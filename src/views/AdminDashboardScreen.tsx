@@ -914,7 +914,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   });
 
   return (
-    <div className="animate-fade-in admin-mode admin-main-container" style={{ minHeight: '100vh', backgroundColor: '#FFFFFF', paddingBottom: 85 }}>
+    <div className="animate-fade-in admin-mode admin-main-container" style={{ minHeight: '100dvh', width: '100%', backgroundColor: '#F8FAFC' }}>
       {/* Modal de Criação / Edição de Corrida */}
       <ManualRideModal
         isOpen={isManualModalOpen}
@@ -1898,7 +1898,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
         );
       })()}
 
-      {/* WRAPPER DO CONTEÚDO (COM MARGEM ESQUERDA AUTOMÁTICA NO DESKTOP PARA A BARRA LATERAL) */}
+      {/* WRAPPER DO CONTEÚDO (100% DA TELA ÚTIL AO LADO DA BARRA LATERAL NO DESKTOP) */}
       <div className="admin-content-wrapper" style={{ backgroundColor: '#F8FAFC' }}>
         {/* HEADER PRINCIPAL CLEAN (BRANCO CORPORATIVO) */}
         <header style={{
@@ -1908,11 +1908,12 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           borderBottom: '1px solid #E2E8F0',
           position: 'sticky',
           top: 0,
-          zIndex: 100
+          zIndex: 100,
+          width: '100%'
         }}>
           <div style={{
-            maxWidth: 1280,
-            margin: '0 auto',
+            width: '100%',
+            margin: 0,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -2061,7 +2062,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
         </header>
 
       {/* CONTEÚDO PRINCIPAL (TELA INTEIRA EM TODAS AS ABAS) */}
-      <main style={{ maxWidth: 1280, width: '100%', margin: '0 auto', padding: '24px 24px 85px 24px' }}>
+      <main style={{ width: '100%', maxWidth: 'none', margin: 0, padding: '20px 24px 40px 24px', flex: 1 }}>
         {/* ================= ABA 1: DASHBOARD MASTER & TORRE DE CONTROLE ================= */}
         {activeTab === 'corridas' && (
           <AdminMasterOverviewTab

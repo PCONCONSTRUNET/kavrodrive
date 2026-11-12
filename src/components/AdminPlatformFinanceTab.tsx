@@ -1670,10 +1670,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         </td>
 
                         <td
-                          style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}
+                          style={{ padding: '12px 16px', textAlign: 'right' }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6 }}>
                             <button
                               type="button"
                               onClick={() => setTermsViewerDriver(drv)}

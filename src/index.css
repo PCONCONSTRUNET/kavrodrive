@@ -116,7 +116,7 @@ input, select, textarea {
 
 @media (min-width: 1024px) {
   .admin-mode .app-container {
-    max-width: 1200px;
+    max-width: 100%;
   }
 }
 
@@ -431,18 +431,19 @@ input, select, textarea {
     top: 0;
     bottom: 0;
     left: 0;
-    width: 276px;
+    width: 256px;
     background-color: #121A21;
     color: #FFFFFF;
     z-index: 200;
     display: flex !important;
     flex-direction: column;
-    border-right: 1.5px solid #2C3E50;
-    box-shadow: 6px 0 24px rgba(0, 0, 0, 0.18);
+    border-right: 1px solid #1E293B;
+    box-shadow: none;
     overflow-y: auto;
   }
   .admin-content-wrapper {
-    margin-left: 276px;
+    margin-left: 256px;
+    width: calc(100% - 256px);
     min-height: 100dvh;
     display: flex;
     flex-direction: column;
@@ -473,6 +474,7 @@ input, select, textarea {
   }
   .admin-content-wrapper {
     margin-left: 0;
+    width: 100%;
     min-height: 100dvh;
     display: flex;
     flex-direction: column;
