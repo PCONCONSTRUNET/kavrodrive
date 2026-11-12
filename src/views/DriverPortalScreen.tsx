@@ -61,12 +61,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   // Login states
   const [loginIdentifier, setLoginIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [loginStep, setLoginStep] = useState<'identifier' | 'password'>('identifier');
+  const [loginMatchedName, setLoginMatchedName] = useState('');
+  const [loginNotFound, setLoginNotFound] = useState(false);
+  const [isLookupOnlySession, setIsLookupOnlySession] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isLoadingAuth, setIsLoadingAuth] = useState(false);
 
-  // Cadastro em 3 etapas estilo Uber Partner
+  // Cadastro em etapas estilo Uber Partner
   const [regStep, setRegStep] = useState<number>(1);
-  const REG_TOTAL_STEPS = 10;
+  const REG_TOTAL_STEPS = 9;
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [regName, setRegName] = useState('');
@@ -91,9 +95,14 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [regHasLargeTrunk, setRegHasLargeTrunk] = useState(true);
   const [regHasLeatherSeats, setRegHasLeatherSeats] = useState(false);
   const [regCategory, setRegCategory] = useState('kavro_go');
-  const [regPixType, setRegPixType] = useState<'cpf' | 'telefone' | 'email' | 'aleatoria'>('cpf');
-  const [regPixKey, setRegPixKey] = useState('');
-  const [regBankName, setRegBankName] = useState('');
+
+  // Edição de chave PIX após aprovação (na aba Carteira)
+  const [pixEditType, setPixEditType] = useState<'cpf' | 'cnpj' | 'telefone' | 'email' | 'aleatoria'>('cpf');
+  const [pixEditKey, setPixEditKey] = useState('');
+  const [pixEditBank, setPixEditBank] = useState('');
+  const [isSavingPix, setIsSavingPix] = useState(false);
+  const [pixSaveNotice, setPixSaveNotice] = useState('');
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
   // Aplica ficha técnica pré-cadastrada da marca/modelo com características automáticas
   const handleApplyVehicleTemplate = (brand: string, model: string) => {
@@ -137,7 +146,42 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [copiedDebtPix, setCopiedDebtPix] = useState(false);
   const [isSimulatingDebtWebhook, setIsSimulatingDebtWebhook] = useState(false);
 
+  useEffect(() => {
+    if (currentDriver?.id) {
+      setPixEditType(currentDriver.pixType || 'cpf');
+      setPixEditKey(currentDriver.pixKey || '');
+      setPixEditBank(currentDriver.bankName || '');
+    }
+  }, [currentDriver?.id]);
+
   const loadDriverAndWallet = async (drvId: string) => {
+    if (currentDriver && (currentDriver.approvalStatus !== 'aprovado' || isLookupOnlySession)) {
+      const lookupKey = currentDriver.document || currentDriver.phone || '';
+      if (lookupKey) {
+        const res = await StorageService.checkDriverByIdentifier(lookupKey);
+        if (res.ok && res.found && res.driver) {
+          if (!isLookupOnlySession && res.driver.approvalStatus === 'aprovado') {
+            const w = await StorageService.fetchDriverWallet(drvId);
+            if (w) setWallet(w);
+            const list = await StorageService.fetchDriversList();
+            const fresh = list.find(d => d.id === drvId);
+            if (fresh) {
+              setCurrentDriver(fresh);
+              StorageService.setCurrentDriver(fresh);
+              return;
+            }
+          }
+          setCurrentDriver(prev => {
+            if (!prev) return null;
+            const merged = { ...prev, ...res.driver } as DriverProfile;
+            if (!isLookupOnlySession) StorageService.setCurrentDriver(merged);
+            return merged;
+          });
+          return;
+        }
+      }
+    }
+    if (isLookupOnlySession) return;
     const w = await StorageService.fetchDriverWallet(drvId);
     if (w) setWallet(w);
     const list = await StorageService.fetchDriversList();
@@ -158,7 +202,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       }, 3000);
       return () => clearInterval(t);
     }
-  }, [currentDriver?.id]);
+  }, [currentDriver?.id, currentDriver?.approvalStatus, isLookupOnlySession]);
 
   // Alerta sonoro para novas chamadas no radar
   const prevRadarIdsRef = useRef<Set<string>>(new Set());
@@ -180,6 +224,49 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   }, [rides, currentDriver?.isOnline, currentDriver?.id, currentDriver?.approvalStatus, currentDriver?.enabledCategories]);
 
   // Handlers de Autenticação
+  const handleLogoutDriver = () => {
+    StorageService.setCurrentDriver(null);
+    setCurrentDriver(null);
+    setIsLookupOnlySession(false);
+    setLoginStep('identifier');
+    setLoginMatchedName('');
+    setLoginPassword('');
+    setAuthError('');
+    setLoginNotFound(false);
+  };
+
+  const handleCheckIdentifierSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setLoginNotFound(false);
+    const trimmed = loginIdentifier.trim();
+    if (!trimmed) {
+      setAuthError('Informe seu CPF, celular ou e-mail.');
+      return;
+    }
+    setIsLoadingAuth(true);
+    const res = await StorageService.checkDriverByIdentifier(trimmed);
+    setIsLoadingAuth(false);
+    if (!res.ok) {
+      setAuthError(res.error || 'Erro ao consultar cadastro.');
+      return;
+    }
+    if (!res.found || !res.driver) {
+      setLoginNotFound(true);
+      setAuthError('Cadastro não localizado com este dado.');
+      return;
+    }
+    if (res.driver.approvalStatus !== 'aprovado') {
+      setIsLookupOnlySession(true);
+      setCurrentDriver(res.driver as DriverProfile);
+      return;
+    }
+    setLoginMatchedName(res.driver.firstName || String(res.driver.name || '').split(' ')[0] || 'Motorista');
+    setLoginPassword('');
+    setTurnstileResetKey(k => k + 1);
+    setLoginStep('password');
+  };
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
@@ -195,6 +282,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       setTurnstileResetKey(k => k + 1);
       return;
     }
+    setIsLookupOnlySession(false);
     setCurrentDriver(res.driver);
     if (res.wallet) setWallet(res.wallet);
   };
@@ -234,10 +322,6 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     }
     if (regStep < REG_TOTAL_STEPS) {
       setRegStep(regStep + 1);
-      return;
-    }
-    if (!regPixKey.trim()) {
-      setAuthError('Informe sua chave PIX para receber os ganhos.');
       return;
     }
     if (isTurnstileEnabled() && !turnstileToken) {
@@ -291,9 +375,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       vehicleCategory: previewEval.eligibleCategoryIds[previewEval.eligibleCategoryIds.length - 1] || regCategory,
       eligibleCategories: previewEval.eligibleCategoryIds,
       enabledCategories: previewEval.eligibleCategoryIds,
-      pixType: regPixType,
-      pixKey: regPixKey || regDocument,
-      bankName: regBankName,
+      pixType: 'cpf',
+      pixKey: '',
+      bankName: '',
       turnstileToken: turnstileToken || undefined
     });
     setIsLoadingAuth(false);
@@ -302,6 +386,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       setTurnstileResetKey(k => k + 1);
       return;
     }
+    setIsLookupOnlySession(false);
     setCurrentDriver(res.driver);
     // Abrir imediatamente a verificação facial KYC semiautomática via Human AI
     setIsKycModalOpen(true);
@@ -444,12 +529,17 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     e.preventDefault();
     if (!currentDriver) return;
     setWithdrawError('');
+    const targetPixKey = (withdrawPixKey || currentDriver.pixKey || '').trim();
+    if (!targetPixKey) {
+      setWithdrawError('Cadastre ou informe sua chave PIX antes de solicitar o saque.');
+      return;
+    }
     const amount = parseFloat(withdrawAmountStr.replace(',', '.')) || 0;
     setIsRequestingWithdraw(true);
     const res = await StorageService.requestDriverWithdrawal(currentDriver.id, {
       amount,
-      pixKey: withdrawPixKey || currentDriver.pixKey,
-      pixType: currentDriver.pixType
+      pixKey: targetPixKey,
+      pixType: currentDriver.pixType || 'cpf'
     });
     setIsRequestingWithdraw(false);
     if (!res.ok) {
@@ -459,6 +549,30 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     if (res.wallet) setWallet(res.wallet);
     setIsWithdrawModalOpen(false);
     setWithdrawAmountStr('');
+  };
+
+  const handleSavePixKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentDriver) return;
+    setPixSaveNotice('');
+    if (!pixEditKey.trim()) {
+      setPixSaveNotice('Informe uma chave PIX válida.');
+      return;
+    }
+    setIsSavingPix(true);
+    const res = await StorageService.updateDriverProfile(currentDriver.id, {
+      pixType: pixEditType,
+      pixKey: pixEditKey.trim(),
+      bankName: pixEditBank.trim()
+    });
+    setIsSavingPix(false);
+    if (res.ok && res.driver) {
+      setCurrentDriver(res.driver);
+      setPixSaveNotice('Chave PIX salva com sucesso!');
+      setTimeout(() => setPixSaveNotice(''), 3500);
+    } else {
+      setPixSaveNotice('Não foi possível salvar sua chave PIX agora.');
+    }
   };
 
   const handleOpenDebtPixModal = async () => {
@@ -549,8 +663,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       6: { section: 'Veículo', title: 'Qual carro você vai usar?', subtitle: 'O veículo precisa ter 4 portas e documentação em dia.' },
       7: { section: 'Veículo', title: 'Ano e cor do veículo' },
       8: { section: 'Veículo', title: 'Qual é a placa?', subtitle: 'Padrão Mercosul ou antigo.' },
-      9: { section: 'Veículo', title: 'O que seu carro tem?', subtitle: 'Isso define em quais categorias você pode receber viagens.' },
-      10: { section: 'Pagamentos', title: 'Onde quer receber seus ganhos?', subtitle: 'Em seguida você vai enviar a foto da CNH e fazer a validação facial.' }
+      9: { section: 'Veículo', title: 'O que seu carro tem?', subtitle: 'Isso define em quais categorias você pode receber viagens.' }
     };
 
     return (
@@ -585,63 +698,129 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           flexDirection: 'column'
         }}>
           {authMode === 'login' ? (
-            <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              <h1 style={{ fontSize: '1.75rem', fontWeight: 700, lineHeight: 1.2, margin: '8px 0 4px 0', color: '#000000', letterSpacing: '-0.02em' }}>
-                Bem-vindo de volta
-              </h1>
-              <p style={{ fontSize: '0.95rem', color: '#6B6B6B', margin: '0 0 8px 0' }}>
-                Entre para ficar online e receber viagens.
-              </p>
+            loginStep === 'identifier' ? (
+              <form onSubmit={handleCheckIdentifierSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <h1 style={{ fontSize: '1.75rem', fontWeight: 700, lineHeight: 1.2, margin: '8px 0 4px 0', color: '#000000', letterSpacing: '-0.02em' }}>
+                  Informe seu CPF
+                </h1>
+                <p style={{ fontSize: '0.95rem', color: '#6B6B6B', margin: '0 0 8px 0' }}>
+                  Digite seu CPF para continuar seu cadastro, ver análise ou entrar no app.
+                </p>
 
-              <div>
-                <label style={uLabel}>CPF, celular ou e-mail</label>
-                <input
-                  type="text"
-                  placeholder="Digite seu identificador"
-                  value={loginIdentifier}
-                  onChange={(e) => setLoginIdentifier(e.target.value)}
-                  required
-                  style={uInput}
-                />
-              </div>
-              <div>
-                <label style={uLabel}>Senha</label>
-                <input
-                  type="password"
-                  placeholder="Sua senha"
-                  value={loginPassword}
-                  onChange={(e) => setLoginPassword(e.target.value)}
-                  required
-                  style={uInput}
-                />
-              </div>
-
-              {authError && (
-                <div style={{ color: '#C1121F', fontSize: '0.86rem', fontWeight: 500, padding: '10px 12px', backgroundColor: '#FDECEC', borderRadius: 8 }}>
-                  {authError}
+                <div>
+                  <label style={uLabel}>CPF (ou celular / e-mail)</label>
+                  <input
+                    type="text"
+                    placeholder="000.000.000-00"
+                    value={loginIdentifier}
+                    onChange={(e) => {
+                      const raw = e.target.value;
+                      setLoginNotFound(false);
+                      setAuthError('');
+                      if (/^\d[\d.-]*$/.test(raw) && raw.replace(/\D/g, '').length <= 11) {
+                        setLoginIdentifier(formatCPF(raw));
+                      } else {
+                        setLoginIdentifier(raw);
+                      }
+                    }}
+                    required
+                    style={uInput}
+                  />
                 </div>
-              )}
 
-              <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
+                {authError && (
+                  <div style={{ color: '#C1121F', fontSize: '0.86rem', fontWeight: 500, padding: '10px 12px', backgroundColor: '#FDECEC', borderRadius: 8 }}>
+                    {authError}
+                  </div>
+                )}
 
-              <button type="submit" disabled={isLoadingAuth} style={{ ...uPrimaryBtn(isLoadingAuth), marginTop: 8 }}>
-                {isLoadingAuth ? 'Entrando...' : 'Entrar'}
-              </button>
+                <button type="submit" disabled={isLoadingAuth} style={{ ...uPrimaryBtn(isLoadingAuth), marginTop: 4 }}>
+                  {isLoadingAuth ? 'Verificando...' : 'Continuar'}
+                </button>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '8px 0' }}>
-                <div style={{ flex: 1, height: 1, backgroundColor: '#E2E2E2' }} />
-                <span style={{ fontSize: '0.85rem', color: '#6B6B6B' }}>ou</span>
-                <div style={{ flex: 1, height: 1, backgroundColor: '#E2E2E2' }} />
-              </div>
+                {loginNotFound && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const digits = loginIdentifier.replace(/\D/g, '');
+                      if (digits.length === 11) setRegDocument(formatCPF(digits));
+                      setAuthMode('register');
+                      setRegStep(1);
+                      setAuthError('');
+                      setLoginNotFound(false);
+                    }}
+                    style={{ ...uPrimaryBtn(), backgroundColor: '#000000', color: '#FFFFFF' }}
+                  >
+                    Cadastrar com este CPF
+                  </button>
+                )}
 
-              <button
-                type="button"
-                onClick={() => { setAuthMode('register'); setRegStep(1); setAuthError(''); }}
-                style={{ ...uPrimaryBtn(), backgroundColor: '#F3F3F3', color: '#000000' }}
-              >
-                Quero dirigir com a Kavro
-              </button>
-            </form>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '8px 0' }}>
+                  <div style={{ flex: 1, height: 1, backgroundColor: '#E2E2E2' }} />
+                  <span style={{ fontSize: '0.85rem', color: '#6B6B6B' }}>ou</span>
+                  <div style={{ flex: 1, height: 1, backgroundColor: '#E2E2E2' }} />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('register'); setRegStep(1); setAuthError(''); setLoginNotFound(false); }}
+                  style={{ ...uPrimaryBtn(), backgroundColor: '#F3F3F3', color: '#000000' }}
+                >
+                  Quero dirigir com a Kavro
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleLoginSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => { setLoginStep('identifier'); setLoginPassword(''); setAuthError(''); }}
+                    aria-label="Voltar"
+                    style={{ width: 40, height: 40, borderRadius: '50%', border: 'none', backgroundColor: '#F3F3F3', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: '1.2rem', color: '#000' }}
+                  >
+                    ←
+                  </button>
+                  <div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Cadastro aprovado
+                    </div>
+                    <div style={{ fontSize: '0.84rem', color: '#6B6B6B' }}>{loginIdentifier}</div>
+                  </div>
+                </div>
+
+                <h1 style={{ fontSize: '1.75rem', fontWeight: 700, lineHeight: 1.2, margin: '4px 0 0 0', color: '#000000', letterSpacing: '-0.02em' }}>
+                  Olá, {loginMatchedName || 'motorista'}
+                </h1>
+                <p style={{ fontSize: '0.95rem', color: '#6B6B6B', margin: '0 0 8px 0' }}>
+                  Digite sua senha cadastrada para entrar.
+                </p>
+
+                <div>
+                  <label style={uLabel}>Senha</label>
+                  <input
+                    autoFocus
+                    type="password"
+                    placeholder="Sua senha"
+                    value={loginPassword}
+                    onChange={(e) => setLoginPassword(e.target.value)}
+                    required
+                    style={uInput}
+                  />
+                </div>
+
+                {authError && (
+                  <div style={{ color: '#C1121F', fontSize: '0.86rem', fontWeight: 500, padding: '10px 12px', backgroundColor: '#FDECEC', borderRadius: 8 }}>
+                    {authError}
+                  </div>
+                )}
+
+                <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
+
+                <button type="submit" disabled={isLoadingAuth} style={{ ...uPrimaryBtn(isLoadingAuth), marginTop: 8 }}>
+                  {isLoadingAuth ? 'Entrando...' : 'Entrar'}
+                </button>
+              </form>
+            )
           ) : (
             <form key={`reg-step-${regStep}`} onSubmit={handleRegisterSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 18, flex: 1 }}>
               {/* Voltar + barra de progresso contínua */}
@@ -814,50 +993,6 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </div>
               )}
 
-              {/* 10. PIX */}
-              {regStep === 10 && (
-                <>
-                  <div>
-                    <label style={uLabel}>Tipo de chave</label>
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {([
-                        { id: 'cpf', label: 'CPF' },
-                        { id: 'telefone', label: 'Celular' },
-                        { id: 'email', label: 'E-mail' },
-                        { id: 'aleatoria', label: 'Aleatória' }
-                      ] as const).map(opt => (
-                        <button key={opt.id} type="button"
-                          onClick={() => {
-                            setRegPixType(opt.id);
-                            if (opt.id === 'cpf' && regDocument) setRegPixKey(formatCPF(regDocument));
-                            else if (opt.id === 'telefone' && regPhone) setRegPixKey(formatPhone(regPhone));
-                            else if (opt.id === 'email' && regEmail) setRegPixKey(regEmail);
-                            else if (opt.id === 'aleatoria') setRegPixKey('');
-                          }}
-                          style={uChip(regPixType === opt.id)}
-                        >{opt.label}</button>
-                      ))}
-                    </div>
-                  </div>
-                  <div>
-                    <label style={uLabel}>Chave PIX</label>
-                    <input type="text" placeholder="Digite sua chave PIX" value={regPixKey}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (regPixType === 'cpf') setRegPixKey(formatCPF(val));
-                        else if (regPixType === 'telefone') setRegPixKey(formatPhone(val));
-                        else setRegPixKey(val);
-                      }}
-                      style={uInput} />
-                  </div>
-                  <div>
-                    <label style={uLabel}>Banco <span style={{ color: '#6B6B6B', fontWeight: 400 }}>(opcional)</span></label>
-                    <input type="text" placeholder="Ex: Nubank, Inter, Itaú" value={regBankName}
-                      onChange={(e) => setRegBankName(e.target.value)} style={uInput} />
-                  </div>
-                </>
-              )}
-
               {authError && (
                 <div style={{ color: '#C1121F', fontSize: '0.86rem', fontWeight: 500, padding: '10px 12px', backgroundColor: '#FDECEC', borderRadius: 8 }}>
                   {authError}
@@ -896,230 +1031,257 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     );
   }
 
-  // 2. TELA DE KYC & AGUARDANDO APROVAÇÃO
-  if (currentDriver.approvalStatus !== 'aprovado') {
-    const isCorrection = currentDriver.approvalStatus === 'correcao_solicitada';
-    const isInReview = currentDriver.approvalStatus === 'em_analise';
-    const isRejected = currentDriver.approvalStatus === 'rejeitado';
-    const isPending = !isCorrection && !isInReview && !isRejected;
+  // 2. TELA DE KYC & AGUARDANDO APROVAÇÃO (TEMA CLEAN ESTILO UBER)
+  if (currentDriver.approvalStatus !== 'aprovado' || isLookupOnlySession) {
+    const firstName = String(currentDriver.name || '').trim().split(/\s+/)[0] || 'motorista';
+    const isApprovedLookup = isLookupOnlySession && currentDriver.approvalStatus === 'aprovado';
+    const isCorrection = !isApprovedLookup && currentDriver.approvalStatus === 'correcao_solicitada';
+    const isInReview = !isApprovedLookup && currentDriver.approvalStatus === 'em_analise';
+    const isRejected = !isApprovedLookup && currentDriver.approvalStatus === 'rejeitado';
+    const isPending = !isApprovedLookup && !isCorrection && !isInReview && !isRejected;
+    const feedbackMsg = currentDriver.kyc?.adminNotes || currentDriver.kyc?.correctionInstructions || currentDriver.rejectionReason;
 
-    const biometric = currentDriver.kyc?.biometricResult;
+    const handleManualStatusRefresh = async () => {
+      setIsCheckingStatus(true);
+      await loadDriverAndWallet(currentDriver.id);
+      setIsCheckingStatus(false);
+    };
+
+    const handleProceedToPasswordLogin = () => {
+      const idVal = currentDriver.document ? formatCPF(currentDriver.document) : (loginIdentifier || currentDriver.phone || '');
+      setLoginIdentifier(idVal);
+      setLoginMatchedName(firstName);
+      setLoginPassword('');
+      setAuthError('');
+      setTurnstileResetKey(k => k + 1);
+      setLoginStep('password');
+      setAuthMode('login');
+      setIsLookupOnlySession(false);
+      StorageService.setCurrentDriver(null);
+      setCurrentDriver(null);
+    };
 
     return (
-      <div style={{
+      <div className="kv-light" style={{
         minHeight: '100dvh',
-        backgroundColor: '#090D14',
-        color: '#FFFFFF',
-        padding: '24px 16px',
+        backgroundColor: '#FFFFFF',
+        color: '#000000',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        textAlign: 'center',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
+        fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif'
       }}>
-        <div style={{
-          maxWidth: 440,
-          width: '100%',
-          backgroundColor: '#121722',
-          borderRadius: 24,
-          padding: '28px 22px',
-          border: '1.5px solid #1E293B',
-          boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-          boxSizing: 'border-box'
+        {/* Cabeçalho preto igual à tela de KYC */}
+        <header style={{
+          backgroundColor: '#000000',
+          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 20px 14px 20px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
         }}>
-          {/* Ícone contextual */}
-          <div style={{
-            width: 68,
-            height: 68,
-            borderRadius: '50%',
-            backgroundColor: isCorrection ? 'rgba(245, 158, 11, 0.15)' : isInReview ? 'rgba(37, 99, 235, 0.15)' : isRejected ? 'rgba(239, 68, 68, 0.15)' : 'rgba(118, 216, 0, 0.15)',
-            color: isCorrection ? '#F59E0B' : isInReview ? '#60A5FA' : isRejected ? '#EF4444' : '#76D800',
-            border: `2px solid ${isCorrection ? '#F59E0B' : isInReview ? '#3B82F6' : isRejected ? '#EF4444' : '#76D800'}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 18px auto'
-          }}>
-            {isCorrection ? <AlertTriangle size={34} /> : isInReview ? <Clock size={34} /> : isRejected ? <XCircle size={34} /> : <ShieldCheck size={36} />}
-          </div>
+          <img src="/logo-horizontal-white.png" alt="Kavro Drive" style={{ height: 28, width: 'auto', objectFit: 'contain' }} />
+          <button
+            type="button"
+            onClick={handleLogoutDriver}
+            aria-label="Sair"
+            style={{
+              height: 36,
+              padding: '0 14px',
+              borderRadius: 999,
+              border: 'none',
+              backgroundColor: 'rgba(255,255,255,0.14)',
+              color: '#FFFFFF',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer'
+            }}
+          >
+            Sair
+          </button>
+        </header>
 
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '4px 10px',
-            borderRadius: 20,
-            fontSize: '0.72rem',
-            fontWeight: 800,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            backgroundColor: isCorrection ? 'rgba(245, 158, 11, 0.2)' : isInReview ? 'rgba(37, 99, 235, 0.2)' : isRejected ? 'rgba(239, 68, 68, 0.2)' : 'rgba(118, 216, 0, 0.2)',
-            color: isCorrection ? '#FBBF24' : isInReview ? '#93C5FD' : isRejected ? '#FCA5A5' : '#76D800',
-            marginBottom: 12
-          }}>
-            {isCorrection ? 'Correção Solicitada' : isInReview ? 'Em Análise Manual' : isRejected ? 'Cadastro Recusado' : 'Validação KYC Pendente'}
-          </div>
-
-          <h2 style={{ fontSize: '1.3rem', fontWeight: 900, margin: '0 0 10px 0', letterSpacing: '-0.02em', color: '#FFFFFF' }}>
-            {isCorrection
-              ? 'Ajuste nos Documentos Solicitado'
-              : isInReview
-                ? 'Documentação em Análise'
-                : isRejected
-                  ? 'Cadastro Não Aprovado'
-                  : 'Verificação Facial Obrigatória'}
-          </h2>
-
-          <p style={{ fontSize: '0.86rem', color: '#94A3B8', lineHeight: 1.5, margin: '0 0 20px 0' }}>
-            {isCorrection
-              ? 'A Central Master analisou seus documentos e solicitou uma nova foto com melhor nitidez ou iluminação.'
-              : isInReview
-                ? `Olá ${currentDriver.name}, sua foto da CNH e selfie foram comparadas pela IA local no navegador e enviadas com segurança ao administrador.`
-                : isRejected
-                  ? 'Infelizmente seu cadastro não pôde ser ativado com as informações fornecidas.'
-                  : `Olá ${currentDriver.name}, para ativar sua conta e receber corridas, é necessário validar sua CNH e capturar uma selfie via IA facial local.`}
-          </p>
-
-          {/* Feedback ou instruções do Administrador (quando houver correção solicitada ou recusa) */}
-          {(isCorrection || isRejected) && (currentDriver.kyc?.adminNotes || currentDriver.rejectionReason) && (
-            <div style={{
-              backgroundColor: isRejected ? 'rgba(239, 68, 68, 0.1)' : 'rgba(245, 158, 11, 0.1)',
-              border: `1px solid ${isRejected ? 'rgba(239, 68, 68, 0.3)' : 'rgba(245, 158, 11, 0.3)'}`,
-              borderRadius: 14,
-              padding: '12px 14px',
-              textAlign: 'left',
-              marginBottom: 18
-            }}>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: isRejected ? '#F87171' : '#FBBF24', textTransform: 'uppercase', marginBottom: 4 }}>
-                Mensagem da Central Kavro:
+        <main style={{
+          flex: 1,
+          width: '100%',
+          maxWidth: 460,
+          margin: '0 auto',
+          padding: '28px 20px calc(32px + env(safe-area-inset-bottom, 0px)) 20px',
+          boxSizing: 'border-box',
+          display: 'flex',
+          flexDirection: 'column'
+        }}>
+          {isApprovedLookup ? (
+            <>
+              <div style={{ display: 'inline-flex', alignSelf: 'flex-start', padding: '5px 12px', borderRadius: 999, backgroundColor: '#DCFCE7', color: '#166534', fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.04em', marginBottom: 14 }}>
+                CADASTRO APROVADO
               </div>
-              <div style={{ fontSize: '0.82rem', color: '#E2E8F0', lineHeight: 1.45 }}>
-                {currentDriver.kyc?.adminNotes || currentDriver.rejectionReason}
-              </div>
-            </div>
-          )}
+              <h1 style={{ fontSize: '1.7rem', fontWeight: 700, lineHeight: 1.2, margin: '0 0 8px 0', color: '#000000', letterSpacing: '-0.02em' }}>
+                Sua conta foi aprovada
+              </h1>
+              <p style={{ fontSize: '0.96rem', color: '#6B6B6B', lineHeight: 1.5, margin: '0 0 24px 0' }}>
+                Olá, {firstName}. Agora é só entrar com sua senha cadastrada para ficar online e receber viagens.
+              </p>
 
-          {/* Card de Score Biométrico (quando já realizado) */}
-          {biometric && (
-            <div style={{
-              backgroundColor: '#1E293B',
-              borderRadius: 14,
-              padding: '12px 14px',
-              marginBottom: 20,
-              border: '1px solid #334155',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between'
-            }}>
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ fontSize: '0.7rem', color: '#94A3B8', textTransform: 'uppercase', fontWeight: 700 }}>
-                  IA Facial Human Biometrics
+              {(currentDriver.vehicleBrand || currentDriver.vehiclePlate) && (
+                <div style={{ backgroundColor: '#F3F3F3', borderRadius: 12, padding: '14px 16px', marginBottom: 24 }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: '#6B6B6B', textTransform: 'uppercase', marginBottom: 4 }}>Veículo cadastrado</div>
+                  <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#000000' }}>
+                    {currentDriver.vehicleBrand} {currentDriver.vehicleModel} {currentDriver.vehiclePlate ? `• ${currentDriver.vehiclePlate}` : ''}
+                  </div>
                 </div>
-                <div style={{ fontSize: '0.78rem', color: '#E2E8F0', marginTop: 2 }}>
-                  Comparação CNH ↔ Selfie
-                </div>
-              </div>
-              <div style={{
-                padding: '4px 10px',
-                borderRadius: 8,
-                backgroundColor: (biometric.isMatch ?? biometric.match) ? 'rgba(118, 216, 0, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-                color: (biometric.isMatch ?? biometric.match) ? '#76D800' : '#EF4444',
-                fontWeight: 900,
-                fontSize: '0.88rem'
-              }}>
-                {(biometric.similarityScore ?? biometric.similarity ?? 0)}% {(biometric.isMatch ?? biometric.match) ? 'Compatível' : 'Divergente'}
-              </div>
-            </div>
-          )}
+              )}
 
-          {/* Ações */}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {/* Se precisa fazer ou refazer KYC */}
-            {(isPending || isCorrection || isRejected) && (
+              <div style={{ flex: 1, minHeight: 16 }} />
+
               <button
                 type="button"
-                onClick={() => setIsKycModalOpen(true)}
+                onClick={handleProceedToPasswordLogin}
                 style={{
-                  width: '100%',
-                  padding: '14px',
-                  borderRadius: 14,
-                  backgroundColor: '#76D800',
-                  color: '#000000',
-                  border: 'none',
-                  fontWeight: 900,
-                  fontSize: '0.92rem',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  boxShadow: '0 4px 20px rgba(118, 216, 0, 0.35)'
+                  width: '100%', height: 54, borderRadius: 10, border: 'none',
+                  backgroundColor: '#000000', color: '#FFFFFF', fontSize: '1rem', fontWeight: 600,
+                  cursor: 'pointer'
                 }}
               >
-                <Camera size={18} />
-                <span>{isCorrection ? 'Reenviar CNH & Nova Selfie' : isRejected ? 'Tentar Novo Envio KYC' : 'Fazer Verificação Facial (KYC)'}</span>
+                Entrar com minha senha
               </button>
-            )}
+            </>
+          ) : isInReview ? (
+            <>
+              <div style={{ width: 52, height: 52, borderRadius: '50%', backgroundColor: '#F3F3F3', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+                <Clock size={24} color="#000000" />
+              </div>
+              <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#6B6B6B', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 6 }}>
+                EM ANÁLISE
+              </div>
+              <h1 style={{ fontSize: '1.7rem', fontWeight: 700, lineHeight: 1.2, margin: '0 0 10px 0', color: '#000000', letterSpacing: '-0.02em' }}>
+                Seu cadastro está em análise
+              </h1>
+              <p style={{ fontSize: '0.96rem', color: '#6B6B6B', lineHeight: 1.5, margin: '0 0 24px 0' }}>
+                Olá, {firstName}. Recebemos seus documentos e nossa equipe já está revisando seu perfil.
+              </p>
 
-            {/* Se está em análise manual */}
-            {isInReview && (
-              <>
+              <div style={{ backgroundColor: '#F3F3F3', borderRadius: 12, padding: '16px', display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <CheckCircle2 size={18} color="#000000" />
+                  <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#000000' }}>CNH e selfie enviadas com sucesso</span>
+                </div>
+                {(currentDriver.vehicleBrand || currentDriver.vehiclePlate) && (
+                  <div style={{ fontSize: '0.84rem', color: '#545454', paddingLeft: 28 }}>
+                    Veículo: {currentDriver.vehicleBrand} {currentDriver.vehicleModel} {currentDriver.vehiclePlate ? `• ${currentDriver.vehiclePlate}` : ''}
+                  </div>
+                )}
+                <div style={{ fontSize: '0.82rem', color: '#6B6B6B', paddingLeft: 28, lineHeight: 1.45 }}>
+                  Você pode fechar o app. Na próxima vez, basta digitar seu CPF para acompanhar ou entrar.
+                </div>
+              </div>
+
+              <div style={{ flex: 1, minHeight: 16 }} />
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
                 <button
                   type="button"
-                  onClick={() => loadDriverAndWallet(currentDriver.id)}
+                  onClick={handleManualStatusRefresh}
+                  disabled={isCheckingStatus}
                   style={{
-                    width: '100%',
-                    padding: '14px',
-                    borderRadius: 14,
-                    backgroundColor: '#2563EB',
-                    color: '#FFF',
-                    border: 'none',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8
+                    width: '100%', height: 54, borderRadius: 10, border: 'none',
+                    backgroundColor: '#000000', color: '#FFFFFF', fontSize: '1rem', fontWeight: 600,
+                    cursor: isCheckingStatus ? 'default' : 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
                   }}
                 >
-                  <RefreshCw size={16} />
-                  <span>Verificar Aprovação Agora</span>
+                  <RefreshCw size={17} />
+                  <span>{isCheckingStatus ? 'Consultando...' : 'Atualizar status'}</span>
                 </button>
-
                 <button
                   type="button"
                   onClick={() => setIsKycModalOpen(true)}
                   style={{
-                    width: '100%',
-                    padding: '12px',
-                    borderRadius: 14,
-                    backgroundColor: 'rgba(255,255,255,0.06)',
-                    color: '#CBD5E1',
-                    border: '1px solid #334155',
-                    fontWeight: 700,
-                    fontSize: '0.82rem',
+                    width: '100%', height: 48, borderRadius: 10, border: 'none',
+                    backgroundColor: '#F3F3F3', color: '#000000', fontSize: '0.92rem', fontWeight: 600,
                     cursor: 'pointer'
                   }}
                 >
-                  Rever ou Substituir Documentos
+                  Reenviar documentos
                 </button>
-              </>
-            )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{
+                display: 'inline-flex', alignSelf: 'flex-start', padding: '5px 12px', borderRadius: 999,
+                backgroundColor: isCorrection ? '#FEF3C7' : isRejected ? '#FDECEC' : '#F3F3F3',
+                color: isCorrection ? '#92400E' : isRejected ? '#C1121F' : '#000000',
+                fontSize: '0.75rem', fontWeight: 700, letterSpacing: '0.05em', marginBottom: 12
+              }}>
+                {isCorrection ? 'CORREÇÃO SOLICITADA' : isRejected ? 'NÃO APROVADO' : 'DOCUMENTOS'}
+              </div>
 
+              <h1 style={{ fontSize: '1.7rem', fontWeight: 700, lineHeight: 1.2, margin: '0 0 8px 0', color: '#000000', letterSpacing: '-0.02em' }}>
+                {isCorrection ? 'Envie seus documentos novamente' : isRejected ? 'Cadastro não aprovado' : 'Falta validar sua conta'}
+              </h1>
+              <p style={{ fontSize: '0.96rem', color: '#6B6B6B', lineHeight: 1.5, margin: '0 0 24px 0' }}>
+                {isCorrection
+                  ? `Olá, ${firstName}. Precisamos de uma nova foto mais nítida para concluir a análise.`
+                  : isRejected
+                    ? `Olá, ${firstName}. Não foi possível aprovar os documentos anteriores.`
+                    : `Olá, ${firstName}. São só 2 passos rápidos para enviar sua conta para análise.`}
+              </p>
 
-            <button
-              type="button"
-              onClick={() => {
-                StorageService.setCurrentDriver(null);
-                setCurrentDriver(null);
-              }}
-              style={{ background: 'none', border: 'none', color: '#64748B', fontSize: '0.8rem', cursor: 'pointer', marginTop: 4 }}
-            >
-              Sair da conta
-            </button>
-          </div>
-        </div>
+              {(isCorrection || isRejected) && feedbackMsg && (
+                <div style={{
+                  backgroundColor: isRejected ? '#FDECEC' : '#FEF3C7',
+                  borderRadius: 12,
+                  padding: '14px 16px',
+                  marginBottom: 20,
+                  fontSize: '0.88rem',
+                  color: isRejected ? '#991B1B' : '#78350F',
+                  lineHeight: 1.45
+                }}>
+                  <strong>Observação:</strong> {feedbackMsg}
+                </div>
+              )}
+
+              {isPending && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 24 }}>
+                  {[
+                    { num: '1', title: 'Foto da CNH', desc: 'Foto nítida da CNH ou PDF digital' },
+                    { num: '2', title: 'Selfie ao vivo', desc: 'Captura rápida pela câmera do aparelho' }
+                  ].map(step => (
+                    <div key={step.num} style={{
+                      display: 'flex', alignItems: 'center', gap: 14,
+                      backgroundColor: '#F3F3F3', borderRadius: 12, padding: '14px 16px'
+                    }}>
+                      <div style={{
+                        width: 32, height: 32, borderRadius: '50%', backgroundColor: '#000000', color: '#FFFFFF',
+                        fontSize: '0.88rem', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
+                      }}>
+                        {step.num}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.96rem', fontWeight: 600, color: '#000000' }}>{step.title}</div>
+                        <div style={{ fontSize: '0.8rem', color: '#6B6B6B', marginTop: 2 }}>{step.desc}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ flex: 1, minHeight: 16 }} />
+
+              <button
+                type="button"
+                onClick={() => setIsKycModalOpen(true)}
+                style={{
+                  width: '100%', height: 54, borderRadius: 10, border: 'none',
+                  backgroundColor: '#000000', color: '#FFFFFF', fontSize: '1rem', fontWeight: 600,
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8
+                }}
+              >
+                <Camera size={18} />
+                <span>{isCorrection || isRejected ? 'Reenviar documentos' : 'Fazer verificação'}</span>
+              </button>
+            </>
+          )}
+        </main>
 
         {/* Modal de KYC do Motorista */}
         <DriverKycVerificationModal
@@ -1129,7 +1291,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           onClose={() => setIsKycModalOpen(false)}
           onSuccess={(updated) => {
             setCurrentDriver(updated);
-            StorageService.setCurrentDriver(updated);
+            if (!isLookupOnlySession) {
+              StorageService.setCurrentDriver(updated);
+            }
             setIsKycModalOpen(false);
           }}
           correctionInstructions={currentDriver.kyc?.adminNotes}
@@ -1636,7 +1800,11 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               {/* Botão de Transferência Imediata */}
               <button
                 type="button"
-                onClick={() => setIsWithdrawModalOpen(true)}
+                onClick={() => {
+                  setWithdrawPixKey(currentDriver.pixKey || '');
+                  setWithdrawError('');
+                  setIsWithdrawModalOpen(true);
+                }}
                 style={{
                   width: '100%',
                   height: 50,
@@ -1667,10 +1835,99 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 <div style={{ fontSize: '2.2rem', fontWeight: 900, color: '#22C55E', margin: '4px 0' }}>
                   R$ {wallet.availableBalance.toFixed(2).replace('.', ',')}
                 </div>
-                <div style={{ fontSize: '0.8rem', color: '#94A3B8' }}>
-                  Chave PIX: {currentDriver.pixKey} ({currentDriver.pixType})
+                <div style={{ fontSize: '0.82rem', color: currentDriver.pixKey ? '#94A3B8' : '#FBBF24' }}>
+                  {currentDriver.pixKey
+                    ? `Chave PIX: ${currentDriver.pixKey} (${currentDriver.pixType || 'cpf'})`
+                    : 'Chave PIX ainda não cadastrada — configure abaixo para receber seus saques.'}
                 </div>
               </div>
+
+              {/* Cadastro / Edição de Chave PIX após aprovação */}
+              <form onSubmit={handleSavePixKey} style={{
+                backgroundColor: '#1E293B',
+                borderRadius: 20,
+                padding: '18px 20px',
+                border: '1px solid #334155',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 12
+              }}>
+                <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#FFFFFF' }}>
+                  Chave PIX para Recebimentos
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {([
+                    { id: 'cpf', label: 'CPF' },
+                    { id: 'cnpj', label: 'CNPJ' },
+                    { id: 'telefone', label: 'Celular' },
+                    { id: 'email', label: 'E-mail' },
+                    { id: 'aleatoria', label: 'Aleatória' }
+                  ] as const).map(opt => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => {
+                        setPixEditType(opt.id);
+                        if (opt.id === 'cpf' && currentDriver.document) setPixEditKey(formatCPF(currentDriver.document));
+                        else if (opt.id === 'telefone' && currentDriver.phone) setPixEditKey(formatPhone(currentDriver.phone));
+                        else if (opt.id === 'email' && currentDriver.email) setPixEditKey(currentDriver.email);
+                      }}
+                      style={{
+                        padding: '7px 12px',
+                        borderRadius: 999,
+                        border: pixEditType === opt.id ? '1.5px solid #22C55E' : '1px solid #475569',
+                        backgroundColor: pixEditType === opt.id ? 'rgba(34,197,94,0.16)' : '#0F172A',
+                        color: pixEditType === opt.id ? '#4ADE80' : '#CBD5E1',
+                        fontSize: '0.78rem',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  type="text"
+                  placeholder="Digite sua chave PIX"
+                  value={pixEditKey}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (pixEditType === 'cpf') setPixEditKey(formatCPF(val));
+                    else if (pixEditType === 'telefone') setPixEditKey(formatPhone(val));
+                    else setPixEditKey(val);
+                  }}
+                  style={{
+                    width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderRadius: 10,
+                    border: '1px solid #475569', backgroundColor: '#0F172A', color: '#FFFFFF', fontSize: '0.9rem'
+                  }}
+                />
+                <input
+                  type="text"
+                  placeholder="Banco (opcional)"
+                  value={pixEditBank}
+                  onChange={(e) => setPixEditBank(e.target.value)}
+                  style={{
+                    width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderRadius: 10,
+                    border: '1px solid #475569', backgroundColor: '#0F172A', color: '#FFFFFF', fontSize: '0.9rem'
+                  }}
+                />
+                {pixSaveNotice && (
+                  <div style={{ fontSize: '0.8rem', color: pixSaveNotice.includes('sucesso') ? '#4ADE80' : '#F87171', fontWeight: 600 }}>
+                    {pixSaveNotice}
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={isSavingPix}
+                  style={{
+                    width: '100%', height: 44, borderRadius: 10, border: 'none',
+                    backgroundColor: '#22C55E', color: '#0F172A', fontWeight: 800, fontSize: '0.88rem', cursor: 'pointer'
+                  }}
+                >
+                  {isSavingPix ? 'Salvando...' : 'Salvar Chave PIX'}
+                </button>
+              </form>
 
               {wallet.debtBalance > 0 && (
                 <div style={{
@@ -1812,10 +2069,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         onClose={() => setIsDrawerOpen(false)}
         onSelectTab={(tab) => setActiveTab(tab)}
         onOpenPreferences={() => setIsPreferencesOpen(true)}
-        onLogout={() => {
-          StorageService.setCurrentDriver(null);
-          setCurrentDriver(null);
-        }}
+        onLogout={handleLogoutDriver}
       />
 
       {/* 2. Preferências da Viagem (Print 1 do usuário) */}

@@ -478,6 +478,24 @@ export const StorageService = {
     }
   },
 
+  async checkDriverByIdentifier(identifier: string): Promise<{
+    ok: boolean;
+    found?: boolean;
+    driver?: Partial<DriverProfile> & { firstName?: string };
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/drivers/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier })
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão com o servidor.' };
+    }
+  },
+
   async loginDriver(identifier: string, password: string, turnstileToken?: string): Promise<{
     ok: boolean;
     driver?: DriverProfile;
@@ -648,6 +666,8 @@ export const StorageService = {
 
   async submitKycDocuments(payload: {
     driverId: string;
+    driverDocument?: string;
+    driverPhone?: string;
     cnhDocumentPhoto: string;
     selfiePhoto: string;
     biometricResult: import('../types').KycBiometricResult;

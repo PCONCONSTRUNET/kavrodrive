@@ -690,7 +690,7 @@ async function handleApiRequest(req, res) {
         hasLeatherSeats: body.hasLeatherSeats !== undefined ? Boolean(body.hasLeatherSeats) : undefined,
         enabledCategories: Array.isArray(body.enabledCategories) ? body.enabledCategories : undefined,
         city: body.city || 'Brasil',
-        pixKey: body.pixKey || cleanPhone,
+        pixKey: String(body.pixKey || '').trim(),
         pixType: body.pixType || 'cpf',
         bankName: body.bankName || '',
         bankAgency: body.bankAgency || '',
@@ -713,6 +713,51 @@ async function handleApiRequest(req, res) {
       ).catch(() => {});
 
       return sendJson(res, 200, { ok: true, driver: saved });
+    }
+
+    if (pathname === '/api/drivers/check' && method === 'POST') {
+      const body = await parseBody(req);
+      const identifier = String(body.identifier || body.cpf || body.document || body.phone || '').trim();
+      if (!identifier) {
+        return sendJson(res, 400, { ok: false, error: 'Informe seu CPF, celular ou e-mail.' });
+      }
+
+      const row = await finance.findDriverByIdentifier(identifier);
+      if (!row) {
+        return sendJson(res, 200, { ok: true, found: false });
+      }
+
+      const full = await finance.getDriverById(row.id);
+      const src = full || row;
+      const firstName = String(src.name || '').trim().split(/\s+/)[0] || 'Motorista';
+      const kyc = src.kyc || {};
+
+      return sendJson(res, 200, {
+        ok: true,
+        found: true,
+        driver: {
+          id: src.id,
+          name: src.name,
+          firstName,
+          document: src.document || '',
+          phone: '',
+          email: '',
+          approvalStatus: src.approvalStatus || 'pendente_aprovacao',
+          rejectionReason: src.rejectionReason || null,
+          vehicleBrand: src.vehicleBrand || '',
+          vehicleModel: src.vehicleModel || '',
+          vehiclePlate: src.vehiclePlate || '',
+          city: src.city || '',
+          kyc: {
+            status: kyc.status || src.approvalStatus || 'pendente_aprovacao',
+            submittedAt: kyc.submittedAt || null,
+            reviewedAt: kyc.reviewedAt || null,
+            rejectionReason: kyc.rejectionReason || null,
+            correctionInstructions: kyc.correctionInstructions || null,
+            adminNotes: kyc.adminNotes || null
+          }
+        }
+      });
     }
 
     if (pathname === '/api/drivers/login' && method === 'POST') {
@@ -911,11 +956,31 @@ async function handleApiRequest(req, res) {
     if (pathname === '/api/kyc/submit' && method === 'POST') {
       const body = await parseBody(req);
       const driverId = String(body.driverId || '').trim();
-      const driver = await finance.getDriverById(driverId);
+      let driver = driverId ? await finance.getDriverById(driverId) : null;
+      if (!driver && body.driverDocument) {
+        const cleanDoc = String(body.driverDocument).replace(/\D/g, '');
+        if (cleanDoc.length >= 11) {
+          const foundByDoc = await finance.findDriverByIdentifier(cleanDoc);
+          if (foundByDoc) driver = await finance.getDriverById(foundByDoc.id);
+        }
+      }
+      if (!driver && body.driverPhone) {
+        const cleanPhone = String(body.driverPhone).replace(/\D/g, '');
+        if (cleanPhone.length >= 10) {
+          const foundByPhone = await finance.findDriverByIdentifier(cleanPhone);
+          if (foundByPhone) driver = await finance.getDriverById(foundByPhone.id);
+        }
+      }
       if (!driver) {
-        return sendJson(res, 404, { ok: false, error: 'Motorista parceiro não localizado.' });
+        return sendJson(res, 404, {
+          ok: false,
+          error: !db.pool
+            ? 'Cadastro não localizado no servidor (verifique a conexão DATABASE_URL do Pooler IPv4 na Vercel). Tente entrar com seu CPF novamente.'
+            : 'Motorista parceiro não localizado. Faça login novamente com seu CPF para continuar.'
+        });
       }
 
+      const resolvedDriverId = driver.id;
       const cnhPhoto = body.cnhDocumentPhoto;
       const selfiePhoto = body.selfiePhoto;
       const biometric = body.biometricResult;
@@ -927,12 +992,12 @@ async function handleApiRequest(req, res) {
       const reqHost = req.headers.host || 'localhost:5173';
 
       // 4. Salvar com segurança no Supabase Storage Privado ou Cofre Seguro
-      const cnhSaved = await kycStorage.saveKycDocument(driverId, 'cnh', cnhPhoto);
-      const selfieSaved = await kycStorage.saveKycDocument(driverId, 'selfie', selfiePhoto);
+      const cnhSaved = await kycStorage.saveKycDocument(resolvedDriverId, 'cnh', cnhPhoto);
+      const selfieSaved = await kycStorage.saveKycDocument(resolvedDriverId, 'selfie', selfiePhoto);
 
       // Gerar URLs temporárias assinadas de 15 minutos
-      const cnhTempUrl = await kycStorage.generateTemporarySignedUrl(cnhSaved, driverId, reqHost);
-      const selfieTempUrl = await kycStorage.generateTemporarySignedUrl(selfieSaved, driverId, reqHost);
+      const cnhTempUrl = await kycStorage.generateTemporarySignedUrl(cnhSaved, resolvedDriverId, reqHost);
+      const selfieTempUrl = await kycStorage.generateTemporarySignedUrl(selfieSaved, resolvedDriverId, reqHost);
 
       const now = new Date().toISOString();
       const prevKyc = driver.kyc || {};
