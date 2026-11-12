@@ -4,6 +4,16 @@ const push = require('./push.cjs');
 const env = require('./env.cjs');
 const finance = require('./financeEngine.cjs');
 const kycStorage = require('./kycStorage.cjs');
+const driverTermsContract = require('./driverTermsContract.cjs');
+const passengerTermsContract = require('./passengerTermsContract.cjs');
+
+function getRequestClientIp(req) {
+  return (
+    String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
+    req.socket?.remoteAddress ||
+    '127.0.0.1'
+  );
+}
 
 const VALID_ADMIN_PINS = ['1234', '2026', 'admin', '0000', '9999'];
 
@@ -161,6 +171,7 @@ async function ensureClientsSchema() {
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS password_hash TEXT;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT FALSE;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS terms_signature JSONB;
     `);
     await finance.ensureExtendedSchema();
     clientsSchemaReady = true;
@@ -245,6 +256,7 @@ function sanitizeClientRow(row, isAdmin = false) {
     blocked: Boolean(row.blocked),
     savedAddresses: row.saved_addresses || [],
     termsAcceptedAt: row.terms_accepted_at || undefined,
+    termsSignature: row.terms_signature || undefined,
     createdAt: row.created_at
   };
   if (isAdmin) {
@@ -644,6 +656,9 @@ async function handleApiRequest(req, res) {
       if (!password || password.length < 4) {
         return sendJson(res, 400, { ok: false, error: 'Crie uma senha de pelo menos 4 caracteres.' });
       }
+      if (!body.partialOnboarding && (!body.termsAcceptance || body.termsAcceptance.accepted !== true)) {
+        return sendJson(res, 400, { ok: false, error: 'É necessário concordar com os Termos e Condições de Uso para concluir o cadastro.' });
+      }
 
       const existing = await finance.findDriverByIdentifier(cleanPhone) || await finance.findDriverByIdentifier(document);
       let targetId = `drv-${Date.now()}`;
@@ -663,6 +678,28 @@ async function handleApiRequest(req, res) {
 
       const photoUrl = body.photo ? await kycStorage.savePublicMedia(targetId, 'avatar', body.photo) : '';
       const vehiclePhotoUrl = body.vehiclePhoto ? await kycStorage.savePublicMedia(targetId, 'vehicle', body.vehiclePhoto) : '';
+
+      const clientIp = getRequestClientIp(req);
+
+      const termsSignature = body.termsAcceptance?.accepted
+        ? driverTermsContract.buildDriverTermsSignature({
+            driverId: targetId,
+            name,
+            document,
+            cnh,
+            phone,
+            email: String(body.email || '').trim().toLowerCase(),
+            city: body.city || 'Brasil',
+            vehicleBrand,
+            vehicleModel,
+            vehicleYear,
+            vehiclePlate,
+            ip: clientIp,
+            userAgent: req.headers['user-agent'],
+            host: req.headers.host,
+            clientAcceptance: body.termsAcceptance
+          })
+        : (existing?.termsSignature || existing?.metadata?.termsSignature || null);
 
       const saved = await finance.saveDriverRecord({
         id: targetId,
@@ -699,7 +736,8 @@ async function handleApiRequest(req, res) {
         approvalStatus: 'pendente_aprovacao',
         isOnline: false,
         rating: 5.0,
-        totalRides: 0
+        totalRides: 0,
+        termsSignature
       });
 
       await db.query(
@@ -731,6 +769,28 @@ async function handleApiRequest(req, res) {
       const src = full || row;
       const firstName = String(src.name || '').trim().split(/\s+/)[0] || 'Motorista';
       const kyc = src.kyc || {};
+      const rawTermsSig = src.termsSignature || (src.metadata && src.metadata.termsSignature) || null;
+      const isTermsSigned = Boolean(rawTermsSig && rawTermsSig.signed);
+      const safeTermsSummary = isTermsSigned
+        ? {
+            signed: true,
+            contractId: rawTermsSig.contractId,
+            contractVersion: rawTermsSig.contractVersion,
+            contractDate: rawTermsSig.contractDate,
+            validationCode: rawTermsSig.validationCode,
+            documentHash: rawTermsSig.documentHash,
+            signedAt: rawTermsSig.signedAt,
+            signedAtBrasilia: rawTermsSig.signedAtBrasilia,
+            driverSnapshot: rawTermsSig.driverSnapshot
+              ? {
+                  name: rawTermsSig.driverSnapshot.name,
+                  vehicle: rawTermsSig.driverSnapshot.vehicle,
+                  vehiclePlate: rawTermsSig.driverSnapshot.vehiclePlate,
+                  city: rawTermsSig.driverSnapshot.city
+                }
+              : undefined
+          }
+        : null;
 
       return sendJson(res, 200, {
         ok: true,
@@ -748,6 +808,8 @@ async function handleApiRequest(req, res) {
           vehicleModel: src.vehicleModel || '',
           vehiclePlate: src.vehiclePlate || '',
           city: src.city || '',
+          termsSigned: isTermsSigned,
+          termsSignature: safeTermsSummary,
           kyc: {
             status: kyc.status || src.approvalStatus || 'pendente_aprovacao',
             submittedAt: kyc.submittedAt || null,
@@ -971,6 +1033,13 @@ async function handleApiRequest(req, res) {
           if (foundByPhone) driver = await finance.getDriverById(foundByPhone.id);
         }
       }
+      if (!driver && body.driverEmail) {
+        const cleanEmail = String(body.driverEmail).trim().toLowerCase();
+        if (cleanEmail.includes('@')) {
+          const foundByEmail = await finance.findDriverByIdentifier(cleanEmail);
+          if (foundByEmail) driver = await finance.getDriverById(foundByEmail.id);
+        }
+      }
       if (!driver) {
         return sendJson(res, 404, {
           ok: false,
@@ -983,7 +1052,18 @@ async function handleApiRequest(req, res) {
       const resolvedDriverId = driver.id;
       const cnhPhoto = body.cnhDocumentPhoto;
       const selfiePhoto = body.selfiePhoto;
-      const biometric = body.biometricResult;
+      const rawBiometric = body.biometricResult;
+      const normSim = Number(rawBiometric?.similarityScore ?? rawBiometric?.similarity ?? 0);
+      const normMatch = Boolean(rawBiometric?.isMatch ?? rawBiometric?.match ?? (normSim >= 55));
+      const biometric = rawBiometric
+        ? {
+            ...rawBiometric,
+            similarity: normSim,
+            similarityScore: normSim,
+            match: normMatch,
+            isMatch: normMatch
+          }
+        : null;
 
       if (!cnhPhoto || !selfiePhoto) {
         return sendJson(res, 400, { ok: false, error: 'A fotografia da CNH e a selfie da câmara são obrigatórias.' });
@@ -2416,6 +2496,9 @@ async function handleApiRequest(req, res) {
       if (!password || password.length < 4) {
         return sendJson(res, 400, { ok: false, error: 'Crie uma senha com pelo menos 4 caracteres.' });
       }
+      if (!body.termsAcceptance || body.termsAcceptance.accepted !== true) {
+        return sendJson(res, 400, { ok: false, error: 'É necessário ler e concordar com os Termos e Condições Gerais de Uso para concluir o cadastro.' });
+      }
 
       const existingRes = await db.query(
         `SELECT * FROM public.clients
@@ -2426,7 +2509,8 @@ async function handleApiRequest(req, res) {
       );
 
       const passwordHash = hashPassword(password);
-      const termsAcceptedAt = body.termsAcceptedAt || new Date().toISOString();
+      const clientIp = getRequestClientIp(req);
+      let savedClientRow = null;
 
       if (existingRes.rows[0]) {
         const existing = existingRes.rows[0];
@@ -2436,34 +2520,71 @@ async function handleApiRequest(req, res) {
             error: 'Já existe uma conta cadastrada com este WhatsApp ou E-mail. Faça login com sua senha.'
           });
         }
+        const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
+          clientId: existing.id,
+          name,
+          document,
+          phone,
+          email,
+          ip: clientIp,
+          userAgent: req.headers['user-agent'],
+          host: req.headers.host,
+          clientAcceptance: body.termsAcceptance
+        });
         const updatedRes = await db.query(
           `UPDATE public.clients
-           SET name = $1, phone = $2, email = $3, document = $4, password_hash = $5, terms_accepted_at = $6
-           WHERE id = $7
+           SET name = $1, phone = $2, email = $3, document = $4, password_hash = $5, terms_accepted_at = $6, terms_signature = $7
+           WHERE id = $8
            RETURNING *`,
-          [name, phone, email || null, document || null, passwordHash, termsAcceptedAt, existing.id]
+          [name, phone, email || null, document || null, passwordHash, termsSignature.signedAt, JSON.stringify(termsSignature), existing.id]
         );
-        return sendJson(res, 200, { ok: true, client: sanitizeClientRow(updatedRes.rows[0], false) });
+        savedClientRow = updatedRes.rows[0];
+      } else {
+        const newId = body.id || `cli-${Date.now()}`;
+        const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
+          clientId: newId,
+          name,
+          document,
+          phone,
+          email,
+          ip: clientIp,
+          userAgent: req.headers['user-agent'],
+          host: req.headers.host,
+          clientAcceptance: body.termsAcceptance
+        });
+        const insertRes = await db.query(
+          `INSERT INTO public.clients (id, name, phone, email, document, password_hash, saved_addresses, terms_accepted_at, terms_signature, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+           RETURNING *`,
+          [
+            newId,
+            name,
+            phone,
+            email || null,
+            document || null,
+            passwordHash,
+            JSON.stringify(body.savedAddresses || []),
+            termsSignature.signedAt,
+            JSON.stringify(termsSignature)
+          ]
+        );
+        savedClientRow = insertRes.rows[0];
       }
 
-      const newId = body.id || `cli-${Date.now()}`;
-      const insertRes = await db.query(
-        `INSERT INTO public.clients (id, name, phone, email, document, password_hash, saved_addresses, terms_accepted_at, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-         RETURNING *`,
+      const sanitizedClient = sanitizeClientRow(savedClientRow, false);
+      const docSummary = sanitizedClient.document ? ` • CPF: ${sanitizedClient.document}` : '';
+      const termCode = sanitizedClient.termsSignature?.validationCode ? ` • Termo: ${sanitizedClient.termsSignature.validationCode}` : '';
+      await db.query(
+        `INSERT INTO public.notifications (id, title, message, type, read, timestamp)
+         VALUES ($1, $2, $3, 'client_new', false, NOW())`,
         [
-          newId,
-          name,
-          phone,
-          email || null,
-          document || null,
-          passwordHash,
-          JSON.stringify(body.savedAddresses || []),
-          termsAcceptedAt
+          `notif-cli-${Date.now()}`,
+          `👤 Novo Passageiro Cadastrado: ${sanitizedClient.name}`,
+          `WhatsApp: ${sanitizedClient.phone}${docSummary}${termCode}`
         ]
-      );
+      ).catch(() => {});
 
-      return sendJson(res, 200, { ok: true, client: sanitizeClientRow(insertRes.rows[0], false) });
+      return sendJson(res, 200, { ok: true, client: sanitizedClient });
     }
 
     if (pathname === '/api/clients/check' && (method === 'POST' || method === 'GET')) {
@@ -2481,7 +2602,7 @@ async function handleApiRequest(req, res) {
       const cleanPhone = !isEmail ? identifier.replace(/\D/g, '') : '';
 
       const foundRes = await db.query(
-        `SELECT id, name, phone, email, blocked, password_hash FROM public.clients
+        `SELECT id, name, phone, email, blocked, password_hash, terms_signature FROM public.clients
          WHERE ($1 <> '' AND LOWER(COALESCE(email, '')) = $1)
             OR ($2 <> '' AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2)
          LIMIT 1`,
@@ -2499,7 +2620,9 @@ async function handleApiRequest(req, res) {
         hasPassword: Boolean(clientRow.password_hash),
         name: clientRow.name,
         firstName: clientRow.name ? clientRow.name.split(' ')[0] : 'Passageiro',
-        blocked: Boolean(clientRow.blocked)
+        blocked: Boolean(clientRow.blocked),
+        termsSigned: Boolean(clientRow.terms_signature && clientRow.terms_signature.signed),
+        termsValidationCode: clientRow.terms_signature?.validationCode || null
       });
     }
 
@@ -2583,18 +2706,19 @@ async function handleApiRequest(req, res) {
         const pwdHash = cli.password ? hashPassword(cli.password) : null;
 
         const r = await db.query(`
-          INSERT INTO public.clients (id, name, phone, email, document, password_hash, notes, blocked, saved_addresses, terms_accepted_at, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          INSERT INTO public.clients (id, name, phone, email, document, password_hash, notes, blocked, saved_addresses, terms_accepted_at, terms_signature, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           ON CONFLICT (id) DO UPDATE SET
             name = EXCLUDED.name,
             phone = EXCLUDED.phone,
             email = COALESCE(EXCLUDED.email, public.clients.email),
             document = COALESCE(EXCLUDED.document, public.clients.document),
             password_hash = COALESCE(EXCLUDED.password_hash, public.clients.password_hash),
-            notes = CASE WHEN $12::boolean THEN EXCLUDED.notes ELSE public.clients.notes END,
-            blocked = CASE WHEN $12::boolean THEN EXCLUDED.blocked ELSE public.clients.blocked END,
+            notes = CASE WHEN $13::boolean THEN EXCLUDED.notes ELSE public.clients.notes END,
+            blocked = CASE WHEN $13::boolean THEN EXCLUDED.blocked ELSE public.clients.blocked END,
             saved_addresses = EXCLUDED.saved_addresses,
-            terms_accepted_at = COALESCE(EXCLUDED.terms_accepted_at, public.clients.terms_accepted_at)
+            terms_accepted_at = COALESCE(EXCLUDED.terms_accepted_at, public.clients.terms_accepted_at),
+            terms_signature = COALESCE(EXCLUDED.terms_signature, public.clients.terms_signature)
           RETURNING *;
         `, [
           cli.id,
@@ -2607,6 +2731,7 @@ async function handleApiRequest(req, res) {
           Boolean(cli.blocked),
           JSON.stringify(cli.savedAddresses || []),
           cli.termsAcceptedAt || null,
+          cli.termsSignature ? JSON.stringify(cli.termsSignature) : null,
           cli.createdAt || new Date().toISOString(),
           isAdmin
         ]);

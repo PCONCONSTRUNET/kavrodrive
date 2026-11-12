@@ -49,12 +49,26 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
     loadMasterData();
   }, [rides.length]);
 
+  useEffect(() => {
+    const handleDbSync = () => {
+      const syncedDrivers = StorageService.getDrivers();
+      setDrivers(syncedDrivers);
+    };
+    window.addEventListener('up_database_synced', handleDbSync);
+    return () => window.removeEventListener('up_database_synced', handleDbSync);
+  }, []);
+
   const commPct = Number(config.platformCommissionPercent ?? 20);
 
   const stats = useMemo(() => {
     const onlineDrivers = drivers.filter(d => d.isOnline && d.approvalStatus === 'aprovado').length;
     const busyDrivers = drivers.filter(d => Boolean(d.currentRideId)).length;
-    const pendingDrivers = drivers.filter(d => d.approvalStatus === 'pendente_aprovacao').length;
+    const pendingDrivers = drivers.filter(d =>
+      d.approvalStatus === 'pendente_aprovacao' ||
+      d.approvalStatus === 'pendente' ||
+      d.approvalStatus === 'em_analise' ||
+      d.approvalStatus === 'correcao_solicitada'
+    ).length;
     const blockedDrivers = drivers.filter(d => d.financialBlocked).length;
 
     const activeRides = rides.filter(r =>

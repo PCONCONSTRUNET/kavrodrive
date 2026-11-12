@@ -28,10 +28,17 @@ import {
 } from '../services/vehicleService';
 import { DriverChatModal } from '../components/DriverChatModal';
 import { DriverPreferencesModal } from '../components/DriverPreferencesModal';
+import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { DriverIncomingRideModal } from '../components/DriverIncomingRideModal';
 import { DriverActiveRideCard } from '../components/DriverActiveRideCard';
 import { DriverDrawerMenu } from '../components/DriverDrawerMenu';
 import { DriverKycVerificationModal } from '../components/DriverKycVerificationModal';
+import { DriverTermsContractModal } from '../components/DriverTermsContractModal';
+import {
+  DRIVER_TERMS_AFFIRMATIVE_TEXT,
+  DRIVER_TERMS_CONTRACT_ID,
+  DRIVER_TERMS_CONTRACT_VERSION
+} from '../utils/driverTermsContract';
 import { TurnstileWidget, isTurnstileEnabled } from '../components/TurnstileWidget';
 import confetti from 'canvas-confetti';
 
@@ -70,7 +77,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
 
   // Cadastro em etapas estilo Uber Partner
   const [regStep, setRegStep] = useState<number>(1);
-  const REG_TOTAL_STEPS = 9;
+  const REG_TOTAL_STEPS = 10;
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
   const [regName, setRegName] = useState('');
@@ -95,6 +102,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [regHasLargeTrunk, setRegHasLargeTrunk] = useState(true);
   const [regHasLeatherSeats, setRegHasLeatherSeats] = useState(false);
   const [regCategory, setRegCategory] = useState('kavro_go');
+  const [regTermsAccepted, setRegTermsAccepted] = useState(false);
+  const [isRegTermsModalOpen, setIsRegTermsModalOpen] = useState(false);
+  const [isDriverSignedContractOpen, setIsDriverSignedContractOpen] = useState(false);
 
   // Edição de chave PIX após aprovação (na aba Carteira)
   const [pixEditType, setPixEditType] = useState<'cpf' | 'cnpj' | 'telefone' | 'email' | 'aleatoria'>('cpf');
@@ -171,9 +181,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               return;
             }
           }
+          const checkedDriver = res.driver;
           setCurrentDriver(prev => {
             if (!prev) return null;
-            const merged = { ...prev, ...res.driver } as DriverProfile;
+            const merged = {
+              ...prev,
+              ...checkedDriver,
+              phone: checkedDriver.phone || prev.phone,
+              email: checkedDriver.email || prev.email,
+              termsSignature: checkedDriver.termsSignature || prev.termsSignature
+            } as DriverProfile;
             if (!isLookupOnlySession) StorageService.setCurrentDriver(merged);
             return merged;
           });
@@ -291,9 +308,10 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       if (typeof reader.result === 'string') {
-        setRegPhoto(reader.result);
+        const compressed = await compressDataUrlForUpload(reader.result, 720, 0.82);
+        setRegPhoto(compressed);
       }
     };
     reader.readAsDataURL(file);
@@ -313,6 +331,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         case 6: return !regBrand.trim() || !regModel.trim() ? 'Informe a marca e o modelo do veículo.' : '';
         case 7: return !/^\d{4}$/.test(regYear) ? 'Informe o ano do veículo (ex: 2022).' : (!regColor.trim() ? 'Informe a cor do veículo.' : '');
         case 8: return regPlate.replace(/[^A-Za-z0-9]/g, '').length < 7 ? 'Informe uma placa válida (ex: ABC1D23).' : '';
+        case 10: return !regTermsAccepted ? 'Leia e marque o aceite dos Termos e Condições de Uso do Motorista Parceiro para assinar e enviar.' : '';
         default: return '';
       }
     })();
@@ -378,7 +397,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       pixType: 'cpf',
       pixKey: '',
       bankName: '',
-      turnstileToken: turnstileToken || undefined
+      turnstileToken: turnstileToken || undefined,
+      termsAcceptance: {
+        accepted: true,
+        contractId: DRIVER_TERMS_CONTRACT_ID,
+        contractVersion: DRIVER_TERMS_CONTRACT_VERSION,
+        acceptedAtClient: new Date().toISOString(),
+        affirmativeText: DRIVER_TERMS_AFFIRMATIVE_TEXT,
+        language: typeof navigator !== 'undefined' ? navigator.language : 'pt-BR',
+        timezone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'America/Sao_Paulo'
+      }
     });
     setIsLoadingAuth(false);
     if (!res.ok || !res.driver) {
@@ -663,7 +691,12 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       6: { section: 'Veículo', title: 'Qual carro você vai usar?', subtitle: 'O veículo precisa ter 4 portas e documentação em dia.' },
       7: { section: 'Veículo', title: 'Ano e cor do veículo' },
       8: { section: 'Veículo', title: 'Qual é a placa?', subtitle: 'Padrão Mercosul ou antigo.' },
-      9: { section: 'Veículo', title: 'O que seu carro tem?', subtitle: 'Isso define em quais categorias você pode receber viagens.' }
+      9: { section: 'Veículo', title: 'O que seu carro tem?', subtitle: 'Isso define em quais categorias você pode receber viagens.' },
+      10: {
+        section: 'Contrato de parceria',
+        title: 'Termos e condições de uso',
+        subtitle: 'Leia o contrato de Motorista Parceiro e registre seu aceite eletrônico.'
+      }
     };
 
     return (
@@ -746,6 +779,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                       if (digits.length === 11) setRegDocument(formatCPF(digits));
                       setAuthMode('register');
                       setRegStep(1);
+                      setRegTermsAccepted(false);
                       setAuthError('');
                       setLoginNotFound(false);
                     }}
@@ -763,7 +797,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
 
                 <button
                   type="button"
-                  onClick={() => { setAuthMode('register'); setRegStep(1); setAuthError(''); setLoginNotFound(false); }}
+                  onClick={() => { setAuthMode('register'); setRegStep(1); setRegTermsAccepted(false); setAuthError(''); setLoginNotFound(false); }}
                   style={{ ...uPrimaryBtn(), backgroundColor: '#F3F3F3', color: '#000000' }}
                 >
                   Quero dirigir com a Kavro
@@ -993,6 +1027,116 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </div>
               )}
 
+              {/* 10. Termos e Condições de Uso — Motorista Parceiro + Assinatura Digital */}
+              {regStep === 10 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{
+                    backgroundColor: '#F3F3F3',
+                    borderRadius: 12,
+                    padding: '14px 16px',
+                    border: '1px solid #E2E2E2',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', color: '#000000' }}>
+                        Instrumento de Parceria • {DRIVER_TERMS_CONTRACT_ID}
+                      </span>
+                      <span style={{
+                        fontSize: '0.7rem', fontWeight: 700, padding: '2px 8px', borderRadius: 999,
+                        backgroundColor: '#E5E7EB', color: '#111827'
+                      }}>
+                        Versão {DRIVER_TERMS_CONTRACT_VERSION}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: '0.82rem', color: '#333333', lineHeight: 1.45 }}>
+                      <div><strong>Signatário:</strong> {regName || 'Motorista Parceiro'} • <strong>CPF:</strong> {regDocument || '—'}</div>
+                      <div><strong>Veículo:</strong> {[regBrand, regModel, regYear].filter(Boolean).join(' ') || '—'} • <strong>Placa:</strong> {regPlate ? regPlate.toUpperCase() : '—'}</div>
+                    </div>
+
+                    <div style={{ fontSize: '0.78rem', color: '#525252', lineHeight: 1.45, borderTop: '1px solid #E2E2E2', paddingTop: 8 }}>
+                      Regula a relação de parceria sem vínculo exclusivo, regras de verificação KYC, repasses financeiros, taxas da plataforma (Anexo I — a partir de 12% no cartão e regras de saques PIX) e segurança.
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setIsRegTermsModalOpen(true)}
+                      style={{
+                        height: 44,
+                        borderRadius: 10,
+                        border: '1.5px solid #000000',
+                        backgroundColor: '#FFFFFF',
+                        color: '#000000',
+                        fontSize: '0.88rem',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8
+                      }}
+                    >
+                      <span>Ler contrato completo (34 cláusulas + Anexos)</span>
+                    </button>
+                  </div>
+
+                  <div
+                    role="checkbox"
+                    aria-checked={regTermsAccepted}
+                    tabIndex={0}
+                    onClick={() => {
+                      setRegTermsAccepted(!regTermsAccepted);
+                      setAuthError('');
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === ' ' || e.key === 'Enter') {
+                        e.preventDefault();
+                        setRegTermsAccepted(!regTermsAccepted);
+                        setAuthError('');
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: 12,
+                      padding: '14px',
+                      borderRadius: 12,
+                      cursor: 'pointer',
+                      backgroundColor: regTermsAccepted ? '#F0FDF4' : '#FFFFFF',
+                      border: regTermsAccepted ? '2px solid #16A34A' : '1.5px solid #D4D4D4'
+                    }}
+                  >
+                    <span style={{
+                      width: 22,
+                      height: 22,
+                      borderRadius: 6,
+                      marginTop: 1,
+                      flexShrink: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: regTermsAccepted ? '#16A34A' : '#FFFFFF',
+                      border: regTermsAccepted ? '2px solid #16A34A' : '2px solid #737373',
+                      color: '#FFFFFF',
+                      fontSize: '0.82rem',
+                      fontWeight: 800
+                    }}>
+                      {regTermsAccepted ? '✓' : ''}
+                    </span>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <span style={{ fontSize: '0.86rem', fontWeight: 600, color: '#000000', lineHeight: 1.4 }}>
+                        {DRIVER_TERMS_AFFIRMATIVE_TEXT}
+                      </span>
+                      <span style={{ fontSize: '0.75rem', color: '#525252', lineHeight: 1.4 }}>
+                        Sua assinatura eletrônica será registrada com data, horário de Brasília, IP de origem e hash criptográfico SHA-256.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {authError && (
                 <div style={{ color: '#C1121F', fontSize: '0.86rem', fontWeight: 500, padding: '10px 12px', backgroundColor: '#FDECEC', borderRadius: 8 }}>
                   {authError}
@@ -1006,13 +1150,13 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 <>
                   <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
                   <div style={{ fontSize: '0.8rem', color: '#6B6B6B', lineHeight: 1.45, textAlign: 'center' }}>
-                    Em seguida você fará a verificação de identidade (CNH + selfie ao vivo).
+                    Ao continuar, seu contrato assinado eletronicamente será salvo e você seguirá para envio da CNH e selfie ao vivo.
                   </div>
                 </>
               )}
 
               <button type="submit" disabled={isLoadingAuth} style={uPrimaryBtn(isLoadingAuth)}>
-                {regStep < REG_TOTAL_STEPS ? 'Continuar' : isLoadingAuth ? 'Enviando...' : 'Continuar para documentos'}
+                {regStep < REG_TOTAL_STEPS ? 'Continuar' : isLoadingAuth ? 'Assinando e enviando...' : 'Concordar, Assinar e Enviar'}
               </button>
 
               {regStep === 1 && (
@@ -1027,6 +1171,26 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             </form>
           )}
         </main>
+
+        <DriverTermsContractModal
+          isOpen={isRegTermsModalOpen}
+          onClose={() => setIsRegTermsModalOpen(false)}
+          mode="driver"
+          config={config}
+          draftSigner={{
+            name: regName,
+            cpf: regDocument,
+            phone: regPhone,
+            email: regEmail,
+            city: regCity,
+            vehicle: [regBrand, regModel, regYear].filter(Boolean).join(' '),
+            plate: regPlate ? regPlate.toUpperCase() : ''
+          }}
+          onAccept={() => {
+            setRegTermsAccepted(true);
+            setAuthError('');
+          }}
+        />
       </div>
     );
   }
@@ -1164,6 +1328,14 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                   <CheckCircle2 size={18} color="#000000" />
                   <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#000000' }}>CNH e selfie enviadas com sucesso</span>
                 </div>
+                {currentDriver.termsSignature?.signed && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <CheckCircle2 size={18} color="#15803D" />
+                    <span style={{ fontSize: '0.88rem', fontWeight: 600, color: '#15803D' }}>
+                      Termo assinado ({currentDriver.termsSignature.validationCode})
+                    </span>
+                  </div>
+                )}
                 {(currentDriver.vehicleBrand || currentDriver.vehiclePlate) && (
                   <div style={{ fontSize: '0.84rem', color: '#545454', paddingLeft: 28 }}>
                     Veículo: {currentDriver.vehicleBrand} {currentDriver.vehicleModel} {currentDriver.vehiclePlate ? `• ${currentDriver.vehiclePlate}` : ''}
@@ -1202,6 +1374,19 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 >
                   Reenviar documentos
                 </button>
+                {currentDriver.termsSignature?.signed && (
+                  <button
+                    type="button"
+                    onClick={() => setIsDriverSignedContractOpen(true)}
+                    style={{
+                      width: '100%', height: 46, borderRadius: 10, border: '1px solid #E2E8F0',
+                      backgroundColor: '#FFFFFF', color: '#15803D', fontSize: '0.86rem', fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Ver Termo Assinado ({currentDriver.termsSignature.validationCode})
+                  </button>
+                )}
               </div>
             </>
           ) : (
@@ -1279,6 +1464,19 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 <Camera size={18} />
                 <span>{isCorrection || isRejected ? 'Reenviar documentos' : 'Fazer verificação'}</span>
               </button>
+              {currentDriver.termsSignature?.signed && (
+                <button
+                  type="button"
+                  onClick={() => setIsDriverSignedContractOpen(true)}
+                  style={{
+                    width: '100%', height: 46, borderRadius: 10, border: '1px solid #E2E8F0',
+                    backgroundColor: '#FFFFFF', color: '#15803D', fontSize: '0.86rem', fontWeight: 600,
+                    cursor: 'pointer', marginTop: 10
+                  }}
+                >
+                  Ver Termo Assinado ({currentDriver.termsSignature.validationCode})
+                </button>
+              )}
             </>
           )}
         </main>
@@ -1297,6 +1495,14 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             setIsKycModalOpen(false);
           }}
           correctionInstructions={currentDriver.kyc?.adminNotes}
+        />
+
+        <DriverTermsContractModal
+          isOpen={isDriverSignedContractOpen}
+          onClose={() => setIsDriverSignedContractOpen(false)}
+          mode="driver"
+          config={config}
+          driver={currentDriver}
         />
       </div>
     );
@@ -2054,6 +2260,72 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                   <span>Visualizar CNH & Selfie KYC</span>
                 </button>
               </div>
+
+              {/* Card Termos de Uso & Assinatura Eletrônica */}
+              <div style={{
+                backgroundColor: '#1E293B',
+                borderRadius: 20,
+                padding: '18px',
+                border: '1px solid #334155',
+                marginTop: 12
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <ShieldCheck size={20} color="#76D800" />
+                    <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#FFFFFF' }}>Termos & Contrato Digital</span>
+                  </div>
+                  <span style={{
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    backgroundColor: currentDriver.termsSignature?.signed ? 'rgba(118, 216, 0, 0.15)' : 'rgba(234, 179, 8, 0.15)',
+                    color: currentDriver.termsSignature?.signed ? '#76D800' : '#FACC15'
+                  }}>
+                    {currentDriver.termsSignature?.signed ? 'Assinado' : `Versão ${DRIVER_TERMS_CONTRACT_VERSION}`}
+                  </span>
+                </div>
+
+                {currentDriver.termsSignature?.signed ? (
+                  <div style={{ fontSize: '0.78rem', color: '#94A3B8', lineHeight: 1.5, marginBottom: 12 }}>
+                    Assinado eletronicamente em <strong style={{ color: '#E2E8F0' }}>{currentDriver.termsSignature.signedAtBrasilia}</strong>.
+                    <div style={{ fontFamily: 'monospace', fontSize: '0.74rem', color: '#76D800', marginTop: 4 }}>
+                      Código: {currentDriver.termsSignature.validationCode}
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.78rem', color: '#94A3B8', lineHeight: 1.5, marginBottom: 12 }}>
+                    Instrumento contratual de Motorista Parceiro Kavro Drive ({DRIVER_TERMS_CONTRACT_ID}).
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setIsDriverSignedContractOpen(true)}
+                  style={{
+                    width: '100%',
+                    padding: '11px',
+                    borderRadius: 12,
+                    backgroundColor: 'rgba(255,255,255,0.06)',
+                    color: '#FFFFFF',
+                    border: '1px solid #475569',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6
+                  }}
+                >
+                  <Eye size={14} />
+                  <span>
+                    {currentDriver.termsSignature?.signed
+                      ? `Ver Termo Assinado (${currentDriver.termsSignature.validationCode})`
+                      : 'Visualizar Termos e Condições'}
+                  </span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -2301,6 +2573,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             setIsKycModalOpen(false);
           }}
           correctionInstructions={currentDriver.kyc?.adminNotes}
+        />
+      )}
+
+      {currentDriver && (
+        <DriverTermsContractModal
+          isOpen={isDriverSignedContractOpen}
+          onClose={() => setIsDriverSignedContractOpen(false)}
+          mode="driver"
+          config={config}
+          driver={currentDriver}
         />
       )}
     </div>

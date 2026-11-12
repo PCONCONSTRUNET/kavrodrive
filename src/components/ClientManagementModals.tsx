@@ -5,10 +5,11 @@ import {
   X, Check, Calendar, Clock, DollarSign, ChevronRight, Navigation,
   Sparkles, ExternalLink, ShieldCheck, AlertCircle, Award
 } from 'lucide-react';
-import { ClientProfile, Ride } from '../types';
+import { ClientProfile, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
 import { WhatsAppIcon } from './WhatsAppIcon';
+import { PassengerTermsContractModal } from './PassengerTermsContractModal';
 
 // ============================================================================
 // MODAL 1: FORMULÁRIO DE CADASTRO / EDIÇÃO MANUAL DE CLIENTE
@@ -341,6 +342,7 @@ interface ClientDetailModalProps {
   onClose: () => void;
   client: ClientProfile | null;
   rides: Ride[];
+  config?: SystemConfig;
   onOpenRideDetail: (ride: Ride) => void;
   onScheduleForClient: (client: ClientProfile) => void;
   onEditClient: (client: ClientProfile) => void;
@@ -352,16 +354,19 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
   onClose,
   client,
   rides,
+  config,
   onOpenRideDetail,
   onScheduleForClient,
   onEditClient,
   onDeleteClient,
 }) => {
   const [activeTab, setActiveTab] = useState<'resumo' | 'corridas' | 'financeiro'>('resumo');
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setActiveTab('resumo');
+      setIsTermsModalOpen(false);
     }
   }, [isOpen, client?.id]);
 
@@ -414,23 +419,25 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
     .map(w => w[0]?.toUpperCase())
     .join('');
 
-  return createPortal(
-    <div
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 9999,
-        backgroundColor: 'rgba(15, 23, 42, 0.55)',
-        backdropFilter: 'blur(3px)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 20
-      }}
-    >
+  return (
+    <>
+      {createPortal(
+        <div
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 9999,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20
+          }}
+        >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -732,6 +739,115 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                   </div>
                 )}
               </div>
+
+              <div
+                style={{
+                  gridColumn: '1 / -1',
+                  backgroundColor: '#FFFFFF',
+                  border: client.termsSignature?.signed ? '1px solid #BBF7D0' : '1px solid #E2E8F0',
+                  borderRadius: 10,
+                  padding: 16
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <ShieldCheck size={16} color={client.termsSignature?.signed ? '#16A34A' : '#64748B'} />
+                    <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>
+                      Termos e Condições de Uso — Passageiro (Assinatura Digital)
+                    </span>
+                    {client.termsSignature?.signed ? (
+                      <span style={{
+                        padding: '3px 9px',
+                        borderRadius: 999,
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        backgroundColor: '#DCFCE7',
+                        color: '#166534'
+                      }}>
+                        ✓ ASSINADO • v{client.termsSignature.contractVersion || '0.1'}
+                      </span>
+                    ) : client.termsAcceptedAt ? (
+                      <span style={{
+                        padding: '3px 9px',
+                        borderRadius: 999,
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        backgroundColor: '#FEF9C3',
+                        color: '#854D0E'
+                      }}>
+                        ACEITE REGISTRADO (SEM CERTIFICADO SHA-256)
+                      </span>
+                    ) : (
+                      <span style={{
+                        padding: '3px 9px',
+                        borderRadius: 999,
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        backgroundColor: '#F1F5F9',
+                        color: '#475569'
+                      }}>
+                        PENDENTE / CADASTRO LEGADO
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsTermsModalOpen(true)}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '7px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #0F172A',
+                      backgroundColor: '#0F172A',
+                      color: '#FFFFFF',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <FileText size={13} />
+                    {client.termsSignature?.signed ? 'Ver Contrato & Certificado / PDF' : 'Visualizar Minuta / PDF'}
+                  </button>
+                </div>
+
+                {client.termsSignature?.signed ? (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+                    <div style={{ padding: '8px 10px', borderRadius: 8, backgroundColor: '#F0FDF4', border: '1px solid #DCFCE7' }}>
+                      <div style={{ fontSize: '0.67rem', fontWeight: 700, color: '#15803D', textTransform: 'uppercase' }}>Código de Validação</div>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0F172A', fontFamily: 'monospace', marginTop: 2 }}>
+                        {client.termsSignature.validationCode}
+                      </div>
+                    </div>
+                    <div style={{ padding: '8px 10px', borderRadius: 8, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: '0.67rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Data/Hora do Aceite (Brasília)</div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A', marginTop: 2 }}>
+                        {client.termsSignature.signedAtBrasilia || client.termsSignature.signedAt}
+                      </div>
+                    </div>
+                    <div style={{ padding: '8px 10px', borderRadius: 8, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }} title={client.termsSignature.signatureHash}>
+                      <div style={{ fontSize: '0.67rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Hash SHA-256</div>
+                      <div style={{ fontSize: '0.76rem', fontWeight: 600, color: '#334155', fontFamily: 'monospace', marginTop: 2 }}>
+                        {client.termsSignature.signatureHash ? `${client.termsSignature.signatureHash.slice(0, 22)}...` : '—'}
+                      </div>
+                    </div>
+                    <div style={{ padding: '8px 10px', borderRadius: 8, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontSize: '0.67rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Identificação no Aceite</div>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 600, color: '#0F172A', marginTop: 2 }}>
+                        {client.termsSignature.passengerSnapshot?.name || client.name}
+                        {client.termsSignature.passengerSnapshot?.cpf ? ` • CPF ${client.termsSignature.passengerSnapshot.cpf}` : ''}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.76rem', color: '#64748B', lineHeight: 1.5 }}>
+                    {client.termsAcceptedAt
+                      ? `Aceite registrado em ${new Date(client.termsAcceptedAt).toLocaleString('pt-BR')} sem metadados SHA-256 estendidos.`
+                      : 'Passageiro cadastrado manualmente pelo painel administrativo ou antes da exigência do certificado eletrônico SHA-256.'}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 
@@ -881,5 +997,14 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
       </div>
     </div>,
     document.body
+      )}
+      <PassengerTermsContractModal
+        isOpen={isOpen && isTermsModalOpen}
+        onClose={() => setIsTermsModalOpen(false)}
+        mode="admin"
+        client={client}
+        config={config}
+      />
+    </>
   );
 };

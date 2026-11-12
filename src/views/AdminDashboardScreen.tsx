@@ -19,6 +19,7 @@ import { RideDetailAdminModal } from '../components/RideDetailAdminModal';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { RidePaymentCheckoutModal } from '../components/RidePaymentCheckoutModal';
 import { ClientFormModal, ClientDetailModal } from '../components/ClientManagementModals';
+import { PassengerTermsContractModal } from '../components/PassengerTermsContractModal';
 import { FinanceReportPdfModal } from '../components/FinanceReportPdfModal';
 import { AdminDriverProfileTab } from '../components/AdminDriverProfileTab';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
@@ -100,6 +101,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   const [isClientFormOpen, setIsClientFormOpen] = useState(false);
   const [clientToEdit, setClientToEdit] = useState<ClientProfile | null>(null);
   const [selectedClientDetail, setSelectedClientDetail] = useState<ClientProfile | null>(null);
+  const [termsViewerClient, setTermsViewerClient] = useState<ClientProfile | null>(null);
   const [clientSearchTerm, setClientSearchTerm] = useState('');
   const [manualInitialClientName, setManualInitialClientName] = useState('');
   const [manualInitialClientPhone, setManualInitialClientPhone] = useState('');
@@ -958,10 +960,19 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
         onClose={() => setSelectedClientDetail(null)}
         client={selectedClientDetail}
         rides={rides}
+        config={config}
         onOpenRideDetail={(ride) => setSelectedRideDetail(ride)}
         onScheduleForClient={handleScheduleForClient}
         onEditClient={handleEditClient}
         onDeleteClient={handleDeleteClient}
+      />
+
+      <PassengerTermsContractModal
+        isOpen={Boolean(termsViewerClient)}
+        onClose={() => setTermsViewerClient(null)}
+        mode="admin"
+        client={termsViewerClient}
+        config={config}
       />
 
       {/* Modal de Detalhes e Gestão da Corrida */}
@@ -6043,7 +6054,41 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                               style={{ borderBottom: '1px solid #F1F5F9', cursor: 'pointer' }}
                             >
                               <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0F172A' }}>
-                                {c.name}
+                                <div>{c.name}</div>
+                                {c.termsSignature?.signed ? (
+                                  <div
+                                    title={`Código: ${c.termsSignature.validationCode} • Assinado em ${c.termsSignature.signedAtBrasilia || c.termsSignature.signedAt}`}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      marginTop: 4,
+                                      padding: '2px 7px',
+                                      borderRadius: 999,
+                                      backgroundColor: '#DCFCE7',
+                                      color: '#166534',
+                                      fontSize: '0.66rem',
+                                      fontWeight: 700
+                                    }}
+                                  >
+                                    ✓ Termo Assinado • {c.termsSignature.validationCode}
+                                  </div>
+                                ) : c.termsAcceptedAt ? (
+                                  <div
+                                    style={{
+                                      display: 'inline-block',
+                                      marginTop: 4,
+                                      padding: '2px 7px',
+                                      borderRadius: 999,
+                                      backgroundColor: '#FEF9C3',
+                                      color: '#854D0E',
+                                      fontSize: '0.66rem',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    Aceite registrado
+                                  </div>
+                                ) : null}
                               </td>
                               <td style={{ padding: '12px 14px', color: '#334155' }}>
                                 {c.phone}
@@ -6059,6 +6104,27 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                               </td>
                               <td style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                  <button
+                                    type="button"
+                                    onClick={() => setTermsViewerClient(c)}
+                                    title={c.termsSignature?.signed ? `Visualizar contrato assinado (${c.termsSignature.validationCode})` : 'Visualizar minuta dos Termos de Uso — Passageiro'}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      padding: '5px 9px',
+                                      borderRadius: 6,
+                                      border: c.termsSignature?.signed ? '1px solid #86EFAC' : '1px solid #CBD5E1',
+                                      backgroundColor: c.termsSignature?.signed ? '#F0FDF4' : '#FFFFFF',
+                                      color: c.termsSignature?.signed ? '#166534' : '#475569',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <FileText size={12} />
+                                    {c.termsSignature?.signed ? 'Termo Assinado' : 'Termo'}
+                                  </button>
                                   <button
                                     type="button"
                                     onClick={() => handleOpenClientDetail(c)}

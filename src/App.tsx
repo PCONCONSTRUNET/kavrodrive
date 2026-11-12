@@ -20,6 +20,7 @@ import { AuthModal } from './components/AuthModal';
 import { ClientWelcomeScreen } from './components/ClientWelcomeScreen';
 import { WhatsAppIcon } from './components/WhatsAppIcon';
 import { TermsPrivacyModal } from './components/TermsPrivacyModal';
+import { PassengerTermsContractModal } from './components/PassengerTermsContractModal';
 import { getCleanWhatsappNumber } from './utils/format';
 
 // ── TELA DE BOAS-VINDAS (ANTES DO LOGIN) ──────────────────────
@@ -219,9 +220,10 @@ const ClientApp: React.FC<{
           onOpenTerms={() => setIsTermsOpen(true)}
         />
         <PwaInstallBanner customBottomOffset={20} />
-        <TermsPrivacyModal
+        <PassengerTermsContractModal
           isOpen={isTermsOpen}
           onClose={() => setIsTermsOpen(false)}
+          mode="passenger"
           config={config}
         />
       </>
@@ -439,6 +441,7 @@ const DriverRoute: React.FC<{
     document.cookie = 'up_pwa_role=admin; path=/; max-age=31536000; SameSite=Lax';
     setIsAuthenticated(true);
     setIsLoginModalOpen(false);
+    StorageService.syncFromDatabase().catch(() => {});
   };
 
   const handleExitAdmin = () => {

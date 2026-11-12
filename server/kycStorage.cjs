@@ -1,4 +1,5 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -53,11 +54,38 @@ function getSupabase() {
 }
 
 // Armazenamento local seguro caso Cloudflare R2 ou Supabase Storage não estejam com credenciais configuradas
-const LOCAL_VAULT_DIR = path.resolve(__dirname, '.kyc_vault');
-if (!fs.existsSync(LOCAL_VAULT_DIR)) {
-  try {
-    fs.mkdirSync(LOCAL_VAULT_DIR, { recursive: true });
-  } catch {}
+function resolveLocalVaultDir() {
+  const candidates = process.env.VERCEL
+    ? [path.join(os.tmpdir(), 'kavro_kyc_vault')]
+    : [path.resolve(__dirname, '.kyc_vault'), path.join(os.tmpdir(), 'kavro_kyc_vault')];
+  for (const dir of candidates) {
+    try {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      return dir;
+    } catch {}
+  }
+  return os.tmpdir();
+}
+
+const LOCAL_VAULT_DIR = resolveLocalVaultDir();
+
+function inferExtensionAndMime(mimeType) {
+  const normalized = String(mimeType || '').toLowerCase();
+  if (normalized === 'application/pdf') return { ext: 'pdf', contentType: 'application/pdf' };
+  if (normalized === 'image/png') return { ext: 'png', contentType: 'image/png' };
+  if (normalized === 'image/webp') return { ext: 'webp', contentType: 'image/webp' };
+  if (normalized === 'image/heic' || normalized === 'image/heif') return { ext: 'heic', contentType: normalized };
+  return { ext: 'jpg', contentType: normalized.startsWith('image/') ? normalized : 'image/jpeg' };
+}
+
+function inferContentTypeFromFilename(filename) {
+  const lower = String(filename || '').toLowerCase();
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'image/jpeg';
 }
 
 // Tokens temporários de visualização com expiração automática (15 minutos)
@@ -79,20 +107,27 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
   const isCnh = docType === 'cnh';
   const prefix = isCnh ? 'cnh' : 'selfie';
   const timestamp = Date.now();
-  const filename = `${prefix}_${driverId}_${timestamp}.jpg`;
-  const storagePath = `drivers/${driverId}/${filename}`;
 
   let buffer;
+  let contentType = 'image/jpeg';
+  let ext = 'jpg';
+
   if (typeof dataUrlOrBuffer === 'string') {
-    const match = dataUrlOrBuffer.match(/^data:image\/[a-zA-Z+]+;base64,(.+)$/);
+    const match = dataUrlOrBuffer.match(/^data:([a-zA-Z0-9.+/-]+)(?:;[^,]*)?;base64,(.+)$/s);
     if (match) {
-      buffer = Buffer.from(match[1], 'base64');
+      const detected = inferExtensionAndMime(match[1]);
+      contentType = detected.contentType;
+      ext = detected.ext;
+      buffer = Buffer.from(match[2], 'base64');
     } else {
       buffer = Buffer.from(dataUrlOrBuffer, 'utf8');
     }
   } else {
     buffer = dataUrlOrBuffer;
   }
+
+  const filename = `${prefix}_${driverId}_${timestamp}.${ext}`;
+  const storagePath = `drivers/${driverId}/${filename}`;
 
   // 1. PRIORIDADE: Cloudflare R2 (Object Storage dedicado, 10 GB grátis, zero egress)
   const r2 = getCloudflareR2();
@@ -104,17 +139,18 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
         Bucket: bucket,
         Key: storagePath,
         Body: buffer,
-        ContentType: 'image/jpeg'
+        ContentType: contentType
       }));
 
       return {
         storage: 'cloudflare_r2',
         path: storagePath,
         bucket,
-        filename
+        filename,
+        contentType
       };
     } catch (err) {
-      console.warn('[KYC Storage] Falha no upload para Cloudflare R2, tentando fallback:', err.message);
+      console.error('[KYC Storage] Falha no upload para Cloudflare R2, tentando fallback:', err.message);
     }
   }
 
@@ -128,7 +164,7 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
       const { data, error } = await supabase.storage
         .from('kyc-documents')
         .upload(storagePath, buffer, {
-          contentType: 'image/jpeg',
+          contentType,
           upsert: true
         });
 
@@ -136,7 +172,8 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
         return {
           storage: 'supabase',
           path: storagePath,
-          filename
+          filename,
+          contentType
         };
       }
       console.warn('[KYC Storage] Falha no upload Supabase, utilizando cofre local:', error?.message);
@@ -145,14 +182,16 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
     }
   }
 
-  // 3. FALLBACK: Armazenamento seguro no cofre local (sem VPS externa)
-  const localFilePath = path.join(LOCAL_VAULT_DIR, filename);
+  // 3. FALLBACK: Armazenamento seguro no cofre local (ou /tmp em serverless)
+  const vaultDir = resolveLocalVaultDir();
+  const localFilePath = path.join(vaultDir, filename);
   fs.writeFileSync(localFilePath, buffer);
 
   return {
     storage: 'local_vault',
     path: filename,
-    filename
+    filename,
+    contentType
   };
 }
 
@@ -208,6 +247,7 @@ async function generateTemporarySignedUrl(docInfo, driverId, reqHost) {
   tempSignedTokens.set(token, {
     driverId,
     filename: docInfo.path || docInfo.filename,
+    contentType: docInfo.contentType || inferContentTypeFromFilename(docInfo.path || docInfo.filename),
     expiresAt
   });
 
@@ -227,12 +267,13 @@ function resolveTemporaryDocument(token) {
     return null;
   }
 
-  const filePath = path.join(LOCAL_VAULT_DIR, item.filename);
+  const vaultDir = resolveLocalVaultDir();
+  const filePath = path.join(vaultDir, item.filename);
   if (!fs.existsSync(filePath)) return null;
 
   return {
     buffer: fs.readFileSync(filePath),
-    contentType: 'image/jpeg',
+    contentType: item.contentType || inferContentTypeFromFilename(item.filename),
     driverId: item.driverId
   };
 }

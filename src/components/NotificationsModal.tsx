@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { 
   Bell, CheckCheck, Trash2, X, AlertTriangle, Car, 
   CheckCircle2, XCircle, CreditCard, Clock, ExternalLink, 
-  Sparkles, Check, ChevronRight 
+  Sparkles, Check, ChevronRight, UserPlus, ShieldCheck 
 } from 'lucide-react';
 import { NotificationItem, Ride } from '../types';
 import { StorageService } from '../services/storage';
@@ -211,6 +211,57 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             boxShadow: '0 3px 10px rgba(234, 88, 12, 0.3)'
           }}>
             <Clock size={19} strokeWidth={2.4} />
+          </div>
+        );
+      case 'driver_new':
+        return (
+          <div style={{
+            width: 38,
+            height: 38,
+            borderRadius: 12,
+            backgroundColor: '#4F46E5',
+            color: '#FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            boxShadow: '0 3px 10px rgba(79, 70, 229, 0.35)'
+          }}>
+            <UserPlus size={19} strokeWidth={2.3} />
+          </div>
+        );
+      case 'driver_kyc':
+        return (
+          <div style={{
+            width: 38,
+            height: 38,
+            borderRadius: 12,
+            backgroundColor: '#0F172A',
+            color: '#76D800',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            boxShadow: '0 3px 10px rgba(15, 23, 42, 0.3)'
+          }}>
+            <ShieldCheck size={19} strokeWidth={2.3} />
+          </div>
+        );
+      case 'client_new':
+        return (
+          <div style={{
+            width: 38,
+            height: 38,
+            borderRadius: 12,
+            backgroundColor: '#0D9488',
+            color: '#FFFFFF',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            boxShadow: '0 3px 10px rgba(13, 148, 136, 0.3)'
+          }}>
+            <UserPlus size={19} strokeWidth={2.3} />
           </div>
         );
       case 'ride_new':

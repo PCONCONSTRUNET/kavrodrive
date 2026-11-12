@@ -15,6 +15,7 @@ import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { NotificationsModal } from '../components/NotificationsModal';
 import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
+import { PassengerTermsContractModal } from '../components/PassengerTermsContractModal';
 import { clientExternalId } from '../services/push';
 import { formatPhone, formatCPF, getCleanWhatsappNumber } from '../utils/format';
 import { searchAddressGeocode } from '../utils/geo';
@@ -62,6 +63,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   const [document, setDocument] = useState(currentUser?.document ? formatCPF(currentUser.document) : '');
   const [savedSuccess, setSavedSuccess] = useState(false);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
+  const [isSignedContractOpen, setIsSignedContractOpen] = useState(false);
 
   // Sincroniza com propUser
   useEffect(() => {
@@ -1251,19 +1253,19 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         </div>
       )}
 
-      {/* Link para Termos de Uso & Política de Privacidade (LGPD) */}
-      <div style={{ marginTop: 16, textAlign: 'center', paddingBottom: 12 }}>
+      {/* Termos de Uso & Assinatura Digital + Privacidade LGPD */}
+      <div style={{ marginTop: 16, textAlign: 'center', paddingBottom: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
         <button
           type="button"
-          onClick={() => setIsTermsOpen(true)}
+          onClick={() => setIsSignedContractOpen(true)}
           style={{
-            background: '#F8FAFC',
-            border: '1.5px solid #E2E8F0',
+            background: currentUser?.termsSignature?.signed ? '#F0FDF4' : '#F8FAFC',
+            border: currentUser?.termsSignature?.signed ? '1.5px solid #86EFAC' : '1.5px solid #E2E8F0',
             borderRadius: 12,
             padding: '10px 16px',
-            fontSize: '0.76rem',
+            fontSize: '0.78rem',
             fontWeight: 700,
-            color: '#334155',
+            color: currentUser?.termsSignature?.signed ? '#15803D' : '#334155',
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
@@ -1272,14 +1274,50 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
           }}
         >
           <ShieldCheck size={16} color="#16A34A" />
-          <span>Termos de Uso & Política de Privacidade (LGPD)</span>
+          <span>
+            {currentUser?.termsSignature?.signed
+              ? `Ver Termo Assinado (${currentUser.termsSignature.validationCode})`
+              : 'Termos e Condições Gerais de Uso — Passageiro'}
+          </span>
         </button>
-        <div style={{ fontSize: '0.66rem', color: '#94A3B8', marginTop: 4 }}>
+
+        {currentUser?.termsSignature?.signed && (
+          <div style={{ fontSize: '0.7rem', color: '#15803D', fontWeight: 600 }}>
+            Assinado digitalmente em {currentUser.termsSignature.signedAtBrasilia} (Brasília)
+          </div>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setIsTermsOpen(true)}
+          style={{
+            background: 'none',
+            border: 'none',
+            padding: '4px 8px',
+            fontSize: '0.72rem',
+            fontWeight: 600,
+            color: '#64748B',
+            textDecoration: 'underline',
+            cursor: 'pointer',
+          }}
+        >
+          Resumo de Privacidade & Auditoria GPS (LGPD)
+        </button>
+        <div style={{ fontSize: '0.66rem', color: '#94A3B8' }}>
           🔒 Dados cadastrais e rotas GPS protegidos conforme a Lei 13.709/2018
         </div>
       </div>
 
-      {/* Modal de Termos de Uso e Política de Privacidade (LGPD) */}
+      {/* Modal de Contrato & Termo Assinado Digitalmente do Passageiro */}
+      <PassengerTermsContractModal
+        isOpen={isSignedContractOpen}
+        onClose={() => setIsSignedContractOpen(false)}
+        mode="passenger"
+        config={config}
+        client={currentUser}
+      />
+
+      {/* Modal de Resumo de Privacidade (LGPD) */}
       <TermsPrivacyModal
         isOpen={isTermsOpen}
         onClose={() => setIsTermsOpen(false)}

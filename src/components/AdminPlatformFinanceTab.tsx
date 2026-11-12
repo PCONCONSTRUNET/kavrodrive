@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   RefreshCw, Lock, Unlock, Search, Check, X, Eye, Star, Phone, Car, User, Wallet,
   ShieldCheck, ShieldAlert, Sparkles, AlertTriangle, FileText
@@ -14,6 +14,7 @@ import {
 } from '../types';
 import { StorageService } from '../services/storage';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
+import { DriverTermsContractModal } from './DriverTermsContractModal';
 
 interface AdminPlatformFinanceTabProps {
   config: SystemConfig;
@@ -24,6 +25,21 @@ interface AdminPlatformFinanceTabProps {
 
 const formatBRL = (val: number) =>
   `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const getBiometricSummary = (drv?: DriverProfile | null) => {
+  const bio = drv?.kyc?.biometricResult;
+  if (!bio) return null;
+  const similarity = Number(bio.similarityScore ?? bio.similarity ?? 0);
+  const isMatch = Boolean(bio.isMatch ?? bio.match ?? (similarity >= 55));
+  return { similarity, isMatch };
+};
+
+const hasKycDocument = (drv: DriverProfile, kind: 'cnh' | 'selfie') => {
+  if (kind === 'cnh') {
+    return Boolean(drv.cnhDocumentPhoto || drv.kyc?.cnhDocumentPath || drv.kyc?.cnhDocumentUrl || drv.kyc?.cnhDocInfo);
+  }
+  return Boolean(drv.selfiePhoto || drv.kyc?.selfiePath || drv.kyc?.selfieUrl || drv.kyc?.selfieDocInfo);
+};
 
 export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = ({
   config,
@@ -40,6 +56,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   const [driverSearch, setDriverSearch] = useState('');
   const [driverStatusFilter, setDriverStatusFilter] = useState<'todos' | 'em_analise' | 'correcao_solicitada' | 'pendente_aprovacao' | 'aprovado' | 'rejeitado' | 'inadimplentes'>('todos');
   const [reviewingKycDriver, setReviewingKycDriver] = useState<DriverProfile | null>(null);
+  const [termsViewerDriver, setTermsViewerDriver] = useState<DriverProfile | null>(null);
 
   // Estado do Modal de Histórico Completo (Avaliação, Corridas, Saques, Extrato e Cadastro)
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
@@ -93,9 +110,29 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     setIsLoading(false);
   };
 
+  const lastDriverDigestRef = useRef('');
+
   useEffect(() => {
     loadAll();
   }, [rides.length]);
+
+  useEffect(() => {
+    const handleDbSync = () => {
+      const synced = StorageService.getDrivers();
+      setDrivers(synced);
+      const digest = synced
+        .map(d => `${d.id}:${d.approvalStatus}:${d.kyc?.status || ''}:${d.kyc?.submittedAt || ''}:${d.termsSignature?.signed ? '1' : '0'}`)
+        .join('|');
+      if (lastDriverDigestRef.current && digest !== lastDriverDigestRef.current) {
+        StorageService.fetchAdminFinanceOverview().then(fin => {
+          if (fin) setOverview(fin);
+        }).catch(() => {});
+      }
+      lastDriverDigestRef.current = digest;
+    };
+    window.addEventListener('up_database_synced', handleDbSync);
+    return () => window.removeEventListener('up_database_synced', handleDbSync);
+  }, []);
 
   const handleSaveRules = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -706,6 +743,103 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   </div>
                 </div>
 
+                {/* Card Contrato & Termos de Uso Assinados Digitalmente */}
+                <div style={{
+                  padding: 16,
+                  borderRadius: 8,
+                  border: selectedDriver.termsSignature?.signed ? '1px solid #BBF7D0' : '1px solid #E2E8F0',
+                  backgroundColor: selectedDriver.termsSignature?.signed ? '#F0FDF4' : '#FFFFFF',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>
+                      <FileText size={18} color={selectedDriver.termsSignature?.signed ? '#15803D' : '#64748B'} />
+                      <span>Contrato & Termos de Uso — Motorista Parceiro (Assinatura Digital)</span>
+                    </div>
+                    <span style={{
+                      padding: '3px 10px',
+                      borderRadius: 6,
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      backgroundColor: selectedDriver.termsSignature?.signed ? '#DCFCE7' : '#FEF3C7',
+                      color: selectedDriver.termsSignature?.signed ? '#15803D' : '#B45309'
+                    }}>
+                      {selectedDriver.termsSignature?.signed ? 'ASSINADO DIGITALMENTE' : 'SEM ASSINATURA REGISTRADA'}
+                    </span>
+                  </div>
+
+                  {selectedDriver.termsSignature?.signed ? (
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                      gap: 10,
+                      fontSize: '0.75rem',
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #DCFCE7',
+                      borderRadius: 8,
+                      padding: 12
+                    }}>
+                      <div>
+                        <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Motorista / CPF</div>
+                        <div style={{ fontWeight: 700, color: '#0F172A' }}>
+                          {selectedDriver.termsSignature.driverSnapshot?.name || selectedDriver.name}
+                        </div>
+                        <div style={{ color: '#475569' }}>
+                          CPF {selectedDriver.termsSignature.driverSnapshot?.cpf || selectedDriver.document}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Data / Horário (Brasília)</div>
+                        <div style={{ fontWeight: 700, color: '#0F172A' }}>
+                          {selectedDriver.termsSignature.signedAtBrasilia}
+                        </div>
+                        <div style={{ color: '#475569' }}>
+                          IP: {selectedDriver.termsSignature.technicalEvidence?.ip || 'N/A'}
+                        </div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Código de Validação</div>
+                        <div style={{ fontWeight: 800, fontFamily: 'monospace', color: '#15803D' }}>
+                          {selectedDriver.termsSignature.validationCode}
+                        </div>
+                        <div style={{ fontFamily: 'monospace', fontSize: '0.68rem', color: '#64748B' }}>
+                          SHA-256: {selectedDriver.termsSignature.signatureHash.slice(0, 18)}...
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: '0.76rem', color: '#64748B' }}>
+                      Cadastro realizado antes da obrigatoriedade do Termo v0.1 ou sem certificado digital anexado.
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={() => setTermsViewerDriver(selectedDriver)}
+                      style={{
+                        height: 34,
+                        padding: '0 14px',
+                        borderRadius: 6,
+                        border: 'none',
+                        backgroundColor: selectedDriver.termsSignature?.signed ? '#15803D' : '#0F172A',
+                        color: '#FFFFFF',
+                        fontSize: '0.76rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}
+                    >
+                      <FileText size={14} />
+                      <span>Abrir Termo Assinado / Imprimir PDF</span>
+                    </button>
+                  </div>
+                </div>
+
                 {/* Card de KYC & Biometria Facial Human */}
                 <div style={{
                   padding: 16,
@@ -743,24 +877,33 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, fontSize: '0.78rem' }}>
-                    <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Similaridade Facial IA</div>
-                      <div style={{ fontWeight: 800, fontSize: '0.92rem', color: selectedDriver.kyc?.biometricResult?.isMatch ? '#15803D' : '#0F172A', marginTop: 2 }}>
-                        {selectedDriver.kyc?.biometricResult ? `${selectedDriver.kyc.biometricResult.similarityScore}% (${selectedDriver.kyc.biometricResult.isMatch ? 'Compatível' : 'Atenção'})` : 'Pendente de envio'}
-                      </div>
-                    </div>
-                    <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Documento CNH</div>
-                      <div style={{ fontWeight: 700, fontSize: '0.82rem', color: selectedDriver.cnhDocumentPhoto || selectedDriver.kyc?.cnhDocumentPath ? '#15803D' : '#DC2626', marginTop: 2 }}>
-                        {selectedDriver.cnhDocumentPhoto || selectedDriver.kyc?.cnhDocumentPath ? '✓ Armazenado Seguro' : 'Não enviado'}
-                      </div>
-                    </div>
-                    <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Selfie Facial</div>
-                      <div style={{ fontWeight: 700, fontSize: '0.82rem', color: selectedDriver.selfiePhoto || selectedDriver.kyc?.selfiePath ? '#15803D' : '#DC2626', marginTop: 2 }}>
-                        {selectedDriver.selfiePhoto || selectedDriver.kyc?.selfiePath ? '✓ Capturada via WebRTC' : 'Não capturada'}
-                      </div>
-                    </div>
+                    {(() => {
+                      const bioSummary = getBiometricSummary(selectedDriver);
+                      const hasCnh = hasKycDocument(selectedDriver, 'cnh');
+                      const hasSelfie = hasKycDocument(selectedDriver, 'selfie');
+                      return (
+                        <>
+                          <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
+                            <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Similaridade Facial IA</div>
+                            <div style={{ fontWeight: 800, fontSize: '0.92rem', color: bioSummary?.isMatch ? '#15803D' : '#0F172A', marginTop: 2 }}>
+                              {bioSummary ? `${bioSummary.similarity}% (${bioSummary.isMatch ? 'Compatível' : 'Atenção'})` : 'Pendente de envio'}
+                            </div>
+                          </div>
+                          <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
+                            <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Documento CNH</div>
+                            <div style={{ fontWeight: 700, fontSize: '0.82rem', color: hasCnh ? '#15803D' : '#DC2626', marginTop: 2 }}>
+                              {hasCnh ? '✓ Armazenado Seguro' : 'Não enviado'}
+                            </div>
+                          </div>
+                          <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
+                            <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Selfie Facial</div>
+                            <div style={{ fontWeight: 700, fontSize: '0.82rem', color: hasSelfie ? '#15803D' : '#DC2626', marginTop: 2 }}>
+                              {hasSelfie ? '✓ Capturada via WebRTC' : 'Não capturada'}
+                            </div>
+                          </div>
+                        </>
+                      );
+                    })()}
                     <div style={{ backgroundColor: '#F8FAFC', padding: '10px 12px', borderRadius: 6, border: '1px solid #E2E8F0' }}>
                       <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Auditoria & LGPD</div>
                       <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#475569', marginTop: 2 }}>
@@ -1157,6 +1300,16 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     );
   };
 
+  const renderDriverTermsModal = () => (
+    <DriverTermsContractModal
+      isOpen={Boolean(termsViewerDriver)}
+      onClose={() => setTermsViewerDriver(null)}
+      mode="admin"
+      driver={termsViewerDriver}
+      config={config}
+    />
+  );
+
   // Se foi aberto pela aba "Motoristas" da barra lateral, exibe a tela dedicada de Gestão de Frota
   if (isFleetStandaloneView) {
     const onlineCount = drivers.filter(d => d.isOnline && d.approvalStatus === 'aprovado').length;
@@ -1170,8 +1323,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
         {renderDriverFullDossierModal()}
-      {renderAdminKycReviewModal()}
         {renderAdminKycReviewModal()}
+        {renderDriverTermsModal()}
 
         {/* Cabeçalho Limpo da Aba de Motoristas */}
         <div style={{
@@ -1249,6 +1402,67 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
             <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 6 }}>Teto de dívida: {formatBRL(currentDebtLimit)}</div>
           </div>
         </div>
+
+        {/* Banner acionável quando há cadastros ou documentos KYC aguardando aprovação */}
+        {(inReviewCount > 0 || pendingCount > 0 || correctionsCount > 0) && (
+          <div style={{
+            backgroundColor: '#EFF6FF',
+            border: '1px solid #BFDBFE',
+            borderRadius: 10,
+            padding: '12px 16px',
+            marginBottom: 14,
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 10
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, color: '#1E3A8A', fontSize: '0.8rem', fontWeight: 600 }}>
+              <ShieldAlert size={18} color="#2563EB" />
+              <span>
+                Fila de Aprovação Ativa: <strong>{inReviewCount}</strong> com KYC em análise, <strong>{pendingCount}</strong> aguardando documentos e <strong>{correctionsCount}</strong> em correção.
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {inReviewCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setDriverStatusFilter('em_analise')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    border: 'none',
+                    backgroundColor: '#1D4ED8',
+                    color: '#FFFFFF',
+                    fontSize: '0.74rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Analisar KYC ({inReviewCount})
+                </button>
+              )}
+              {pendingCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setDriverStatusFilter('pendente_aprovacao')}
+                  style={{
+                    padding: '6px 12px',
+                    borderRadius: 6,
+                    border: '1px solid #93C5FD',
+                    backgroundColor: '#FFFFFF',
+                    color: '#1E40AF',
+                    fontSize: '0.74rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Ver Pendentes ({pendingCount})
+                </button>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Tabela Corporativa de Motoristas */}
         <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
@@ -1415,16 +1629,36 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                drv.approvalStatus === 'correcao_solicitada' ? 'Correção Solicitada' :
                                drv.approvalStatus === 'rejeitado' ? 'Rejeitado' : 'Pendente'}
                             </span>
-                            {drv.kyc?.biometricResult && (
-                              <span style={{
-                                fontSize: '0.65rem',
-                                padding: '1px 6px',
-                                borderRadius: 4,
-                                fontWeight: 700,
-                                backgroundColor: drv.kyc.biometricResult.isMatch ? '#DCFCE7' : '#FEE2E2',
-                                color: drv.kyc.biometricResult.isMatch ? '#166534' : '#991B1B'
-                              }}>
-                                ⚡ {drv.kyc.biometricResult.similarityScore}% Facial IA
+                            {(() => {
+                              const bioSummary = getBiometricSummary(drv);
+                              if (!bioSummary) return null;
+                              return (
+                                <span style={{
+                                  fontSize: '0.65rem',
+                                  padding: '1px 6px',
+                                  borderRadius: 4,
+                                  fontWeight: 700,
+                                  backgroundColor: bioSummary.isMatch ? '#DCFCE7' : '#FEE2E2',
+                                  color: bioSummary.isMatch ? '#166534' : '#991B1B'
+                                }}>
+                                  ⚡ {bioSummary.similarity}% Facial IA
+                                </span>
+                              );
+                            })()}
+                            {drv.termsSignature?.signed && (
+                              <span
+                                title={`Certificado ${drv.termsSignature.validationCode} • ${drv.termsSignature.signedAtBrasilia}`}
+                                style={{
+                                  fontSize: '0.65rem',
+                                  padding: '1px 6px',
+                                  borderRadius: 4,
+                                  fontWeight: 700,
+                                  backgroundColor: '#DCFCE7',
+                                  color: '#15803D',
+                                  border: '1px solid #BBF7D0'
+                                }}
+                              >
+                                ✓ Termo Assinado
                               </span>
                             )}
                             {drv.financialBlocked && (
@@ -1440,6 +1674,27 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           onClick={(e) => e.stopPropagation()}
                         >
                           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                            <button
+                              type="button"
+                              onClick={() => setTermsViewerDriver(drv)}
+                              style={{
+                                padding: '5px 10px',
+                                borderRadius: 6,
+                                border: drv.termsSignature?.signed ? '1px solid #16A34A' : '1px solid #CBD5E1',
+                                backgroundColor: drv.termsSignature?.signed ? '#F0FDF4' : '#F8FAFC',
+                                color: drv.termsSignature?.signed ? '#15803D' : '#475569',
+                                fontSize: '0.72rem',
+                                fontWeight: 700,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4
+                              }}
+                            >
+                              <FileText size={13} />
+                              <span>{drv.termsSignature?.signed ? 'Termo Assinado' : 'Termo'}</span>
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => setReviewingKycDriver(drv)}
@@ -1600,6 +1855,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {renderDriverFullDossierModal()}
       {renderAdminKycReviewModal()}
+      {renderDriverTermsModal()}
 
       {/* Cabeçalho Limpo + Seletor de Período */}
       <div style={{

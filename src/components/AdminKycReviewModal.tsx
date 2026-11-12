@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { DriverProfile, KycAuditLog, DriverKycData } from '../types';
 import { StorageService } from '../services/storage';
+import { DriverTermsContractModal } from './DriverTermsContractModal';
 
 interface AdminKycReviewModalProps {
   driver: DriverProfile;
@@ -22,26 +23,39 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
 }) => {
   const [kycData, setKycData] = useState<DriverKycData | null>(driver.kyc || null);
   const [isLoading, setIsLoading] = useState(false);
+  const [fetchError, setFetchError] = useState('');
+  const [cnhImgError, setCnhImgError] = useState(false);
+  const [selfieImgError, setSelfieImgError] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
 
   // Form de correção ou recusa
   const [reviewNote, setReviewNote] = useState('');
   const [selectedAction, setSelectedAction] = useState<'aprovado' | 'rejeitado' | 'correcao_solicitada' | null>(null);
   const [adminName, setAdminName] = useState('Administrador Master');
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
 
   // Buscar dados e URLs temporárias frescas (15 min) ao abrir
   useEffect(() => {
     if (isOpen && driver.id) {
+      setKycData(driver.kyc || null);
+      setFetchError('');
+      setCnhImgError(false);
+      setSelfieImgError(false);
       loadFreshKyc();
     }
   }, [isOpen, driver.id]);
 
   const loadFreshKyc = async () => {
     setIsLoading(true);
+    setFetchError('');
+    setCnhImgError(false);
+    setSelfieImgError(false);
     const res = await StorageService.fetchDriverKyc(driver.id);
     setIsLoading(false);
     if (res.ok && res.kyc) {
       setKycData(res.kyc);
+    } else if (!res.ok) {
+      setFetchError(res.error || 'Não foi possível carregar os documentos KYC no servidor.');
     }
   };
 
@@ -221,6 +235,59 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
           </div>
         </div>
 
+        {/* Faixa de Validação Contratual & Assinatura Digital */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 10,
+          backgroundColor: driver.termsSignature?.signed ? '#F0FDF4' : '#FFFBEB',
+          border: `1px solid ${driver.termsSignature?.signed ? '#BBF7D0' : '#FDE68A'}`,
+          borderRadius: 12,
+          padding: '10px 14px',
+          marginBottom: 18
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <FileText size={18} color={driver.termsSignature?.signed ? '#15803D' : '#B45309'} />
+            <div style={{ fontSize: '0.78rem', color: '#0F172A', lineHeight: 1.4 }}>
+              {driver.termsSignature?.signed ? (
+                <>
+                  <strong>Termo de Parceria ASSINADO DIGITALMENTE</strong> ({driver.termsSignature.validationCode})
+                  <div style={{ color: '#475569', fontSize: '0.73rem' }}>
+                    {driver.termsSignature.signedAtBrasilia} • CPF {driver.termsSignature.driverSnapshot?.cpf || driver.document} • IP {driver.termsSignature.technicalEvidence?.ip || 'N/A'}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <strong>Contrato Digital (v0.1):</strong> Sem assinatura eletrônica anexada a este cadastro.
+                </>
+              )}
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setIsTermsModalOpen(true)}
+            style={{
+              padding: '6px 12px',
+              borderRadius: 8,
+              border: 'none',
+              backgroundColor: driver.termsSignature?.signed ? '#15803D' : '#0F172A',
+              color: '#FFFFFF',
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <FileText size={13} />
+            <span>{driver.termsSignature?.signed ? 'Ver Termo Assinado' : 'Abrir Minuta Contratual'}</span>
+          </button>
+        </div>
+
         {/* 1. VISUALIZAÇÃO DOS DOCUMENTOS LADO A LADO */}
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: '0.85rem', fontWeight: 800, color: '#0F172A', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -246,15 +313,51 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
               padding: 12,
               textAlign: 'center'
             }}>
+              {fetchError && (
+                <div style={{
+                  marginBottom: 12,
+                  padding: '10px 14px',
+                  borderRadius: 12,
+                  backgroundColor: '#FEF2F2',
+                  border: '1px solid #FECACA',
+                  color: '#991B1B',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10
+                }}>
+                  <span>⚠️ {fetchError}</span>
+                  <button
+                    type="button"
+                    onClick={loadFreshKyc}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 8,
+                      border: '1px solid #DC2626',
+                      backgroundColor: '#FFFFFF',
+                      color: '#B91C1C',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Tentar Novamente
+                  </button>
+                </div>
+              )}
+
               <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#475569', marginBottom: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
                 <FileText size={15} color="#2563EB" />
                 <span>Documento CNH</span>
               </div>
-              {cnhUrl ? (
+              {cnhUrl && !cnhImgError ? (
                 <div>
                   <img
                     src={cnhUrl}
                     alt="CNH do Motorista"
+                    onError={() => setCnhImgError(true)}
                     style={{ maxHeight: 180, width: '100%', objectFit: 'contain', borderRadius: 8, border: '1px solid #CBD5E1' }}
                   />
                   <div style={{ marginTop: 8 }}>
@@ -268,6 +371,26 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
                       <ExternalLink size={12} />
                     </a>
                   </div>
+                </div>
+              ) : cnhImgError ? (
+                <div style={{ padding: '24px 12px', color: '#B45309', fontSize: '0.78rem' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Link temporário expirado ou indisponível.</div>
+                  <button
+                    type="button"
+                    onClick={loadFreshKyc}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #D97706',
+                      backgroundColor: '#FFFBEB',
+                      color: '#92400E',
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Gerar Nova URL Temporária
+                  </button>
                 </div>
               ) : (
                 <div style={{ padding: '36px 12px', color: '#94A3B8', fontSize: '0.82rem' }}>
@@ -288,11 +411,12 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
                 <Camera size={15} color="#15803D" />
                 <span>Selfie Capturada ao Vivo</span>
               </div>
-              {selfieUrl ? (
+              {selfieUrl && !selfieImgError ? (
                 <div>
                   <img
                     src={selfieUrl}
                     alt="Selfie do Motorista"
+                    onError={() => setSelfieImgError(true)}
                     style={{ maxHeight: 180, width: '100%', objectFit: 'contain', borderRadius: 8, border: '1px solid #CBD5E1' }}
                   />
                   <div style={{ marginTop: 8 }}>
@@ -307,6 +431,26 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
                     </a>
                   </div>
                 </div>
+              ) : selfieImgError ? (
+                <div style={{ padding: '24px 12px', color: '#B45309', fontSize: '0.78rem' }}>
+                  <div style={{ fontWeight: 700, marginBottom: 8 }}>Link temporário expirado ou indisponível.</div>
+                  <button
+                    type="button"
+                    onClick={loadFreshKyc}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 8,
+                      border: '1px solid #D97706',
+                      backgroundColor: '#FFFBEB',
+                      color: '#92400E',
+                      fontSize: '0.74rem',
+                      fontWeight: 700,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Gerar Nova URL Temporária
+                  </button>
+                </div>
               ) : (
                 <div style={{ padding: '36px 12px', color: '#94A3B8', fontSize: '0.82rem' }}>
                   Nenhuma selfie capturada ainda.
@@ -317,57 +461,61 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
         </div>
 
         {/* 2. PAINEL DE BIOMETRIA FACIAL (HUMAN AI) */}
-        {biometric && (
-          <div style={{
-            backgroundColor: biometric.match ? '#F0FDF4' : '#FFFBEB',
-            border: `1.5px solid ${biometric.match ? '#BBF7D0' : '#FDE68A'}`,
-            borderRadius: 16,
-            padding: 16,
-            marginBottom: 20
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {biometric.match ? (
-                  <CheckCircle2 size={24} color="#15803D" />
-                ) : (
-                  <AlertTriangle size={24} color="#D97706" />
-                )}
-                <div>
-                  <div style={{ fontSize: '0.98rem', fontWeight: 900, color: '#0F172A' }}>
-                    Triagem Facial Human: {biometric.match ? 'Padrões Compatíveis' : 'Possível Divergência'}
-                  </div>
-                  <div style={{ fontSize: '0.76rem', color: '#64748B' }}>
-                    Motor: {biometric.engine} {biometric.engineVersion} • Distância: {biometric.distance}
+        {biometric && (() => {
+          const bioSim = Number(biometric.similarityScore ?? biometric.similarity ?? 0);
+          const bioMatch = Boolean(biometric.isMatch ?? biometric.match ?? (bioSim >= 55));
+          return (
+            <div style={{
+              backgroundColor: bioMatch ? '#F0FDF4' : '#FFFBEB',
+              border: `1.5px solid ${bioMatch ? '#BBF7D0' : '#FDE68A'}`,
+              borderRadius: 16,
+              padding: 16,
+              marginBottom: 20
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {bioMatch ? (
+                    <CheckCircle2 size={24} color="#15803D" />
+                  ) : (
+                    <AlertTriangle size={24} color="#D97706" />
+                  )}
+                  <div>
+                    <div style={{ fontSize: '0.98rem', fontWeight: 900, color: '#0F172A' }}>
+                      Triagem Facial Human: {bioMatch ? 'Padrões Compatíveis' : 'Possível Divergência'}
+                    </div>
+                    <div style={{ fontSize: '0.76rem', color: '#64748B' }}>
+                      Motor: {biometric.engine} {biometric.engineVersion} • Distância: {biometric.distance}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <div style={{
-                fontSize: '1.4rem',
-                fontWeight: 900,
-                color: biometric.match ? '#15803D' : '#D97706'
-              }}>
-                {biometric.similarity}%
-              </div>
-            </div>
-
-            {biometric.divergences.length > 0 && (
-              <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '10px 12px', marginBottom: 8, border: '1px solid #FEF3C7' }}>
-                <div style={{ fontSize: '0.74rem', fontWeight: 800, color: '#B45309', marginBottom: 4 }}>
-                  Divergências Identificadas pelo Modelo:
+                <div style={{
+                  fontSize: '1.4rem',
+                  fontWeight: 900,
+                  color: bioMatch ? '#15803D' : '#D97706'
+                }}>
+                  {bioSim}%
                 </div>
-                {biometric.divergences.map((div, i) => (
-                  <div key={i} style={{ fontSize: '0.74rem', color: '#78350F', marginBottom: 2 }}>
-                    • {div}
-                  </div>
-                ))}
               </div>
-            )}
 
-            <div style={{ fontSize: '0.70rem', color: '#64748B', lineHeight: 1.35 }}>
-              🛡️ {biometric.disclaimer}
+              {(biometric.divergences || []).length > 0 && (
+                <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '10px 12px', marginBottom: 8, border: '1px solid #FEF3C7' }}>
+                  <div style={{ fontSize: '0.74rem', fontWeight: 800, color: '#B45309', marginBottom: 4 }}>
+                    Divergências Identificadas pelo Modelo:
+                  </div>
+                  {(biometric.divergences || []).map((div, i) => (
+                    <div key={i} style={{ fontSize: '0.74rem', color: '#78350F', marginBottom: 2 }}>
+                      • {div}
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ fontSize: '0.70rem', color: '#64748B', lineHeight: 1.35 }}>
+                🛡️ {biometric.disclaimer}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* 3. AÇÕES DO ADMINISTRADOR (APROVAR, REJEITAR OU SOLICITAR CORREÇÃO) */}
         <div style={{
@@ -580,6 +728,13 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
           </div>
         </div>
       </div>
+
+      <DriverTermsContractModal
+        isOpen={isTermsModalOpen}
+        onClose={() => setIsTermsModalOpen(false)}
+        mode="admin"
+        driver={driver}
+      />
     </div>
   );
 };

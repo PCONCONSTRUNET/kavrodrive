@@ -19,6 +19,8 @@ import {
 } from '../utils/categoryEngine';
 import { StorageService } from '../services/storage';
 import { formatCurrency, formatRideCode } from '../utils/format';
+import { AdminKycReviewModal } from './AdminKycReviewModal';
+import { DriverTermsContractModal } from './DriverTermsContractModal';
 
 interface AdminRideCategoriesTabProps {
   config: SystemConfig;
@@ -73,6 +75,8 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   const [driverFilter, setDriverFilter] = useState<'todos' | 'pendentes_cadastro' | 'excecoes_solicitadas' | 'kavro_go' | 'kavro_plus' | 'kavro_exec'>('todos');
   const [driverSearch, setDriverSearch] = useState<string>('');
   const [updatingDriverId, setUpdatingDriverId] = useState<string | null>(null);
+  const [kycInspectionDriver, setKycInspectionDriver] = useState<DriverProfile | null>(null);
+  const [contractModalDriver, setContractModalDriver] = useState<DriverProfile | null>(null);
 
   useEffect(() => {
     setCategories(normalizeCategoriesFromConfig(config));
@@ -81,14 +85,16 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   const loadDrivers = async () => {
     setIsLoadingDrivers(true);
     try {
-      const list = await StorageService.getDrivers();
+      const list = await StorageService.fetchDriversList();
       if (Array.isArray(list) && list.length > 0) {
         setDrivers(list);
       } else {
-        setDrivers(StorageService.getOnlineDrivers());
+        const cached = StorageService.getDrivers();
+        setDrivers(cached.length > 0 ? cached : StorageService.getOnlineDrivers());
       }
     } catch {
-      setDrivers(StorageService.getOnlineDrivers());
+      const cached = StorageService.getDrivers();
+      setDrivers(cached.length > 0 ? cached : StorageService.getOnlineDrivers());
     } finally {
       setIsLoadingDrivers(false);
     }
@@ -96,6 +102,12 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
 
   useEffect(() => {
     loadDrivers();
+    const handleDbSync = () => {
+      const synced = StorageService.getDrivers();
+      setDrivers(synced);
+    };
+    window.addEventListener('up_database_synced', handleDbSync);
+    return () => window.removeEventListener('up_database_synced', handleDbSync);
   }, []);
 
   const selectedCategory = useMemo(() => {
@@ -268,7 +280,12 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   }, [categories, drivers, rides]);
 
   const totalPendingDriverApprovals = useMemo(
-    () => drivers.filter(d => d.approvalStatus === 'pendente_aprovacao').length,
+    () => drivers.filter(d =>
+      d.approvalStatus === 'pendente_aprovacao' ||
+      d.approvalStatus === 'pendente' ||
+      d.approvalStatus === 'em_analise' ||
+      d.approvalStatus === 'correcao_solicitada'
+    ).length,
     [drivers]
   );
 
@@ -328,7 +345,12 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   const filteredDrivers = useMemo(() => {
     return drivers.filter(drv => {
       const { evaluations } = evaluateAllDriverCategories(drv, categories);
-      if (driverFilter === 'pendentes_cadastro' && drv.approvalStatus !== 'pendente_aprovacao') {
+      if (driverFilter === 'pendentes_cadastro' &&
+        drv.approvalStatus !== 'pendente_aprovacao' &&
+        drv.approvalStatus !== 'pendente' &&
+        drv.approvalStatus !== 'em_analise' &&
+        drv.approvalStatus !== 'correcao_solicitada'
+      ) {
         return false;
       }
       if (driverFilter === 'excecoes_solicitadas' && (!drv.pendingCategoryRequests || drv.pendingCategoryRequests.length === 0)) {
@@ -2193,15 +2215,59 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                               fontWeight: 700,
                               backgroundColor:
                                 drv.approvalStatus === 'aprovado' ? '#DCFCE7' :
-                                drv.approvalStatus === 'pendente_aprovacao' ? '#FEF3C7' : '#FEE2E2',
+                                drv.approvalStatus === 'em_analise' ? '#DBEAFE' :
+                                drv.approvalStatus === 'correcao_solicitada' ? '#FEF3C7' :
+                                drv.approvalStatus === 'pendente_aprovacao' || drv.approvalStatus === 'pendente' ? '#FEF3C7' : '#FEE2E2',
                               color:
                                 drv.approvalStatus === 'aprovado' ? '#15803D' :
-                                drv.approvalStatus === 'pendente_aprovacao' ? '#B45309' : '#DC2626'
+                                drv.approvalStatus === 'em_analise' ? '#1D4ED8' :
+                                drv.approvalStatus === 'correcao_solicitada' ? '#B45309' :
+                                drv.approvalStatus === 'pendente_aprovacao' || drv.approvalStatus === 'pendente' ? '#B45309' : '#DC2626'
                             }}>
                               {drv.approvalStatus === 'aprovado' ? 'Cadastro Aprovado' :
-                               drv.approvalStatus === 'pendente_aprovacao' ? 'Aguardando Aprovação' :
-                               drv.approvalStatus}
+                               drv.approvalStatus === 'em_analise' ? 'Em Análise KYC' :
+                               drv.approvalStatus === 'correcao_solicitada' ? 'Correção Solicitada' :
+                               drv.approvalStatus === 'pendente_aprovacao' || drv.approvalStatus === 'pendente' ? 'Aguardando Aprovação' :
+                               drv.approvalStatus === 'rejeitado' ? 'Rejeitado' : drv.approvalStatus}
                             </span>
+
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                              <button
+                                type="button"
+                                onClick={() => setKycInspectionDriver(drv)}
+                                style={{
+                                  padding: '5px 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #2563EB',
+                                  backgroundColor: '#EFF6FF',
+                                  color: '#1D4ED8',
+                                  fontSize: '0.70rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                Inspecionar KYC & Docs
+                              </button>
+
+                              {drv.termsSignature?.signed && (
+                                <button
+                                  type="button"
+                                  onClick={() => setContractModalDriver(drv)}
+                                  style={{
+                                    padding: '5px 10px',
+                                    borderRadius: 6,
+                                    border: '1px solid #BBF7D0',
+                                    backgroundColor: '#F0FDF4',
+                                    color: '#15803D',
+                                    fontSize: '0.70rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Contrato
+                                </button>
+                              )}
+                            </div>
 
                             {drv.approvalStatus !== 'aprovado' && (
                               <button
@@ -2509,6 +2575,27 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
             </div>
           </form>
         </div>
+      )}
+
+      {kycInspectionDriver && (
+        <AdminKycReviewModal
+          driver={kycInspectionDriver}
+          isOpen={Boolean(kycInspectionDriver)}
+          onClose={() => setKycInspectionDriver(null)}
+          onUpdated={() => {
+            loadDrivers();
+          }}
+        />
+      )}
+
+      {contractModalDriver && (
+        <DriverTermsContractModal
+          isOpen={Boolean(contractModalDriver)}
+          onClose={() => setContractModalDriver(null)}
+          mode="admin"
+          config={config}
+          driver={contractModalDriver}
+        />
       )}
     </div>
   );

@@ -7,6 +7,7 @@ import { DriverProfile, KycBiometricResult } from '../types';
 import { compareFacesKyc, captureFrameFromVideo } from '../services/kycService';
 import { StorageService } from '../services/storage';
 import { convertPdfToImageDataUrl, isPdfDocument } from '../utils/pdfToImage';
+import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { KycBiometricPrivacyModal } from './KycBiometricPrivacyModal';
 import { SystemConfig } from '../types';
 
@@ -284,38 +285,7 @@ export const DriverKycVerificationModal: React.FC<DriverKycVerificationModalProp
     }
   };
 
-  // Envia documentos e laudo para o servidor e storage Supabase
-  const compressDataUrlForUpload = (dataUrl: string, maxDim = 1280, quality = 0.82): Promise<string> =>
-    new Promise((resolve) => {
-      if (!dataUrl || !dataUrl.startsWith('data:image/')) {
-        resolve(dataUrl);
-        return;
-      }
-      const img = new Image();
-      img.onload = () => {
-        const w = img.naturalWidth || img.width;
-        const h = img.naturalHeight || img.height;
-        if (!w || !h) {
-          resolve(dataUrl);
-          return;
-        }
-        const scale = Math.min(1, maxDim / Math.max(w, h));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(w * scale);
-        canvas.height = Math.round(h * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          resolve(dataUrl);
-          return;
-        }
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const compressed = canvas.toDataURL('image/jpeg', quality);
-        resolve(compressed.length < dataUrl.length ? compressed : dataUrl);
-      };
-      img.onerror = () => resolve(dataUrl);
-      img.src = dataUrl;
-    });
-
+  // Envia documentos e laudo para o servidor e storage Cloudflare R2 / Supabase
   const handleConfirmAndSubmitKyc = async () => {
     if (!cnhPhoto || !selfiePhoto || !biometricResult) return;
     setIsSubmitting(true);
@@ -329,6 +299,7 @@ export const DriverKycVerificationModal: React.FC<DriverKycVerificationModalProp
       driverId: driver.id,
       driverDocument: driver.document,
       driverPhone: driver.phone,
+      driverEmail: driver.email,
       cnhDocumentPhoto: compressedCnh,
       selfiePhoto: compressedSelfie,
       biometricResult: biometricResult

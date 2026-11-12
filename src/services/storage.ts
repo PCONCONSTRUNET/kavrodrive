@@ -159,6 +159,7 @@ export const StorageService = {
       }
       if (isAdmin && Array.isArray(data.notifications)) {
         localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(data.notifications));
+        window.dispatchEvent(new CustomEvent('up_notifications_updated'));
       }
       if (data.blockedSlots) {
         localStorage.setItem('up_blocked_slots', JSON.stringify(data.blockedSlots));
@@ -456,7 +457,19 @@ export const StorageService = {
     }
   },
 
-  async registerDriver(payload: Partial<DriverProfile> & { password: string; turnstileToken?: string }): Promise<{
+  async registerDriver(payload: Partial<DriverProfile> & {
+    password: string;
+    turnstileToken?: string;
+    termsAcceptance?: {
+      accepted: boolean;
+      contractId: string;
+      contractVersion: string;
+      acceptedAtClient: string;
+      affirmativeText: string;
+      language?: string;
+      timezone?: string;
+    };
+  }): Promise<{
     ok: boolean;
     driver?: DriverProfile;
     error?: string;
@@ -668,6 +681,7 @@ export const StorageService = {
     driverId: string;
     driverDocument?: string;
     driverPhone?: string;
+    driverEmail?: string;
     cnhDocumentPhoto: string;
     selfiePhoto: string;
     biometricResult: import('../types').KycBiometricResult;
@@ -993,6 +1007,15 @@ export const StorageService = {
     email: string;
     password: string;
     termsAcceptedAt?: string;
+    termsAcceptance?: {
+      accepted: boolean;
+      contractId?: string;
+      contractVersion?: string;
+      acceptedAtClient?: string;
+      affirmativeText?: string;
+      language?: string;
+      timezone?: string;
+    };
     turnstileToken?: string;
   }): Promise<{ ok: boolean; client?: ClientProfile; error?: string }> {
     try {

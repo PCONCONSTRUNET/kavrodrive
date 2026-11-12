@@ -46,6 +46,38 @@ export interface SavedCard {
   createdAt: string;
 }
 
+export interface TermsSignatureTechnicalEvidence {
+  ip: string;
+  userAgent: string;
+  host?: string;
+  clientAcceptedAt?: string;
+  language?: string;
+  timezone?: string;
+}
+
+export interface PassengerTermsSignature {
+  signed: boolean;
+  contractId: string;
+  contractVersion: string;
+  contractDate: string;
+  contractTitle: string;
+  contractHash: string;
+  signatureHash: string;
+  validationCode: string;
+  signedAt: string;
+  signedAtBrasilia: string;
+  affirmativeAction: string;
+  passengerSnapshot: {
+    clientId: string;
+    name: string;
+    cpf: string;
+    rawCpf?: string;
+    phone?: string;
+    email?: string;
+  };
+  technicalEvidence: TermsSignatureTechnicalEvidence;
+}
+
 export interface ClientProfile {
   id: string;
   name: string;
@@ -63,6 +95,8 @@ export interface ClientProfile {
     lng: number;
   }>;
   savedCards?: SavedCard[];
+  termsAcceptedAt?: string;
+  termsSignature?: PassengerTermsSignature | null;
   createdAt: string;
 }
 
@@ -105,12 +139,22 @@ export interface KycAuditLog {
   userAgent?: string;
 }
 
+export interface DriverKycStoredDocInfo {
+  storage?: string;
+  path?: string;
+  bucket?: string;
+  filename?: string;
+  contentType?: string;
+}
+
 export interface DriverKycData {
   status: KycStatus;
-  cnhDocumentUrl?: string;       // URL temporária ou caminho no storage privado Supabase
-  selfieUrl?: string;            // URL temporária ou caminho no storage privado Supabase
+  cnhDocumentUrl?: string;       // URL temporária ou caminho no storage privado Supabase/R2
+  selfieUrl?: string;            // URL temporária ou caminho no storage privado Supabase/R2
   cnhDocumentPath?: string;      // Caminho interno no storage
   selfiePath?: string;           // Caminho interno no storage
+  cnhDocInfo?: DriverKycStoredDocInfo | null;
+  selfieDocInfo?: DriverKycStoredDocInfo | null;
   biometricResult?: KycBiometricResult;
   rejectionReason?: string;
   correctionInstructions?: string;
@@ -178,6 +222,33 @@ export interface CategoryEligibilityEvaluation {
   metCriteria: string[];
 }
 
+export interface DriverTermsSignature {
+  signed: boolean;
+  contractId: string;
+  contractVersion: string;
+  contractDate: string;
+  contractTitle: string;
+  contractHash: string;
+  signatureHash: string;
+  validationCode: string;
+  signedAt: string;
+  signedAtBrasilia: string;
+  affirmativeAction: string;
+  driverSnapshot: {
+    driverId: string;
+    name: string;
+    cpf: string;
+    rawCpf?: string;
+    cnh?: string;
+    phone?: string;
+    email?: string;
+    city?: string;
+    vehicle?: string;
+    vehiclePlate?: string;
+  };
+  technicalEvidence: TermsSignatureTechnicalEvidence;
+}
+
 export interface DriverProfile {
   id: string;
   name: string;
@@ -190,6 +261,7 @@ export interface DriverProfile {
   cnhDocumentPhoto?: string;  // Foto da CNH enviada pelo motorista
   selfiePhoto?: string;       // Selfie capturada diretamente pela câmara
   kyc?: DriverKycData;        // Registro completo do processo KYC semiautomático
+  termsSignature?: DriverTermsSignature | null; // Assinatura digital dos Termos de Uso
   vehicleBrand: string;
   vehicleModel: string;
   vehicleVersion?: string; // Versão do veículo (ex: XEi 2.0 Automático)

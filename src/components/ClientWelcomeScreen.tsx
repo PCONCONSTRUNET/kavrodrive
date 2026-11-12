@@ -4,6 +4,13 @@ import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
 import { WhatsAppIcon } from './WhatsAppIcon';
+import { PassengerTermsContractModal } from './PassengerTermsContractModal';
+import {
+  PASSENGER_TERMS_AFFIRMATIVE_TEXT,
+  PASSENGER_TERMS_CONTRACT_ID,
+  PASSENGER_TERMS_CONTRACT_VERSION
+} from '../utils/passengerTermsContract';
+import { buildTermsAcceptancePayload } from '../utils/contractMarkdownParser';
 
 interface ClientWelcomeScreenProps {
   config: SystemConfig;
@@ -34,16 +41,19 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
   const [regName, setRegName] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
-  const [regAcceptedTerms, setRegAcceptedTerms] = useState(true);
+  const [regAcceptedTerms, setRegAcceptedTerms] = useState(false);
 
   // Dados para login por e-mail
   const [emailIdentifier, setEmailIdentifier] = useState('');
   const [emailPassword, setEmailPassword] = useState('');
   const [isEmailRegister, setIsEmailRegister] = useState(false);
+  const [emailRegAcceptedTerms, setEmailRegAcceptedTerms] = useState(false);
 
   // Dados para social (Google / Apple)
   const [socialProvider, setSocialProvider] = useState<'Google' | 'Apple'>('Google');
   const [socialName, setSocialName] = useState('');
+  const [socialAcceptedTerms, setSocialAcceptedTerms] = useState(false);
+  const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
 
   // Formata telefone enquanto digita
   const handlePhoneInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -120,18 +130,24 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       return;
     }
     if (!regAcceptedTerms) {
-      setErrorMsg('Você precisa aceitar os termos de uso para continuar.');
+      setErrorMsg('Leia e aceite os Termos e Condições Gerais de Uso — Passageiro para concluir o cadastro.');
       return;
     }
 
     setIsLoading(true);
+    const termsAcceptance = buildTermsAcceptancePayload(
+      PASSENGER_TERMS_CONTRACT_ID,
+      PASSENGER_TERMS_CONTRACT_VERSION,
+      PASSENGER_TERMS_AFFIRMATIVE_TEXT
+    );
     const res = await StorageService.registerClient({
       name: regName.trim(),
       phone: phone,
       email: regEmail.trim().toLowerCase(),
       document: '',
       password: regPassword,
-      termsAcceptedAt: new Date().toISOString(),
+      termsAcceptedAt: termsAcceptance.acceptedAtClient,
+      termsAcceptance,
     });
     setIsLoading(false);
 
@@ -157,15 +173,25 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       return;
     }
 
-    setIsLoading(true);
     if (isEmailRegister) {
+      if (!emailRegAcceptedTerms) {
+        setErrorMsg('Leia e aceite os Termos e Condições Gerais de Uso — Passageiro para cadastrar sua conta.');
+        return;
+      }
+      setIsLoading(true);
+      const termsAcceptance = buildTermsAcceptancePayload(
+        PASSENGER_TERMS_CONTRACT_ID,
+        PASSENGER_TERMS_CONTRACT_VERSION,
+        PASSENGER_TERMS_AFFIRMATIVE_TEXT
+      );
       const res = await StorageService.registerClient({
         name: regName.trim() || 'Passageiro Kavro',
         phone: phone || '(48) 99999-0000',
         email: emailIdentifier.trim().toLowerCase(),
         document: '',
         password: emailPassword,
-        termsAcceptedAt: new Date().toISOString(),
+        termsAcceptedAt: termsAcceptance.acceptedAtClient,
+        termsAcceptance,
       });
       setIsLoading(false);
       if (res.ok && res.client) {
@@ -175,6 +201,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         setErrorMsg(res.error || 'Erro ao criar conta por e-mail.');
       }
     } else {
+      setIsLoading(true);
       const res = await StorageService.loginClient(emailIdentifier, emailPassword);
       setIsLoading(false);
       if (res.ok && res.client) {
@@ -190,10 +217,13 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
   const handleSocialClick = (provider: 'Google' | 'Apple') => {
     setSocialProvider(provider);
     setSocialName('Passageiro ' + provider);
+    setSocialAcceptedTerms(false);
+    setErrorMsg('');
     setActiveModal('social_confirm');
   };
 
   const handleConfirmSocialLogin = async () => {
+    setErrorMsg('');
     setIsLoading(true);
     const mockEmail = `cliente.${socialProvider.toLowerCase()}@kavrodrive.com.br`;
     const check = await StorageService.checkClientExists(mockEmail);
@@ -208,13 +238,25 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       }
     }
 
+    if (!socialAcceptedTerms) {
+      setIsLoading(false);
+      setErrorMsg('Confirme que leu e concorda com os Termos de Uso — Passageiro para criar seu acesso.');
+      return;
+    }
+
+    const termsAcceptance = buildTermsAcceptancePayload(
+      PASSENGER_TERMS_CONTRACT_ID,
+      PASSENGER_TERMS_CONTRACT_VERSION,
+      PASSENGER_TERMS_AFFIRMATIVE_TEXT
+    );
     const regRes = await StorageService.registerClient({
       name: socialName.trim() || `Usuário ${socialProvider}`,
       phone: phone || '(48) 99999-0000',
       email: mockEmail,
       document: '',
       password: 'kavro1234',
-      termsAcceptedAt: new Date().toISOString(),
+      termsAcceptedAt: termsAcceptance.acceptedAtClient,
+      termsAcceptance,
     });
     setIsLoading(false);
     if (regRes.ok && regRes.client) {
@@ -801,14 +843,36 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.78rem', color: '#4B5563', cursor: 'pointer', marginTop: 4 }}>
-                <input
-                  type="checkbox"
-                  checked={regAcceptedTerms}
-                  onChange={(e) => setRegAcceptedTerms(e.target.checked)}
-                />
-                <span>Li e concordo com os Termos de Uso e Política de Privacidade</span>
-              </label>
+              <div style={{
+                backgroundColor: regAcceptedTerms ? '#F0FDF4' : '#F8FAFC',
+                border: regAcceptedTerms ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
+                borderRadius: 10,
+                padding: '10px 12px',
+                marginTop: 4
+              }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.77rem', color: '#1F2937', cursor: 'pointer', lineHeight: 1.45 }}>
+                  <input
+                    type="checkbox"
+                    checked={regAcceptedTerms}
+                    onChange={(e) => { setRegAcceptedTerms(e.target.checked); setErrorMsg(''); }}
+                    style={{ marginTop: 2, accentColor: '#16A34A' }}
+                  />
+                  <span>
+                    Li e concordo com os{' '}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
+                      style={{
+                        background: 'none', border: 'none', padding: 0, color: '#15803D',
+                        fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit'
+                      }}
+                    >
+                      Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
+                    </button>
+                    . Aceite registrado com data, hora e certificado digital.
+                  </span>
+                </label>
+              </div>
 
               {errorMsg && (
                 <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
@@ -933,6 +997,38 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
+              {isEmailRegister && (
+                <div style={{
+                  backgroundColor: emailRegAcceptedTerms ? '#F0FDF4' : '#F8FAFC',
+                  border: emailRegAcceptedTerms ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
+                  borderRadius: 10,
+                  padding: '10px 12px'
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.77rem', color: '#1F2937', cursor: 'pointer', lineHeight: 1.45 }}>
+                    <input
+                      type="checkbox"
+                      checked={emailRegAcceptedTerms}
+                      onChange={(e) => { setEmailRegAcceptedTerms(e.target.checked); setErrorMsg(''); }}
+                      style={{ marginTop: 2, accentColor: '#16A34A' }}
+                    />
+                    <span>
+                      Li e concordo com os{' '}
+                      <button
+                        type="button"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
+                        style={{
+                          background: 'none', border: 'none', padding: 0, color: '#15803D',
+                          fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit'
+                        }}
+                      >
+                        Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
+                      </button>
+                      . Aceite registrado eletronicamente.
+                    </span>
+                  </label>
+                </div>
+              )}
+
               {errorMsg && (
                 <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
                   {errorMsg}
@@ -1030,6 +1126,42 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
+              <div style={{
+                backgroundColor: socialAcceptedTerms ? '#F0FDF4' : '#F8FAFC',
+                border: socialAcceptedTerms ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
+                borderRadius: 10,
+                padding: '10px 12px'
+              }}>
+                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.77rem', color: '#1F2937', cursor: 'pointer', lineHeight: 1.45 }}>
+                  <input
+                    type="checkbox"
+                    checked={socialAcceptedTerms}
+                    onChange={(e) => { setSocialAcceptedTerms(e.target.checked); setErrorMsg(''); }}
+                    style={{ marginTop: 2, accentColor: '#16A34A' }}
+                  />
+                  <span>
+                    Ao criar uma conta, li e concordo com os{' '}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
+                      style={{
+                        background: 'none', border: 'none', padding: 0, color: '#15803D',
+                        fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit'
+                      }}
+                    >
+                      Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
+                    </button>
+                    .
+                  </span>
+                </label>
+              </div>
+
+              {errorMsg && (
+                <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
+                  {errorMsg}
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={handleConfirmSocialLogin}
@@ -1126,6 +1258,28 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
           </div>
         </div>
       )}
+
+      <PassengerTermsContractModal
+        isOpen={isTermsModalOpen}
+        onClose={() => setIsTermsModalOpen(false)}
+        mode="passenger"
+        config={config}
+        draftSigner={{
+          name: regName || socialName,
+          phone,
+          email: regEmail || emailIdentifier
+        }}
+        onAccept={() => {
+          if (activeModal === 'email_login') {
+            setEmailRegAcceptedTerms(true);
+          } else if (activeModal === 'social_confirm') {
+            setSocialAcceptedTerms(true);
+          } else {
+            setRegAcceptedTerms(true);
+          }
+          setErrorMsg('');
+        }}
+      />
     </div>
   );
 };

@@ -7,7 +7,13 @@ import {
 import { ClientProfile } from '../types';
 import { StorageService } from '../services/storage';
 import { formatPhone, formatCPF } from '../utils/format';
-import { TermsPrivacyModal } from './TermsPrivacyModal';
+import { PassengerTermsContractModal } from './PassengerTermsContractModal';
+import {
+  PASSENGER_TERMS_AFFIRMATIVE_TEXT,
+  PASSENGER_TERMS_CONTRACT_ID,
+  PASSENGER_TERMS_CONTRACT_VERSION
+} from '../utils/passengerTermsContract';
+import { buildTermsAcceptancePayload } from '../utils/contractMarkdownParser';
 import { TurnstileWidget, isTurnstileEnabled } from './TurnstileWidget';
 
 interface AuthModalProps {
@@ -141,6 +147,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         email: email.trim(),
         password,
         termsAcceptedAt: new Date().toISOString(),
+        termsAcceptance: buildTermsAcceptancePayload(
+          PASSENGER_TERMS_CONTRACT_ID,
+          PASSENGER_TERMS_CONTRACT_VERSION,
+          PASSENGER_TERMS_AFFIRMATIVE_TEXT
+        ),
         turnstileToken: turnstileToken || undefined
       });
       setIsSubmitting(false);
@@ -592,9 +603,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                               display: 'inline',
                             }}
                           >
-                            Termos de Uso e Política de Privacidade (LGPD)
+                            Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
                           </button>
-                          . Estou ciente de que as <strong>rotas e dados de GPS são gravados</strong> para segurança mútua do passageiro e motorista.
+                          . Estou ciente da gravação de rotas/GPS e de que minha assinatura eletrônica será registrada com data, hora, IP e certificado SHA-256.
                         </span>
                       </label>
                     </div>
@@ -694,10 +705,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         </div>
       </div>
 
-      {/* Modal de Termos de Uso e Política de Privacidade (LGPD) */}
-      <TermsPrivacyModal
+      {/* Modal de Termos e Condições Gerais de Uso — Passageiro */}
+      <PassengerTermsContractModal
         isOpen={isTermsOpen}
         onClose={() => setIsTermsOpen(false)}
+        mode="passenger"
+        draftSigner={{
+          name,
+          cpf: cpfOrDoc,
+          phone,
+          email
+        }}
+        onAccept={() => {
+          setAcceptedTerms(true);
+          setErrorMsg('');
+        }}
       />
     </div>,
     document.body
