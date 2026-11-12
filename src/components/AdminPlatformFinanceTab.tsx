@@ -1648,7 +1648,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         }}
                         style={{ borderBottom: '1px solid #F1F5F9', cursor: 'pointer' }}
                       >
-                        <td style={{ padding: '12px 16px' }}>
+                        <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                           <div style={{ fontWeight: 600, color: '#0F172A' }}>{drv.name}</div>
                           <div style={{ fontSize: '0.7rem', color: '#64748B' }}>{formatPhone(drv.phone) || drv.phone}</div>
                         </td>
@@ -1672,7 +1672,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           </span>
                         </td>
 
-                        <td style={{ padding: '12px 14px', fontSize: '0.74rem', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>
+                        <td style={{ padding: '12px 14px', fontSize: '0.74rem', color: '#334155', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                           <div>CPF: {formatDocument(drv.document) || '—'}</div>
                           <div style={{ fontSize: '0.68rem', color: '#64748B' }}>CNH: {formatCNHPunctuated(drv.cnh) || '—'}</div>
                         </td>
@@ -1681,12 +1681,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           <div style={{ fontWeight: 600, color: '#0F172A', fontSize: '0.75rem' }}>
                             {drv.vehicleBrand} {drv.vehicleModel} ({drv.vehicleColor})
                           </div>
-                          <div style={{ fontSize: '0.7rem', color: '#64748B', fontFamily: 'monospace' }}>
+                          <div style={{ fontSize: '0.7rem', color: '#64748B', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                             Placa: {formatPlateDisplay(drv.vehiclePlate) || '—'}
                           </div>
                         </td>
 
-                        <td style={{ padding: '12px 14px', fontSize: '0.73rem', color: '#334155', fontFamily: 'monospace' }}>
+                        <td style={{ padding: '12px 14px', fontSize: '0.73rem', color: '#334155', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                           {formatPixKey(drv.pixKey, drv.pixType) || 'Não informada'}
                         </td>
 
@@ -1768,172 +1768,208 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         </td>
 
                         <td
-                          style={{ padding: '12px 16px', textAlign: 'right' }}
+                          style={{ padding: '12px 16px', textAlign: 'right', verticalAlign: 'middle' }}
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', flexWrap: 'wrap', gap: 6 }}>
-                            <button
-                              type="button"
-                              onClick={() => setTermsViewerDriver(drv)}
-                              style={{
-                                padding: '5px 10px',
-                                borderRadius: 6,
-                                border: drv.termsSignature?.signed ? '1px solid #16A34A' : '1px solid #CBD5E1',
-                                backgroundColor: drv.termsSignature?.signed ? '#F0FDF4' : '#F8FAFC',
-                                color: drv.termsSignature?.signed ? '#15803D' : '#475569',
-                                fontSize: '0.72rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4
-                              }}
-                            >
-                              <FileText size={13} />
-                              <span>{drv.termsSignature?.signed ? 'Termo Assinado' : 'Termo'}</span>
-                            </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                            {/* Linha 1: Documentos, KYC e Ficha */}
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+                              <button
+                                type="button"
+                                onClick={() => setTermsViewerDriver(drv)}
+                                style={{
+                                  height: 28,
+                                  padding: '0 10px',
+                                  borderRadius: 6,
+                                  border: drv.termsSignature?.signed ? '1px solid #16A34A' : '1px solid #CBD5E1',
+                                  backgroundColor: drv.termsSignature?.signed ? '#F0FDF4' : '#F8FAFC',
+                                  color: drv.termsSignature?.signed ? '#15803D' : '#475569',
+                                  fontSize: '0.71rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                <FileText size={12} />
+                                <span>{drv.termsSignature?.signed ? 'Termo Assinado' : 'Termo'}</span>
+                              </button>
 
-                            <button
-                              type="button"
-                              onClick={() => setReviewingKycDriver(drv)}
-                              style={{
-                                padding: '5px 10px',
-                                borderRadius: 6,
-                                border: '1px solid #2563EB',
-                                backgroundColor: '#EFF6FF',
-                                color: '#1D4ED8',
-                                fontSize: '0.72rem',
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4
-                              }}
-                            >
-                              <ShieldCheck size={13} />
-                              <span>KYC & Biometria</span>
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => setReviewingKycDriver(drv)}
+                                style={{
+                                  height: 28,
+                                  padding: '0 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #2563EB',
+                                  backgroundColor: '#EFF6FF',
+                                  color: '#1D4ED8',
+                                  fontSize: '0.71rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                <ShieldCheck size={12} />
+                                <span>KYC & Biometria</span>
+                              </button>
 
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setDriverModalTab('resumo');
-                                setSelectedDriverId(drv.id);
-                              }}
-                              style={{
-                                padding: '5px 10px',
-                                borderRadius: 6,
-                                border: '1px solid #0F172A',
-                                backgroundColor: '#0F172A',
-                                color: '#FFFFFF',
-                                fontSize: '0.72rem',
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4
-                              }}
-                            >
-                              <Eye size={12} />
-                              <span>Ver Histórico</span>
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDriverModalTab('resumo');
+                                  setSelectedDriverId(drv.id);
+                                }}
+                                style={{
+                                  height: 28,
+                                  padding: '0 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #0F172A',
+                                  backgroundColor: '#0F172A',
+                                  color: '#FFFFFF',
+                                  fontSize: '0.71rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                <Eye size={12} />
+                                <span>Ver Histórico</span>
+                              </button>
+                            </div>
 
-                            {(drv.approvalStatus === 'pendente_aprovacao' || drv.approvalStatus === 'pendente' || drv.approvalStatus === 'em_analise') && (
-                              <>
+                            {/* Linha 2: Decisão de Aprovação / Bloqueio */}
+                            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'nowrap' }}>
+                              {(drv.approvalStatus === 'pendente_aprovacao' || drv.approvalStatus === 'pendente' || drv.approvalStatus === 'em_analise') && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDriverApproval(drv.id, 'aprovado')}
+                                    style={{
+                                      height: 28,
+                                      padding: '0 12px',
+                                      borderRadius: 6,
+                                      border: '1px solid #16A34A',
+                                      backgroundColor: '#16A34A',
+                                      color: '#FFFFFF',
+                                      fontSize: '0.71rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    <Check size={12} />
+                                    <span>Aprovar</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDriverApproval(drv.id, 'rejeitado')}
+                                    style={{
+                                      height: 28,
+                                      padding: '0 12px',
+                                      borderRadius: 6,
+                                      border: '1px solid #FECACA',
+                                      backgroundColor: '#FEF2F2',
+                                      color: '#DC2626',
+                                      fontSize: '0.71rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    <X size={12} />
+                                    <span>Recusar</span>
+                                  </button>
+                                </>
+                              )}
+
+                              {drv.approvalStatus === 'aprovado' && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleDriverFinancialBlock(drv, Boolean(drv.financialBlocked))}
+                                    style={{
+                                      height: 28,
+                                      padding: '0 11px',
+                                      borderRadius: 6,
+                                      border: '1px solid #CBD5E1',
+                                      backgroundColor: '#FFFFFF',
+                                      color: drv.financialBlocked ? '#15803D' : '#334155',
+                                      fontSize: '0.71rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    {drv.financialBlocked ? <Unlock size={12} /> : <Lock size={12} />}
+                                    <span>{drv.financialBlocked ? 'Desbloquear' : 'Bloquear'}</span>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDriverApproval(drv.id, 'suspenso')}
+                                    style={{
+                                      height: 28,
+                                      padding: '0 11px',
+                                      borderRadius: 6,
+                                      border: '1px solid #E2E8F0',
+                                      backgroundColor: '#F8FAFC',
+                                      color: '#64748B',
+                                      fontSize: '0.71rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      whiteSpace: 'nowrap'
+                                    }}
+                                  >
+                                    Suspender
+                                  </button>
+                                </>
+                              )}
+
+                              {(drv.approvalStatus === 'suspenso' || drv.approvalStatus === 'rejeitado') && (
                                 <button
                                   type="button"
                                   onClick={() => handleDriverApproval(drv.id, 'aprovado')}
                                   style={{
-                                    padding: '5px 10px',
+                                    height: 28,
+                                    padding: '0 12px',
                                     borderRadius: 6,
                                     border: '1px solid #16A34A',
                                     backgroundColor: '#16A34A',
                                     color: '#FFFFFF',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  Aprovar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDriverApproval(drv.id, 'rejeitado')}
-                                  style={{
-                                    padding: '5px 10px',
-                                    borderRadius: 6,
-                                    border: '1px solid #FECACA',
-                                    backgroundColor: '#FFFFFF',
-                                    color: '#DC2626',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  Recusar
-                                </button>
-                              </>
-                            )}
-
-                            {drv.approvalStatus === 'aprovado' && (
-                              <>
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleDriverFinancialBlock(drv, Boolean(drv.financialBlocked))}
-                                  style={{
-                                    padding: '5px 10px',
-                                    borderRadius: 6,
-                                    border: '1px solid #CBD5E1',
-                                    backgroundColor: '#FFFFFF',
-                                    color: drv.financialBlocked ? '#15803D' : '#334155',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
+                                    fontSize: '0.71rem',
+                                    fontWeight: 700,
                                     cursor: 'pointer',
                                     display: 'inline-flex',
                                     alignItems: 'center',
-                                    gap: 4
+                                    gap: 4,
+                                    whiteSpace: 'nowrap'
                                   }}
                                 >
-                                  {drv.financialBlocked ? <Unlock size={12} /> : <Lock size={12} />}
-                                  <span>{drv.financialBlocked ? 'Desbloquear' : 'Bloquear'}</span>
+                                  <Check size={12} />
+                                  <span>Reativar</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDriverApproval(drv.id, 'suspenso')}
-                                  style={{
-                                    padding: '5px 10px',
-                                    borderRadius: 6,
-                                    border: '1px solid #E2E8F0',
-                                    backgroundColor: '#F8FAFC',
-                                    color: '#64748B',
-                                    fontSize: '0.72rem',
-                                    fontWeight: 600,
-                                    cursor: 'pointer'
-                                  }}
-                                >
-                                  Suspender
-                                </button>
-                              </>
-                            )}
-
-                            {(drv.approvalStatus === 'suspenso' || drv.approvalStatus === 'rejeitado') && (
-                              <button
-                                type="button"
-                                onClick={() => handleDriverApproval(drv.id, 'aprovado')}
-                                style={{
-                                  padding: '5px 10px',
-                                  borderRadius: 6,
-                                  border: '1px solid #16A34A',
-                                  backgroundColor: '#16A34A',
-                                  color: '#FFFFFF',
-                                  fontSize: '0.72rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                Reativar
-                              </button>
-                            )}
+                              )}
+                            </div>
                           </div>
                         </td>
                       </tr>
