@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/logo-icon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#121A21" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+    <meta id="apple-app-title" name="apple-mobile-web-app-title" content="KAVRO DRIVE" />
+    <link rel="apple-touch-icon" href="/logo-icon.png" />
+    <link id="app-manifest" rel="manifest" href="/manifest.json" />
+    <script>
+      (function () {
+        try {
+          var p = window.location.pathname || '/';
+          var isAdminRoute = /^\/(administracion|admin|motora|motorista|painel|dashboard)(\/|$)/i.test(p);
+          var m = document.getElementById('app-manifest');
+          var titleMeta = document.getElementById('apple-app-title');
+          if (isAdminRoute) {
+            if (m) m.setAttribute('href', '/manifest-admin.json');
+            if (titleMeta) titleMeta.setAttribute('content', 'Kavro Motorista');
+          } else {
+            if (m) m.setAttribute('href', '/manifest.json');
+            if (titleMeta) titleMeta.setAttribute('content', 'KAVRO DRIVE');
+          }
+        } catch (e) {}
+      })();
+    </script>
+    
+    <title>KAVRO DRIVE — Mobilidade Urbana & Corridas na Hora</title>
+    
+    <!-- Google Fonts: Inter & Plus Jakarta Sans -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- OneSignal Web Push (usa o mesmo service worker do PWA: /sw.js) -->
+    <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+    <script>
+      window.OneSignalDeferred = window.OneSignalDeferred || [];
+      OneSignalDeferred.push(async function (OneSignal) {
+        await OneSignal.init({
+          appId: "618823b7-cb26-49c8-b7c0-96385c228a98",
+          safari_web_id: "web.onesignal.auto.5f83a190-684a-4c4c-a875-2ee8aa7bf929",
+          serviceWorkerPath: "sw.js",
+          serviceWorkerParam: { scope: "/" },
+          allowLocalhostAsSecureOrigin: true,
+          notifyButton: { enable: false }, // usamos nosso próprio pop-up com a logo
+          promptOptions: { slidedown: { prompts: [] } }
+        });
+        window.__oneSignalReady = true;
+        window.dispatchEvent(new CustomEvent('up_onesignal_ready'));
+        try {
+          if (OneSignal.Notifications && OneSignal.Notifications.addEventListener) {
+            OneSignal.Notifications.addEventListener('foregroundWillDisplay', function () {
+              window.dispatchEvent(new CustomEvent('up_push_received'));
+            });
+          }
+        } catch (e) {}
+      });
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(err => console.log('SW reg error:', err));
+        });
+      }
+    </script>
+  </body>
+</html>

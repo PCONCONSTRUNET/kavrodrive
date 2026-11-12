@@ -1,0 +1,605 @@
+:root {
+  /* Cores da Identidade Visual Oficial UP MOBILIDADE */
+  --color-primary: #76D800; /* Verde-Limão Vibrante */
+  --color-primary-hover: #65BE00;
+  --color-primary-light: rgba(118, 216, 0, 0.14);
+  --color-primary-glow: rgba(118, 216, 0, 0.35);
+
+  --color-dark: #121A21; /* Grafite azulado escuro da logo */
+  --color-dark-surface: #1B2631;
+  --color-dark-surface-elevated: #243342;
+  --color-dark-border: #2C3E50;
+
+  --color-bg-light: #F6F8F9;
+  --color-surface-white: #FFFFFF;
+  --color-text-main: #0F172A;
+  --color-text-muted: #64748B;
+  --color-border-light: #E2E8F0;
+
+  --status-pending: #F59E0B;
+  --status-confirmed: #10B981;
+  --status-active: #3B82F6;
+  --status-finished: #6B7280;
+  --status-cancelled: #EF4444;
+
+  --font-heading: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-full: 9999px;
+
+  --shadow-subtle: 0 2px 8px rgba(0, 0, 0, 0.04);
+  --shadow-card: 0 4px 20px -2px rgba(18, 26, 33, 0.08);
+  --shadow-elevated: 0 12px 32px -4px rgba(18, 26, 33, 0.16);
+  --shadow-glow: 0 4px 18px rgba(118, 216, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Autofill do navegador no cadastro do motorista (tema claro estilo Uber) */
+.kv-light input:-webkit-autofill,
+.kv-light input:-webkit-autofill:hover,
+.kv-light input:-webkit-autofill:focus,
+.kv-light input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #F3F3F3 inset !important;
+  -webkit-text-fill-color: #000000 !important;
+  caret-color: #000000 !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+.kv-light input:focus {
+  border-color: #000000 !important;
+  background-color: #FFFFFF !important;
+}
+
+html, body, #root {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  position: relative;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-bg-light);
+  color: var(--color-text-main);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.5;
+  overflow-x: hidden;
+  user-select: none;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  letter-spacing: -0.02em;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+input, select, textarea {
+  font-family: inherit;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Previne zoom automático forçado no Android Chrome e iOS Safari ao tocar/focar em inputs */
+@media screen and (max-width: 820px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Utilitários Flex e Container */
+.app-container {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  background-color: var(--color-bg-light);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.06);
+}
+
+@media (min-width: 1024px) {
+  .admin-mode .app-container {
+    max-width: 1200px;
+  }
+}
+
+/* Safe areas para Mobile (notch iPhone e barra Android) */
+.safe-top {
+  padding-top: max(env(safe-area-inset-top), 12px);
+}
+
+.safe-bottom {
+  padding-bottom: max(env(safe-area-inset-bottom), 16px);
+}
+
+/* Botões Modernos e Modelo iOS */
+.btn-primary {
+  background-color: var(--color-primary);
+  color: var(--color-dark);
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 1rem;
+  padding: 14px 24px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: var(--shadow-glow);
+  transition: all 0.2s ease;
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+  background-color: var(--color-primary-hover);
+}
+
+/* Botão Grande Modelo iOS (Pill, Bold, Haptic Press) */
+.btn-ios-primary {
+  width: 100%;
+  background: linear-gradient(180deg, #7BE000 0%, #68C400 100%);
+  color: #121A21;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 1.05rem;
+  padding: 17px 24px;
+  border-radius: 9999px; /* Formato Pílula / Rounded Full estilo iOS */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  box-shadow: 0 6px 20px rgba(118, 216, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+  border: none;
+  cursor: pointer;
+  letter-spacing: -0.01em;
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.btn-ios-primary:hover {
+  filter: brightness(1.03);
+}
+
+.btn-ios-primary:active {
+  transform: scale(0.97);
+  box-shadow: 0 2px 10px rgba(118, 216, 0, 0.3);
+}
+
+.btn-ios-secondary {
+  background: #F1F5F9;
+  color: #334155;
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: 0.95rem;
+  padding: 16px 20px;
+  border-radius: 9999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #CBD5E1;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.btn-ios-secondary:active {
+  transform: scale(0.97);
+  background: #E2E8F0;
+}
+
+.btn-secondary {
+  background-color: var(--color-dark);
+  color: #ffffff;
+  font-family: var(--font-heading);
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 12px 20px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:active {
+  background-color: var(--color-dark-surface);
+  transform: scale(0.98);
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1.5px solid var(--color-border-light);
+  color: var(--color-text-main);
+  font-weight: 600;
+  padding: 11px 18px;
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.btn-outline:active {
+  background: #f1f5f9;
+}
+
+/* Badge de status */
+.badge-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.badge-aguardando_confirmacao {
+  background-color: #FEF3C7;
+  color: #B45309;
+}
+
+.badge-confirmada {
+  background-color: #D1FAE5;
+  color: #065F46;
+}
+
+.badge-a_caminho {
+  background-color: #E0E7FF;
+  color: #3730A3;
+}
+
+.badge-em_andamento {
+  background-color: #DBEAFE;
+  color: #1E40AF;
+}
+
+.badge-finalizada {
+  background-color: #F3F4F6;
+  color: #374151;
+}
+
+.badge-cancelada {
+  background-color: #FEE2E2;
+  color: #991B1B;
+}
+
+/* Cards */
+.card-glass {
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  box-shadow: var(--shadow-card);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+}
+
+.card-dark {
+  background: var(--color-dark);
+  color: #ffffff;
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-elevated);
+}
+
+/* Animações e transições */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(18, 26, 33, 0.78);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  z-index: 9999;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  overscroll-behavior: contain;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.modal-sheet {
+  background: #ffffff;
+  width: 100%;
+  max-width: 480px;
+  border-top-left-radius: 24px;
+  border-top-right-radius: 24px;
+  max-height: 88dvh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 -10px 40px rgba(0, 0, 0, 0.28);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  animation: slideUp 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  padding-bottom: max(env(safe-area-inset-bottom), 12px);
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.25s ease-out;
+}
+
+/* Pulsação do ponto de localização */
+@keyframes pulseDot {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(118, 216, 0, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(118, 216, 0, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(118, 216, 0, 0); }
+}
+
+.pulse-location {
+  animation: pulseDot 2s infinite;
+}
+
+/* =========================================================
+   BARRA LATERAL (DRAWER) & BARRA DE RODAPÉ (BOTTOM NAV)
+   ========================================================= */
+
+/* Drawer / Barra Lateral */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(10, 15, 20, 0.78);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  z-index: 10000;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes slideDrawerIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.drawer-content {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 300px;
+  max-width: 84vw;
+  background-color: #121A21;
+  color: #FFFFFF;
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 12px 0 40px rgba(0, 0, 0, 0.6);
+  animation: slideDrawerIn 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  border-right: 1.5px solid #2C3E50;
+  overflow-y: auto;
+}
+
+/* Barra de Rodapé Fixa (Mobile Bottom Navigation) */
+.admin-bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  min-height: calc(64px + env(safe-area-inset-bottom, 0px));
+  height: auto;
+  background-color: #121A21;
+  border-top: 1.5px solid #2C3E50;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 8px 8px calc(10px + env(safe-area-inset-bottom, 0px)) 8px;
+  z-index: 900;
+  box-shadow: 0 -6px 25px rgba(0, 0, 0, 0.4);
+}
+
+@media (min-width: 900px) {
+  .admin-bottom-nav {
+    display: none !important;
+  }
+  .desktop-tabs-nav {
+    display: none !important;
+  }
+  .mobile-only-header {
+    display: none !important;
+  }
+  .desktop-only-header {
+    display: flex !important;
+  }
+  .admin-desktop-sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 276px;
+    background-color: #121A21;
+    color: #FFFFFF;
+    z-index: 200;
+    display: flex !important;
+    flex-direction: column;
+    border-right: 1.5px solid #2C3E50;
+    box-shadow: 6px 0 24px rgba(0, 0, 0, 0.18);
+    overflow-y: auto;
+  }
+  .admin-content-wrapper {
+    margin-left: 276px;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  .admin-mobile-menu-btn {
+    display: none !important;
+  }
+  .admin-mobile-center-logo {
+    display: none !important;
+  }
+  .admin-desktop-header-title {
+    display: flex !important;
+  }
+}
+
+@media (max-width: 899px) {
+  .desktop-tabs-nav {
+    display: none !important;
+  }
+  .desktop-only-header {
+    display: none !important;
+  }
+  .mobile-only-header {
+    display: flex !important;
+  }
+  .admin-desktop-sidebar {
+    display: none !important;
+  }
+  .admin-content-wrapper {
+    margin-left: 0;
+    min-height: 100dvh;
+    display: flex;
+    flex-direction: column;
+  }
+  .admin-mobile-menu-btn {
+    display: flex !important;
+  }
+  .admin-mobile-center-logo {
+    display: flex !important;
+  }
+  .admin-desktop-header-title {
+    display: none !important;
+  }
+  .admin-main-container {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
+
+/* ==============================================================
+   TELA INTEIRA PARA MODAIS (SEM BORDAS ESCURAS NEM CORTES NO MOBILE)
+   ============================================================== */
+.app-fullscreen-modal-backdrop {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  min-height: 100dvh !important;
+  background-color: #FFFFFF !important;
+  z-index: 99999 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.app-fullscreen-modal-card {
+  background-color: #FFFFFF !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-height: 100dvh !important;
+  max-height: 100dvh !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch !important;
+}
+
+@media (min-width: 640px) {
+  .app-fullscreen-modal-backdrop {
+    background-color: rgba(15, 23, 42, 0.78) !important;
+    backdrop-filter: blur(6px) !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 20px !important;
+  }
+
+  .app-fullscreen-modal-card {
+    max-width: 520px !important;
+    max-height: 92vh !important;
+    min-height: auto !important;
+    height: auto !important;
+    border-radius: 22px !important;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.4) !important;
+    border: 1px solid #E2E8F0 !important;
+  }
+}
+
+/* ==============================================================
+   REGRAS DE IMPRESSÃO / SALVAMENTO EM PDF PROFISSIONAL
+   ============================================================== */
+@media screen {
+  .printable-finance-report-container {
+    display: none !important;
+  }
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm 12mm;
+  }
+
+  /* Oculta toda a interface comum da tela */
+  #root,
+  .modal-overlay-screen,
+  .admin-bottom-nav,
+  .admin-drawer-overlay,
+  .admin-drawer-content {
+    display: none !important;
+    visibility: hidden !important;
+  }
+
+  /* Exibe exclusivamente o relatório em PDF limpo */
+  .printable-finance-report-container {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #FFFFFF !important;
+    color: #0F172A !important;
+    box-sizing: border-box !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  .printable-finance-report-container * {
+    visibility: visible !important;
+  }
+
+  .pdf-page {
+    width: 100% !important;
+    background: #FFFFFF !important;
+    color: #0F172A !important;
+  }
+
+  .pdf-avoid-break {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+}
+
+

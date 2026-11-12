@@ -1,0 +1,59 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/index.js": {
+      "includeFiles": "server/**",
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/manifest.json", "destination": "/api?__path=manifest" },
+    { "source": "/manifest-admin.json", "destination": "/api?__path=manifest&role=admin" },
+    { "source": "/api/:path*", "destination": "/api?__path=:path*" },
+    { "source": "/motora", "destination": "/admin.html" },
+    { "source": "/motora/:path*", "destination": "/admin.html" },
+    { "source": "/admin", "destination": "/admin.html" },
+    { "source": "/admin/:path*", "destination": "/admin.html" },
+    { "source": "/motorista", "destination": "/admin.html" },
+    { "source": "/painel", "destination": "/admin.html" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    },
+    {
+      "source": "/manifest.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/manifest-admin.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/motora",
+      "headers": [
+        { "key": "Set-Cookie", "value": "up_pwa_role=admin; Path=/; Max-Age=31536000; SameSite=Lax" },
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/admin",
+      "headers": [
+        { "key": "Set-Cookie", "value": "up_pwa_role=admin; Path=/; Max-Age=31536000; SameSite=Lax" },
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    }
+  ]
+}
