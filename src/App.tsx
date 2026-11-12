@@ -505,13 +505,11 @@ const DriverRoute: React.FC<{
     return (
       <div style={{
         minHeight: '100dvh',
-        background: 'radial-gradient(circle at 50% 0%, #182634 0%, #0B1015 70%)',
+        backgroundColor: '#FFFFFF',
         display: 'flex',
         flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '16px',
-        color: '#ffffff',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        color: '#000000',
         boxSizing: 'border-box'
       }}>
         <AdminLoginModal
@@ -519,194 +517,258 @@ const DriverRoute: React.FC<{
           onClose={() => setIsLoginModalOpen(false)}
           onSuccess={handleAdminSuccess}
         />
-        <div style={{
-          textAlign: 'center',
-          maxWidth: 360,
+
+        {/* Top Bar estilo Uber */}
+        <header style={{
           width: '100%',
-          backgroundColor: 'rgba(18, 26, 33, 0.95)',
-          border: '1px solid rgba(118, 216, 0, 0.28)',
-          borderRadius: 22,
-          padding: '24px 20px 22px',
-          boxShadow: '0 20px 50px rgba(0,0,0,0.65), 0 0 24px rgba(118, 216, 0, 0.08)',
-          backdropFilter: 'blur(12px)',
+          height: 60,
+          backgroundColor: '#000000',
+          color: '#FFFFFF',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '0 24px',
           boxSizing: 'border-box'
         }}>
-          {/* Logo Oficial Kavro Drive */}
-          <div style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 10,
-            marginBottom: 14
-          }}>
-            <div style={{
-              width: 64,
-              height: 64,
-              borderRadius: 18,
-              backgroundColor: '#0D1318',
-              border: '1.5px solid rgba(118, 216, 0, 0.45)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 6,
-              boxShadow: '0 6px 20px rgba(118, 216, 0, 0.18)'
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: '1.12rem', fontWeight: 800, letterSpacing: '-0.02em', color: '#FFFFFF' }}>
+              Kavro Drive
+            </span>
+            <span style={{
+              backgroundColor: '#27272A',
+              color: '#F4F4F5',
+              fontSize: '0.68rem',
+              fontWeight: 700,
+              padding: '3px 8px',
+              borderRadius: 6,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase'
             }}>
-              <img
-                src="/pwa-icon-192.png"
-                alt="KAVRO DRIVE"
-                style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 12 }}
-              />
-            </div>
-
-            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: '0.78rem', fontWeight: 900, letterSpacing: '0.06em', color: '#E2E8F0' }}>
-                KAVRO DRIVE
-              </span>
-              <span style={{
-                backgroundColor: '#76D800',
-                color: '#121A21',
-                fontSize: '0.62rem',
-                fontWeight: 900,
-                padding: '2px 7px',
-                borderRadius: 6,
-                letterSpacing: '0.04em'
-              }}>
-                ADMIN MASTER
-              </span>
-            </div>
+              Painel Master
+            </span>
           </div>
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            style={{
+              background: 'none',
+              border: 'none',
+              color: '#D4D4D8',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              padding: '6px 8px'
+            }}
+          >
+            App Passageiro
+          </button>
+        </header>
 
-          <h2 style={{ fontSize: '1.18rem', fontWeight: 800, margin: '0 0 4px 0', letterSpacing: '-0.02em', color: '#FFFFFF' }}>
-            Painel Administrativo Master
-          </h2>
-          <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: '0 0 16px 0', lineHeight: 1.35 }}>
-            Acesso exclusivo com e-mail e senha autorizados
-          </p>
-
-          <form onSubmit={handleDirectSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ position: 'relative' }}>
-              <Mail size={16} style={{ position: 'absolute', left: 13, top: 15, color: '#76D800' }} />
-              <input
-                type="email"
-                placeholder="E-mail do administrador"
-                value={adminEmail}
-                autoFocus
-                required
-                onChange={(e) => {
-                  setAdminEmail(e.target.value);
-                  setAdminError('');
-                }}
-                style={{
-                  width: '100%',
-                  height: 46,
-                  padding: '0 14px 0 38px',
-                  borderRadius: 12,
-                  border: adminError ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
-                  backgroundColor: '#16202A',
-                  color: '#ffffff',
-                  fontSize: '0.9rem',
-                  fontWeight: 600,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  transition: 'border-color 0.2s'
-                }}
-              />
-            </div>
-
-            <div style={{ position: 'relative' }}>
-              <Lock size={16} style={{ position: 'absolute', left: 13, top: 15, color: '#76D800' }} />
-              <input
-                type={showAdminPassword ? 'text' : 'password'}
-                placeholder="Senha de acesso"
-                value={adminPassword}
-                required
-                onChange={(e) => {
-                  setAdminPassword(e.target.value);
-                  setAdminError('');
-                }}
-                style={{
-                  width: '100%',
-                  height: 46,
-                  padding: '0 40px 0 38px',
-                  borderRadius: 12,
-                  border: adminError ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
-                  backgroundColor: '#16202A',
-                  color: '#ffffff',
-                  fontSize: '0.9rem',
-                  fontWeight: 600,
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  transition: 'border-color 0.2s'
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowAdminPassword(!showAdminPassword)}
-                style={{
-                  position: 'absolute',
-                  right: 11,
-                  top: 13,
-                  background: 'none',
-                  border: 'none',
-                  color: '#94A3B8',
-                  cursor: 'pointer'
-                }}
-              >
-                {showAdminPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-              </button>
-            </div>
-
-            <TurnstileWidget theme="dark" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
-
-            {adminError && (
-              <div style={{ color: '#F87171', fontSize: '0.76rem', fontWeight: 700 }}>
-                {adminError}
+        {/* Área Central Clean estilo Uber */}
+        <main style={{
+          flex: 1,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px 20px 40px',
+          boxSizing: 'border-box'
+        }}>
+          <div style={{
+            width: '100%',
+            maxWidth: 380,
+            boxSizing: 'border-box'
+          }}>
+            <div style={{ marginBottom: 24 }}>
+              <div style={{
+                display: 'inline-block',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: '#52525B',
+                backgroundColor: '#F3F4F6',
+                padding: '4px 10px',
+                borderRadius: 999,
+                marginBottom: 12
+              }}>
+                Administração Master
               </div>
-            )}
+              <h1 style={{
+                fontSize: '1.65rem',
+                fontWeight: 700,
+                lineHeight: 1.2,
+                letterSpacing: '-0.025em',
+                margin: '0 0 8px 0',
+                color: '#000000'
+              }}>
+                Entrar no Painel Master
+              </h1>
+              <p style={{
+                fontSize: '0.9rem',
+                color: '#6B7280',
+                margin: 0,
+                lineHeight: 1.4
+              }}>
+                Acesso exclusivo com e-mail e senha autorizados
+              </p>
+            </div>
 
-            <button
-              type="submit"
-              disabled={isAdminLoading}
-              className="btn-ios-primary"
-              style={{
-                width: '100%',
-                height: 46,
-                padding: '0 16px',
-                borderRadius: 12,
-                fontSize: '0.92rem',
-                fontWeight: 800,
+            <form onSubmit={handleDirectSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{
+                height: 50,
+                backgroundColor: '#F3F3F3',
+                borderRadius: 10,
+                border: adminError ? '1.5px solid #DC2626' : '1.5px solid transparent',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                marginTop: 2,
-                opacity: isAdminLoading ? 0.75 : 1
-              }}
-            >
-              <span>{isAdminLoading ? 'Validando acesso...' : 'Entrar no Painel Master'}</span>
-              {!isAdminLoading && <ArrowRight size={16} />}
-            </button>
+                padding: '0 14px',
+                boxSizing: 'border-box'
+              }}>
+                <Mail size={18} color="#52525B" style={{ marginRight: 10, flexShrink: 0 }} />
+                <input
+                  type="email"
+                  placeholder="E-mail do administrador"
+                  value={adminEmail}
+                  autoFocus
+                  required
+                  onChange={(e) => {
+                    setAdminEmail(e.target.value);
+                    setAdminError('');
+                  }}
+                  style={{
+                    flex: 1,
+                    height: '100%',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    fontSize: '0.96rem',
+                    fontWeight: 500,
+                    color: '#000000',
+                    outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div style={{
+                height: 50,
+                backgroundColor: '#F3F3F3',
+                borderRadius: 10,
+                border: adminError ? '1.5px solid #DC2626' : '1.5px solid transparent',
+                display: 'flex',
+                alignItems: 'center',
+                padding: '0 14px',
+                boxSizing: 'border-box'
+              }}>
+                <Lock size={18} color="#52525B" style={{ marginRight: 10, flexShrink: 0 }} />
+                <input
+                  type={showAdminPassword ? 'text' : 'password'}
+                  placeholder="Senha de acesso"
+                  value={adminPassword}
+                  required
+                  onChange={(e) => {
+                    setAdminPassword(e.target.value);
+                    setAdminError('');
+                  }}
+                  style={{
+                    flex: 1,
+                    height: '100%',
+                    border: 'none',
+                    backgroundColor: 'transparent',
+                    fontSize: '0.96rem',
+                    fontWeight: 500,
+                    color: '#000000',
+                    outline: 'none'
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowAdminPassword(!showAdminPassword)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#52525B',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: 4
+                  }}
+                >
+                  {showAdminPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+              </div>
+
+              <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
+
+              {adminError && (
+                <div style={{
+                  color: '#DC2626',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                  backgroundColor: '#FEF2F2',
+                  border: '1px solid #FECACA',
+                  borderRadius: 8,
+                  padding: '9px 12px',
+                  textAlign: 'left'
+                }}>
+                  {adminError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isAdminLoading}
+                style={{
+                  width: '100%',
+                  height: 50,
+                  backgroundColor: '#000000',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  borderRadius: 10,
+                  fontSize: '0.98rem',
+                  fontWeight: 700,
+                  cursor: isAdminLoading ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                  marginTop: 4,
+                  opacity: isAdminLoading ? 0.75 : 1
+                }}
+              >
+                <span>{isAdminLoading ? 'Validando acesso...' : 'Entrar no Painel Master'}</span>
+                {!isAdminLoading && <ArrowRight size={17} />}
+              </button>
+            </form>
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              margin: '22px 0',
+              gap: 12
+            }}>
+              <div style={{ flex: 1, height: 1, backgroundColor: '#E5E7EB' }} />
+              <span style={{ fontSize: '0.82rem', color: '#9CA3AF', fontWeight: 500 }}>ou</span>
+              <div style={{ flex: 1, height: 1, backgroundColor: '#E5E7EB' }} />
+            </div>
+
             <button
               type="button"
               onClick={() => navigate('/kavro-drive')}
               style={{
                 width: '100%',
-                height: 40,
-                padding: '0 12px',
+                height: 48,
+                backgroundColor: '#F3F3F3',
+                color: '#000000',
+                border: 'none',
                 borderRadius: 10,
-                border: '1px solid #334155',
-                backgroundColor: '#0F172A',
-                color: '#76D800',
-                fontSize: '0.78rem',
-                fontWeight: 800,
-                cursor: 'pointer',
-                marginTop: 4
+                fontSize: '0.92rem',
+                fontWeight: 600,
+                cursor: 'pointer'
               }}
             >
-              🚗 Sou Motorista Parceiro → Abrir App Motorista
+              Portal do Motorista Parceiro
             </button>
-          </form>
-        </div>
+          </div>
+        </main>
         <PwaInstallBanner customBottomOffset={20} />
       </div>
     );

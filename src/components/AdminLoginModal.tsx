@@ -67,42 +67,51 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
       }}
     >
       <div style={{
-        backgroundColor: '#121A21',
-        border: '1px solid rgba(118, 216, 0, 0.3)',
-        borderRadius: 22,
-        padding: '22px 18px',
-        maxWidth: 350,
+        backgroundColor: '#FFFFFF',
+        border: '1px solid #E5E7EB',
+        borderRadius: 18,
+        padding: '24px 20px',
+        maxWidth: 360,
         width: '100%',
-        color: '#ffffff',
-        textAlign: 'center',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.6)',
+        color: '#000000',
+        textAlign: 'left',
+        boxShadow: '0 20px 50px rgba(0,0,0,0.22)',
         animation: 'fadeIn 0.2s ease'
       }}>
         <div style={{
-          width: 58,
-          height: 58,
-          borderRadius: 16,
-          backgroundColor: '#0D1318',
-          border: '1.5px solid rgba(118, 216, 0, 0.45)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          margin: '0 auto 12px auto',
-          padding: 5
+          display: 'inline-block',
+          fontSize: '0.68rem',
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: '#52525B',
+          backgroundColor: '#F3F4F6',
+          padding: '3px 9px',
+          borderRadius: 999,
+          marginBottom: 8
         }}>
-          <img src="/pwa-icon-192.png" alt="Kavro Drive" style={{ width: '100%', height: '100%', objectFit: 'contain', borderRadius: 10 }} />
+          Painel Master
         </div>
 
-        <h3 style={{ fontSize: '1.12rem', fontWeight: 800, marginBottom: 4 }}>
-          Painel Administrativo Master
+        <h3 style={{ fontSize: '1.25rem', fontWeight: 700, margin: '0 0 4px 0', color: '#000000' }}>
+          Entrar no Painel Master
         </h3>
-        <p style={{ fontSize: '0.76rem', color: '#94A3B8', marginBottom: 14 }}>
-          Acesso exclusivo por e-mail e senha autorizados
+        <p style={{ fontSize: '0.84rem', color: '#6B7280', margin: '0 0 16px 0' }}>
+          Acesso exclusivo com e-mail e senha autorizados
         </p>
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ position: 'relative' }}>
-            <Mail size={16} style={{ position: 'absolute', left: 12, top: 14, color: '#76D800' }} />
+          <div style={{
+            height: 48,
+            backgroundColor: '#F3F3F3',
+            borderRadius: 10,
+            border: errorMsg ? '1.5px solid #DC2626' : '1.5px solid transparent',
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 12px',
+            boxSizing: 'border-box'
+          }}>
+            <Mail size={16} color="#52525B" style={{ marginRight: 10, flexShrink: 0 }} />
             <input
               type="email"
               placeholder="E-mail administrador"
@@ -114,23 +123,29 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                 setErrorMsg('');
               }}
               style={{
-                width: '100%',
-                height: 44,
-                padding: '0 14px 0 36px',
-                borderRadius: 12,
-                border: errorMsg ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
-                backgroundColor: '#1B2631',
-                color: '#ffffff',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                boxSizing: 'border-box',
+                flex: 1,
+                height: '100%',
+                border: 'none',
+                backgroundColor: 'transparent',
+                color: '#000000',
+                fontSize: '0.94rem',
+                fontWeight: 500,
                 outline: 'none'
               }}
             />
           </div>
 
-          <div style={{ position: 'relative' }}>
-            <Lock size={16} style={{ position: 'absolute', left: 12, top: 14, color: '#76D800' }} />
+          <div style={{
+            height: 48,
+            backgroundColor: '#F3F3F3',
+            borderRadius: 10,
+            border: errorMsg ? '1.5px solid #DC2626' : '1.5px solid transparent',
+            display: 'flex',
+            alignItems: 'center',
+            padding: '0 12px',
+            boxSizing: 'border-box'
+          }}>
+            <Lock size={16} color="#52525B" style={{ marginRight: 10, flexShrink: 0 }} />
             <input
               type={showPassword ? 'text' : 'password'}
               placeholder="Sua senha"
@@ -141,16 +156,13 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
                 setErrorMsg('');
               }}
               style={{
-                width: '100%',
-                height: 44,
-                padding: '0 38px 0 36px',
-                borderRadius: 12,
-                border: errorMsg ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
-                backgroundColor: '#1B2631',
-                color: '#ffffff',
-                fontSize: '0.9rem',
-                fontWeight: 600,
-                boxSizing: 'border-box',
+                flex: 1,
+                height: '100%',
+                border: 'none',
+                backgroundColor: 'transparent',
+                color: '#000000',
+                fontSize: '0.94rem',
+                fontWeight: 500,
                 outline: 'none'
               }}
             />
@@ -158,23 +170,22 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               type="button"
               onClick={() => setShowPassword(!showPassword)}
               style={{
-                position: 'absolute',
-                right: 10,
-                top: 12,
                 background: 'none',
                 border: 'none',
-                color: '#94A3B8',
-                cursor: 'pointer'
+                color: '#52525B',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center'
               }}
             >
               {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
 
-          <TurnstileWidget theme="dark" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
+          <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
 
           {errorMsg && (
-            <div style={{ color: '#F87171', fontSize: '0.75rem', fontWeight: 700 }}>
+            <div style={{ color: '#DC2626', fontSize: '0.78rem', fontWeight: 600 }}>
               {errorMsg}
             </div>
           )}
@@ -185,10 +196,10 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
               onClick={onClose}
               style={{
                 flex: 1,
-                padding: 12,
-                borderRadius: 12,
-                backgroundColor: '#1E293B',
-                color: '#CBD5E1',
+                height: 46,
+                borderRadius: 10,
+                backgroundColor: '#F3F3F3',
+                color: '#111827',
                 fontSize: '0.9rem',
                 fontWeight: 600,
                 border: 'none',
@@ -200,10 +211,19 @@ export const AdminLoginModal: React.FC<AdminLoginModalProps> = ({
             <button
               type="submit"
               disabled={isLoading}
-              className="btn-primary"
-              style={{ flex: 2, padding: 12 }}
+              style={{
+                flex: 2,
+                height: 46,
+                borderRadius: 10,
+                backgroundColor: '#000000',
+                color: '#FFFFFF',
+                fontSize: '0.92rem',
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer'
+              }}
             >
-              {isLoading ? 'Verificando...' : 'Entrar no Painel'}
+              {isLoading ? 'Verificando...' : 'Entrar'}
             </button>
           </div>
         </form>
