@@ -9,6 +9,7 @@ import { ClientMyRidesScreen } from './views/ClientMyRidesScreen';
 import { ClientProfileScreen } from './views/ClientProfileScreen';
 import { AdminDashboardScreen } from './views/AdminDashboardScreen';
 import { DriverPortalScreen } from './views/DriverPortalScreen';
+import { LandingScreen } from './views/LandingScreen';
 import { PassengerTrackingScreen } from './views/PassengerTrackingScreen';
 import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
 import { DriverPublicAuditModal } from './components/DriverPublicAuditModal';
@@ -166,7 +167,11 @@ const ClientApp: React.FC<{
   refreshData: () => void;
 }> = ({ config, rides, refreshData }) => {
   const [currentUser, setCurrentUser] = useState<ClientProfile | null>(StorageService.getCurrentUser());
-  const [currentTab, setCurrentTab] = useState<'inicio' | 'agendar' | 'minhas_corridas' | 'perfil'>('inicio');
+  const [currentTab, setCurrentTab] = useState<'inicio' | 'agendar' | 'minhas_corridas' | 'perfil'>(() =>
+    typeof window !== 'undefined' && window.location.search.includes('flow=schedule')
+      ? 'agendar'
+      : 'inicio'
+  );
   const [initialBookingOrigin, setInitialBookingOrigin] = useState<LocationPoint | null>(null);
   const [initialBookingDestination, setInitialBookingDestination] = useState<LocationPoint | null>(null);
 
@@ -201,6 +206,8 @@ const ClientApp: React.FC<{
     if (pendingBookingAction) {
       pendingBookingAction();
       setPendingBookingAction(null);
+    } else if (typeof window !== 'undefined' && window.location.search.includes('flow=schedule')) {
+      setCurrentTab('agendar');
     }
   };
 
@@ -878,13 +885,23 @@ export const App: React.FC = () => {
         }
       />
 
-      {/* Rota principal do Cliente (em / e em /cliente) */}
+      {/* Landing Page Oficial na Raiz (/) estilo Uber — Desktop e Mobile */}
       <Route
         path="/"
+        element={<LandingScreen config={config} />}
+      />
+
+      {/* Rotas do App do Passageiro (/cliente e /app) */}
+      <Route
+        path="/cliente/*"
         element={<ClientApp config={config} rides={rides} refreshData={refreshData} />}
       />
       <Route
-        path="/cliente/*"
+        path="/cliente"
+        element={<ClientApp config={config} rides={rides} refreshData={refreshData} />}
+      />
+      <Route
+        path="/app/*"
         element={<ClientApp config={config} rides={rides} refreshData={refreshData} />}
       />
 
