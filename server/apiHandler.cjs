@@ -15,7 +15,180 @@ function getRequestClientIp(req) {
   );
 }
 
-const VALID_ADMIN_PINS = ['1234', '2026', 'admin', '0000', '9999'];
+const DEFAULT_MASTER_ADMIN_EMAIL = 'appuberadmin@gmail.com';
+const ADMIN_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const EPHEMERAL_ADMIN_FALLBACK_KEY = crypto.randomBytes(32).toString('hex');
+const adminAuthUserCache = new Map();
+
+function getAllowedMasterAdminEmail() {
+  return (process.env.ADMIN_MASTER_EMAIL || DEFAULT_MASTER_ADMIN_EMAIL).trim().toLowerCase();
+}
+
+function getAdminSessionSecret() {
+  const explicit = String(process.env.ADMIN_SESSION_SECRET || '').trim();
+  if (explicit) return explicit;
+  const seed = String(process.env.DATABASE_URL || process.env.TURNSTILE_SECRET_KEY || '').trim();
+  if (seed) {
+    return crypto.createHmac('sha256', seed).update('kavro-master-admin-session-v1').digest('hex');
+  }
+  return EPHEMERAL_ADMIN_FALLBACK_KEY;
+}
+
+function signAdminSessionToken({ sub, id, email }) {
+  const payload = {
+    sub: String(sub || id || ''),
+    email: String(email || '').trim().toLowerCase(),
+    iat: Date.now(),
+    exp: Date.now() + ADMIN_SESSION_TTL_MS
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', getAdminSessionSecret()).update(encoded).digest('base64url');
+  return {
+    token: `kavro_adm.${encoded}.${sig}`,
+    expiresAt: new Date(payload.exp).toISOString()
+  };
+}
+
+function verifyAdminSessionToken(rawToken) {
+  const token = String(rawToken || '').trim();
+  if (!token.startsWith('kavro_adm.')) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [, encoded, sig] = parts;
+  if (!encoded || !sig) return null;
+
+  const expectedSig = crypto.createHmac('sha256', getAdminSessionSecret()).update(encoded).digest('base64url');
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expBuf = Buffer.from(expectedSig, 'utf8');
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (!payload || !payload.sub || !payload.email || Number(payload.exp || 0) <= Date.now()) {
+      return null;
+    }
+    const allowedEmail = getAllowedMasterAdminEmail();
+    if (String(payload.email).trim().toLowerCase() !== allowedEmail) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+async function verifySupabaseMasterAccountActive(sub, email) {
+  const allowedEmail = getAllowedMasterAdminEmail();
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail || cleanEmail !== allowedEmail) return false;
+
+  const cacheKey = `${sub}:${cleanEmail}`;
+  const cached = adminAuthUserCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.ok;
+  }
+
+  try {
+    const res = await db.query(
+      `SELECT id, email, email_confirmed_at, banned_until, deleted_at
+       FROM auth.users
+       WHERE id = $1 AND LOWER(email) = $2
+       LIMIT 1`,
+      [sub, allowedEmail]
+    );
+    const row = res.rows[0];
+    const ok = Boolean(
+      row &&
+      !row.deleted_at &&
+      row.email_confirmed_at &&
+      String(row.email || '').trim().toLowerCase() === allowedEmail &&
+      (!row.banned_until || new Date(row.banned_until) <= new Date())
+    );
+    adminAuthUserCache.set(cacheKey, { ok, expiresAt: Date.now() + 30000 });
+    return ok;
+  } catch (err) {
+    console.warn('[AdminAuth] Erro ao verificar conta no Supabase auth.users:', err.message);
+    return false;
+  }
+}
+
+async function verifySupabaseAdminCredentials(rawEmail, rawPassword) {
+  const email = String(rawEmail || '').trim().toLowerCase();
+  const password = String(rawPassword || '');
+  const allowedEmail = getAllowedMasterAdminEmail();
+
+  if (!email || !password) {
+    return { ok: false, status: 400, error: 'Informe seu e-mail e senha do Painel Master.' };
+  }
+
+  // Regra rígida: nenhum outro e-mail além do administrador exclusivo pode entrar
+  if (email !== allowedEmail) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Acesso negado: este e-mail não tem permissão para acessar o Painel Master.'
+    };
+  }
+
+  // 1. Se SUPABASE_URL + SUPABASE_ANON_KEY estiverem configurados, valida pela REST API oficial do Supabase Auth
+  const supabaseUrl = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+  const supabaseAnonKey = String(process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '').trim();
+  if (supabaseUrl && supabaseAnonKey) {
+    try {
+      const authResp = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          apikey: supabaseAnonKey
+        },
+        body: JSON.stringify({ email, password })
+      });
+      const authData = await authResp.json().catch(() => ({}));
+      const authUser = authData?.user;
+      const verifiedEmail = String(authUser?.email || '').trim().toLowerCase();
+      if (!authResp.ok || !authUser?.id || verifiedEmail !== allowedEmail) {
+        return { ok: false, status: 401, error: 'E-mail ou senha inválidos no Supabase Auth.' };
+      }
+      return { ok: true, user: { id: authUser.id, email: verifiedEmail } };
+    } catch (err) {
+      console.warn('[AdminAuth] Fallback para Postgres auth.users:', err.message);
+    }
+  }
+
+  // 2. Validação direta na tabela oficial auth.users do Supabase PostgreSQL (pgcrypto/bcrypt)
+  try {
+    const res = await db.query(
+      `SELECT id, email, email_confirmed_at, banned_until, deleted_at,
+              (encrypted_password IS NOT NULL AND encrypted_password = extensions.crypt($1, encrypted_password)) AS pwd_ok
+       FROM auth.users
+       WHERE LOWER(email) = $2
+       LIMIT 1`,
+      [password, allowedEmail]
+    );
+    const userRow = res.rows[0];
+    if (!userRow || userRow.deleted_at || !userRow.pwd_ok) {
+      return { ok: false, status: 401, error: 'E-mail ou senha inválidos no Supabase.' };
+    }
+    if (!userRow.email_confirmed_at) {
+      return { ok: false, status: 403, error: 'Confirme este e-mail no Supabase antes de acessar o Painel Master.' };
+    }
+    if (userRow.banned_until && new Date(userRow.banned_until) > new Date()) {
+      return { ok: false, status: 403, error: 'Conta administrativa suspensa no Supabase.' };
+    }
+    return {
+      ok: true,
+      user: {
+        id: userRow.id,
+        email: String(userRow.email).trim().toLowerCase()
+      }
+    };
+  } catch (err) {
+    console.error('[AdminAuth] Falha ao validar credenciais no Supabase PostgreSQL:', err.message);
+    return { ok: false, status: 500, error: 'Erro ao validar credenciais no Supabase.' };
+  }
+}
 
 // Memória rápida para telemetria em tempo real de SOS
 const sosMemoryStore = new Map();
@@ -377,22 +550,14 @@ function sanitizeRideForPublic(ride, reqClientId, reqClientPhoneDigits) {
 }
 
 async function isAuthorizedAdmin(req) {
-  const pinHeader = req.headers['x-admin-pin'] || (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
-  if (!pinHeader) return false;
-  const cleanPin = String(pinHeader).trim().toLowerCase();
-  if (VALID_ADMIN_PINS.includes(cleanPin)) return true;
+  const authHeader = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const tokenHeader = authHeader || String(req.headers['x-admin-pin'] || '').trim();
+  if (!tokenHeader) return false;
 
-  try {
-    const cfgRes = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
-    const customPin = cfgRes.rows[0]?.config?.adminPin;
-    if (customPin && String(customPin).trim().toLowerCase() === cleanPin) {
-      return true;
-    }
-  } catch {
-    // ignore
-  }
+  const payload = verifyAdminSessionToken(tokenHeader);
+  if (!payload) return false;
 
-  return false;
+  return verifySupabaseMasterAccountActive(payload.sub, payload.email);
 }
 
 function parseBody(req) {
@@ -589,6 +754,37 @@ async function handleApiRequest(req, res) {
         turnstileSiteKey: siteKey,
         googleEnabled: Boolean(googleClientId),
         googleClientId
+      });
+    }
+
+    // 0.3 LOGIN E SESSÃO DO PAINEL ADMIN MASTER (Exclusivo Supabase Auth + allowlist estrita)
+    if (pathname === '/api/admin/login' && method === 'POST') {
+      const body = await parseBody(req);
+      const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
+      if (!turnstile.ok) {
+        return sendJson(res, 403, { ok: false, error: turnstile.error });
+      }
+      const check = await verifySupabaseAdminCredentials(body.email, body.password);
+      if (!check.ok || !check.user) {
+        return sendJson(res, check.status || 401, { ok: false, error: check.error || 'Acesso negado.' });
+      }
+      const session = signAdminSessionToken(check.user);
+      return sendJson(res, 200, {
+        ok: true,
+        token: session.token,
+        email: check.user.email,
+        expiresAt: session.expiresAt
+      });
+    }
+
+    if (pathname === '/api/admin/session' && method === 'GET') {
+      const ok = await isAuthorizedAdmin(req);
+      if (!ok) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão administrativa expirada ou não autorizada.' });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        email: getAllowedMasterAdminEmail()
       });
     }
 

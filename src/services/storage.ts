@@ -645,7 +645,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/admin/finance/overview?_t=${Date.now()}`, {
         cache: 'no-store',
-        headers: { 'x-admin-pin': this.getAdminPin() || '1234' }
+        headers: { 'x-admin-pin': this.getAdminPin() }
       });
       if (!res.ok) return null;
       return await res.json();
@@ -667,7 +667,7 @@ export const StorageService = {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-pin': this.getAdminPin() || '1234'
+          'x-admin-pin': this.getAdminPin()
         },
         body: JSON.stringify(payload)
       });
@@ -709,7 +709,7 @@ export const StorageService = {
   }> {
     try {
       const res = await fetch(`/api/kyc/driver/${encodeURIComponent(driverId)}`, {
-        headers: { 'x-admin-pin': this.getAdminPin() || '1234' }
+        headers: { 'x-admin-pin': this.getAdminPin() }
       });
       return await res.json();
     } catch {
@@ -728,7 +728,7 @@ export const StorageService = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-pin': this.getAdminPin() || '1234'
+          'x-admin-pin': this.getAdminPin()
         },
         body: JSON.stringify(payload)
       });
@@ -748,7 +748,7 @@ export const StorageService = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-pin': this.getAdminPin() || '1234'
+          'x-admin-pin': this.getAdminPin()
         },
         body: JSON.stringify(payload)
       });
@@ -768,7 +768,7 @@ export const StorageService = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-pin': this.getAdminPin() || '1234'
+          'x-admin-pin': this.getAdminPin()
         },
         body: JSON.stringify({ action, notes })
       });
@@ -788,7 +788,7 @@ export const StorageService = {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-pin': this.getAdminPin() || '1234'
+          'x-admin-pin': this.getAdminPin()
         },
         body: JSON.stringify({ action, reason })
       });
@@ -1408,7 +1408,22 @@ export const StorageService = {
   },
 
   isAdminAuthenticated(): boolean {
-    return localStorage.getItem(STORAGE_KEYS.ADMIN_AUTH) === 'true';
+    if (localStorage.getItem(STORAGE_KEYS.ADMIN_AUTH) !== 'true') return false;
+    const token = localStorage.getItem('up_admin_token') || '';
+    if (!token.startsWith('kavro_adm.')) return false;
+    try {
+      const parts = token.split('.');
+      if (parts.length !== 3) return false;
+      const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      const payload = JSON.parse(atob(b64));
+      if (!payload || !payload.exp || Number(payload.exp) <= Date.now()) {
+        this.setAdminAuthenticated(false);
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   setAdminAuthenticated(auth: boolean): void {
@@ -1416,19 +1431,87 @@ export const StorageService = {
       localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
     } else {
       localStorage.removeItem(STORAGE_KEYS.ADMIN_AUTH);
+      localStorage.removeItem('up_admin_token');
+      localStorage.removeItem('up_admin_pin');
+      localStorage.removeItem('up_admin_email');
     }
   },
 
   getAdminPin(): string {
     if (!this.isAdminAuthenticated()) return '';
-    return localStorage.getItem('up_admin_pin') || '1234';
+    return localStorage.getItem('up_admin_token') || '';
   },
 
-  setAdminPin(pin: string): void {
-    if (pin) {
-      localStorage.setItem('up_admin_pin', pin);
+  setAdminPin(token: string): void {
+    localStorage.removeItem('up_admin_pin');
+    if (token && token.startsWith('kavro_adm.')) {
+      localStorage.setItem('up_admin_token', token);
     } else {
-      localStorage.removeItem('up_admin_pin');
+      localStorage.removeItem('up_admin_token');
+    }
+  },
+
+  getAdminEmail(): string {
+    if (!this.isAdminAuthenticated()) return '';
+    return localStorage.getItem('up_admin_email') || '';
+  },
+
+  async loginMasterAdmin(
+    email: string,
+    password: string,
+    turnstileToken?: string
+  ): Promise<{ ok: boolean; email?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, turnstileToken })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !data.token) {
+        return { ok: false, error: data.error || 'Credenciais inválidas para o Painel Master.' };
+      }
+      this.setAdminPin(data.token);
+      if (data.email) {
+        localStorage.setItem('up_admin_email', String(data.email));
+      }
+      this.setAdminAuthenticated(true);
+      return { ok: true, email: data.email };
+    } catch {
+      return { ok: false, error: 'Erro de conexão com o servidor ao autenticar administrador.' };
+    }
+  },
+
+  async verifyAdminSession(): Promise<boolean> {
+    const token = localStorage.getItem('up_admin_token') || '';
+    if (!token.startsWith('kavro_adm.')) {
+      this.setAdminAuthenticated(false);
+      return false;
+    }
+    try {
+      const res = await fetch('/api/admin/session', {
+        cache: 'no-store',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-admin-pin': token
+        }
+      });
+      if (!res.ok) {
+        this.setAdminAuthenticated(false);
+        return false;
+      }
+      const data = await res.json();
+      if (!data?.ok) {
+        this.setAdminAuthenticated(false);
+        return false;
+      }
+      if (data.email) {
+        localStorage.setItem('up_admin_email', String(data.email));
+      }
+      localStorage.setItem(STORAGE_KEYS.ADMIN_AUTH, 'true');
+      return true;
+    } catch {
+      return this.isAdminAuthenticated();
     }
   },
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
-import { Home, Calendar, Clock, User, MapPin, PhoneCall, ArrowRight, Sparkles } from 'lucide-react';
+import { Home, Calendar, Clock, User, MapPin, PhoneCall, ArrowRight, Sparkles, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { SystemConfig, Ride, LocationPoint, ClientProfile } from './types';
 import { StorageService } from './services/storage';
 import { ClientHomeScreen } from './views/ClientHomeScreen';
@@ -21,6 +21,7 @@ import { ClientWelcomeScreen } from './components/ClientWelcomeScreen';
 import { WhatsAppIcon } from './components/WhatsAppIcon';
 import { TermsPrivacyModal } from './components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from './components/PassengerTermsContractModal';
+import { TurnstileWidget, isTurnstileEnabled } from './components/TurnstileWidget';
 import { getCleanWhatsappNumber } from './utils/format';
 
 // ── TELA DE BOAS-VINDAS (ANTES DO LOGIN) ──────────────────────
@@ -415,7 +416,7 @@ const ClientApp: React.FC<{
   );
 };
 
-// Componente para a Rota do Motorista / Administrador com tela de PIN se não autenticado
+// Componente para a Rota do Painel Administrativo Master com login exclusivo Supabase
 const DriverRoute: React.FC<{
   rides: Ride[];
   config: SystemConfig;
@@ -424,15 +425,33 @@ const DriverRoute: React.FC<{
   const navigate = useNavigate();
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(StorageService.isAdminAuthenticated());
   const [isLoginModalOpen, setIsLoginModalOpen] = useState<boolean>(false);
-  const [pinInput, setPinInput] = useState('');
-  const [pinError, setPinError] = useState(false);
+  const [adminEmail, setAdminEmail] = useState('');
+  const [adminPassword, setAdminPassword] = useState('');
+  const [showAdminPassword, setShowAdminPassword] = useState(false);
+  const [adminError, setAdminError] = useState('');
+  const [isAdminLoading, setIsAdminLoading] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
 
   useEffect(() => {
-    setIsAuthenticated(StorageService.isAdminAuthenticated());
+    let active = true;
     localStorage.setItem('up_pwa_role', 'admin');
     document.cookie = 'up_pwa_role=admin; path=/; max-age=31536000; SameSite=Lax';
     const manifestLink = document.getElementById('app-manifest') || document.querySelector('link[rel="manifest"]');
     if (manifestLink) manifestLink.setAttribute('href', '/manifest-admin.json');
+
+    (async () => {
+      if (StorageService.isAdminAuthenticated()) {
+        const valid = await StorageService.verifyAdminSession();
+        if (active) setIsAuthenticated(valid);
+      } else if (active) {
+        setIsAuthenticated(false);
+      }
+    })();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const handleAdminSuccess = () => {
@@ -452,15 +471,33 @@ const DriverRoute: React.FC<{
     navigate('/cliente');
   };
 
-  const handleDirectSubmit = (e: React.FormEvent) => {
+  const handleDirectSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const cleanPin = pinInput.trim().toLowerCase();
-    if (cleanPin === '1234' || cleanPin === '2026' || cleanPin === 'admin' || cleanPin === '0000' || cleanPin === '9999') {
-      StorageService.setAdminPin(cleanPin);
+    setAdminError('');
+
+    const cleanEmail = adminEmail.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setAdminError('Informe seu e-mail administrador.');
+      return;
+    }
+    if (!adminPassword) {
+      setAdminError('Digite sua senha.');
+      return;
+    }
+    if (isTurnstileEnabled() && !turnstileToken) {
+      setAdminError('Confirme a verificação de segurança anti-robô.');
+      return;
+    }
+
+    setIsAdminLoading(true);
+    const res = await StorageService.loginMasterAdmin(cleanEmail, adminPassword, turnstileToken || undefined);
+    setIsAdminLoading(false);
+
+    if (res.ok) {
       handleAdminSuccess();
     } else {
-      setPinError(true);
-      setPinInput('');
+      setAdminError(res.error || 'E-mail ou senha não autorizados.');
+      setTurnstileResetKey(k => k + 1);
     }
   };
 
@@ -484,7 +521,7 @@ const DriverRoute: React.FC<{
         />
         <div style={{
           textAlign: 'center',
-          maxWidth: 340,
+          maxWidth: 360,
           width: '100%',
           backgroundColor: 'rgba(18, 26, 33, 0.95)',
           border: '1px solid rgba(118, 216, 0, 0.28)',
@@ -534,61 +571,102 @@ const DriverRoute: React.FC<{
                 borderRadius: 6,
                 letterSpacing: '0.04em'
               }}>
-                MOTORISTA
+                ADMIN MASTER
               </span>
             </div>
           </div>
 
           <h2 style={{ fontSize: '1.18rem', fontWeight: 800, margin: '0 0 4px 0', letterSpacing: '-0.02em', color: '#FFFFFF' }}>
-            Painel Operacional
+            Painel Administrativo Master
           </h2>
           <p style={{ color: '#94A3B8', fontSize: '0.78rem', margin: '0 0 16px 0', lineHeight: 1.35 }}>
-            Digite seu PIN de segurança para acessar
+            Acesso exclusivo com e-mail e senha autorizados
           </p>
 
           <form onSubmit={handleDirectSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <input
-              type="password"
-              inputMode="numeric"
-              placeholder="Digite seu PIN"
-              value={pinInput}
-              autoFocus
-              onChange={(e) => {
-                const val = e.target.value;
-                setPinInput(val);
-                setPinError(false);
-                const clean = val.trim().toLowerCase();
-                if (clean === '1234' || clean === '2026' || clean === '0000' || clean === '9999') {
-                  StorageService.setAdminPin(clean);
-                  handleAdminSuccess();
-                }
-              }}
-              style={{
-                width: '100%',
-                height: 46,
-                padding: '0 14px',
-                borderRadius: 12,
-                border: pinError ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
-                backgroundColor: '#16202A',
-                color: '#ffffff',
-                fontSize: pinInput ? '1.25rem' : '0.9rem',
-                fontWeight: 800,
-                textAlign: 'center',
-                letterSpacing: pinInput ? 8 : 0.5,
-                outline: 'none',
-                boxSizing: 'border-box',
-                transition: 'border-color 0.2s'
-              }}
-            />
+            <div style={{ position: 'relative' }}>
+              <Mail size={16} style={{ position: 'absolute', left: 13, top: 15, color: '#76D800' }} />
+              <input
+                type="email"
+                placeholder="E-mail do administrador"
+                value={adminEmail}
+                autoFocus
+                required
+                onChange={(e) => {
+                  setAdminEmail(e.target.value);
+                  setAdminError('');
+                }}
+                style={{
+                  width: '100%',
+                  height: 46,
+                  padding: '0 14px 0 38px',
+                  borderRadius: 12,
+                  border: adminError ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
+                  backgroundColor: '#16202A',
+                  color: '#ffffff',
+                  fontSize: '0.9rem',
+                  fontWeight: 600,
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s'
+                }}
+              />
+            </div>
 
-            {pinError && (
+            <div style={{ position: 'relative' }}>
+              <Lock size={16} style={{ position: 'absolute', left: 13, top: 15, color: '#76D800' }} />
+              <input
+                type={showAdminPassword ? 'text' : 'password'}
+                placeholder="Senha de acesso"
+                value={adminPassword}
+                required
+                onChange={(e) => {
+                  setAdminPassword(e.target.value);
+                  setAdminError('');
+                }}
+                style={{
+                  width: '100%',
+                  height: 46,
+                  padding: '0 40px 0 38px',
+                  borderRadius: 12,
+                  border: adminError ? '1.5px solid #EF4444' : '1.5px solid #2C3E50',
+                  backgroundColor: '#16202A',
+                  color: '#ffffff',
+                  fontSize: '0.9rem',
+                  fontWeight: 600,
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                  transition: 'border-color 0.2s'
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowAdminPassword(!showAdminPassword)}
+                style={{
+                  position: 'absolute',
+                  right: 11,
+                  top: 13,
+                  background: 'none',
+                  border: 'none',
+                  color: '#94A3B8',
+                  cursor: 'pointer'
+                }}
+              >
+                {showAdminPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+              </button>
+            </div>
+
+            <TurnstileWidget theme="dark" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
+
+            {adminError && (
               <div style={{ color: '#F87171', fontSize: '0.76rem', fontWeight: 700 }}>
-                PIN de acesso inválido. Tente novamente.
+                {adminError}
               </div>
             )}
 
             <button
               type="submit"
+              disabled={isAdminLoading}
               className="btn-ios-primary"
               style={{
                 width: '100%',
@@ -601,11 +679,12 @@ const DriverRoute: React.FC<{
                 alignItems: 'center',
                 justifyContent: 'center',
                 gap: 6,
-                marginTop: 2
+                marginTop: 2,
+                opacity: isAdminLoading ? 0.75 : 1
               }}
             >
-              <span>Entrar no Painel Master</span>
-              <ArrowRight size={16} />
+              <span>{isAdminLoading ? 'Validando acesso...' : 'Entrar no Painel Master'}</span>
+              {!isAdminLoading && <ArrowRight size={16} />}
             </button>
             <button
               type="button"
