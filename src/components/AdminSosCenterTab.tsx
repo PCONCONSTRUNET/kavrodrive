@@ -343,8 +343,8 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
             Nenhum chamado de SOS registrado para o filtro selecionado.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {filteredAlerts.map((alert, index) => {
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, backgroundColor: '#F8FAFC' }}>
+            {filteredAlerts.map((alert) => {
               const isCritical = alert.status === 'ativo';
               const isAttending = alert.status === 'em_atendimento';
               const fullTrackingLink = `${window.location.origin}/sos/${alert.id}`;
@@ -356,8 +356,10 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
                   key={alert.id}
                   style={{
                     padding: '18px 20px',
-                    borderBottom: index < filteredAlerts.length - 1 ? '1px solid #E2E8F0' : 'none',
+                    border: isCritical ? '1.5px solid #FCA5A5' : '1.5px solid #CBD5E1',
+                    borderRadius: 10,
                     backgroundColor: isCritical ? '#FFFBFB' : '#FFFFFF',
+                    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
                     display: 'flex',
                     flexDirection: 'column',
                     gap: 14

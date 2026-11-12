@@ -307,7 +307,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
         key={key}
         style={{
           backgroundColor: '#FFFFFF',
-          border: `1px solid ${isOpen ? '#0F172A' : '#E2E8F0'}`,
+          border: `1.5px solid ${isOpen ? '#0F172A' : '#CBD5E1'}`,
           borderRadius: 10,
           overflow: 'hidden',
           opacity: t.enabled ? 1 : 0.68,
