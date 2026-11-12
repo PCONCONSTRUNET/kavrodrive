@@ -432,6 +432,19 @@ async function localQuery(text, params = []) {
         terms_accepted_at: params[7],
         created_at: now
       };
+    } else if (params.length === 9) {
+      row = {
+        id: params[0],
+        name: params[1],
+        phone: params[2],
+        email: params[3],
+        document: params[4],
+        password_hash: params[5],
+        saved_addresses: parseJsonSafe(params[6], []),
+        terms_accepted_at: params[7],
+        terms_signature: parseJsonSafe(params[8], null),
+        created_at: now
+      };
     } else {
       row = {
         id: params[0],
@@ -467,7 +480,8 @@ async function localQuery(text, params = []) {
       if (c) { c.password_hash = params[0]; saveLocalStore(); }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
     }
-    const c = localStore.clients.find(item => item.id === params[6]);
+    const idParam = params.length >= 8 ? params[7] : params[6];
+    const c = localStore.clients.find(item => item.id === idParam);
     if (c) {
       c.name = params[0];
       c.phone = params[1];
@@ -475,6 +489,9 @@ async function localQuery(text, params = []) {
       c.document = params[3];
       c.password_hash = params[4];
       c.terms_accepted_at = params[5];
+      if (params.length >= 8) {
+        c.terms_signature = parseJsonSafe(params[6], c.terms_signature || null);
+      }
       saveLocalStore();
     }
     return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };

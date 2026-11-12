@@ -1053,6 +1053,89 @@ export const StorageService = {
     }
   },
 
+  async getAuthConfig(): Promise<{
+    googleEnabled: boolean;
+    googleClientId: string;
+    turnstileEnabled: boolean;
+    turnstileSiteKey: string;
+  }> {
+    const buildGoogleId = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
+    const buildTurnstileKey = String(import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
+    try {
+      const res = await fetch('/api/auth-config');
+      if (res.ok) {
+        const data = await res.json();
+        const googleClientId = String(data?.googleClientId || buildGoogleId || '').trim();
+        const turnstileSiteKey = String(data?.turnstileSiteKey || data?.siteKey || buildTurnstileKey || '').trim();
+        return {
+          googleEnabled: Boolean(googleClientId || data?.googleEnabled),
+          googleClientId,
+          turnstileEnabled: Boolean(data?.turnstileEnabled ?? turnstileSiteKey),
+          turnstileSiteKey,
+        };
+      }
+    } catch {
+      // Fallback para build env
+    }
+    return {
+      googleEnabled: Boolean(buildGoogleId),
+      googleClientId: buildGoogleId,
+      turnstileEnabled: Boolean(buildTurnstileKey),
+      turnstileSiteKey: buildTurnstileKey,
+    };
+  },
+
+  async authenticateWithGoogle(payload: {
+    accessToken?: string;
+    idToken?: string;
+    name?: string;
+    phone?: string;
+    termsAcceptance?: {
+      accepted: boolean;
+      contractId?: string;
+      contractVersion?: string;
+      acceptedAtClient?: string;
+      affirmativeText?: string;
+      language?: string;
+      timezone?: string;
+    };
+    turnstileToken?: string;
+  }): Promise<{
+    ok: boolean;
+    needsRegistration?: boolean;
+    googleProfile?: {
+      email: string;
+      name: string;
+      picture?: string;
+      existingPhone?: string;
+    };
+    client?: ClientProfile;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/clients/google-auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error || 'Erro ao autenticar com o Google.' };
+      }
+      if (data.client) {
+        this.setCurrentUser(data.client);
+      }
+      return {
+        ok: true,
+        needsRegistration: Boolean(data.needsRegistration),
+        googleProfile: data.googleProfile,
+        client: data.client
+      };
+    } catch {
+      return { ok: false, error: 'Erro de conexão com o servidor. Verifique sua internet.' };
+    }
+  },
+
   async checkClientExists(identifier: string): Promise<{
     ok: boolean;
     exists: boolean;

@@ -13,6 +13,69 @@ import {
 } from '../utils/passengerTermsContract';
 import { buildTermsAcceptancePayload } from '../utils/contractMarkdownParser';
 
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        oauth2?: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            callback: (response: { access_token?: string; error?: string; error_description?: string }) => void;
+            error_callback?: (err: { type?: string; message?: string }) => void;
+          }) => {
+            requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+          };
+        };
+      };
+    };
+  }
+}
+
+let googleGsiScriptPromise: Promise<void> | null = null;
+
+function loadGoogleIdentityScript(): Promise<void> {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (window.google?.accounts?.oauth2?.initTokenClient) return Promise.resolve();
+  if (googleGsiScriptPromise) return googleGsiScriptPromise;
+
+  googleGsiScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-kavro-gsi="1"]') as HTMLScriptElement | null;
+    if (existing) {
+      if (window.google?.accounts?.oauth2?.initTokenClient) {
+        resolve();
+        return;
+      }
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener(
+        'error',
+        () => {
+          googleGsiScriptPromise = null;
+          existing.remove();
+          reject(new Error('Falha ao carregar SDK do Google'));
+        },
+        { once: true }
+      );
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.setAttribute('data-kavro-gsi', '1');
+    script.onload = () => resolve();
+    script.onerror = () => {
+      googleGsiScriptPromise = null;
+      script.remove();
+      reject(new Error('Falha ao carregar SDK do Google'));
+    };
+    document.head.appendChild(script);
+  });
+
+  return googleGsiScriptPromise;
+}
+
 interface ClientWelcomeScreenProps {
   config: SystemConfig;
   onAuthSuccess: (client: ClientProfile) => void;
@@ -30,7 +93,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
   // Estados dos fluxos secundários (Uber style bottom sheet / modal)
   const [activeModal, setActiveModal] = useState<
-    'password_login' | 'register_new' | 'email_login' | 'find_account' | 'social_confirm' | null
+    'password_login' | 'register_new' | 'email_login' | 'find_account' | 'google_complete' | null
   >(null);
 
   // Dados para login com senha
@@ -50,10 +113,21 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
   const [isEmailRegister, setIsEmailRegister] = useState(false);
   const [emailRegAcceptedTerms, setEmailRegAcceptedTerms] = useState(false);
 
-  // Dados para social (Google / Apple)
-  const [socialProvider, setSocialProvider] = useState<'Google' | 'Apple'>('Google');
-  const [socialName, setSocialName] = useState('');
-  const [socialAcceptedTerms, setSocialAcceptedTerms] = useState(false);
+  // Dados para Login / Cadastro via Google OAuth
+  const [googleClientId, setGoogleClientId] = useState(() =>
+    String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim()
+  );
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleSession, setGoogleSession] = useState<{
+    accessToken: string;
+    email: string;
+    name: string;
+    picture?: string;
+  } | null>(null);
+  const [googleName, setGoogleName] = useState('');
+  const [googlePhone, setGooglePhone] = useState('');
+  const [googleAcceptedTerms, setGoogleAcceptedTerms] = useState(false);
+
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
   const [turnstileResetKey, setTurnstileResetKey] = useState(0);
@@ -62,6 +136,23 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     setTurnstileToken(null);
     setTurnstileResetKey(k => k + 1);
   }, [activeModal, isEmailRegister]);
+
+  // Pre-carrega Client ID e SDK Google Identity Services para que o popup abra direto no toque
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      if (!googleClientId) {
+        const cfg = await StorageService.getAuthConfig();
+        if (active && cfg.googleClientId) {
+          setGoogleClientId(cfg.googleClientId);
+        }
+      }
+      await loadGoogleIdentityScript().catch(() => {});
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Formata telefone enquanto digita
   const handlePhoneInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -239,62 +330,164 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     }
   };
 
-  // Login 1-Click Social (Google / Apple)
-  const handleSocialClick = (provider: 'Google' | 'Apple') => {
-    setSocialProvider(provider);
-    setSocialName('Passageiro ' + provider);
-    setSocialAcceptedTerms(false);
-    setErrorMsg('');
-    setActiveModal('social_confirm');
+  const handleAppleClick = () => {
+    setErrorMsg('Login com a Apple estará disponível em breve. Entre usando Google, WhatsApp ou E-mail.');
   };
 
-  const handleConfirmSocialLogin = async () => {
+  // Login / Cadastro real via Google Identity Services (OAuth2)
+  const launchGooglePopup = (resolvedClientId: string) => {
+    const oauth2 = window.google?.accounts?.oauth2;
+    if (!oauth2?.initTokenClient) {
+      setGoogleLoading(false);
+      setErrorMsg('Não foi possível inicializar a janela de login do Google. Recarregue a página.');
+      return;
+    }
+
+    const tokenClient = oauth2.initTokenClient({
+      client_id: resolvedClientId,
+      scope: 'openid email profile',
+      callback: async (tokenResponse) => {
+        if (tokenResponse.error || !tokenResponse.access_token) {
+          setGoogleLoading(false);
+          setErrorMsg(tokenResponse.error_description || 'Autorização com Google não concluída.');
+          return;
+        }
+
+        const res = await StorageService.authenticateWithGoogle({
+          accessToken: tokenResponse.access_token
+        });
+        setGoogleLoading(false);
+
+        if (!res.ok) {
+          setErrorMsg(res.error || 'Erro ao autenticar com o Google.');
+          return;
+        }
+
+        if (res.client && !res.needsRegistration) {
+          setActiveModal(null);
+          onAuthSuccess(res.client);
+          return;
+        }
+
+        if (res.needsRegistration && res.googleProfile) {
+          setGoogleSession({
+            accessToken: tokenResponse.access_token,
+            email: res.googleProfile.email,
+            name: res.googleProfile.name,
+            picture: res.googleProfile.picture
+          });
+          setGoogleName(res.googleProfile.name || '');
+          const prefillPhone = res.googleProfile.existingPhone
+            ? formatPhone(res.googleProfile.existingPhone)
+            : phone;
+          setGooglePhone(prefillPhone || '');
+          setGoogleAcceptedTerms(false);
+          setErrorMsg('');
+          setActiveModal('google_complete');
+        }
+      },
+      error_callback: (err) => {
+        setGoogleLoading(false);
+        if (err?.type === 'popup_failed_to_open') {
+          setErrorMsg('O navegador bloqueou a janela do Google. Permita pop-ups e tente novamente.');
+        } else if (err?.type !== 'popup_closed') {
+          setErrorMsg('Não foi possível abrir o login do Google. Tente novamente.');
+        }
+      }
+    });
+
+    tokenClient.requestAccessToken({ prompt: 'select_account' });
+  };
+
+  const handleGoogleLoginClick = () => {
+    if (googleLoading) return;
     setErrorMsg('');
+    setGoogleLoading(true);
+
+    if (googleClientId && window.google?.accounts?.oauth2?.initTokenClient) {
+      try {
+        launchGooglePopup(googleClientId);
+      } catch {
+        setGoogleLoading(false);
+        setErrorMsg('Erro ao iniciar login com o Google.');
+      }
+      return;
+    }
+
+    (async () => {
+      try {
+        let resolvedClientId = googleClientId;
+        if (!resolvedClientId) {
+          const cfg = await StorageService.getAuthConfig();
+          resolvedClientId = cfg.googleClientId;
+          if (resolvedClientId) setGoogleClientId(resolvedClientId);
+        }
+
+        if (!resolvedClientId) {
+          setGoogleLoading(false);
+          setErrorMsg('Login com Google não configurado neste ambiente.');
+          return;
+        }
+
+        await loadGoogleIdentityScript();
+        launchGooglePopup(resolvedClientId);
+      } catch {
+        setGoogleLoading(false);
+        setErrorMsg('Falha ao conectar com os serviços do Google. Verifique sua internet.');
+      }
+    })();
+  };
+
+  const handleCompleteGoogleRegistration = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setErrorMsg('');
+
+    if (!googleSession?.accessToken) {
+      setActiveModal(null);
+      setErrorMsg('Sessão Google expirada. Clique em Continuar com o Google novamente.');
+      return;
+    }
+
+    const cleanName = googleName.trim();
+    const cleanPhone = googlePhone.replace(/\D/g, '');
+    if (cleanName.length < 2) {
+      setErrorMsg('Informe seu nome completo.');
+      return;
+    }
+    if (cleanPhone.length < 10) {
+      setErrorMsg('Informe um WhatsApp válido com DDD para o motorista falar com você.');
+      return;
+    }
+    if (!googleAcceptedTerms) {
+      setErrorMsg('Marque que leu e concorda com os Termos de Uso para concluir seu acesso.');
+      return;
+    }
     if (isTurnstileEnabled() && !turnstileToken) {
       setErrorMsg('Confirme a verificação de segurança anti-robô.');
       return;
     }
+
     setIsLoading(true);
-    const mockEmail = `cliente.${socialProvider.toLowerCase()}@kavrodrive.com.br`;
-    const check = await StorageService.checkClientExists(mockEmail);
-
-    if (check.exists) {
-      const loginRes = await StorageService.loginClient(mockEmail, 'kavro1234', turnstileToken || undefined);
-      setIsLoading(false);
-      if (loginRes.ok && loginRes.client) {
-        setActiveModal(null);
-        onAuthSuccess(loginRes.client);
-        return;
-      }
-    }
-
-    if (!socialAcceptedTerms) {
-      setIsLoading(false);
-      setErrorMsg('Marque que concorda com os Termos de Uso para criar seu acesso.');
-      return;
-    }
-
     const termsAcceptance = buildTermsAcceptancePayload(
       PASSENGER_TERMS_CONTRACT_ID,
       PASSENGER_TERMS_CONTRACT_VERSION,
       PASSENGER_TERMS_AFFIRMATIVE_TEXT
     );
-    const regRes = await StorageService.registerClient({
-      name: socialName.trim() || `Usuário ${socialProvider}`,
-      phone: phone || '(48) 99999-0000',
-      email: mockEmail,
-      document: '',
-      password: 'kavro1234',
-      termsAcceptedAt: termsAcceptance.acceptedAtClient,
+    const res = await StorageService.authenticateWithGoogle({
+      accessToken: googleSession.accessToken,
+      name: cleanName,
+      phone: googlePhone,
       termsAcceptance,
-      turnstileToken: turnstileToken || undefined,
+      turnstileToken: turnstileToken || undefined
     });
     setIsLoading(false);
-    if (regRes.ok && regRes.client) {
+
+    if (res.ok && res.client) {
       setActiveModal(null);
-      onAuthSuccess(regRes.client);
+      setGoogleSession(null);
+      onAuthSuccess(res.client);
     } else {
-      setErrorMsg(regRes.error || 'Erro na autenticação social.');
+      setErrorMsg(res.error || 'Erro ao concluir cadastro com Google.');
       setTurnstileResetKey(k => k + 1);
     }
   };
@@ -560,7 +753,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
             {/* 1. Continuar com a Apple */}
             <button
               type="button"
-              onClick={() => handleSocialClick('Apple')}
+              onClick={handleAppleClick}
               style={{
                 width: '100%',
                 height: 50,
@@ -586,7 +779,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
             {/* 2. Continuar com o Google */}
             <button
               type="button"
-              onClick={() => handleSocialClick('Google')}
+              onClick={handleGoogleLoginClick}
+              disabled={googleLoading}
               style={{
                 width: '100%',
                 height: 50,
@@ -600,7 +794,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 fontSize: '0.95rem',
                 fontWeight: 600,
                 color: '#000000',
-                cursor: 'pointer'
+                cursor: googleLoading ? 'wait' : 'pointer',
+                opacity: googleLoading ? 0.75 : 1
               }}
             >
               <svg width="18" height="18" viewBox="0 0 24 24">
@@ -609,7 +804,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
                 <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
               </svg>
-              <span>Continuar com o Google</span>
+              <span>{googleLoading ? 'Conectando ao Google...' : 'Continuar com o Google'}</span>
             </button>
 
             {/* 3. Continuar por e-mail */}
@@ -1100,8 +1295,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         </div>
       )}
 
-      {/* 4. Modal: Confirmação de Acesso Social (Google / Apple) */}
-      {activeModal === 'social_confirm' && (
+      {/* 4. Modal: Completar Cadastro via Google OAuth */}
+      {activeModal === 'google_complete' && googleSession && (
         <div style={{
           position: 'fixed',
           inset: 0,
@@ -1122,13 +1317,13 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
             padding: '20px 20px 28px 20px',
             boxSizing: 'border-box'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 4px 0', color: '#000000' }}>
-                  Acessar com {socialProvider}
+                  Concluir acesso com Google
                 </h3>
-                <p style={{ fontSize: '0.85rem', color: '#6B7280', margin: 0 }}>
-                  Acesso rápido com 1 toque
+                <p style={{ fontSize: '0.84rem', color: '#6B7280', margin: 0 }}>
+                  Só falta seu WhatsApp e aceite dos Termos para chamar corridas
                 </p>
               </div>
               <button
@@ -1145,16 +1340,53 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
               </button>
             </div>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              padding: '10px 12px',
+              borderRadius: 12,
+              backgroundColor: '#F8FAFC',
+              border: '1px solid #E2E8F0',
+              marginBottom: 14
+            }}>
+              {googleSession.picture ? (
+                <img
+                  src={googleSession.picture}
+                  alt={googleSession.name}
+                  style={{ width: 38, height: 38, borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+                />
+              ) : (
+                <div style={{
+                  width: 38, height: 38, borderRadius: '50%',
+                  backgroundColor: '#E2E8F0', color: '#0F172A',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontWeight: 800, flexShrink: 0
+                }}>
+                  {(googleSession.name || googleSession.email).charAt(0).toUpperCase()}
+                </div>
+              )}
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {googleSession.name}
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#15803D', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  ✓ {googleSession.email}
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleCompleteGoogleRegistration} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
-                  Como podemos te chamar?
+                  Nome completo
                 </label>
                 <input
                   type="text"
-                  placeholder="Seu nome"
-                  value={socialName}
-                  onChange={(e) => setSocialName(e.target.value)}
+                  placeholder="Seu nome completo"
+                  value={googleName}
+                  onChange={(e) => setGoogleName(e.target.value)}
+                  required
                   style={{
                     width: '100%', height: 48, padding: '0 14px',
                     borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
@@ -1163,7 +1395,26 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
-              {renderCompactTermsConsent(socialAcceptedTerms, setSocialAcceptedTerms)}
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
+                  WhatsApp com DDD (para contato do motorista)
+                </label>
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="(48) 99999-9999"
+                  value={googlePhone}
+                  onChange={(e) => setGooglePhone(formatPhone(e.target.value))}
+                  required
+                  style={{
+                    width: '100%', height: 48, padding: '0 14px',
+                    borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+                    fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+                  }}
+                />
+              </div>
+
+              {renderCompactTermsConsent(googleAcceptedTerms, setGoogleAcceptedTerms)}
 
               <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
 
@@ -1174,8 +1425,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
               )}
 
               <button
-                type="button"
-                onClick={handleConfirmSocialLogin}
+                type="submit"
                 disabled={isLoading}
                 style={{
                   height: 50,
@@ -1188,9 +1438,9 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                   cursor: 'pointer'
                 }}
               >
-                {isLoading ? 'Conectando...' : `Continuar como ${socialName || socialProvider}`}
+                {isLoading ? 'Salvando acesso...' : 'Concluir e entrar'}
               </button>
-            </div>
+            </form>
           </div>
         </div>
       )}
@@ -1278,15 +1528,15 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         mode="passenger"
         config={config}
         draftSigner={{
-          name: regName || socialName,
-          phone,
-          email: regEmail || emailIdentifier
+          name: regName || googleName,
+          phone: activeModal === 'google_complete' ? googlePhone : phone,
+          email: regEmail || emailIdentifier || googleSession?.email
         }}
         onAccept={() => {
           if (activeModal === 'email_login') {
             setEmailRegAcceptedTerms(true);
-          } else if (activeModal === 'social_confirm') {
-            setSocialAcceptedTerms(true);
+          } else if (activeModal === 'google_complete') {
+            setGoogleAcceptedTerms(true);
           } else {
             setRegAcceptedTerms(true);
           }

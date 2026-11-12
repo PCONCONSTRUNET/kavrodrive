@@ -202,6 +202,85 @@ function verifyPassword(password, storedHash) {
   return storedHash === clean;
 }
 
+function getGoogleClientId() {
+  return (
+    process.env.GOOGLE_CLIENT_ID ||
+    process.env.VITE_GOOGLE_CLIENT_ID ||
+    process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
+    ''
+  ).trim();
+}
+
+async function verifyGoogleCredential({ idToken, accessToken }) {
+  const googleClientId = getGoogleClientId();
+  if (!googleClientId) {
+    return { ok: false, status: 503, error: 'Login com Google não configurado no servidor.' };
+  }
+
+  const cleanIdToken = String(idToken || '').trim();
+  const cleanAccessToken = String(accessToken || '').trim();
+
+  try {
+    if (cleanIdToken) {
+      const resp = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(cleanIdToken)}`);
+      if (!resp.ok) {
+        return { ok: false, status: 401, error: 'Token do Google inválido ou expirado. Tente entrar novamente.' };
+      }
+      const data = await resp.json();
+      const audOk = data && data.aud === googleClientId;
+      const verified = data && (data.email_verified === true || data.email_verified === 'true');
+      const email = String(data?.email || '').trim().toLowerCase();
+      if (!audOk || !verified || !email) {
+        return { ok: false, status: 401, error: 'Conta Google não verificada ou não autorizada para este aplicativo.' };
+      }
+      return {
+        ok: true,
+        sub: String(data.sub || ''),
+        email,
+        name: String(data.name || data.given_name || email.split('@')[0]).trim(),
+        picture: String(data.picture || '').trim()
+      };
+    }
+
+    if (cleanAccessToken) {
+      const infoResp = await fetch(`https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(cleanAccessToken)}`);
+      if (!infoResp.ok) {
+        return { ok: false, status: 401, error: 'Sessão do Google expirada. Clique em Continuar com o Google novamente.' };
+      }
+      const info = await infoResp.json();
+      const clientMatch = info && (info.aud === googleClientId || info.azp === googleClientId);
+      if (!clientMatch || Number(info.expires_in || 0) <= 0) {
+        return { ok: false, status: 401, error: 'Token do Google não pertence a este aplicativo.' };
+      }
+
+      const profileResp = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+        headers: { Authorization: `Bearer ${cleanAccessToken}` }
+      });
+      if (!profileResp.ok) {
+        return { ok: false, status: 401, error: 'Não foi possível ler seu perfil do Google. Tente novamente.' };
+      }
+      const profile = await profileResp.json();
+      const verified = profile && (profile.email_verified === true || profile.email_verified === 'true');
+      const email = String(profile?.email || info?.email || '').trim().toLowerCase();
+      if (!verified || !email) {
+        return { ok: false, status: 401, error: 'Sua conta Google precisa estar com e-mail verificado.' };
+      }
+      return {
+        ok: true,
+        sub: String(profile.sub || info.sub || ''),
+        email,
+        name: String(profile.name || profile.given_name || email.split('@')[0]).trim(),
+        picture: String(profile.picture || '').trim()
+      };
+    }
+
+    return { ok: false, status: 400, error: 'Credencial do Google não recebida.' };
+  } catch (err) {
+    console.warn('[GoogleAuth] Erro ao validar credencial Google:', err.message);
+    return { ok: false, status: 502, error: 'Falha ao validar sua conta com o Google. Tente novamente.' };
+  }
+}
+
 async function verifyTurnstileToken(token, remoteIp) {
   const secret = (process.env.TURNSTILE_SECRET_KEY || '').trim();
   if (!secret) return { ok: true, skipped: true };
@@ -492,18 +571,24 @@ async function handleApiRequest(req, res) {
       return res.end(JSON.stringify(manifestData));
     }
 
-    // 0.2 PUBLIC TURNSTILE CONFIGURATION (apenas site key pública + flag enabled)
-    if (pathname === '/api/turnstile-config' && method === 'GET') {
+    // 0.2 PUBLIC AUTH & TURNSTILE CONFIGURATION (apenas chaves públicas)
+    if ((pathname === '/api/turnstile-config' || pathname === '/api/auth-config') && method === 'GET') {
       const siteKey = (
         process.env.VITE_TURNSTILE_SITE_KEY ||
         process.env.TURNSTILE_SITE_KEY ||
         process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
         ''
       ).trim();
+      const googleClientId = getGoogleClientId();
+      const turnstileEnabled = Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim());
       return sendJson(res, 200, {
         ok: true,
-        enabled: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
-        siteKey
+        enabled: turnstileEnabled,
+        siteKey,
+        turnstileEnabled,
+        turnstileSiteKey: siteKey,
+        googleEnabled: Boolean(googleClientId),
+        googleClientId
       });
     }
 
@@ -2703,6 +2788,190 @@ async function handleApiRequest(req, res) {
       }
 
       return sendJson(res, 200, { ok: true, client: sanitizeClientRow(clientRow, false) });
+    }
+
+    if (pathname === '/api/clients/google-auth' && method === 'POST') {
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const googleCheck = await verifyGoogleCredential({
+        idToken: body.idToken,
+        accessToken: body.accessToken
+      });
+      if (!googleCheck.ok) {
+        return sendJson(res, googleCheck.status || 401, { ok: false, error: googleCheck.error });
+      }
+
+      const googleEmail = googleCheck.email;
+      const emailRes = await db.query(
+        `SELECT * FROM public.clients
+         WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+            OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+         LIMIT 1`,
+        ['', googleEmail]
+      );
+      const existingByEmail = emailRes.rows[0] || null;
+
+      if (existingByEmail) {
+        if (existingByEmail.blocked) {
+          return sendJson(res, 403, {
+            ok: false,
+            error: 'Sua conta está temporariamente suspensa. Entre em contato com a central.'
+          });
+        }
+        const existingPhoneDigits = String(existingByEmail.phone || '').replace(/\D/g, '');
+        const hasTerms = Boolean(
+          existingByEmail.terms_accepted_at ||
+          (existingByEmail.terms_signature && existingByEmail.terms_signature.signed)
+        );
+        if (existingPhoneDigits.length >= 10 && hasTerms) {
+          return sendJson(res, 200, {
+            ok: true,
+            needsRegistration: false,
+            client: sanitizeClientRow(existingByEmail, false)
+          });
+        }
+      }
+
+      const finalName = String(body.name || existingByEmail?.name || googleCheck.name || '').trim();
+      const rawPhone = String(body.phone || existingByEmail?.phone || '').trim();
+      const cleanPhone = rawPhone.replace(/\D/g, '');
+      const acceptedTerms = Boolean(body.termsAcceptance && body.termsAcceptance.accepted === true);
+
+      if (!finalName || cleanPhone.length < 10 || !acceptedTerms) {
+        return sendJson(res, 200, {
+          ok: true,
+          needsRegistration: true,
+          googleProfile: {
+            email: googleEmail,
+            name: finalName || googleCheck.name,
+            picture: googleCheck.picture || '',
+            existingPhone: existingByEmail?.phone || ''
+          }
+        });
+      }
+
+      const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
+      if (!turnstile.ok) {
+        return sendJson(res, 403, { ok: false, error: turnstile.error });
+      }
+
+      let targetRow = existingByEmail;
+      if (!targetRow) {
+        const phoneRes = await db.query(
+          `SELECT * FROM public.clients
+           WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+              OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+           LIMIT 1`,
+          [cleanPhone, '']
+        );
+        const existingByPhone = phoneRes.rows[0] || null;
+        if (existingByPhone) {
+          if (existingByPhone.blocked) {
+            return sendJson(res, 403, {
+              ok: false,
+              error: 'Sua conta está temporariamente suspensa. Entre em contato com a central.'
+            });
+          }
+          const existingEmailNorm = String(existingByPhone.email || '').trim().toLowerCase();
+          if (existingEmailNorm && existingEmailNorm !== googleEmail) {
+            return sendJson(res, 409, {
+              ok: false,
+              error: 'Este WhatsApp já está vinculado a outro e-mail cadastrado. Entre com sua senha ou use outro número.'
+            });
+          }
+          if (existingByPhone.password_hash) {
+            return sendJson(res, 409, {
+              ok: false,
+              error: 'Já existe uma conta cadastrada com este WhatsApp. Faça login com sua senha pelo WhatsApp.'
+            });
+          }
+          targetRow = existingByPhone;
+        }
+      }
+
+      const clientIp = getRequestClientIp(req);
+      let savedClientRow = null;
+
+      if (targetRow) {
+        const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
+          clientId: targetRow.id,
+          name: finalName,
+          document: targetRow.document || '',
+          phone: rawPhone,
+          email: googleEmail,
+          ip: clientIp,
+          userAgent: req.headers['user-agent'],
+          host: req.headers.host,
+          clientAcceptance: body.termsAcceptance
+        });
+        const nextHash = targetRow.password_hash || hashPassword(crypto.randomBytes(24).toString('hex'));
+        const updatedRes = await db.query(
+          `UPDATE public.clients
+           SET name = $1, phone = $2, email = $3, document = $4, password_hash = $5, terms_accepted_at = $6, terms_signature = $7
+           WHERE id = $8
+           RETURNING *`,
+          [
+            finalName,
+            rawPhone,
+            googleEmail,
+            targetRow.document || null,
+            nextHash,
+            termsSignature.signedAt,
+            JSON.stringify(termsSignature),
+            targetRow.id
+          ]
+        );
+        savedClientRow = updatedRes.rows[0];
+      } else {
+        const newId = `cli-${Date.now()}`;
+        const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
+          clientId: newId,
+          name: finalName,
+          document: '',
+          phone: rawPhone,
+          email: googleEmail,
+          ip: clientIp,
+          userAgent: req.headers['user-agent'],
+          host: req.headers.host,
+          clientAcceptance: body.termsAcceptance
+        });
+        const randomHash = hashPassword(crypto.randomBytes(24).toString('hex'));
+        const insertRes = await db.query(
+          `INSERT INTO public.clients (id, name, phone, email, document, password_hash, saved_addresses, terms_accepted_at, terms_signature, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+           RETURNING *`,
+          [
+            newId,
+            finalName,
+            rawPhone,
+            googleEmail,
+            null,
+            randomHash,
+            JSON.stringify([]),
+            termsSignature.signedAt,
+            JSON.stringify(termsSignature)
+          ]
+        );
+        savedClientRow = insertRes.rows[0];
+      }
+
+      const sanitizedClient = sanitizeClientRow(savedClientRow, false);
+      const termCode = sanitizedClient.termsSignature?.validationCode ? ` • Termo: ${sanitizedClient.termsSignature.validationCode}` : '';
+      await db.query(
+        `INSERT INTO public.notifications (id, title, message, type, read, timestamp)
+         VALUES ($1, $2, $3, 'client_new', false, NOW())`,
+        [
+          `notif-cli-${Date.now()}`,
+          `👤 Novo Passageiro (Google): ${sanitizedClient.name}`,
+          `WhatsApp: ${sanitizedClient.phone} • ${googleEmail}${termCode}`
+        ]
+      ).catch(() => {});
+
+      return sendJson(res, 200, {
+        ok: true,
+        needsRegistration: false,
+        client: sanitizedClient
+      });
     }
 
     if (pathname === '/api/clients') {
