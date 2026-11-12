@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Mail, Search, ChevronDown, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, X } from 'lucide-react';
 import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
 import { WhatsAppIcon } from './WhatsAppIcon';
+import { TurnstileWidget, isTurnstileEnabled } from './TurnstileWidget';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
 import {
   PASSENGER_TERMS_AFFIRMATIVE_TEXT,
@@ -54,6 +55,13 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
   const [socialName, setSocialName] = useState('');
   const [socialAcceptedTerms, setSocialAcceptedTerms] = useState(false);
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
+
+  useEffect(() => {
+    setTurnstileToken(null);
+    setTurnstileResetKey(k => k + 1);
+  }, [activeModal, isEmailRegister]);
 
   // Formata telefone enquanto digita
   const handlePhoneInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -103,9 +111,13 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       setErrorMsg('Digite sua senha.');
       return;
     }
+    if (isTurnstileEnabled() && !turnstileToken) {
+      setErrorMsg('Confirme a verificação de segurança anti-robô.');
+      return;
+    }
 
     setIsLoading(true);
-    const res = await StorageService.loginClient(phone, loginPassword);
+    const res = await StorageService.loginClient(phone, loginPassword, turnstileToken || undefined);
     setIsLoading(false);
 
     if (res.ok && res.client) {
@@ -113,6 +125,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       onAuthSuccess(res.client);
     } else {
       setErrorMsg(res.error || 'Senha incorreta. Tente novamente.');
+      setTurnstileResetKey(k => k + 1);
     }
   };
 
@@ -130,7 +143,11 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       return;
     }
     if (!regAcceptedTerms) {
-      setErrorMsg('Leia e aceite os Termos e Condições Gerais de Uso — Passageiro para concluir o cadastro.');
+      setErrorMsg('Marque que concorda com os Termos de Uso para concluir o cadastro.');
+      return;
+    }
+    if (isTurnstileEnabled() && !turnstileToken) {
+      setErrorMsg('Confirme a verificação de segurança anti-robô.');
       return;
     }
 
@@ -148,6 +165,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       password: regPassword,
       termsAcceptedAt: termsAcceptance.acceptedAtClient,
       termsAcceptance,
+      turnstileToken: turnstileToken || undefined,
     });
     setIsLoading(false);
 
@@ -156,6 +174,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       onAuthSuccess(res.client);
     } else {
       setErrorMsg(res.error || 'Não foi possível concluir o cadastro.');
+      setTurnstileResetKey(k => k + 1);
     }
   };
 
@@ -172,12 +191,16 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       setErrorMsg('A senha deve ter no mínimo 4 caracteres.');
       return;
     }
+    if (isEmailRegister && !emailRegAcceptedTerms) {
+      setErrorMsg('Marque que concorda com os Termos de Uso para cadastrar sua conta.');
+      return;
+    }
+    if (isTurnstileEnabled() && !turnstileToken) {
+      setErrorMsg('Confirme a verificação de segurança anti-robô.');
+      return;
+    }
 
     if (isEmailRegister) {
-      if (!emailRegAcceptedTerms) {
-        setErrorMsg('Leia e aceite os Termos e Condições Gerais de Uso — Passageiro para cadastrar sua conta.');
-        return;
-      }
       setIsLoading(true);
       const termsAcceptance = buildTermsAcceptancePayload(
         PASSENGER_TERMS_CONTRACT_ID,
@@ -192,6 +215,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         password: emailPassword,
         termsAcceptedAt: termsAcceptance.acceptedAtClient,
         termsAcceptance,
+        turnstileToken: turnstileToken || undefined,
       });
       setIsLoading(false);
       if (res.ok && res.client) {
@@ -199,16 +223,18 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         onAuthSuccess(res.client);
       } else {
         setErrorMsg(res.error || 'Erro ao criar conta por e-mail.');
+        setTurnstileResetKey(k => k + 1);
       }
     } else {
       setIsLoading(true);
-      const res = await StorageService.loginClient(emailIdentifier, emailPassword);
+      const res = await StorageService.loginClient(emailIdentifier, emailPassword, turnstileToken || undefined);
       setIsLoading(false);
       if (res.ok && res.client) {
         setActiveModal(null);
         onAuthSuccess(res.client);
       } else {
         setErrorMsg(res.error || 'E-mail ou senha incorretos.');
+        setTurnstileResetKey(k => k + 1);
       }
     }
   };
@@ -224,12 +250,16 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
   const handleConfirmSocialLogin = async () => {
     setErrorMsg('');
+    if (isTurnstileEnabled() && !turnstileToken) {
+      setErrorMsg('Confirme a verificação de segurança anti-robô.');
+      return;
+    }
     setIsLoading(true);
     const mockEmail = `cliente.${socialProvider.toLowerCase()}@kavrodrive.com.br`;
     const check = await StorageService.checkClientExists(mockEmail);
 
     if (check.exists) {
-      const loginRes = await StorageService.loginClient(mockEmail, 'kavro1234');
+      const loginRes = await StorageService.loginClient(mockEmail, 'kavro1234', turnstileToken || undefined);
       setIsLoading(false);
       if (loginRes.ok && loginRes.client) {
         setActiveModal(null);
@@ -240,7 +270,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
     if (!socialAcceptedTerms) {
       setIsLoading(false);
-      setErrorMsg('Confirme que leu e concorda com os Termos de Uso — Passageiro para criar seu acesso.');
+      setErrorMsg('Marque que concorda com os Termos de Uso para criar seu acesso.');
       return;
     }
 
@@ -257,6 +287,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       password: 'kavro1234',
       termsAcceptedAt: termsAcceptance.acceptedAtClient,
       termsAcceptance,
+      turnstileToken: turnstileToken || undefined,
     });
     setIsLoading(false);
     if (regRes.ok && regRes.client) {
@@ -264,8 +295,59 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       onAuthSuccess(regRes.client);
     } else {
       setErrorMsg(regRes.error || 'Erro na autenticação social.');
+      setTurnstileResetKey(k => k + 1);
     }
   };
+
+  const renderCompactTermsConsent = (checked: boolean, onToggle: (next: boolean) => void) => (
+    <div style={{
+      backgroundColor: checked ? '#F0FDF4' : '#F8FAFC',
+      border: checked ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
+      borderRadius: 10,
+      padding: '8px 11px',
+      marginTop: 2
+    }}>
+      <label style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        fontSize: '0.78rem',
+        color: '#1F2937',
+        cursor: 'pointer',
+        lineHeight: 1.35,
+        margin: 0
+      }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => { onToggle(e.target.checked); setErrorMsg(''); }}
+          style={{ accentColor: '#16A34A', flexShrink: 0, width: 16, height: 16, margin: 0 }}
+        />
+        <span style={{ textAlign: 'left' }}>
+          Li e concordo com os{' '}
+          <button
+            type="button"
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              color: '#15803D',
+              fontWeight: 700,
+              textDecoration: 'underline',
+              cursor: 'pointer',
+              fontSize: 'inherit',
+              textAlign: 'left',
+              display: 'inline'
+            }}
+          >
+            Termos de Uso
+          </button>
+          <span style={{ color: '#64748B', fontSize: '0.72rem' }}> (v{PASSENGER_TERMS_CONTRACT_VERSION})</span>
+        </span>
+      </label>
+    </div>
+  );
 
   return (
     <div style={{
@@ -642,10 +724,12 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
           <div style={{
             width: '100%',
             maxWidth: 480,
+            maxHeight: '92dvh',
+            overflowY: 'auto',
             backgroundColor: '#FFFFFF',
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
-            padding: '24px 20px 32px 20px',
+            padding: '20px 20px 28px 20px',
             boxSizing: 'border-box'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -707,6 +791,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 </button>
               </div>
 
+              <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
+
               {errorMsg && (
                 <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
                   {errorMsg}
@@ -759,13 +845,15 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
           <div style={{
             width: '100%',
             maxWidth: 480,
+            maxHeight: '92dvh',
+            overflowY: 'auto',
             backgroundColor: '#FFFFFF',
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
-            padding: '24px 20px 32px 20px',
+            padding: '20px 20px 28px 20px',
             boxSizing: 'border-box'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <div>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 4px 0', color: '#000000' }}>
                   Crie sua conta
@@ -843,36 +931,9 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
-              <div style={{
-                backgroundColor: regAcceptedTerms ? '#F0FDF4' : '#F8FAFC',
-                border: regAcceptedTerms ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
-                borderRadius: 10,
-                padding: '10px 12px',
-                marginTop: 4
-              }}>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.77rem', color: '#1F2937', cursor: 'pointer', lineHeight: 1.45 }}>
-                  <input
-                    type="checkbox"
-                    checked={regAcceptedTerms}
-                    onChange={(e) => { setRegAcceptedTerms(e.target.checked); setErrorMsg(''); }}
-                    style={{ marginTop: 2, accentColor: '#16A34A' }}
-                  />
-                  <span>
-                    Li e concordo com os{' '}
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
-                      style={{
-                        background: 'none', border: 'none', padding: 0, color: '#15803D',
-                        fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit'
-                      }}
-                    >
-                      Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
-                    </button>
-                    . Aceite registrado com data, hora e certificado digital.
-                  </span>
-                </label>
-              </div>
+              {renderCompactTermsConsent(regAcceptedTerms, setRegAcceptedTerms)}
+
+              <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
 
               {errorMsg && (
                 <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
@@ -916,13 +977,15 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
           <div style={{
             width: '100%',
             maxWidth: 480,
+            maxHeight: '92dvh',
+            overflowY: 'auto',
             backgroundColor: '#FFFFFF',
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
-            padding: '24px 20px 32px 20px',
+            padding: '20px 20px 28px 20px',
             boxSizing: 'border-box'
           }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 4px 0', color: '#000000' }}>
                   {isEmailRegister ? 'Cadastre-se por e-mail' : 'Entrar por e-mail'}
@@ -997,37 +1060,9 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
-              {isEmailRegister && (
-                <div style={{
-                  backgroundColor: emailRegAcceptedTerms ? '#F0FDF4' : '#F8FAFC',
-                  border: emailRegAcceptedTerms ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
-                  borderRadius: 10,
-                  padding: '10px 12px'
-                }}>
-                  <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.77rem', color: '#1F2937', cursor: 'pointer', lineHeight: 1.45 }}>
-                    <input
-                      type="checkbox"
-                      checked={emailRegAcceptedTerms}
-                      onChange={(e) => { setEmailRegAcceptedTerms(e.target.checked); setErrorMsg(''); }}
-                      style={{ marginTop: 2, accentColor: '#16A34A' }}
-                    />
-                    <span>
-                      Li e concordo com os{' '}
-                      <button
-                        type="button"
-                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
-                        style={{
-                          background: 'none', border: 'none', padding: 0, color: '#15803D',
-                          fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit'
-                        }}
-                      >
-                        Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
-                      </button>
-                      . Aceite registrado eletronicamente.
-                    </span>
-                  </label>
-                </div>
-              )}
+              {isEmailRegister && renderCompactTermsConsent(emailRegAcceptedTerms, setEmailRegAcceptedTerms)}
+
+              <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
 
               {errorMsg && (
                 <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
@@ -1079,10 +1114,12 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
           <div style={{
             width: '100%',
             maxWidth: 480,
+            maxHeight: '92dvh',
+            overflowY: 'auto',
             backgroundColor: '#FFFFFF',
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
-            padding: '24px 20px 32px 20px',
+            padding: '20px 20px 28px 20px',
             boxSizing: 'border-box'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
@@ -1126,35 +1163,9 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
-              <div style={{
-                backgroundColor: socialAcceptedTerms ? '#F0FDF4' : '#F8FAFC',
-                border: socialAcceptedTerms ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
-                borderRadius: 10,
-                padding: '10px 12px'
-              }}>
-                <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: '0.77rem', color: '#1F2937', cursor: 'pointer', lineHeight: 1.45 }}>
-                  <input
-                    type="checkbox"
-                    checked={socialAcceptedTerms}
-                    onChange={(e) => { setSocialAcceptedTerms(e.target.checked); setErrorMsg(''); }}
-                    style={{ marginTop: 2, accentColor: '#16A34A' }}
-                  />
-                  <span>
-                    Ao criar uma conta, li e concordo com os{' '}
-                    <button
-                      type="button"
-                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsTermsModalOpen(true); }}
-                      style={{
-                        background: 'none', border: 'none', padding: 0, color: '#15803D',
-                        fontWeight: 700, textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit'
-                      }}
-                    >
-                      Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
-                    </button>
-                    .
-                  </span>
-                </label>
-              </div>
+              {renderCompactTermsConsent(socialAcceptedTerms, setSocialAcceptedTerms)}
+
+              <TurnstileWidget theme="light" onVerify={setTurnstileToken} resetKey={turnstileResetKey} />
 
               {errorMsg && (
                 <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
@@ -1198,10 +1209,12 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
           <div style={{
             width: '100%',
             maxWidth: 480,
+            maxHeight: '92dvh',
+            overflowY: 'auto',
             backgroundColor: '#FFFFFF',
             borderTopLeftRadius: 20,
             borderTopRightRadius: 20,
-            padding: '24px 20px 32px 20px',
+            padding: '20px 20px 28px 20px',
             boxSizing: 'border-box'
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>

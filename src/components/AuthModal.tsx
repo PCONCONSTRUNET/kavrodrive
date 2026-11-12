@@ -559,31 +559,31 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                       </span>
                     </div>
 
-                    {/* Termos de Uso e Política de Privacidade (LGPD & Gravação de GPS) */}
+                    {/* Termos de Uso */}
                     <div
                       style={{
-                        backgroundColor: '#F8FAFC',
-                        borderRadius: 12,
-                        padding: '10px 12px',
+                        backgroundColor: acceptedTerms ? '#F0FDF4' : '#F8FAFC',
+                        borderRadius: 10,
+                        padding: '8px 11px',
                         border: acceptedTerms ? '1.5px solid #86EFAC' : '1.5px solid #CBD5E1',
                         transition: 'border-color 0.2s ease',
                       }}
                     >
-                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
                         <input
                           type="checkbox"
                           checked={acceptedTerms}
                           onChange={(e) => setAcceptedTerms(e.target.checked)}
                           style={{
-                            width: 18,
-                            height: 18,
+                            width: 16,
+                            height: 16,
                             accentColor: '#16A34A',
                             cursor: 'pointer',
-                            marginTop: 2,
+                            margin: 0,
                             flexShrink: 0,
                           }}
                         />
-                        <span style={{ fontSize: '0.74rem', color: '#334155', lineHeight: 1.45 }}>
+                        <span style={{ fontSize: '0.76rem', color: '#334155', lineHeight: 1.35, textAlign: 'left' }}>
                           Li e concordo com os{' '}
                           <button
                             type="button"
@@ -597,15 +597,17 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                               border: 'none',
                               padding: 0,
                               color: '#15803D',
-                              fontWeight: 800,
+                              fontWeight: 700,
                               textDecoration: 'underline',
                               cursor: 'pointer',
+                              fontSize: 'inherit',
+                              textAlign: 'left',
                               display: 'inline',
                             }}
                           >
-                            Termos e Condições Gerais de Uso — Passageiro (v{PASSENGER_TERMS_CONTRACT_VERSION})
+                            Termos de Uso
                           </button>
-                          . Estou ciente da gravação de rotas/GPS e de que minha assinatura eletrônica será registrada com data, hora, IP e certificado SHA-256.
+                          <span style={{ color: '#64748B', fontSize: '0.7rem' }}> (v{PASSENGER_TERMS_CONTRACT_VERSION})</span>
                         </span>
                       </label>
                     </div>

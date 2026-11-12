@@ -492,6 +492,21 @@ async function handleApiRequest(req, res) {
       return res.end(JSON.stringify(manifestData));
     }
 
+    // 0.2 PUBLIC TURNSTILE CONFIGURATION (apenas site key pública + flag enabled)
+    if (pathname === '/api/turnstile-config' && method === 'GET') {
+      const siteKey = (
+        process.env.VITE_TURNSTILE_SITE_KEY ||
+        process.env.TURNSTILE_SITE_KEY ||
+        process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ||
+        ''
+      ).trim();
+      return sendJson(res, 200, {
+        ok: true,
+        enabled: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
+        siteKey
+      });
+    }
+
     // 1. SYNC ALL DATA IN 1 FAST CALL
     if (pathname === '/api/sync' && method === 'GET') {
       await ensureClientsSchema();
