@@ -480,6 +480,16 @@ async function localQuery(text, params = []) {
       if (c) { c.password_hash = params[0]; saveLocalStore(); }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
     }
+    if (upper.includes('SET NAME = $1, PHONE = $2, EMAIL = $3 WHERE ID = $4')) {
+      const c = localStore.clients.find(item => item.id === params[3]);
+      if (c) {
+        c.name = params[0];
+        c.phone = params[1];
+        c.email = params[2];
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
     const idParam = params.length >= 8 ? params[7] : params[6];
     const c = localStore.clients.find(item => item.id === idParam);
     if (c) {

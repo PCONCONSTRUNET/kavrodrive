@@ -2591,7 +2591,10 @@ async function handleApiRequest(req, res) {
       const password = String(body.password || '');
 
       if (!name || cleanPhone.length < 10) {
-        return sendJson(res, 400, { ok: false, error: 'Informe nome completo e WhatsApp válido.' });
+        return sendJson(res, 400, { ok: false, error: 'Informe nome completo e WhatsApp válido com DDD.' });
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return sendJson(res, 400, { ok: false, error: 'Informe um endereço de e-mail válido.' });
       }
       if (!password || password.length < 4) {
         return sendJson(res, 400, { ok: false, error: 'Crie uma senha com pelo menos 4 caracteres.' });
@@ -2972,6 +2975,71 @@ async function handleApiRequest(req, res) {
         needsRegistration: false,
         client: sanitizedClient
       });
+    }
+
+    if (pathname === '/api/clients/complete-contact' && method === 'POST') {
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const clientId = String(body.clientId || '').trim();
+      const password = String(body.password || '');
+      const name = String(body.name || '').trim();
+      const rawPhone = String(body.phone || '').trim();
+      const cleanPhone = rawPhone.replace(/\D/g, '');
+      const email = String(body.email || '').trim().toLowerCase();
+
+      if (!clientId || !password) {
+        return sendJson(res, 400, { ok: false, error: 'Sessão inválida. Faça login novamente.' });
+      }
+      if (cleanPhone.length < 10 || cleanPhone === '48999990000') {
+        return sendJson(res, 400, { ok: false, error: 'Informe um WhatsApp válido com DDD.' });
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return sendJson(res, 400, { ok: false, error: 'Informe um endereço de e-mail válido.' });
+      }
+
+      const clientRes = await db.query(
+        `SELECT * FROM public.clients
+         WHERE ($1 <> '' AND id = $1)
+            OR ($2 <> '' AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2)
+         LIMIT 1`,
+        [clientId, '']
+      );
+      const currentRow = clientRes.rows[0];
+      if (!currentRow) {
+        return sendJson(res, 404, { ok: false, error: 'Conta não encontrada.' });
+      }
+      if (currentRow.blocked) {
+        return sendJson(res, 403, { ok: false, error: 'Sua conta está temporariamente suspensa. Entre em contato com a central.' });
+      }
+      if (!currentRow.password_hash || !verifyPassword(password, currentRow.password_hash)) {
+        return sendJson(res, 401, { ok: false, error: 'Confirmação de senha inválida. Faça login novamente.' });
+      }
+
+      const conflictRes = await db.query(
+        `SELECT id, phone, email FROM public.clients
+         WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+            OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+         LIMIT 1`,
+        [cleanPhone, email]
+      );
+      const conflict = conflictRes.rows[0];
+      if (conflict && conflict.id !== currentRow.id) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: 'Este WhatsApp ou E-mail já está vinculado a outra conta.'
+        });
+      }
+
+      const nextName = name || currentRow.name || 'Passageiro Kavro';
+      const updated = await db.query(
+        `UPDATE public.clients
+         SET name = $1, phone = $2, email = $3
+         WHERE id = $4
+         RETURNING *`,
+        [nextName, rawPhone, email, currentRow.id]
+      );
+      const savedRow = updated.rows[0] || { ...currentRow, name: nextName, phone: rawPhone, email };
+      return sendJson(res, 200, { ok: true, client: sanitizeClientRow(savedRow, false) });
     }
 
     if (pathname === '/api/clients') {

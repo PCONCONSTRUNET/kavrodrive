@@ -1136,6 +1136,30 @@ export const StorageService = {
     }
   },
 
+  async completeClientContact(payload: {
+    clientId: string;
+    password: string;
+    name?: string;
+    phone: string;
+    email: string;
+  }): Promise<{ ok: boolean; client?: ClientProfile; error?: string }> {
+    try {
+      const res = await fetch('/api/clients/complete-contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok || !data.client) {
+        return { ok: false, error: data.error || 'Erro ao atualizar dados de contato.' };
+      }
+      this.setCurrentUser(data.client);
+      return { ok: true, client: data.client };
+    } catch {
+      return { ok: false, error: 'Erro de conexão com o servidor. Verifique sua internet.' };
+    }
+  },
+
   async checkClientExists(identifier: string): Promise<{
     ok: boolean;
     exists: boolean;

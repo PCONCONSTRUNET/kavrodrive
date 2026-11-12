@@ -93,7 +93,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
   // Estados dos fluxos secundários (Uber style bottom sheet / modal)
   const [activeModal, setActiveModal] = useState<
-    'password_login' | 'register_new' | 'email_login' | 'find_account' | 'google_complete' | null
+    'password_login' | 'register_new' | 'email_login' | 'find_account' | 'google_complete' | 'complete_contact' | null
   >(null);
 
   // Dados para login com senha
@@ -110,8 +110,18 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
   // Dados para login por e-mail
   const [emailIdentifier, setEmailIdentifier] = useState('');
   const [emailPassword, setEmailPassword] = useState('');
+  const [emailRegPhone, setEmailRegPhone] = useState('');
   const [isEmailRegister, setIsEmailRegister] = useState(false);
   const [emailRegAcceptedTerms, setEmailRegAcceptedTerms] = useState(false);
+
+  // Completar telefone ou e-mail faltante em contas antigas após login
+  const [pendingContactAuth, setPendingContactAuth] = useState<{
+    client: ClientProfile;
+    password: string;
+  } | null>(null);
+  const [contactName, setContactName] = useState('');
+  const [contactPhone, setContactPhone] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
 
   // Dados para Login / Cadastro via Google OAuth
   const [googleClientId, setGoogleClientId] = useState(() =>
@@ -194,6 +204,26 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     }
   };
 
+  const finishClientLogin = (client: ClientProfile, usedPassword: string) => {
+    const cleanEmail = String(client.email || '').trim().toLowerCase();
+    const hasValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
+    const cleanPhoneDigits = String(client.phone || '').replace(/\D/g, '');
+    const hasRealPhone = cleanPhoneDigits.length >= 10 && cleanPhoneDigits !== '48999990000';
+
+    if (!hasValidEmail || !hasRealPhone) {
+      setPendingContactAuth({ client, password: usedPassword });
+      setContactName(client.name || '');
+      setContactPhone(hasRealPhone ? formatPhone(client.phone) : phone);
+      setContactEmail(hasValidEmail ? cleanEmail : '');
+      setErrorMsg('');
+      setActiveModal('complete_contact');
+      return;
+    }
+
+    setActiveModal(null);
+    onAuthSuccess(client);
+  };
+
   // Confirmação de login com senha
   const handlePasswordLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -212,8 +242,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     setIsLoading(false);
 
     if (res.ok && res.client) {
-      setActiveModal(null);
-      onAuthSuccess(res.client);
+      finishClientLogin(res.client, loginPassword);
     } else {
       setErrorMsg(res.error || 'Senha incorreta. Tente novamente.');
       setTurnstileResetKey(k => k + 1);
@@ -225,8 +254,13 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     e.preventDefault();
     setErrorMsg('');
 
+    const cleanEmail = regEmail.trim().toLowerCase();
     if (!regName.trim()) {
       setErrorMsg('Informe seu nome completo.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setErrorMsg('Informe um endereço de e-mail válido.');
       return;
     }
     if (!regPassword || regPassword.length < 4) {
@@ -251,7 +285,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     const res = await StorageService.registerClient({
       name: regName.trim(),
       phone: phone,
-      email: regEmail.trim().toLowerCase(),
+      email: cleanEmail,
       document: '',
       password: regPassword,
       termsAcceptedAt: termsAcceptance.acceptedAtClient,
@@ -274,7 +308,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     e.preventDefault();
     setErrorMsg('');
 
-    if (!emailIdentifier.includes('@')) {
+    const cleanEmail = emailIdentifier.trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       setErrorMsg('Digite um endereço de e-mail válido.');
       return;
     }
@@ -282,9 +317,20 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       setErrorMsg('A senha deve ter no mínimo 4 caracteres.');
       return;
     }
-    if (isEmailRegister && !emailRegAcceptedTerms) {
-      setErrorMsg('Marque que concorda com os Termos de Uso para cadastrar sua conta.');
-      return;
+    if (isEmailRegister) {
+      if (regName.trim().length < 2) {
+        setErrorMsg('Informe seu nome completo.');
+        return;
+      }
+      const cleanRegPhone = emailRegPhone.replace(/\D/g, '');
+      if (cleanRegPhone.length < 10) {
+        setErrorMsg('Informe um WhatsApp válido com DDD.');
+        return;
+      }
+      if (!emailRegAcceptedTerms) {
+        setErrorMsg('Marque que concorda com os Termos de Uso para cadastrar sua conta.');
+        return;
+      }
     }
     if (isTurnstileEnabled() && !turnstileToken) {
       setErrorMsg('Confirme a verificação de segurança anti-robô.');
@@ -299,9 +345,9 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         PASSENGER_TERMS_AFFIRMATIVE_TEXT
       );
       const res = await StorageService.registerClient({
-        name: regName.trim() || 'Passageiro Kavro',
-        phone: phone || '(48) 99999-0000',
-        email: emailIdentifier.trim().toLowerCase(),
+        name: regName.trim(),
+        phone: emailRegPhone.trim(),
+        email: cleanEmail,
         document: '',
         password: emailPassword,
         termsAcceptedAt: termsAcceptance.acceptedAtClient,
@@ -318,15 +364,52 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       }
     } else {
       setIsLoading(true);
-      const res = await StorageService.loginClient(emailIdentifier, emailPassword, turnstileToken || undefined);
+      const res = await StorageService.loginClient(cleanEmail, emailPassword, turnstileToken || undefined);
       setIsLoading(false);
       if (res.ok && res.client) {
-        setActiveModal(null);
-        onAuthSuccess(res.client);
+        finishClientLogin(res.client, emailPassword);
       } else {
         setErrorMsg(res.error || 'E-mail ou senha incorretos.');
         setTurnstileResetKey(k => k + 1);
       }
+    }
+  };
+
+  const handleCompleteContactSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+
+    if (!pendingContactAuth) {
+      setActiveModal(null);
+      return;
+    }
+    const cleanPhoneDigits = contactPhone.replace(/\D/g, '');
+    const cleanEmail = contactEmail.trim().toLowerCase();
+    if (cleanPhoneDigits.length < 10 || cleanPhoneDigits === '48999990000') {
+      setErrorMsg('Informe um número de WhatsApp válido com DDD.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setErrorMsg('Informe um endereço de e-mail válido.');
+      return;
+    }
+
+    setIsLoading(true);
+    const res = await StorageService.completeClientContact({
+      clientId: pendingContactAuth.client.id,
+      password: pendingContactAuth.password,
+      name: contactName.trim() || pendingContactAuth.client.name,
+      phone: contactPhone.trim(),
+      email: cleanEmail,
+    });
+    setIsLoading(false);
+
+    if (res.ok && res.client) {
+      setPendingContactAuth(null);
+      setActiveModal(null);
+      onAuthSuccess(res.client);
+    } else {
+      setErrorMsg(res.error || 'Não foi possível salvar seus dados de contato.');
     }
   };
 
@@ -784,6 +867,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 setErrorMsg('');
                 setEmailIdentifier('');
                 setEmailPassword('');
+                setEmailRegPhone(phone);
                 setIsEmailRegister(false);
                 setActiveModal('email_login');
               }}
@@ -1063,13 +1147,14 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
-                  E-mail (opcional para recibos)
+                  E-mail *
                 </label>
                 <input
                   type="email"
                   placeholder="seuemail@gmail.com"
                   value={regEmail}
                   onChange={(e) => setRegEmail(e.target.value)}
+                  required
                   style={{
                     width: '100%', height: 48, padding: '0 14px',
                     borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
@@ -1175,21 +1260,39 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
             <form onSubmit={handleEmailSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {isEmailRegister && (
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>Nome completo</label>
-                  <input
-                    type="text"
-                    placeholder="Seu nome"
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    required
-                    style={{
-                      width: '100%', height: 48, padding: '0 14px',
-                      borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
-                      fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
-                    }}
-                  />
-                </div>
+                <>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>Nome completo *</label>
+                    <input
+                      type="text"
+                      placeholder="Seu nome completo"
+                      value={regName}
+                      onChange={(e) => setRegName(e.target.value)}
+                      required
+                      style={{
+                        width: '100%', height: 48, padding: '0 14px',
+                        borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+                        fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+                      }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>WhatsApp com DDD *</label>
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      placeholder="(48) 99999-9999"
+                      value={emailRegPhone}
+                      onChange={(e) => setEmailRegPhone(formatPhone(e.target.value))}
+                      required
+                      style={{
+                        width: '100%', height: 48, padding: '0 14px',
+                        borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+                        fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+                      }}
+                    />
+                  </div>
+                </>
               )}
 
               <div>
@@ -1409,6 +1512,135 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 }}
               >
                 {isLoading ? 'Salvando acesso...' : 'Concluir e entrar'}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* 4B. Modal: Completar E-mail / WhatsApp Obrigatórios após Login */}
+      {activeModal === 'complete_contact' && pendingContactAuth && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.55)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'center'
+        }}>
+          <div style={{
+            width: '100%',
+            maxWidth: 480,
+            maxHeight: '92dvh',
+            overflowY: 'auto',
+            backgroundColor: '#FFFFFF',
+            borderTopLeftRadius: 20,
+            borderTopRightRadius: 20,
+            padding: '20px 20px 28px 20px',
+            boxSizing: 'border-box'
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <div>
+                <h3 style={{ fontSize: '1.22rem', fontWeight: 800, margin: '0 0 4px 0', color: '#000000' }}>
+                  Complete seus dados de contato
+                </h3>
+                <p style={{ fontSize: '0.84rem', color: '#6B7280', margin: 0 }}>
+                  Para segurança das corridas, informe seu WhatsApp e E-mail válidos para continuar
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setPendingContactAuth(null); setActiveModal(null); setErrorMsg(''); }}
+                style={{
+                  width: 32, height: 32, borderRadius: '50%',
+                  backgroundColor: '#F3F4F6', border: 'none',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  cursor: 'pointer', color: '#374151'
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleCompleteContactSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
+                  Nome completo *
+                </label>
+                <input
+                  type="text"
+                  placeholder="Seu nome completo"
+                  value={contactName}
+                  onChange={(e) => setContactName(e.target.value)}
+                  required
+                  style={{
+                    width: '100%', height: 48, padding: '0 14px',
+                    borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+                    fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
+                  WhatsApp com DDD *
+                </label>
+                <input
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="(48) 99999-9999"
+                  value={contactPhone}
+                  onChange={(e) => setContactPhone(formatPhone(e.target.value))}
+                  required
+                  style={{
+                    width: '100%', height: 48, padding: '0 14px',
+                    borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+                    fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
+                  E-mail *
+                </label>
+                <input
+                  type="email"
+                  placeholder="seuemail@gmail.com"
+                  value={contactEmail}
+                  onChange={(e) => setContactEmail(e.target.value)}
+                  required
+                  style={{
+                    width: '100%', height: 48, padding: '0 14px',
+                    borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+                    fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+                  }}
+                />
+              </div>
+
+              {errorMsg && (
+                <div style={{ color: '#DC2626', fontSize: '0.8rem', fontWeight: 600 }}>
+                  {errorMsg}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                style={{
+                  height: 50,
+                  backgroundColor: '#000000',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  borderRadius: 10,
+                  fontSize: '1rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  marginTop: 4
+                }}
+              >
+                {isLoading ? 'Salvando...' : 'Salvar e entrar'}
               </button>
             </form>
           </div>
