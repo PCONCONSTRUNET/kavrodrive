@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { DriverProfile, DriverWalletSummary, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { PushService, driverExternalId } from '../services/push';
+import { PushPermissionPrompt } from '../components/PushNotifications';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
@@ -211,6 +213,10 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
 
   useEffect(() => {
     if (currentDriver?.id) {
+      const drvExt = driverExternalId(currentDriver.id, currentDriver.phone);
+      if (drvExt) {
+        PushService.identify('motorista', drvExt).catch(() => {});
+      }
       loadDriverAndWallet(currentDriver.id);
       const t = setInterval(() => {
         if (document.visibilityState === 'visible') {
@@ -2586,6 +2592,13 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           mode="driver"
           config={config}
           driver={currentDriver}
+        />
+      )}
+
+      {currentDriver && (
+        <PushPermissionPrompt
+          role="motorista"
+          externalId={driverExternalId(currentDriver.id, currentDriver.phone) || null}
         />
       )}
     </div>

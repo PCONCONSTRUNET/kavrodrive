@@ -17,6 +17,11 @@ const COPY: Record<PushRole, { title: string; text: string; bullets: string[] }>
     title: 'Receba avisos da sua viagem',
     text: 'Avisamos você sobre a sua corrida, mesmo com o app fechado.',
     bullets: ['Confirmação do agendamento', 'Pagamento aprovado', 'Lembrete antes da corrida']
+  },
+  motorista: {
+    title: 'Alertas em tempo real de corridas',
+    text: 'Receba notificações instantâneas de novos passageiros e avisos da Kavro Drive.',
+    bullets: ['Novas corridas na região', 'Atualizações de embarque', 'Avisos da plataforma']
   }
 };
 

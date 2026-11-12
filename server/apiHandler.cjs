@@ -2722,9 +2722,10 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, { ok: true, transaction: updatedTx });
     }
 
-    // ===== PUSH: teste e modelos =====
+    // ===== PUSH: teste, modelos e disparo manual =====
     if (pathname === '/api/push/templates' && method === 'GET') {
-      return sendJson(res, 200, push.DEFAULT_TEMPLATES);
+      const templates = await push.getTemplates();
+      return sendJson(res, 200, templates);
     }
     if (pathname === '/api/push/test' && method === 'POST') {
       if (!await isAuthorizedAdmin(req)) {
@@ -2732,8 +2733,29 @@ async function handleApiRequest(req, res) {
       }
       const body = await parseBody(req);
       const target = body.externalId || push.ADMIN_EXTERNAL_ID;
-      const r = await push.sendToExternalIds([target], body.title || '🔔 Teste Kavro Drive', body.message || 'Notificações funcionando!', { url: '/motora' });
+      const r = await push.sendToExternalIds([target], body.title || '🔔 Teste Kavro Drive', body.message || 'Notificações funcionando!', { url: '/administracion' });
       return sendJson(res, 200, { ok: !!r?.id, result: r });
+    }
+    if (pathname === '/api/push/broadcast' && method === 'POST') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { error: 'Acesso não autorizado para disparo de notificações.' });
+      }
+      const body = await parseBody(req);
+      const audience = ['cliente', 'motorista', 'ambos', 'admin'].includes(body.audience)
+        ? body.audience
+        : 'ambos';
+      const title = String(body.title || '').trim();
+      const message = String(body.message || '').trim();
+      if (!title || !message) {
+        return sendJson(res, 400, { error: 'Título e mensagem da notificação são obrigatórios.' });
+      }
+      const out = await push.broadcastManualPush({
+        audience,
+        title,
+        message,
+        url: body.url ? String(body.url) : undefined
+      });
+      return sendJson(res, 200, out);
     }
 
     // 4. EXPENSES

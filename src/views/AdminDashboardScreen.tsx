@@ -51,7 +51,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'sos' | 'clientes' | 'perfil' | 'config'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
 
   useEffect(() => {
@@ -1767,6 +1767,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             items: [
               { id: 'rotas', label: 'Rotas GPS', icon: Route, badge: completedRoutesCount > 0 ? String(completedRoutesCount) : null },
               { id: 'clientes', label: 'Passageiros', icon: Users, badge: null },
+              { id: 'notificacoes', label: 'Notificações & Push', icon: Bell, badge: null },
               { id: 'config', label: 'Tarifas & Regras', icon: Settings, badge: null },
             ]
           }
@@ -2030,6 +2031,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
                 {activeTab === 'clientes' && 'Passageiros'}
+                {activeTab === 'notificacoes' && 'Notificações & Push'}
                 {activeTab === 'config' && 'Tarifas & Regras'}
               </span>
             </div>
@@ -7380,15 +7382,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 </div>
               </div>
 
-              {/* Modelos de Notificação Push */}
-              <PushTemplatesEditor
-                value={currentConfig.pushTemplates}
-                onChange={(next) => {
-                  setIsConfigDirty(true);
-                  setCurrentConfig(prev => ({ ...prev, pushTemplates: next }));
-                }}
-              />
-
               <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   type="submit"
@@ -7414,6 +7407,73 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             </form>
           );
         })()}
+
+        {/* ================= ABA: NOTIFICAÇÕES & PUSH (DEDICADA) ================= */}
+        {activeTab === 'notificacoes' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 12,
+            }}>
+              <div>
+                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0F172A', margin: 0, letterSpacing: '-0.02em' }}>
+                  Notificações, Gatilhos & Mensageria Push
+                </h2>
+                <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '3px 0 0 0' }}>
+                  Envie notificações manuais com emojis para Passageiros ou Motoristas e crie gatilhos automáticos personalizados.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const ok = await StorageService.saveConfig(currentConfig);
+                  setIsConfigDirty(false);
+                  if (ok) {
+                    onRefreshData();
+                    alert('Regras e gatilhos de notificação salvos com sucesso!');
+                  } else {
+                    alert('Erro ao salvar gatilhos de notificação no servidor.');
+                  }
+                }}
+                style={{
+                  height: 38,
+                  padding: '0 18px',
+                  fontSize: '0.82rem',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  borderRadius: 8,
+                  border: 'none',
+                  backgroundColor: '#0F172A',
+                  color: '#FFFFFF',
+                  cursor: 'pointer'
+                }}
+              >
+                <Check size={15} />
+                <span>Salvar Gatilhos & Modelos</span>
+              </button>
+            </div>
+
+            <PushTemplatesEditor
+              value={currentConfig.pushTemplates}
+              onChange={(next) => {
+                setIsConfigDirty(true);
+                setCurrentConfig(prev => ({ ...prev, pushTemplates: next }));
+              }}
+              onPersist={async (next) => {
+                const updated = { ...currentConfig, pushTemplates: next };
+                setCurrentConfig(updated);
+                await StorageService.saveConfig(updated);
+                setIsConfigDirty(false);
+                onRefreshData();
+              }}
+            />
+          </div>
+        )}
 
         {/* ================= ABA 6: PERFIL DO MOTORISTA & AUDITORIA PÚBLICA ================= */}
         {activeTab === 'perfil' && (

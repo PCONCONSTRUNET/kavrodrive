@@ -590,11 +590,27 @@ export interface SystemConfig {
   pushTemplates?: Record<string, PushTemplate>;
 }
 
+export type PushAudience = 'admin' | 'cliente' | 'motorista' | 'ambos';
+export type PushTriggerEvent =
+  | 'new_ride'
+  | 'ride_confirmed'
+  | 'driver_on_way'
+  | 'ride_in_progress'
+  | 'ride_finished'
+  | 'ride_cancelled'
+  | 'payment_approved'
+  | 'pix_paid'
+  | 'reminder';
+
 export interface PushTemplate {
   enabled: boolean;
   title: string;
   message: string;
   minutesBefore?: number;
+  audience?: PushAudience;
+  event?: PushTriggerEvent;
+  label?: string;
+  isCustom?: boolean;
 }
 
 export interface NotificationItem {

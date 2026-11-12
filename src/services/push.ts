@@ -1,9 +1,19 @@
 // ============================================================
 // Push Notifications (OneSignal Web SDK v16) — Admin x Cliente
 // ============================================================
-export type PushRole = 'admin' | 'cliente';
+export type PushRole = 'admin' | 'cliente' | 'motorista';
 
 export const ADMIN_EXTERNAL_ID = 'up-admin';
+
+// Mesma regra do servidor (server/push.cjs)
+export function driverExternalId(driverId?: string, phone?: string): string | null {
+  if (driverId && String(driverId).trim()) {
+    const cleanId = String(driverId).trim();
+    return cleanId.startsWith('drv-') ? cleanId : `drv-${cleanId}`;
+  }
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits.length >= 8 ? `drv-${digits}` : null;
+}
 
 // Mesma regra do servidor (server/push.cjs)
 export function clientExternalId(phone?: string): string | null {
@@ -86,7 +96,7 @@ export const PushService = {
 
   // Vincula o aparelho ao usuário (admin ou cliente) — chamado em todo carregamento
   async identify(role: PushRole, externalId: string | null): Promise<void> {
-    const targetId = externalId || (role === 'admin' ? ADMIN_EXTERNAL_ID : clientExternalId());
+    const targetId = externalId || (role === 'admin' ? ADMIN_EXTERNAL_ID : role === 'motorista' ? driverExternalId() : clientExternalId());
     if (!targetId || !this.isSupported()) return;
     await withOneSignal(async (os) => {
       if (os.User?.externalId !== targetId) await os.login(targetId);
@@ -103,7 +113,7 @@ export const PushService = {
       return { ok: false, reason: 'unsupported' };
     }
 
-    const targetId = externalId || (role === 'admin' ? ADMIN_EXTERNAL_ID : clientExternalId());
+    const targetId = externalId || (role === 'admin' ? ADMIN_EXTERNAL_ID : role === 'motorista' ? driverExternalId() : clientExternalId());
 
     // 1. Dispara o prompt nativo do navegador IMEDIATAMENTE dentro do gesto de clique!
     let perm: NotificationPermission = Notification.permission;
