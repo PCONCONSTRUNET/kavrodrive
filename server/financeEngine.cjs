@@ -85,6 +85,27 @@ function calculateSplit(grossAmount, commissionPercent = 20) {
   };
 }
 
+// Resolve a taxa/comissão oficial considerando meio de pagamento (PIX, Cartão, Dinheiro) e regra global/categoria
+function resolveCommissionPercentForRide(cfg = {}, categoryObj = null, paymentMethod = 'pix') {
+  const methodKey = paymentMethod === 'online' ? 'cartao_credito' : String(paymentMethod || 'pix');
+  const perMethodMap = cfg?.paymentMethodCommissionPercents || {};
+  const rawMethodPct = perMethodMap[methodKey];
+  if (rawMethodPct !== undefined && rawMethodPct !== null && rawMethodPct !== '') {
+    const parsed = Number(rawMethodPct);
+    if (!Number.isNaN(parsed)) {
+      return Math.min(100, Math.max(0, round2(parsed)));
+    }
+  }
+  if (cfg?.useCategoryCommissionOverride && categoryObj && categoryObj.commissionPercent !== undefined) {
+    const catPct = Number(categoryObj.commissionPercent);
+    if (!Number.isNaN(catPct)) {
+      return Math.min(100, Math.max(0, round2(catPct)));
+    }
+  }
+  const basePct = Number(cfg?.platformCommissionPercent ?? 20);
+  return Math.min(100, Math.max(0, Number.isNaN(basePct) ? 20 : round2(basePct)));
+}
+
 // ============================================================
 // Helpers de Acesso Unificado (PostgreSQL ou LocalStore)
 // ============================================================
@@ -1542,7 +1563,7 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
   if (!ride || !ride.driverId) return null;
   const cfg = await getSystemConfig();
   const finalGross = finalAmountOverride !== null ? round2(finalAmountOverride) : round2(ride.totalPrice);
-  const split = calculateSplit(finalGross, ride.commissionPercent ?? cfg.platformCommissionPercent ?? 20);
+  const split = calculateSplit(finalGross, ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod));
 
   // Verifica se o motorista possuía dívida anterior para registrar nota de compensação automática
   const walletBefore = await getDriverWallet(ride.driverId);
@@ -1603,14 +1624,30 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
   return { driverEntry, split, idempotent };
 }
 
-// Registra confirmação de corrida em DINHEIRO e lança débito da comissão no saldo do motorista
+// Registra confirmação de corrida em DINHEIRO e lança débito da comissão no saldo do motorista (Modelo Uber)
 async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'confirmado') {
   const cfg = await getSystemConfig();
   const driverId = ride.driverId || 'drv-1001';
   const driverName = ride.driverName || cfg.driverName || 'Motorista';
   const grossFare = round2(ride.totalPrice);
   const actualPaid = resolutionType === 'pendente' ? 0 : round2(receivedAmount ?? grossFare);
-  const split = calculateSplit(grossFare, ride.commissionPercent ?? cfg.platformCommissionPercent ?? 20);
+  const split = calculateSplit(
+    grossFare,
+    ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'dinheiro')
+  );
+
+  // Saldo livre antes do lançamento (sistema Uber: desconta primeiro do saldo livre; o excedente vira saldo devedor)
+  const walletBefore = await getDriverWallet(driverId);
+  const availableBefore = Math.max(0, round2(walletBefore.availableBalance || 0));
+  const deductedFromBalance = round2(Math.min(availableBefore, split.commissionAmount));
+  const addedToDebt = round2(Math.max(0, split.commissionAmount - deductedFromBalance));
+
+  const debitDescription =
+    deductedFromBalance >= split.commissionAmount
+      ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) descontada do Saldo Livre ref. corrida em dinheiro ${ride.rideCode || ride.id}`
+      : deductedFromBalance > 0
+        ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}): R$ ${deductedFromBalance.toFixed(2)} descontado do Saldo Livre + R$ ${addedToDebt.toFixed(2)} no Saldo Devedor ref. corrida ${ride.rideCode || ride.id}`
+        : `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) lançada no Saldo Devedor ref. corrida em dinheiro ${ride.rideCode || ride.id}`;
 
   // 1. Registro informativo do valor recebido em espécie pelo motorista
   await recordLedgerEntry({
@@ -1633,7 +1670,7 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     description: `Recebimento em Dinheiro na corrida ${ride.rideCode || ride.id} (Valor cobrado: R$ ${grossFare.toFixed(2)} | Recebido: R$ ${actualPaid.toFixed(2)})`
   });
 
-  // 2. Débito automático da comissão da Kavro Drive sobre a corrida em dinheiro
+  // 2. Débito automático da comissão da Kavro Drive (desconta do saldo livre e, se faltar, acumula na dívida)
   const { entry: debitEntry } = await recordLedgerEntry({
     idempotencyKey: `cash_comm_debit_${ride.id}`,
     driverId,
@@ -1648,10 +1685,16 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     commissionPercent: split.commissionPercent,
     commissionAmount: split.commissionAmount,
     driverNetAmount: split.driverNetAmount,
-    balanceDelta: -split.commissionAmount, // Gera dívida ou desconta do saldo disponível do motorista
-    balanceBucket: 'debt',
+    balanceDelta: -split.commissionAmount,
+    balanceBucket: deductedFromBalance >= split.commissionAmount ? 'available' : 'debt',
     status: 'confirmado',
-    description: `Débito de comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) ref. corrida em dinheiro ${ride.rideCode || ride.id}`
+    description: debitDescription,
+    metadata: {
+      uberCashAccounting: true,
+      availableBalanceBefore: availableBefore,
+      deductedFromBalance,
+      addedToDebt
+    }
   });
 
   const paymentStatus =
@@ -1844,6 +1887,7 @@ async function getPlatformFinancialOverview() {
 module.exports = {
   round2,
   calculateSplit,
+  resolveCommissionPercentForRide,
   generateDynamicPixPayload,
   getQrCodeUrl,
   ensureExtendedSchema,

@@ -1646,14 +1646,27 @@ async function handleApiRequest(req, res) {
           ride.time = now.toTimeString().slice(0, 5);
         }
 
-        // Cálculo oficial de comissão e valor líquido do motorista no backend respeitando a categoria da corrida
+        // Cálculo oficial de comissão e valor líquido do motorista no backend respeitando meio de pagamento, plataforma e categoria
         const allCats = finance.normalizeCategoriesServer(cfg);
         const mappedCatId = finance.mapLegacyCategoryIdServer(ride.category || before?.category || 'kavro_go');
         const matchedCat = allCats.find(c => c.id === ride.category || c.id === mappedCatId) || allCats[0];
+        const reqMethod = ride.paymentMethod || before?.paymentMethod || 'dinheiro';
+        if (!before && !ride.isManualBooking && Array.isArray(cfg.activePaymentMethods) && cfg.activePaymentMethods.length > 0) {
+          const normalizedMethod = reqMethod === 'online' ? 'cartao_credito' : reqMethod;
+          if (!cfg.activePaymentMethods.includes(normalizedMethod)) {
+            return sendJson(res, 400, {
+              ok: false,
+              error: `A forma de pagamento "${normalizedMethod}" está desativada pela plataforma no momento.`
+            });
+          }
+        }
+        const resolvedMethodCommPct = finance.resolveCommissionPercentForRide
+          ? finance.resolveCommissionPercentForRide(cfg, matchedCat, reqMethod)
+          : commPct;
         const effectiveCommPct = Number(
           ride.commissionPercent ??
           before?.commissionPercent ??
-          matchedCat?.commissionPercent ??
+          resolvedMethodCommPct ??
           commPct
         );
 
@@ -1890,8 +1903,10 @@ async function handleApiRequest(req, res) {
       if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
       const ride = formatRideFromDb(prevRes.rows[0]);
 
+      const cfgForComplete = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
       const finalPrice = body.finalAmount !== undefined ? finance.round2(body.finalAmount) : ride.totalPrice;
-      const split = finance.calculateSplit(finalPrice, ride.commissionPercent ?? 20);
+      const effectiveCompletePct = ride.commissionPercent ?? (finance.resolveCommissionPercentForRide ? finance.resolveCommissionPercentForRide(cfgForComplete, null, ride.paymentMethod) : 20);
+      const split = finance.calculateSplit(finalPrice, effectiveCompletePct);
       const driverId = body.driverId || ride.driverId || 'drv-1001';
       const driver = await finance.getDriverById(driverId);
 

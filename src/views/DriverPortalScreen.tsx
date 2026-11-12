@@ -2412,8 +2412,11 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             <h3 style={{ margin: '0 0 6px 0', fontSize: '1.2rem', fontWeight: 900 }}>
               Cobrar do Passageiro: R$ {cashCompleteRide.totalPrice.toFixed(2).replace('.', ',')}
             </h3>
-            <p style={{ fontSize: '0.8rem', color: '#94A3B8', marginBottom: 14 }}>
-              Receba o dinheiro em mãos. A comissão de {cashCompleteRide.commissionPercent || 20}% será debitada da carteira.
+            <p style={{ fontSize: '0.8rem', color: '#94A3B8', marginBottom: 14, lineHeight: 1.45 }}>
+              Receba o dinheiro em mãos do passageiro. A comissão de{' '}
+              <strong style={{ color: '#F8FAFC' }}>{cashCompleteRide.commissionPercent ?? 20}%</strong>{' '}
+              (R$ {((cashCompleteRide.totalPrice * (cashCompleteRide.commissionPercent ?? 20)) / 100).toFixed(2).replace('.', ',')})
+              será descontada automaticamente do seu Saldo Livre; caso não haja saldo suficiente, a diferença entra no seu Saldo Devedor.
             </p>
             <div style={{ display: 'flex', gap: 8 }}>
               <button

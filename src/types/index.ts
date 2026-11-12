@@ -531,6 +531,14 @@ export interface SystemConfig {
   bufferBetweenRidesMin: number;
   // Configurações financeiras da plataforma (Comissão, Limite de Dívida e Repasses)
   platformCommissionPercent?: number;   // Ex: 20%
+  paymentMethodCommissionPercents?: {
+    pix?: number;
+    cartao_credito?: number;
+    cartao_debito?: number;
+    dinheiro?: number;
+  };
+  useCategoryCommissionOverride?: boolean; // Prioriza comissão individual da categoria quando ativo
+  cashDeductFromBalanceFirst?: boolean;    // Padrão Uber: desconta comissão em dinheiro do saldo disponível antes de gerar dívida
   maxDriverDebtLimit?: number;          // Ex: R$ 100,00 (limite de dívida em dinheiro)
   autoBlockDelinquentDrivers?: boolean; // Bloqueia motorista inadimplente de receber corridas em dinheiro
   minWithdrawalAmount?: number;         // Saque mínimo, ex: R$ 20,00

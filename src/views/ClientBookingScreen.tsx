@@ -46,11 +46,36 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isPickingOrigin, setIsPickingOrigin] = useState(false);
   const [isPickingDestination, setIsPickingDestination] = useState(false);
 
+  const allowedMethods: PaymentMethod[] =
+    Array.isArray(config.activePaymentMethods) && config.activePaymentMethods.length > 0
+      ? config.activePaymentMethods
+      : ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'];
+  const allowPix = allowedMethods.includes('pix');
+  const allowCreditCard = allowedMethods.includes('cartao_credito');
+  const allowDebitCard = allowedMethods.includes('cartao_debito');
+  const allowAnyCard = allowCreditCard || allowDebitCard;
+  const allowCash = allowedMethods.includes('dinheiro');
+
   const [passengers, setPassengers] = useState<number>(1);
   const [hasLuggage, setHasLuggage] = useState<boolean>(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('kavro_go');
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() =>
+    allowPix ? 'pix' : allowCreditCard ? 'cartao_credito' : allowDebitCard ? 'cartao_debito' : 'dinheiro'
+  );
   const [notes, setNotes] = useState<string>('');
+
+  useEffect(() => {
+    if (!allowedMethods.includes(paymentMethod)) {
+      const nextMethod: PaymentMethod = allowPix
+        ? 'pix'
+        : allowCreditCard
+          ? 'cartao_credito'
+          : allowDebitCard
+            ? 'cartao_debito'
+            : 'dinheiro';
+      setPaymentMethod(nextMethod);
+    }
+  }, [allowedMethods.join(','), paymentMethod]);
 
   // Cartões tokenizados do passageiro
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
@@ -1149,66 +1174,72 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           Forma de Pagamento
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginBottom: 10 }}>
-          <button
-            type="button"
-            onClick={() => setPaymentMethod('pix')}
-            style={{
-              padding: '11px 8px',
-              borderRadius: 12,
-              border: paymentMethod === 'pix' ? '2px solid #16A34A' : '1.5px solid #E2E8F0',
-              backgroundColor: paymentMethod === 'pix' ? '#F0FDF4' : '#FFFFFF',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 4,
-              cursor: 'pointer'
-            }}
-          >
-            <QrCode size={18} color={paymentMethod === 'pix' ? '#16A34A' : '#64748B'} />
-            <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>PIX</span>
-            <span style={{ fontSize: '0.64rem', color: '#16A34A', fontWeight: 700 }}>QR Dinâmico</span>
-          </button>
+        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, (allowPix ? 1 : 0) + (allowAnyCard ? 1 : 0) + (allowCash ? 1 : 0))}, 1fr)`, gap: 8, marginBottom: 10 }}>
+          {allowPix && (
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('pix')}
+              style={{
+                padding: '11px 8px',
+                borderRadius: 12,
+                border: paymentMethod === 'pix' ? '2px solid #16A34A' : '1.5px solid #E2E8F0',
+                backgroundColor: paymentMethod === 'pix' ? '#F0FDF4' : '#FFFFFF',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer'
+              }}
+            >
+              <QrCode size={18} color={paymentMethod === 'pix' ? '#16A34A' : '#64748B'} />
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>PIX</span>
+              <span style={{ fontSize: '0.64rem', color: '#16A34A', fontWeight: 700 }}>QR Dinâmico</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setPaymentMethod('cartao_credito')}
-            style={{
-              padding: '11px 8px',
-              borderRadius: 12,
-              border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '2px solid #2563EB' : '1.5px solid #E2E8F0',
-              backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#EFF6FF' : '#FFFFFF',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 4,
-              cursor: 'pointer'
-            }}
-          >
-            <CreditCard size={18} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#2563EB' : '#64748B'} />
-            <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>Cartão</span>
-            <span style={{ fontSize: '0.64rem', color: '#2563EB', fontWeight: 700 }}>No App</span>
-          </button>
+          {allowAnyCard && (
+            <button
+              type="button"
+              onClick={() => setPaymentMethod(allowCreditCard ? 'cartao_credito' : 'cartao_debito')}
+              style={{
+                padding: '11px 8px',
+                borderRadius: 12,
+                border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '2px solid #2563EB' : '1.5px solid #E2E8F0',
+                backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#EFF6FF' : '#FFFFFF',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer'
+              }}
+            >
+              <CreditCard size={18} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#2563EB' : '#64748B'} />
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>Cartão</span>
+              <span style={{ fontSize: '0.64rem', color: '#2563EB', fontWeight: 700 }}>No App</span>
+            </button>
+          )}
 
-          <button
-            type="button"
-            onClick={() => setPaymentMethod('dinheiro')}
-            style={{
-              padding: '11px 8px',
-              borderRadius: 12,
-              border: paymentMethod === 'dinheiro' ? '2px solid #D97706' : '1.5px solid #E2E8F0',
-              backgroundColor: paymentMethod === 'dinheiro' ? '#FFFBEB' : '#FFFFFF',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 4,
-              cursor: 'pointer'
-            }}
-          >
-            <Banknote size={18} color={paymentMethod === 'dinheiro' ? '#D97706' : '#64748B'} />
-            <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>Dinheiro</span>
-            <span style={{ fontSize: '0.64rem', color: '#B45309', fontWeight: 700 }}>Ao motorista</span>
-          </button>
+          {allowCash && (
+            <button
+              type="button"
+              onClick={() => setPaymentMethod('dinheiro')}
+              style={{
+                padding: '11px 8px',
+                borderRadius: 12,
+                border: paymentMethod === 'dinheiro' ? '2px solid #D97706' : '1.5px solid #E2E8F0',
+                backgroundColor: paymentMethod === 'dinheiro' ? '#FFFBEB' : '#FFFFFF',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 4,
+                cursor: 'pointer'
+              }}
+            >
+              <Banknote size={18} color={paymentMethod === 'dinheiro' ? '#D97706' : '#64748B'} />
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>Dinheiro</span>
+              <span style={{ fontSize: '0.64rem', color: '#B45309', fontWeight: 700 }}>Ao motorista</span>
+            </button>
+          )}
         </div>
 
         {/* Lista de Cartões Tokenizados se escolheu Cartão */}
