@@ -15,6 +15,14 @@ import {
 import { StorageService } from '../services/storage';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
+import {
+  formatDocument,
+  formatPhone,
+  formatCNHPunctuated,
+  formatPlateDisplay,
+  formatPixKey
+} from '../utils/format';
+import { computeDriverAutoScore } from '../utils/scoringEngine';
 
 interface AdminPlatformFinanceTabProps {
   config: SystemConfig;
@@ -422,7 +430,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const totalNet = validRides.reduce((acc, r) => acc + Number(r.driverNetAmount ?? (Number(r.totalPrice || 0) - ((Number(r.totalPrice || 0) * currentCommPct) / 100))), 0);
     const totalWithdrawn = driverWithdrawals.filter(w => w.status === 'pago').reduce((acc, w) => acc + Number(w.amount || 0), 0);
 
-    const ratingVal = Number(selectedDriver.rating || 5.0);
+    const autoScore = computeDriverAutoScore(selectedDriver, driverRides, wallet);
+    const ratingVal = autoScore.averageRating;
     const cleanPhone = (selectedDriver.phone || '').replace(/\D/g, '');
 
     return (
@@ -519,9 +528,24 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     <Star size={12} fill="#F59E0B" color="#F59E0B" />
                     {ratingVal.toFixed(2)}
                   </span>
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '2px 8px',
+                    borderRadius: 6,
+                    backgroundColor: autoScore.levelBg,
+                    border: `1px solid ${autoScore.levelBorder}`,
+                    color: autoScore.levelColor,
+                    fontSize: '0.7rem',
+                    fontWeight: 700
+                  }}>
+                    <Sparkles size={11} />
+                    {autoScore.score} pts • {autoScore.level}
+                  </span>
                 </div>
                 <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 3 }}>
-                  CPF: {selectedDriver.document || '—'} • CNH: {selectedDriver.cnh || '—'} • {selectedDriver.vehicleBrand} {selectedDriver.vehicleModel} ({selectedDriver.vehiclePlate})
+                  CPF: {formatDocument(selectedDriver.document) || '—'} • CNH: {formatCNHPunctuated(selectedDriver.cnh) || '—'} • {selectedDriver.vehicleBrand} {selectedDriver.vehicleModel} ({formatPlateDisplay(selectedDriver.vehiclePlate) || '—'})
                 </div>
               </div>
             </div>
@@ -655,13 +679,13 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   </div>
 
                   <div style={{ padding: 14, borderRadius: 8, border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
-                    <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>Avaliação & Viagens</div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
-                      <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0F172A' }}>{ratingVal.toFixed(2)} ★</span>
-                      <span style={{ fontSize: '0.74rem', color: '#64748B' }}>({driverRides.length} corridas)</span>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>Pontuação & Avaliação Automática</div>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '1.35rem', fontWeight: 700, color: '#0F172A' }}>{autoScore.score} pts</span>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#B45309' }}>• {ratingVal.toFixed(2)} ★</span>
                     </div>
                     <div style={{ fontSize: '0.68rem', color: '#64748B', marginTop: 4 }}>
-                      Concluídas: {completedRides.length} • Canceladas: {cancelledRides.length}
+                      {autoScore.level} • Concluídas: {completedRides.length} • Canceladas: {cancelledRides.length}
                     </div>
                   </div>
                 </div>
@@ -679,16 +703,16 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Telefone / WhatsApp</div>
-                        <div style={{ fontWeight: 600, color: '#0F172A' }}>{selectedDriver.phone}</div>
+                        <div style={{ fontWeight: 600, color: '#0F172A' }}>{formatPhone(selectedDriver.phone) || selectedDriver.phone || '—'}</div>
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>CPF</div>
-                        <div style={{ fontWeight: 600, color: '#0F172A' }}>{selectedDriver.document || '—'}</div>
+                        <div style={{ fontWeight: 600, color: '#0F172A', fontVariantNumeric: 'tabular-nums' }}>{formatDocument(selectedDriver.document) || '—'}</div>
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Registro CNH & EAR</div>
-                        <div style={{ fontWeight: 600, color: '#0F172A' }}>
-                          {selectedDriver.cnh || '—'} • {selectedDriver.cnhHasEar !== false ? 'Com EAR' : 'Sem EAR'}
+                        <div style={{ fontWeight: 600, color: '#0F172A', fontVariantNumeric: 'tabular-nums' }}>
+                          {formatCNHPunctuated(selectedDriver.cnh) || '—'} • {selectedDriver.cnhHasEar !== false ? 'Com EAR' : 'Sem EAR'}
                         </div>
                       </div>
                       <div>
@@ -717,7 +741,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Placa Mercosul</div>
-                        <div style={{ fontWeight: 700, color: '#0F172A', fontFamily: 'monospace' }}>{selectedDriver.vehiclePlate || '—'}</div>
+                        <div style={{ fontWeight: 700, color: '#0F172A', fontFamily: 'monospace' }}>{formatPlateDisplay(selectedDriver.vehiclePlate) || '—'}</div>
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Cor / Ano</div>
@@ -733,7 +757,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Chave PIX p/ Repasse</div>
-                        <div style={{ fontWeight: 600, color: '#0F172A', fontFamily: 'monospace' }}>{selectedDriver.pixKey || '—'}</div>
+                        <div style={{ fontWeight: 600, color: '#0F172A', fontFamily: 'monospace' }}>{formatPixKey(selectedDriver.pixKey, selectedDriver.pixType) || '—'}</div>
                       </div>
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Tipo de Chave</div>
@@ -787,7 +811,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           {selectedDriver.termsSignature.driverSnapshot?.name || selectedDriver.name}
                         </div>
                         <div style={{ color: '#475569' }}>
-                          CPF {selectedDriver.termsSignature.driverSnapshot?.cpf || selectedDriver.document}
+                          CPF {formatDocument(selectedDriver.termsSignature.driverSnapshot?.cpf || selectedDriver.document)}
                         </div>
                       </div>
                       <div>
@@ -937,41 +961,98 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   </div>
                 </div>
 
-                {/* Painel de Reputação & Avaliações das Corridas */}
-                <div style={{ padding: 16, borderRadius: 8, border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+                {/* Painel de Pontuação Automática (Kavro Score) & Reputação */}
+                <div style={{ padding: 16, borderRadius: 8, border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF', display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
                     <div>
-                      <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>
-                        Desempenho & Avaliações dos Passageiros
+                      <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 7 }}>
+                        <Sparkles size={15} color="#0F172A" />
+                        Pontuação Automática (Kavro Score) & Desempenho
                       </div>
-                      <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                        Média geral de {ratingVal.toFixed(2)} estrelas com base nas corridas concluídas
+                      <div style={{ fontSize: '0.73rem', color: '#64748B', marginTop: 2 }}>
+                        {autoScore.ratedCount > 0
+                          ? `Calculada automaticamente com base em ${autoScore.ratedCount} avaliação(ões), KYC, termos e histórico de viagens`
+                          : 'Calculada automaticamente pelo KYC, termo digital, CNH e histórico real de viagens'}
                       </div>
                     </div>
-                    <span style={{ fontSize: '1.1rem', fontWeight: 700, color: '#0F172A' }}>
-                      {ratingVal.toFixed(2)} / 5.00 ★
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{
+                        padding: '4px 10px',
+                        borderRadius: 999,
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        backgroundColor: autoScore.levelBg,
+                        border: `1px solid ${autoScore.levelBorder}`,
+                        color: autoScore.levelColor
+                      }}>
+                        Nível {autoScore.level} • {autoScore.score} / {autoScore.maxScore} pts
+                      </span>
+                      <span style={{ fontSize: '1.02rem', fontWeight: 700, color: '#0F172A' }}>
+                        {ratingVal.toFixed(2)} / 5.00 ★
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Barra de progresso do Score */}
+                  <div>
+                    <div style={{ height: 8, borderRadius: 999, backgroundColor: '#F1F5F9', overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+                      <div style={{
+                        width: `${Math.min(100, Math.round((autoScore.score / autoScore.maxScore) * 100))}%`,
+                        height: '100%',
+                        backgroundColor: autoScore.score >= 880 ? '#2563EB' : autoScore.score >= 740 ? '#D97706' : autoScore.score >= 580 ? '#0F172A' : '#DC2626',
+                        borderRadius: 999,
+                        transition: 'width 0.3s ease'
+                      }} />
+                    </div>
                   </div>
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10 }}>
                     <div style={{ padding: '10px 12px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
                       <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Taxa de Conclusão</div>
                       <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#0F172A', marginTop: 2 }}>
-                        {driverRides.length > 0 ? `${Math.round((completedRides.length / driverRides.length) * 100)}%` : '100%'}
+                        {autoScore.completionRate}%
                       </div>
                     </div>
                     <div style={{ padding: '10px 12px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
                       <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Avaliações 5 Estrelas</div>
                       <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#15803D', marginTop: 2 }}>
-                        {completedRides.length > 0 ? completedRides.length : 1} avaliação(ões)
+                        {autoScore.ratedCount > 0 ? `${autoScore.fiveStarCount} avaliação(ões)` : 'Sem avaliações ainda'}
                       </div>
                     </div>
                     <div style={{ padding: '10px 12px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Reclamações / Incidentes</div>
-                      <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#0F172A', marginTop: 2 }}>
-                        0 registros
+                      <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Cancelamentos</div>
+                      <div style={{ fontSize: '0.95rem', fontWeight: 700, color: autoScore.cancelledRides > 0 ? '#DC2626' : '#0F172A', marginTop: 2 }}>
+                        {autoScore.cancelledRides} registro(s)
                       </div>
                     </div>
+                  </div>
+
+                  {/* Critérios detalhados da pontuação automática */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 8 }}>
+                    {autoScore.breakdown.map(item => (
+                      <div
+                        key={item.id}
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 6,
+                          backgroundColor: item.positive ? '#F8FAFC' : '#FEF2F2',
+                          border: `1px solid ${item.positive ? '#E2E8F0' : '#FECACA'}`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          fontSize: '0.73rem'
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 600, color: '#0F172A' }}>{item.label}</div>
+                          <div style={{ fontSize: '0.66rem', color: '#64748B' }}>{item.detail}</div>
+                        </div>
+                        <span style={{ fontWeight: 800, color: item.positive ? '#15803D' : '#DC2626', whiteSpace: 'nowrap' }}>
+                          {item.points >= 0 ? `+${item.points}` : item.points} pts
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -1553,6 +1634,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     const wallet = overview?.driverWallets?.find(w => w.driverId === drv.id);
                     const avail = wallet?.availableBalance ?? 0;
                     const debt = wallet?.debtBalance ?? 0;
+                    const drvRides = rides.filter(
+                      r => r.driverId === drv.id || (r.driverName && r.driverName.trim().toLowerCase() === drv.name.trim().toLowerCase())
+                    );
+                    const drvScore = computeDriverAutoScore(drv, drvRides, wallet);
 
                     return (
                       <tr
@@ -1565,18 +1650,31 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       >
                         <td style={{ padding: '12px 16px' }}>
                           <div style={{ fontWeight: 600, color: '#0F172A' }}>{drv.name}</div>
-                          <div style={{ fontSize: '0.7rem', color: '#64748B' }}>{drv.phone}</div>
+                          <div style={{ fontSize: '0.7rem', color: '#64748B' }}>{formatPhone(drv.phone) || drv.phone}</div>
                         </td>
 
                         <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
-                          <span style={{ fontWeight: 700, color: '#B45309' }}>
-                            {Number(drv.rating || 5.0).toFixed(2)} ★
+                          <div style={{ fontWeight: 700, color: '#B45309' }}>
+                            {drvScore.averageRating.toFixed(2)} ★
+                          </div>
+                          <span style={{
+                            display: 'inline-block',
+                            marginTop: 3,
+                            padding: '1px 6px',
+                            borderRadius: 4,
+                            fontSize: '0.66rem',
+                            fontWeight: 700,
+                            backgroundColor: drvScore.levelBg,
+                            color: drvScore.levelColor,
+                            border: `1px solid ${drvScore.levelBorder}`
+                          }}>
+                            {drvScore.score} pts • {drvScore.level}
                           </span>
                         </td>
 
-                        <td style={{ padding: '12px 14px', fontSize: '0.74rem', color: '#334155' }}>
-                          <div>CPF: {drv.document || '—'}</div>
-                          <div style={{ fontSize: '0.68rem', color: '#64748B' }}>CNH: {drv.cnh || '—'}</div>
+                        <td style={{ padding: '12px 14px', fontSize: '0.74rem', color: '#334155', fontVariantNumeric: 'tabular-nums' }}>
+                          <div>CPF: {formatDocument(drv.document) || '—'}</div>
+                          <div style={{ fontSize: '0.68rem', color: '#64748B' }}>CNH: {formatCNHPunctuated(drv.cnh) || '—'}</div>
                         </td>
 
                         <td style={{ padding: '12px 14px' }}>
@@ -1584,12 +1682,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                             {drv.vehicleBrand} {drv.vehicleModel} ({drv.vehicleColor})
                           </div>
                           <div style={{ fontSize: '0.7rem', color: '#64748B', fontFamily: 'monospace' }}>
-                            Placa: {drv.vehiclePlate || '—'}
+                            Placa: {formatPlateDisplay(drv.vehiclePlate) || '—'}
                           </div>
                         </td>
 
-                        <td style={{ padding: '12px 14px', fontSize: '0.73rem', color: '#334155' }}>
-                          {drv.pixKey || 'Não informada'}
+                        <td style={{ padding: '12px 14px', fontSize: '0.73rem', color: '#334155', fontFamily: 'monospace' }}>
+                          {formatPixKey(drv.pixKey, drv.pixType) || 'Não informada'}
                         </td>
 
                         <td style={{ padding: '12px 14px', fontWeight: 600, color: '#15803D', whiteSpace: 'nowrap' }}>

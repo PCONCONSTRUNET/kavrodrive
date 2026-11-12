@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { ClientProfile, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
-import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
+import { formatPhone, formatDocument, getCleanWhatsappNumber } from '../utils/format';
+import { computeClientAutoScore } from '../utils/scoringEngine';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
 
@@ -395,10 +396,9 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
     .reduce((acc, r) => acc + (r.totalPrice || 0), 0);
   const averageTicket = clientRides.length > 0 ? totalSpent / (clientRides.length || 1) : 0;
 
-  const ratedRides = clientRides.filter(r => typeof r.driverRating === 'number' && r.driverRating > 0);
-  const averageRating = ratedRides.length > 0
-    ? (ratedRides.reduce((acc, r) => acc + (r.driverRating || 5), 0) / ratedRides.length).toFixed(2)
-    : '5.00';
+  const autoScore = computeClientAutoScore(client, clientRides);
+  const ratedRides = clientRides.filter(r => typeof r.driverRating === 'number' && r.driverRating > 0 && r.status === 'finalizada');
+  const averageRating = autoScore.averageRating.toFixed(2);
 
   const pixSpent = clientRides
     .filter(r => r.status !== 'cancelada' && r.paymentMethod === 'pix')
@@ -505,9 +505,24 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                 }}>
                   Nota {averageRating} ({ratedRides.length > 0 ? `${ratedRides.length} aval.` : 'Novo'})
                 </span>
+                <span style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '2px 8px',
+                  borderRadius: 4,
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  backgroundColor: autoScore.levelBg,
+                  border: `1px solid ${autoScore.levelBorder}`,
+                  color: autoScore.levelColor
+                }}>
+                  <Sparkles size={11} />
+                  {autoScore.score} pts • {autoScore.level}
+                </span>
               </div>
               <div style={{ fontSize: '0.76rem', color: '#64748B', marginTop: 3 }}>
-                ID: {client.id} • Telefone: {client.phone} {client.email ? `• ${client.email}` : ''}
+                ID: {client.id} • Telefone: {formatPhone(client.phone) || client.phone} {client.email ? `• ${client.email}` : ''}
               </div>
             </div>
           </div>
@@ -636,12 +651,17 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
           {/* KPIs Superiores */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
             <div style={{ padding: 14, borderRadius: 8, border: '1px solid #E2E8F0', backgroundColor: '#F8FAFC' }}>
-              <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>Avaliação do Passageiro</div>
-              <div style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0F172A', marginTop: 4 }}>
-                {averageRating} / 5.0
+              <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>Pontuação & Avaliação</div>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, marginTop: 4 }}>
+                <span style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0F172A' }}>
+                  {autoScore.score} pts
+                </span>
+                <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#B45309' }}>
+                  • {averageRating} ★
+                </span>
               </div>
               <div style={{ fontSize: '0.68rem', color: '#64748B', marginTop: 2 }}>
-                {ratedRides.length > 0 ? `${ratedRides.length} avaliação(ões)` : 'Reputação padrão 5.0'}
+                {autoScore.level} • {ratedRides.length > 0 ? `${ratedRides.length} avaliação(ões)` : 'Calculado automaticamente'}
               </div>
             </div>
 
@@ -690,7 +710,7 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#64748B' }}>WhatsApp / Telefone:</span>
-                    <strong style={{ color: '#0F172A' }}>{client.phone}</strong>
+                    <strong style={{ color: '#0F172A' }}>{formatPhone(client.phone) || client.phone}</strong>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#64748B' }}>E-mail:</span>
@@ -698,7 +718,7 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#64748B' }}>CPF / Documento:</span>
-                    <strong style={{ color: '#0F172A' }}>{client.document || 'Não informado'}</strong>
+                    <strong style={{ color: '#0F172A' }}>{formatDocument(client.document) || 'Não informado'}</strong>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#64748B' }}>Endereço Favorito:</span>
@@ -714,25 +734,71 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                 </div>
               </div>
 
-              {/* Avaliações e Reputação */}
-              <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: 16 }}>
-                <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#0F172A', marginBottom: 12, paddingBottom: 8, borderBottom: '1px solid #F1F5F9' }}>
-                  Avaliações & Histórico de Atendimento
-                </div>
-                {ratedRides.length === 0 ? (
-                  <div style={{ fontSize: '0.76rem', color: '#64748B', padding: '12px 0' }}>
-                    Nenhuma avaliação específica registrada nas corridas deste passageiro. Nota base: <strong>5.00</strong>.
+              {/* Pontuação Automática & Reputação */}
+              <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingBottom: 8, borderBottom: '1px solid #F1F5F9' }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Sparkles size={14} />
+                    Pontuação Automática (Kavro Score)
                   </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {ratedRides.slice(0, 5).map(r => (
-                      <div key={r.id} style={{ padding: '8px 10px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '0.75rem' }}>
+                  <span style={{
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    backgroundColor: autoScore.levelBg,
+                    color: autoScore.levelColor,
+                    border: `1px solid ${autoScore.levelBorder}`
+                  }}>
+                    {autoScore.score} / 1000 pts • {autoScore.level}
+                  </span>
+                </div>
+
+                <div style={{ height: 7, borderRadius: 999, backgroundColor: '#F1F5F9', overflow: 'hidden', border: '1px solid #E2E8F0' }}>
+                  <div style={{
+                    width: `${Math.min(100, Math.round((autoScore.score / 1000) * 100))}%`,
+                    height: '100%',
+                    backgroundColor: '#0F172A',
+                    borderRadius: 999
+                  }} />
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {autoScore.breakdown.map(item => (
+                    <div
+                      key={item.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        fontSize: '0.73rem',
+                        padding: '6px 8px',
+                        borderRadius: 6,
+                        backgroundColor: item.positive ? '#F8FAFC' : '#FEF2F2',
+                        border: `1px solid ${item.positive ? '#E2E8F0' : '#FECACA'}`
+                      }}
+                    >
+                      <span style={{ color: '#0F172A', fontWeight: 600 }}>{item.label}</span>
+                      <span style={{ fontWeight: 700, color: item.positive ? '#15803D' : '#DC2626' }}>
+                        {item.points >= 0 ? `+${item.points}` : item.points} pts
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {ratedRides.length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#475569' }}>
+                      Avaliações recentes dos motoristas:
+                    </div>
+                    {ratedRides.slice(0, 3).map(r => (
+                      <div key={r.id} style={{ padding: '6px 8px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', fontSize: '0.73rem' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 600, color: '#0F172A' }}>
                           <span>Viagem {r.id} ({r.date.split('-').reverse().join('/')})</span>
-                          <span>Nota: {r.driverRating} / 5</span>
+                          <span>Nota: {r.driverRating} / 5 ★</span>
                         </div>
                         {r.driverNotes && (
-                          <div style={{ color: '#475569', marginTop: 4 }}>"{r.driverNotes}"</div>
+                          <div style={{ color: '#475569', marginTop: 3 }}>"{r.driverNotes}"</div>
                         )}
                       </div>
                     ))}

@@ -427,6 +427,8 @@ export interface Ride {
   driverPlate?: string | null;
   driverCarColor?: string | null;
   driverRating?: number | null;
+  passengerRating?: number | null;
+  passengerNotes?: string | null;
   isQueuedRide?: boolean;
   queuedForDriverId?: string | null;
   declinedDriverIds?: string[];

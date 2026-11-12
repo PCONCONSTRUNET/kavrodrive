@@ -34,9 +34,10 @@ import { normalizeCategoriesFromConfig } from '../utils/categoryEngine';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { isDriverVehicleConfigured, getMissingVehicleFields } from '../services/vehicleService';
 import { 
-  formatPhone, formatRideCode, parseCurrencyInput, parseCurrencyToFloat, 
+  formatPhone, formatDocument, formatRideCode, parseCurrencyInput, parseCurrencyToFloat, 
   formatCurrency, formatCurrencyValue, getCleanWhatsappNumber 
 } from '../utils/format';
+import { computeClientAutoScore } from '../utils/scoringEngine';
 
 interface AdminDashboardScreenProps {
   rides: Ride[];
@@ -6100,7 +6101,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                       <thead>
                         <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
                           <th style={{ padding: '10px 16px', fontWeight: 600 }}>Passageiro</th>
-                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>Telefone / Contato</th>
+                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>Pontuação Automática</th>
+                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>Telefone / CPF</th>
                           <th style={{ padding: '10px 14px', fontWeight: 600 }}>E-mail</th>
                           <th style={{ padding: '10px 14px', fontWeight: 600 }}>Corridas</th>
                           <th style={{ padding: '10px 14px', fontWeight: 600 }}>Volume Movimentado</th>
@@ -6121,6 +6123,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                           const totalSpent = clientRides
                             .filter(r => r.status !== 'cancelada')
                             .reduce((acc, r) => acc + (r.totalPrice || 0), 0);
+                          const clientScore = computeClientAutoScore(c, clientRides);
 
                           return (
                             <tr
@@ -6165,8 +6168,31 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                   </div>
                                 ) : null}
                               </td>
+                              <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>
+                                <div style={{ fontWeight: 700, color: '#0F172A' }}>
+                                  {clientScore.score} pts • {clientScore.averageRating.toFixed(2)} ★
+                                </div>
+                                <span style={{
+                                  display: 'inline-block',
+                                  marginTop: 3,
+                                  padding: '1px 7px',
+                                  borderRadius: 999,
+                                  fontSize: '0.66rem',
+                                  fontWeight: 700,
+                                  backgroundColor: clientScore.levelBg,
+                                  color: clientScore.levelColor,
+                                  border: `1px solid ${clientScore.levelBorder}`
+                                }}>
+                                  Nível {clientScore.level}
+                                </span>
+                              </td>
                               <td style={{ padding: '12px 14px', color: '#334155' }}>
-                                {c.phone}
+                                <div>{formatPhone(c.phone) || c.phone}</div>
+                                {c.document && (
+                                  <div style={{ fontSize: '0.68rem', color: '#64748B' }}>
+                                    CPF: {formatDocument(c.document)}
+                                  </div>
+                                )}
                               </td>
                               <td style={{ padding: '12px 14px', color: '#64748B' }}>
                                 {c.email || '—'}

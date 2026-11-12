@@ -30,6 +30,65 @@ export function formatCPF(value: string | undefined | null): string {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
 }
 
+/** Formata um CNPJ: 00.000.000/0000-00 */
+export function formatCNPJ(value: string | undefined | null): string {
+  if (!value) return '';
+  const digits = String(value).replace(/\D/g, '').slice(0, 14);
+  if (!digits) return '';
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 5) return `${digits.slice(0, 2)}.${digits.slice(2)}`;
+  if (digits.length <= 8) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5)}`;
+  if (digits.length <= 12) return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8)}`;
+  return `${digits.slice(0, 2)}.${digits.slice(2, 5)}.${digits.slice(5, 8)}/${digits.slice(8, 12)}-${digits.slice(12, 14)}`;
+}
+
+/** Formata CPF (11 dígitos) ou CNPJ (14 dígitos) com pontuação automática */
+export function formatDocument(value: string | undefined | null): string {
+  if (!value) return '';
+  const digits = String(value).replace(/\D/g, '');
+  if (digits.length === 14) return formatCNPJ(digits);
+  if (digits.length > 0 && digits.length <= 11) return formatCPF(digits);
+  return String(value);
+}
+
+/** Formata CNH para exibição legível nas fichas: 000.000.000-00 */
+export function formatCNHPunctuated(value: string | undefined | null): string {
+  if (!value) return '';
+  const digits = String(value).replace(/\D/g, '');
+  if (digits.length === 11) return formatCPF(digits);
+  return String(value);
+}
+
+/** Formata placa para exibição nas fichas: ABC-1D23 / ABC-1234 */
+export function formatPlateDisplay(value: string | undefined | null): string {
+  if (!value) return '';
+  const clean = String(value).replace(/[^A-Za-z0-9]/g, '').toUpperCase().slice(0, 7);
+  if (clean.length === 7) return `${clean.slice(0, 3)}-${clean.slice(3)}`;
+  return clean;
+}
+
+/** Formata Chave PIX conforme o tipo (CPF, CNPJ ou Telefone) mantendo e-mail/aleatória intactas */
+export function formatPixKey(value: string | undefined | null, pixType?: string | null): string {
+  if (!value) return '';
+  const raw = String(value).trim();
+  if (!raw || raw.includes('@') || (raw.includes('-') && raw.length >= 24)) return raw;
+  const digits = raw.replace(/\D/g, '');
+  const tipo = String(pixType || '').toLowerCase();
+  if (tipo.includes('telefone') || tipo.includes('phone') || tipo.includes('cel')) {
+    return digits.length >= 10 ? formatPhone(digits) : raw;
+  }
+  if (tipo.includes('cnpj') || digits.length === 14) {
+    return formatCNPJ(digits);
+  }
+  if (tipo.includes('cpf') || digits.length === 11) {
+    // Se começa com DDD provável sem tipo definido e tipo inclui telefone, já tratou acima; caso 11 dígitos padrão sem @
+    if (!tipo && raw.startsWith('(')) return formatPhone(digits);
+    return formatCPF(digits);
+  }
+  if (digits.length === 10) return formatPhone(digits);
+  return raw;
+}
+
 /** Formata um valor monetário em BRL: R$ 1.250,90 */
 export function formatCurrency(value: string | number | undefined | null): string {
   if (value === undefined || value === null || value === '') return 'R$ 0,00';

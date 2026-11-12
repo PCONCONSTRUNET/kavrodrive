@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { 
   Car, MapPin, Clock, Calendar, CheckCircle2, AlertCircle, 
   Phone, Navigation, ShieldCheck, ArrowLeft, Printer, 
-  Copy, Check, Share2, Sparkles, User, RefreshCw, X, FileText, Play
+  Copy, Check, Share2, Sparkles, User, RefreshCw, X, FileText, Play, Star
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
@@ -36,6 +36,10 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLiveMapOpen, setIsLiveMapOpen] = useState(false);
   const [isSosOpen, setIsSosOpen] = useState(false);
+  const [selectedStars, setSelectedStars] = useState<number>(5);
+  const [ratingComment, setRatingComment] = useState('');
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [ratingSavedLocal, setRatingSavedLocal] = useState(false);
 
   // Busca a corrida correspondente
   const ride =
@@ -528,6 +532,92 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
           onClose={() => setIsLiveMapOpen(false)}
           config={config}
         />
+
+        {ride.status === 'finalizada' && (
+          <div className="card-glass" style={{ padding: '16px', borderRadius: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>
+                Avalie sua viagem com {ride.driverName || 'o motorista'}
+              </div>
+              {(ride.passengerRating || ratingSavedLocal) && (
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 8px', borderRadius: 999 }}>
+                  Avaliação enviada ★
+                </span>
+              )}
+            </div>
+
+            {ride.passengerRating || ratingSavedLocal ? (
+              <div style={{ fontSize: '0.78rem', color: '#475569' }}>
+                Nota registrada: <strong style={{ color: '#B45309' }}>{(ride.passengerRating || selectedStars).toFixed(1)} ★</strong>
+                {(ride.passengerNotes || ratingComment) && (
+                  <span> — "{ride.passengerNotes || ratingComment}"</span>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {[1, 2, 3, 4, 5].map(st => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setSelectedStars(st)}
+                      style={{ background: 'none', border: 'none', padding: 2, cursor: 'pointer' }}
+                    >
+                      <Star
+                        size={26}
+                        fill={st <= selectedStars ? '#F59E0B' : 'none'}
+                        color={st <= selectedStars ? '#F59E0B' : '#CBD5E1'}
+                      />
+                    </button>
+                  ))}
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#0F172A', marginLeft: 4 }}>
+                    {selectedStars}.0 / 5.0
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  value={ratingComment}
+                  onChange={e => setRatingComment(e.target.value)}
+                  placeholder="Comentário opcional sobre a viagem..."
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', fontSize: '0.8rem', boxSizing: 'border-box' }}
+                />
+                <button
+                  type="button"
+                  disabled={isSubmittingRating}
+                  onClick={async () => {
+                    setIsSubmittingRating(true);
+                    try {
+                      const res = await fetch(`/api/rides/${encodeURIComponent(ride.id)}/rate`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ raterRole: 'cliente', stars: selectedStars, comment: ratingComment })
+                      });
+                      if (res.ok) {
+                        setRatingSavedLocal(true);
+                        await StorageService.syncFromDatabase();
+                        refreshData();
+                      }
+                    } finally {
+                      setIsSubmittingRating(false);
+                    }
+                  }}
+                  style={{
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    border: 'none',
+                    backgroundColor: '#0F172A',
+                    color: '#FFFFFF',
+                    fontSize: '0.82rem',
+                    fontWeight: 700,
+                    cursor: isSubmittingRating ? 'wait' : 'pointer'
+                  }}
+                >
+                  {isSubmittingRating ? 'Enviando avaliação...' : 'Confirmar Avaliação'}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* CARD 2: Dados do Veículo & Motorista Particular */}
         <div className="card-glass" style={{ padding: '16px', borderRadius: 16 }}>

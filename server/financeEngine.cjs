@@ -238,6 +238,8 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS driver_plate VARCHAR(20);
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS driver_car_color TEXT;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS driver_rating NUMERIC DEFAULT 5.0;
+      ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS passenger_rating NUMERIC;
+      ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS passenger_notes TEXT;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS is_queued_ride BOOLEAN DEFAULT FALSE;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS queued_for_driver_id VARCHAR(64);
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS declined_driver_ids JSONB DEFAULT '[]'::jsonb;

@@ -211,6 +211,8 @@ async function upsertFullRide(rideObj) {
     driver_plate: rideObj.driverPlate ?? null,
     driver_car_color: rideObj.driverCarColor ?? null,
     driver_rating: rideObj.driverRating ?? 5.0,
+    passenger_rating: rideObj.passengerRating ?? null,
+    passenger_notes: rideObj.passengerNotes ?? null,
     is_queued_ride: Boolean(rideObj.isQueuedRide),
     queued_for_driver_id: rideObj.queuedForDriverId ?? null,
     declined_driver_ids: Array.isArray(rideObj.declinedDriverIds) ? rideObj.declinedDriverIds : [],
@@ -264,6 +266,7 @@ async function upsertFullRide(rideObj) {
     `INSERT INTO public.rides (
       id, ride_number, client_name, client_phone, client_id,
       driver_id, driver_name, driver_phone, driver_photo, driver_vehicle, driver_plate, driver_car_color, driver_rating,
+      passenger_rating, passenger_notes,
       is_queued_ride, queued_for_driver_id, declined_driver_ids,
       origin, destination, date, time, passengers, has_luggage, category, category_name, applied_fare_snapshot,
       distance_km, duration_min, estimated_price, total_price, paid_amount,
@@ -271,7 +274,7 @@ async function upsertFullRide(rideObj) {
       payment_method, payment_status, payment_tx_id, pix_qr_code, pix_copy_paste,
       card_id, card_last4, card_brand, status, driver_notes, notes, is_manual_booking, updated_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,NOW()
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,NOW()
     )
     ON CONFLICT (id) DO UPDATE SET
       driver_id = EXCLUDED.driver_id,
@@ -282,6 +285,8 @@ async function upsertFullRide(rideObj) {
       driver_plate = EXCLUDED.driver_plate,
       driver_car_color = EXCLUDED.driver_car_color,
       driver_rating = EXCLUDED.driver_rating,
+      passenger_rating = COALESCE(EXCLUDED.passenger_rating, public.rides.passenger_rating),
+      passenger_notes = COALESCE(EXCLUDED.passenger_notes, public.rides.passenger_notes),
       is_queued_ride = EXCLUDED.is_queued_ride,
       queued_for_driver_id = EXCLUDED.queued_for_driver_id,
       declined_driver_ids = EXCLUDED.declined_driver_ids,
@@ -320,6 +325,7 @@ async function upsertFullRide(rideObj) {
       row.id, row.ride_number, row.client_name, row.client_phone, row.client_id,
       row.driver_id, row.driver_name, row.driver_phone, row.driver_photo, row.driver_vehicle,
       row.driver_plate, row.driver_car_color, row.driver_rating,
+      row.passenger_rating, row.passenger_notes,
       row.is_queued_ride, row.queued_for_driver_id, JSON.stringify(row.declined_driver_ids),
       JSON.stringify(row.origin), JSON.stringify(row.destination), row.date, row.time,
       row.passengers, row.has_luggage, row.category, row.category_name,
@@ -635,6 +641,8 @@ function formatRideFromDb(row) {
     driverPlate: row.driver_plate ?? row.driverPlate ?? null,
     driverCarColor: row.driver_car_color ?? row.driverCarColor ?? null,
     driverRating: row.driver_rating ? Number(row.driver_rating) : 5.0,
+    passengerRating: row.passenger_rating !== undefined && row.passenger_rating !== null ? Number(row.passenger_rating) : null,
+    passengerNotes: row.passenger_notes ?? row.passengerNotes ?? null,
     isQueuedRide: Boolean(row.is_queued_ride ?? row.isQueuedRide),
     queuedForDriverId: row.queued_for_driver_id ?? row.queuedForDriverId ?? null,
     declinedDriverIds: Array.isArray(row.declined_driver_ids)
@@ -1872,6 +1880,49 @@ async function handleApiRequest(req, res) {
         isQueued,
         activeRideId: currentActiveRide?.id || null
       });
+    }
+
+    // AVALIAÇÃO DE CORRIDA + RECÁLCULO AUTOMÁTICO DA NOTA MÉDIA DO MOTORISTA
+    const rideRateMatch = pathname.match(/^\/api\/rides\/([^/]+)\/rate$/);
+    if (rideRateMatch && method === 'POST') {
+      const id = normalizeRideId(decodeURIComponent(rideRateMatch[1]));
+      const body = await parseBody(req);
+      const stars = Math.min(5, Math.max(1, Number(body.stars || 5)));
+      const raterRole = body.raterRole === 'motorista' ? 'motorista' : 'cliente';
+      const comment = body.comment ? String(body.comment).trim() : null;
+
+      const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      const ride = formatRideFromDb(prevRes.rows[0]);
+
+      const patch = raterRole === 'cliente'
+        ? { passengerRating: stars, passengerNotes: comment || ride.passengerNotes }
+        : { driverRating: stars, driverNotes: comment || ride.driverNotes };
+
+      const updatedRide = await upsertFullRide({ ...ride, ...patch });
+
+      let updatedDriverRating = null;
+      if (raterRole === 'cliente' && ride.driverId) {
+        const drvRidesRes = await db.query(
+          'SELECT passenger_rating FROM public.rides WHERE driver_id = $1 AND passenger_rating IS NOT NULL AND passenger_rating > 0',
+          [ride.driverId]
+        );
+        const vals = (drvRidesRes.rows || []).map(x => Number(x.passenger_rating)).filter(n => n > 0);
+        if (vals.length > 0) {
+          updatedDriverRating = Number((vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2));
+          if (db.pool) {
+            await db.query('UPDATE public.drivers SET rating = $1 WHERE id = $2', [updatedDriverRating, ride.driverId]);
+          } else if (Array.isArray(db.localStore?.drivers)) {
+            const dIdx = db.localStore.drivers.findIndex(d => d.id === ride.driverId);
+            if (dIdx >= 0) {
+              db.localStore.drivers[dIdx].rating = updatedDriverRating;
+              db.saveLocalStore();
+            }
+          }
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, ride: updatedRide, updatedDriverRating });
     }
 
     const rideDeclineMatch = pathname.match(/^\/api\/rides\/([^/]+)\/decline$/);
