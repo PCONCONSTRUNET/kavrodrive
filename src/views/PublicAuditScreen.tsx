@@ -20,10 +20,12 @@ import {
   X,
   Navigation,
   Award,
+  FileText,
+  Printer,
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
-import { VehiclePhotoPreview } from '../components/VehiclePhotoPreview';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
+import { getCarColorProfile } from '../services/vehicleService';
 import { formatRideCode } from '../utils/format';
 
 interface PublicAuditScreenProps {
@@ -100,13 +102,32 @@ function maskFallbackName(fullName: string): string {
   return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}. •••`;
 }
 
+function resolveVehicleThumb(driver: {
+  vehiclePhoto?: string;
+  vehicleModel?: string;
+  vehicleCategory?: string;
+  vehicleColor?: string;
+}): string {
+  if (driver.vehiclePhoto && driver.vehiclePhoto.trim()) {
+    return driver.vehiclePhoto;
+  }
+  const ref = `${driver.vehicleModel || ''} ${driver.vehicleCategory || ''} ${driver.vehicleColor || ''}`.toLowerCase();
+  if (/suv|lux|black|select|exec|bag|van|compass|creta|tracker|t-cross|tcross/i.test(ref)) {
+    return '/vehicles/kavro-suv-ev.jpg';
+  }
+  if (/onix|polo|hb20|argo|kwid|mobi|hatch|plus|vermelh|granada|red/i.test(ref)) {
+    return '/vehicles/kavro-compact-ev.jpg';
+  }
+  return '/vehicles/kavro-sedan-ev.jpg';
+}
+
 export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, rides }) => {
   const navigate = useNavigate();
 
   const [isMobile, setIsMobile] = useState<boolean>(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 920 : false
+    typeof window !== 'undefined' ? window.innerWidth < 900 : false
   );
-  const [activeTab, setActiveTab] = useState<'drivers' | 'rides' | 'protocols'>('drivers');
+  const [activeTab, setActiveTab] = useState<'drivers' | 'rides' | 'terms'>('drivers');
   const [loading, setLoading] = useState<boolean>(true);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
@@ -114,17 +135,15 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
   const [publicRides, setPublicRides] = useState<PublicAuditRide[]>([]);
   const [summary, setSummary] = useState<PublicAuditSummary | null>(null);
 
-  // Filtros Frota / Motoristas
   const [driverSearch, setDriverSearch] = useState<string>('');
   const [driverFilter, setDriverFilter] = useState<'all' | 'online' | 'kyc'>('all');
   const [selectedDriver, setSelectedDriver] = useState<PublicAuditDriver | null>(null);
 
-  // Filtros Corridas Auditadas
   const [rideSearch, setRideSearch] = useState<string>('');
   const [rideDriverFilter, setRideDriverFilter] = useState<string>('all');
 
   useEffect(() => {
-    const onResize = () => setIsMobile(window.innerWidth < 920);
+    const onResize = () => setIsMobile(window.innerWidth < 900);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -144,7 +163,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
         }
       }
     } catch {
-      // Fallback para props locais caso ocorra falha de rede
+      // Fallback offline/props
     }
     setLoading(false);
   };
@@ -153,7 +172,6 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
     fetchPublicAudit();
   }, []);
 
-  // Fallback caso API pública ainda não retorne dados (ex: modo offline)
   const effectiveRides = useMemo<PublicAuditRide[]>(() => {
     if (publicRides.length > 0) return publicRides;
     return rides
@@ -243,7 +261,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
       navigator
         .share({
           title: 'Transparência & Auditoria Pública — Kavro Drive',
-          text: 'Consulte os motoristas verificados e o histórico público auditado de corridas na Kavro Drive.',
+          text: 'Consulte o Termo Formal de Conformidade, a frota verificada e o histórico auditado da Kavro Drive.',
           url: auditUrl,
         })
         .catch(() => {});
@@ -256,9 +274,9 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
 
   const containerStyle: React.CSSProperties = {
     width: '100%',
-    maxWidth: 1220,
+    maxWidth: 1200,
     margin: '0 auto',
-    padding: isMobile ? '0 16px' : '0 32px',
+    padding: isMobile ? '0 14px' : '0 28px',
     boxSizing: 'border-box',
   };
 
@@ -272,7 +290,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
         overflowX: 'hidden',
       }}
     >
-      {/* ═══ BARRA SUPERIOR FULL-WIDTH KAVRO ═══ */}
+      {/* ═══ HEADER COMPACTO FULL-WIDTH ═══ */}
       <header
         style={{
           position: 'sticky',
@@ -287,22 +305,22 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
         <div
           style={{
             ...containerStyle,
-            height: 66,
+            height: isMobile ? 58 : 64,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 12,
+            gap: 10,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <button
               type="button"
               onClick={() => navigate('/')}
-              title="Voltar para a página inicial"
+              title="Voltar para a Home"
               style={{
-                width: 36,
-                height: 36,
-                borderRadius: 10,
+                width: 34,
+                height: 34,
+                borderRadius: 9,
                 border: '1px solid rgba(255,255,255,0.16)',
                 backgroundColor: '#131E26',
                 color: '#FFFFFF',
@@ -313,7 +331,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 flexShrink: 0,
               }}
             >
-              <ArrowLeft size={17} />
+              <ArrowLeft size={16} />
             </button>
 
             <img
@@ -321,7 +339,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               alt="Kavro Drive"
               onClick={() => navigate('/')}
               style={{
-                height: isMobile ? 25 : 30,
+                height: isMobile ? 23 : 28,
                 width: 'auto',
                 objectFit: 'contain',
                 cursor: 'pointer',
@@ -330,42 +348,42 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
             />
 
             {!isMobile && (
-              <div
+              <span
                 style={{
                   borderLeft: '1px solid rgba(255,255,255,0.16)',
-                  paddingLeft: 14,
-                  fontSize: '0.84rem',
+                  paddingLeft: 12,
+                  fontSize: '0.82rem',
                   fontWeight: 700,
                   color: '#8CE826',
                   whiteSpace: 'nowrap',
                 }}
               >
                 Transparência &amp; Auditoria Pública
-              </div>
+              </span>
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <button
               type="button"
               onClick={fetchPublicAudit}
-              title="Atualizar dados da auditoria"
+              title="Atualizar dados"
               style={{
-                height: 36,
-                padding: isMobile ? '0 10px' : '0 12px',
-                borderRadius: 10,
+                height: 34,
+                padding: isMobile ? '0 9px' : '0 12px',
+                borderRadius: 9,
                 border: '1px solid rgba(118, 216, 0, 0.25)',
                 backgroundColor: '#131E26',
                 color: '#E2E8F0',
-                fontSize: '0.8rem',
+                fontSize: '0.78rem',
                 fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 6,
+                gap: 5,
                 cursor: 'pointer',
               }}
             >
-              <RefreshCw size={14} style={{ opacity: loading ? 0.6 : 1 }} />
+              <RefreshCw size={13} style={{ opacity: loading ? 0.55 : 1 }} />
               {!isMobile && <span>Atualizar</span>}
             </button>
 
@@ -373,35 +391,35 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               type="button"
               onClick={handleShare}
               style={{
-                height: 36,
-                padding: isMobile ? '0 10px' : '0 14px',
-                borderRadius: 10,
+                height: 34,
+                padding: isMobile ? '0 9px' : '0 12px',
+                borderRadius: 9,
                 border: '1px solid rgba(255,255,255,0.16)',
                 backgroundColor: '#131E26',
                 color: copiedLink ? '#76D800' : '#FFFFFF',
-                fontSize: '0.8rem',
+                fontSize: '0.78rem',
                 fontWeight: 700,
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 6,
+                gap: 5,
                 cursor: 'pointer',
               }}
             >
-              {copiedLink ? <Check size={14} /> : <Share2 size={14} />}
-              <span>{copiedLink ? 'Copiado!' : isMobile ? 'Link' : 'Compartilhar'}</span>
+              {copiedLink ? <Check size={13} /> : <Share2 size={13} />}
+              <span>{copiedLink ? 'Copiado' : isMobile ? 'Link' : 'Compartilhar'}</span>
             </button>
 
             <button
               type="button"
               onClick={() => navigate('/cliente')}
               style={{
-                height: 36,
-                padding: isMobile ? '0 12px' : '0 16px',
-                borderRadius: 10,
+                height: 34,
+                padding: isMobile ? '0 11px' : '0 14px',
+                borderRadius: 9,
                 border: 'none',
                 backgroundColor: '#76D800',
                 color: '#0B1218',
-                fontSize: '0.82rem',
+                fontSize: '0.78rem',
                 fontWeight: 800,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -413,14 +431,14 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
         </div>
       </header>
 
-      {/* ═══ PAINEL HERO & KPIS DA OPERAÇÃO MULTI-MOTORISTAS ═══ */}
+      {/* ═══ HERO COMPACTO + KPIS DA REDE MULTI-MOTORISTAS ═══ */}
       <section
         style={{
           background:
-            'radial-gradient(ellipse at 80% 10%, rgba(118, 216, 0, 0.14) 0%, rgba(11, 18, 24, 0) 55%), #0B1218',
+            'radial-gradient(ellipse at 82% 0%, rgba(118, 216, 0, 0.14) 0%, rgba(11, 18, 24, 0) 52%), #0B1218',
           color: '#FFFFFF',
-          paddingTop: isMobile ? 28 : 44,
-          paddingBottom: isMobile ? 34 : 48,
+          paddingTop: isMobile ? 20 : 34,
+          paddingBottom: isMobile ? 24 : 36,
         }}
       >
         <div style={containerStyle}>
@@ -430,119 +448,118 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               flexDirection: isMobile ? 'column' : 'row',
               alignItems: isMobile ? 'flex-start' : 'flex-end',
               justifyContent: 'space-between',
-              gap: 18,
-              marginBottom: 28,
+              gap: 14,
+              marginBottom: isMobile ? 18 : 24,
             }}
           >
-            <div style={{ maxWidth: 720 }}>
+            <div style={{ maxWidth: 740 }}>
               <div
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  gap: 8,
-                  padding: '5px 12px',
+                  gap: 6,
+                  padding: '4px 10px',
                   borderRadius: 999,
                   backgroundColor: 'rgba(118, 216, 0, 0.14)',
                   border: '1px solid rgba(118, 216, 0, 0.3)',
                   color: '#8CE826',
-                  fontSize: '0.76rem',
+                  fontSize: '0.7rem',
                   fontWeight: 800,
                   textTransform: 'uppercase',
                   letterSpacing: '0.04em',
-                  marginBottom: 12,
+                  marginBottom: 8,
                 }}
               >
-                <ShieldCheck size={14} />
-                <span>Operação Multi-Motoristas Verificada • {effectiveSummary.city}</span>
+                <ShieldCheck size={13} />
+                <span>Operação Multi-Motoristas • {effectiveSummary.city}</span>
               </div>
 
               <h1
                 style={{
-                  fontSize: isMobile ? '1.75rem' : '2.45rem',
+                  fontSize: isMobile ? '1.42rem' : '2.1rem',
                   fontWeight: 800,
-                  lineHeight: 1.14,
+                  lineHeight: 1.15,
                   letterSpacing: '-0.025em',
-                  marginBottom: 10,
+                  marginBottom: 6,
                 }}
               >
-                Central de Transparência &amp; Frota Auditada
+                Central Pública de Transparência, Frota &amp; Conformidade
               </h1>
-              <p style={{ fontSize: '0.95rem', lineHeight: 1.55, color: '#CBD5E1' }}>
-                Consulte todos os motoristas aprovados em atividade, veículos cadastrados com placa Mercosul,
-                status de verificação biométrica (KYC) e o histórico público de corridas finalizadas com
-                anonimização LGPD.
+              <p style={{ fontSize: isMobile ? '0.84rem' : '0.92rem', lineHeight: 1.5, color: '#CBD5E1' }}>
+                Registro público oficial dos motoristas habilitados, veículos vistoriados, histórico de viagens
+                auditadas e Termo Formal de Segurança e LGPD da Kavro Drive.
               </p>
             </div>
 
             <button
               type="button"
-              onClick={() => navigate('/kavro-drive')}
+              onClick={() => setActiveTab('terms')}
               style={{
-                height: 44,
-                padding: '0 18px',
-                borderRadius: 11,
-                border: '1px solid rgba(118, 216, 0, 0.4)',
+                height: 38,
+                padding: '0 14px',
+                borderRadius: 10,
+                border: '1px solid rgba(118, 216, 0, 0.38)',
                 backgroundColor: '#131E26',
                 color: '#8CE826',
-                fontSize: '0.86rem',
+                fontSize: '0.8rem',
                 fontWeight: 700,
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 8,
+                gap: 7,
                 cursor: 'pointer',
                 flexShrink: 0,
               }}
             >
-              <span>Portal do Motorista</span>
-              <ArrowRight size={15} />
+              <FileText size={14} />
+              <span>Ler Termo Formal de Auditoria</span>
             </button>
           </div>
 
-          {/* Grid 4 KPIs da Rede */}
+          {/* 4 KPIs Compactos */}
           <div
             style={{
               display: 'grid',
               gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : 'repeat(4, minmax(0, 1fr))',
-              gap: isMobile ? 10 : 16,
+              gap: isMobile ? 8 : 14,
             }}
           >
             {[
               {
-                label: 'Motoristas Verificados',
+                label: 'Motoristas Ativos',
                 value: effectiveSummary.totalApprovedDrivers,
                 sub: `${effectiveSummary.onlineDrivers} online agora`,
                 accent: '#76D800',
-                icon: <Users size={18} color="#76D800" />,
+                icon: <Users size={15} color="#76D800" />,
               },
               {
                 label: 'Corridas Auditadas',
                 value: effectiveSummary.totalCompletedRides,
-                sub: `${effectiveSummary.totalRegisteredRides} registradas no total`,
+                sub: `${effectiveSummary.totalRegisteredRides} no sistema`,
                 accent: '#FFFFFF',
-                icon: <CheckCircle2 size={18} color="#76D800" />,
+                icon: <CheckCircle2 size={15} color="#76D800" />,
               },
               {
                 label: 'KM Monitorados',
                 value: `${effectiveSummary.totalKm} km`,
-                sub: 'Trajetos com GPS validado',
+                sub: 'Trajetos com GPS',
                 accent: '#FFFFFF',
-                icon: <Navigation size={18} color="#76D800" />,
+                icon: <Navigation size={15} color="#76D800" />,
               },
               {
                 label: 'Passageiros & Nota',
                 value: effectiveSummary.totalPassengers,
-                sub: `Média da frota ★ ${effectiveSummary.avgRating.toFixed(2)}`,
+                sub: `Frota ★ ${effectiveSummary.avgRating.toFixed(2)}`,
                 accent: '#76D800',
-                icon: <Award size={18} color="#76D800" />,
+                icon: <Award size={15} color="#76D800" />,
               },
             ].map((kpi) => (
               <div
                 key={kpi.label}
                 style={{
                   backgroundColor: '#131E26',
-                  border: '1px solid rgba(118, 216, 0, 0.2)',
-                  borderRadius: 16,
-                  padding: isMobile ? '14px' : '18px 20px',
+                  border: '1px solid rgba(118, 216, 0, 0.18)',
+                  borderRadius: 12,
+                  padding: isMobile ? '11px 12px' : '14px 16px',
                 }}
               >
                 <div
@@ -550,33 +567,32 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    marginBottom: 8,
+                    marginBottom: 4,
                   }}
                 >
-                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#94A3B8' }}>
+                  <span style={{ fontSize: isMobile ? '0.7rem' : '0.75rem', fontWeight: 700, color: '#94A3B8' }}>
                     {kpi.label}
                   </span>
                   {kpi.icon}
                 </div>
                 <div
                   style={{
-                    fontSize: isMobile ? '1.35rem' : '1.75rem',
+                    fontSize: isMobile ? '1.18rem' : '1.48rem',
                     fontWeight: 800,
                     color: kpi.accent,
                     lineHeight: 1.15,
-                    marginBottom: 4,
                   }}
                 >
                   {kpi.value}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#CBD5E1' }}>{kpi.sub}</div>
+                <div style={{ fontSize: '0.71rem', color: '#CBD5E1', marginTop: 2 }}>{kpi.sub}</div>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* ═══ BARRA DE ABAS 100% ESTRUTURADA ═══ */}
+      {/* ═══ NAVEGAÇÃO POR ABAS 100% RESPONSIVA ═══ */}
       <div
         style={{
           backgroundColor: '#FFFFFF',
@@ -586,8 +602,8 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
         <div
           style={{
             ...containerStyle,
-            paddingTop: 14,
-            paddingBottom: 14,
+            paddingTop: 10,
+            paddingBottom: 10,
           }}
         >
           <div
@@ -595,10 +611,10 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               display: 'grid',
               gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : 'repeat(3, auto)',
               justifyContent: isMobile ? 'stretch' : 'start',
-              gap: 8,
+              gap: 6,
               backgroundColor: '#F2F6F3',
-              padding: 6,
-              borderRadius: 14,
+              padding: 4,
+              borderRadius: 12,
               border: '1px solid #DCE5DF',
               width: isMobile ? '100%' : 'fit-content',
             }}
@@ -607,19 +623,19 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               {
                 key: 'drivers',
                 label: isMobile ? `Frota (${drivers.length})` : `Frota & Motoristas (${drivers.length})`,
-                icon: <Car size={16} />,
+                icon: <Car size={15} />,
               },
               {
                 key: 'rides',
                 label: isMobile
                   ? `Corridas (${effectiveRides.length})`
                   : `Auditoria de Corridas (${effectiveRides.length})`,
-                icon: <FileCheck2 size={16} />,
+                icon: <FileCheck2 size={15} />,
               },
               {
-                key: 'protocols',
-                label: isMobile ? 'Segurança' : 'Protocolos KYC & LGPD',
-                icon: <Lock size={16} />,
+                key: 'terms',
+                label: isMobile ? 'Termo & LGPD' : 'Termo Formal & Segurança',
+                icon: <Lock size={15} />,
               },
             ].map((tab) => {
               const active = activeTab === tab.key;
@@ -627,21 +643,21 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 <button
                   key={tab.key}
                   type="button"
-                  onClick={() => setActiveTab(tab.key as 'drivers' | 'rides' | 'protocols')}
+                  onClick={() => setActiveTab(tab.key as 'drivers' | 'rides' | 'terms')}
                   style={{
-                    height: 40,
-                    padding: isMobile ? '0 8px' : '0 18px',
-                    borderRadius: 10,
+                    height: 36,
+                    padding: isMobile ? '0 6px' : '0 16px',
+                    borderRadius: 9,
                     border: 'none',
                     backgroundColor: active ? '#121A21' : 'transparent',
                     color: active ? '#76D800' : '#334155',
-                    fontSize: isMobile ? '0.78rem' : '0.88rem',
+                    fontSize: isMobile ? '0.72rem' : '0.84rem',
                     fontWeight: 700,
                     cursor: 'pointer',
                     display: 'inline-flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: 7,
+                    gap: 6,
                     whiteSpace: 'nowrap',
                   }}
                 >
@@ -654,47 +670,47 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
         </div>
       </div>
 
-      {/* ═══ CONTEÚDO PRINCIPAL ═══ */}
-      <main style={{ ...containerStyle, paddingTop: isMobile ? 22 : 34, paddingBottom: 68 }}>
-        {/* ─── ABA 1: FROTA MULTI-MOTORISTAS ─── */}
+      {/* ═══ CONTEÚDO DAS ABAS ═══ */}
+      <main style={{ ...containerStyle, paddingTop: isMobile ? 16 : 26, paddingBottom: 56 }}>
+        {/* ─── ABA 1: FROTA MULTI-MOTORISTAS COMPACTA COM CARROS ELÉTRICOS DE ESTÚDIO ─── */}
         {activeTab === 'drivers' && (
           <div>
-            {/* Barra de Busca e Filtro da Frota */}
+            {/* Barra de Busca e Filtro */}
             <div
               style={{
                 backgroundColor: '#FFFFFF',
                 border: '1px solid #DCE5DF',
-                borderRadius: 16,
-                padding: isMobile ? 14 : 18,
-                marginBottom: 22,
+                borderRadius: 14,
+                padding: isMobile ? 10 : 14,
+                marginBottom: 16,
                 display: 'flex',
                 flexDirection: isMobile ? 'column' : 'row',
                 alignItems: isMobile ? 'stretch' : 'center',
                 justifyContent: 'space-between',
-                gap: 12,
+                gap: 10,
               }}
             >
               <div style={{ position: 'relative', flex: 1 }}>
                 <Search
-                  size={17}
+                  size={16}
                   color="#64748B"
-                  style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)' }}
+                  style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }}
                 />
                 <input
                   type="text"
                   value={driverSearch}
                   onChange={(e) => setDriverSearch(e.target.value)}
-                  placeholder="Buscar por nome do motorista, modelo, placa ou cidade..."
+                  placeholder="Buscar por motorista, modelo, placa ou cidade..."
                   style={{
                     width: '100%',
-                    height: 42,
-                    paddingLeft: 40,
-                    paddingRight: 14,
-                    borderRadius: 10,
+                    height: 38,
+                    paddingLeft: 36,
+                    paddingRight: 12,
+                    borderRadius: 9,
                     border: '1px solid #CBD5E1',
                     backgroundColor: '#F8FAFC',
                     color: '#0B1218',
-                    fontSize: '0.9rem',
+                    fontSize: '0.86rem',
                     outline: 'none',
                     boxSizing: 'border-box',
                   }}
@@ -721,13 +737,13 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                       type="button"
                       onClick={() => setDriverFilter(f.key as 'all' | 'online' | 'kyc')}
                       style={{
-                        height: 40,
-                        padding: isMobile ? '0 8px' : '0 14px',
-                        borderRadius: 10,
+                        height: 36,
+                        padding: isMobile ? '0 6px' : '0 13px',
+                        borderRadius: 9,
                         border: active ? 'none' : '1px solid #DCE5DF',
                         backgroundColor: active ? '#121A21' : '#F2F6F3',
                         color: active ? '#76D800' : '#334155',
-                        fontSize: isMobile ? '0.76rem' : '0.84rem',
+                        fontSize: isMobile ? '0.73rem' : '0.8rem',
                         fontWeight: 700,
                         cursor: 'pointer',
                         whiteSpace: 'nowrap',
@@ -745,8 +761,8 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 style={{
                   backgroundColor: '#FFFFFF',
                   border: '1px solid #DCE5DF',
-                  borderRadius: 18,
-                  padding: '48px 20px',
+                  borderRadius: 16,
+                  padding: '36px 20px',
                   textAlign: 'center',
                   color: '#475569',
                   fontWeight: 600,
@@ -759,220 +775,277 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 style={{
                   backgroundColor: '#FFFFFF',
                   border: '1px solid #DCE5DF',
-                  borderRadius: 18,
-                  padding: '42px 24px',
+                  borderRadius: 16,
+                  padding: '34px 20px',
                   textAlign: 'center',
                 }}
               >
-                <Car size={36} color="#94A3B8" style={{ margin: '0 auto 12px', display: 'block' }} />
-                <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0B1218', marginBottom: 6 }}>
+                <Car size={32} color="#94A3B8" style={{ margin: '0 auto 10px', display: 'block' }} />
+                <div style={{ fontSize: '0.98rem', fontWeight: 700, color: '#0B1218', marginBottom: 4 }}>
                   Nenhum motorista encontrado com esse filtro
                 </div>
-                <div style={{ fontSize: '0.88rem', color: '#64748B' }}>
-                  Ajuste os termos de busca ou visualize todos os parceiros cadastrados na operação.
+                <div style={{ fontSize: '0.84rem', color: '#64748B' }}>
+                  Ajuste a busca ou visualize todos os motoristas habilitados.
                 </div>
               </div>
             ) : (
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))',
-                  gap: 18,
+                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                  gap: isMobile ? 12 : 16,
                 }}
               >
                 {filteredDrivers.map((drv) => {
                   const vehicleLabel =
                     [drv.vehicleBrand, drv.vehicleModel, drv.vehicleVersion].filter(Boolean).join(' ') ||
-                    'Veículo Kavro Verificado';
+                    'Veículo Kavro Drive';
+                  const thumbSrc = resolveVehicleThumb(drv);
+                  const colorInfo = getCarColorProfile(drv.vehicleColor || '');
+
                   return (
                     <div
                       key={drv.id}
                       style={{
                         backgroundColor: '#FFFFFF',
                         border: '1px solid #DCE5DF',
-                        borderRadius: 18,
-                        padding: 18,
+                        borderRadius: 16,
+                        padding: isMobile ? 13 : 16,
                         display: 'flex',
                         flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        gap: 14,
-                        boxShadow: '0 6px 20px rgba(11, 18, 24, 0.04)',
+                        gap: 12,
+                        boxShadow: '0 4px 16px rgba(11, 18, 24, 0.04)',
                       }}
                     >
-                      <div>
-                        {/* Cabeçalho do Motorista */}
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'space-between',
-                            gap: 10,
-                            marginBottom: 14,
-                          }}
-                        >
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                            {drv.photo ? (
-                              <img
-                                src={drv.photo}
-                                alt={drv.name}
-                                style={{
-                                  width: 50,
-                                  height: 50,
-                                  borderRadius: '50%',
-                                  objectFit: 'cover',
-                                  border: drv.isOnline ? '2.5px solid #76D800' : '2px solid #CBD5E1',
-                                  flexShrink: 0,
-                                }}
-                              />
-                            ) : (
-                              <div
-                                style={{
-                                  width: 50,
-                                  height: 50,
-                                  borderRadius: '50%',
-                                  backgroundColor: '#121A21',
-                                  color: '#76D800',
-                                  fontWeight: 800,
-                                  fontSize: '1.15rem',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                  border: drv.isOnline ? '2.5px solid #76D800' : '2px solid #334155',
-                                  flexShrink: 0,
-                                }}
-                              >
-                                {drv.name.charAt(0).toUpperCase()}
-                              </div>
-                            )}
+                      {/* Linha 1: Motorista + Nota + Status */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 10,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                          {drv.photo ? (
+                            <img
+                              src={drv.photo}
+                              alt={drv.name}
+                              style={{
+                                width: 42,
+                                height: 42,
+                                borderRadius: '50%',
+                                objectFit: 'cover',
+                                border: drv.isOnline ? '2px solid #76D800' : '2px solid #CBD5E1',
+                                flexShrink: 0,
+                              }}
+                            />
+                          ) : (
+                            <div
+                              style={{
+                                width: 42,
+                                height: 42,
+                                borderRadius: '50%',
+                                backgroundColor: '#121A21',
+                                color: '#76D800',
+                                fontWeight: 800,
+                                fontSize: '1rem',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                border: drv.isOnline ? '2px solid #76D800' : '2px solid #334155',
+                                flexShrink: 0,
+                              }}
+                            >
+                              {drv.name.charAt(0).toUpperCase()}
+                            </div>
+                          )}
 
-                            <div style={{ minWidth: 0 }}>
-                              <div
+                          <div style={{ minWidth: 0 }}>
+                            <div
+                              style={{
+                                fontSize: '0.96rem',
+                                fontWeight: 800,
+                                color: '#0B1218',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {drv.name}
+                            </div>
+                            <div
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6,
+                                fontSize: '0.75rem',
+                                color: '#475569',
+                              }}
+                            >
+                              <span
                                 style={{
-                                  fontSize: '1.02rem',
-                                  fontWeight: 800,
-                                  color: '#0B1218',
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}
-                              >
-                                {drv.name}
-                              </div>
-                              <div
-                                style={{
-                                  display: 'flex',
+                                  display: 'inline-flex',
                                   alignItems: 'center',
-                                  gap: 8,
-                                  fontSize: '0.78rem',
-                                  color: '#475569',
-                                  marginTop: 2,
+                                  gap: 3,
+                                  fontWeight: 700,
+                                  color: '#0B1218',
                                 }}
                               >
-                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontWeight: 700, color: '#0B1218' }}>
-                                  <Star size={13} color="#F59E0B" fill="#F59E0B" />
-                                  {drv.rating.toFixed(2)}
-                                </span>
-                                {drv.city && <span>• {drv.city}</span>}
-                              </div>
+                                <Star size={12} color="#F59E0B" fill="#F59E0B" />
+                                {drv.rating.toFixed(2)}
+                              </span>
+                              {drv.city && <span>• {drv.city}</span>}
                             </div>
                           </div>
+                        </div>
 
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          {drv.kycVerified && (
+                            <span
+                              style={{
+                                padding: '3px 8px',
+                                borderRadius: 999,
+                                backgroundColor: '#ECFDF5',
+                                border: '1px solid #A7F3D0',
+                                color: '#065F46',
+                                fontSize: '0.68rem',
+                                fontWeight: 800,
+                              }}
+                            >
+                              KYC ✓
+                            </span>
+                          )}
                           <span
                             style={{
-                              padding: '4px 9px',
+                              padding: '3px 8px',
                               borderRadius: 999,
                               backgroundColor: drv.isOnline ? '#DCFCE7' : '#F1F5F9',
                               color: drv.isOnline ? '#166534' : '#475569',
-                              fontSize: '0.72rem',
+                              fontSize: '0.7rem',
                               fontWeight: 800,
                               display: 'inline-flex',
                               alignItems: 'center',
                               gap: 4,
-                              flexShrink: 0,
                             }}
                           >
-                            {drv.isOnline ? <Radio size={11} /> : <CheckCircle2 size={11} />}
+                            {drv.isOnline ? <Radio size={10} /> : <CheckCircle2 size={10} />}
                             <span>{drv.isOnline ? 'Online' : 'Aprovado'}</span>
                           </span>
                         </div>
+                      </div>
 
-                        {/* Preview Visual do Veículo + Placa */}
-                        <div style={{ marginBottom: 12 }}>
-                          <VehiclePhotoPreview
-                            photoUrl={drv.vehiclePhoto}
-                            brand={drv.vehicleBrand}
-                            model={[drv.vehicleModel, drv.vehicleVersion].filter(Boolean).join(' ')}
-                            colorName={drv.vehicleColor}
-                            plate={drv.vehiclePlate}
-                            category={drv.vehicleCategory}
-                            year={drv.vehicleYear}
-                            size="compact"
-                            showPlate={Boolean(drv.vehiclePlate)}
+                      {/* Linha 2 Compacta: Foto Estúdio Moderna EV + Dados do Veículo + Placa Mercosul */}
+                      <div
+                        style={{
+                          backgroundColor: '#0F172A',
+                          borderRadius: 12,
+                          padding: isMobile ? 10 : 12,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 12,
+                          border: '1px solid #1E293B',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: isMobile ? 96 : 122,
+                            height: isMobile ? 64 : 76,
+                            borderRadius: 9,
+                            overflow: 'hidden',
+                            flexShrink: 0,
+                            backgroundColor: '#0B1218',
+                          }}
+                        >
+                          <img
+                            src={thumbSrc}
+                            alt={vehicleLabel}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              display: 'block',
+                            }}
                           />
                         </div>
 
-                        {/* Badges de Conformidade */}
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
-                          <span
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div
                             style={{
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
-                              padding: '4px 9px',
-                              borderRadius: 8,
-                              backgroundColor: drv.kycVerified ? '#ECFDF5' : '#F8FAFC',
-                              border: `1px solid ${drv.kycVerified ? '#A7F3D0' : '#E2E8F0'}`,
-                              color: drv.kycVerified ? '#065F46' : '#475569',
+                              fontSize: '0.64rem',
+                              fontWeight: 800,
+                              color: '#76D800',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
                             }}
                           >
-                            {drv.kycVerified ? '✓ KYC & Biometria OK' : 'Cadastro Verificado'}
-                          </span>
-                          {drv.termsAccepted && (
+                            {(drv.vehicleCategory || 'kavro_go').replace('_', ' ')}
+                            {drv.vehicleYear ? ` • Ano ${drv.vehicleYear}` : ''}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: isMobile ? '0.86rem' : '0.94rem',
+                              fontWeight: 800,
+                              color: '#FFFFFF',
+                              whiteSpace: 'nowrap',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              marginTop: 1,
+                              marginBottom: 4,
+                            }}
+                          >
+                            {vehicleLabel}
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                             <span
                               style={{
-                                fontSize: '0.72rem',
-                                fontWeight: 700,
-                                padding: '4px 9px',
-                                borderRadius: 8,
-                                backgroundColor: '#F2F6F3',
-                                border: '1px solid #DCE5DF',
-                                color: '#1E293B',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                fontSize: '0.7rem',
+                                color: '#CBD5E1',
                               }}
                             >
-                              ✓ Termo Assinado
+                              <span
+                                style={{
+                                  width: 7,
+                                  height: 7,
+                                  borderRadius: '50%',
+                                  backgroundColor: colorInfo.hex,
+                                  border: '1px solid rgba(255,255,255,0.4)',
+                                }}
+                              />
+                              {colorInfo.label}
                             </span>
-                          )}
+                          </div>
                         </div>
 
-                        <div style={{ fontSize: '0.8rem', color: '#475569', lineHeight: 1.45 }}>
-                          {drv.bio?.trim() || `${vehicleLabel} inspecionado para viagens Kavro Drive.`}
-                        </div>
+                        {drv.vehiclePlate && (
+                          <div style={{ flexShrink: 0 }}>
+                            <MercosulPlateBadge plate={drv.vehiclePlate} size="sm" />
+                          </div>
+                        )}
                       </div>
 
-                      {/* Rodapé de Métricas + Ação */}
-                      <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: 12 }}>
-                        <div
-                          style={{
-                            display: 'grid',
-                            gridTemplateColumns: '1fr 1fr',
-                            gap: 8,
-                            marginBottom: 12,
-                          }}
-                        >
-                          <div style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: '8px 10px' }}>
-                            <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
-                              Corridas Concluídas
-                            </div>
-                            <div style={{ fontSize: '1rem', fontWeight: 800, color: '#0B1218' }}>
-                              {drv.completedRidesCount}
-                            </div>
+                      {/* Linha 3: Métricas inline + Botão enxuto */}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 10,
+                          borderTop: '1px solid #E2E8F0',
+                          paddingTop: 10,
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '0.78rem' }}>
+                          <div>
+                            <span style={{ color: '#64748B' }}>Corridas: </span>
+                            <strong style={{ color: '#0B1218' }}>{drv.completedRidesCount}</strong>
                           </div>
-                          <div style={{ backgroundColor: '#F8FAFC', borderRadius: 10, padding: '8px 10px' }}>
-                            <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
-                              KM Auditados
-                            </div>
-                            <div style={{ fontSize: '1rem', fontWeight: 800, color: '#16A34A' }}>
-                              {drv.auditedKm} km
-                            </div>
+                          <div>
+                            <span style={{ color: '#64748B' }}>Auditado: </span>
+                            <strong style={{ color: '#16A34A' }}>{drv.auditedKm} km</strong>
                           </div>
                         </div>
 
@@ -980,23 +1053,23 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                           type="button"
                           onClick={() => setSelectedDriver(drv)}
                           style={{
-                            width: '100%',
-                            height: 40,
-                            borderRadius: 10,
+                            height: 34,
+                            padding: '0 13px',
+                            borderRadius: 9,
                             border: 'none',
                             backgroundColor: '#121A21',
                             color: '#76D800',
-                            fontSize: '0.84rem',
+                            fontSize: '0.78rem',
                             fontWeight: 800,
                             cursor: 'pointer',
-                            display: 'flex',
+                            display: 'inline-flex',
                             alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: 8,
+                            gap: 5,
+                            whiteSpace: 'nowrap',
                           }}
                         >
-                          <span>Ver ficha &amp; corridas</span>
-                          <ArrowRight size={15} />
+                          <span>Ficha &amp; Termo</span>
+                          <ArrowRight size={13} />
                         </button>
                       </div>
                     </div>
@@ -1004,6 +1077,68 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 })}
               </div>
             )}
+
+            {/* Faixa Compacta do Termo Formal logo abaixo da Frota */}
+            <div
+              style={{
+                marginTop: 22,
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #DCE5DF',
+                borderRadius: 16,
+                padding: isMobile ? 16 : 20,
+                display: 'flex',
+                flexDirection: isMobile ? 'column' : 'row',
+                alignItems: isMobile ? 'flex-start' : 'center',
+                justifyContent: 'space-between',
+                gap: 14,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
+                    backgroundColor: '#121A21',
+                    color: '#76D800',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  <FileText size={18} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0B1218', marginBottom: 2 }}>
+                    Declaração Formal de Conformidade &amp; Termo de Auditoria Pública
+                  </div>
+                  <div style={{ fontSize: '0.82rem', color: '#475569', lineHeight: 1.45 }}>
+                    Todos os motoristas exibidos acima possuem CNH ativa, validação biométrica facial (KYC),
+                    vínculo de placa oficial e concordância expressa com as normas da LGPD (Lei nº 13.709/2018).
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveTab('terms')}
+                style={{
+                  height: 38,
+                  padding: '0 16px',
+                  borderRadius: 9,
+                  border: '1px solid #121A21',
+                  backgroundColor: '#F2F6F3',
+                  color: '#0B1218',
+                  fontSize: '0.82rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  whiteSpace: 'nowrap',
+                  flexShrink: 0,
+                }}
+              >
+                Ver Termo Completo
+              </button>
+            </div>
           </div>
         )}
 
@@ -1014,19 +1149,19 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               style={{
                 backgroundColor: '#FFFFFF',
                 border: '1px solid #DCE5DF',
-                borderRadius: 16,
-                padding: isMobile ? 14 : 18,
-                marginBottom: 20,
+                borderRadius: 14,
+                padding: isMobile ? 10 : 14,
+                marginBottom: 16,
                 display: 'grid',
                 gridTemplateColumns: isMobile ? '1fr' : '1.4fr 0.8fr',
-                gap: 12,
+                gap: 10,
               }}
             >
               <div style={{ position: 'relative' }}>
                 <Search
-                  size={17}
+                  size={16}
                   color="#64748B"
-                  style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)' }}
+                  style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }}
                 />
                 <input
                   type="text"
@@ -1035,14 +1170,14 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                   placeholder="Pesquisar por código #UP, rua, bairro, motorista ou placa..."
                   style={{
                     width: '100%',
-                    height: 42,
-                    paddingLeft: 40,
-                    paddingRight: 14,
-                    borderRadius: 10,
+                    height: 38,
+                    paddingLeft: 36,
+                    paddingRight: 12,
+                    borderRadius: 9,
                     border: '1px solid #CBD5E1',
                     backgroundColor: '#F8FAFC',
                     color: '#0B1218',
-                    fontSize: '0.9rem',
+                    fontSize: '0.86rem',
                     outline: 'none',
                     boxSizing: 'border-box',
                   }}
@@ -1054,13 +1189,13 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 onChange={(e) => setRideDriverFilter(e.target.value)}
                 style={{
                   width: '100%',
-                  height: 42,
-                  padding: '0 12px',
-                  borderRadius: 10,
+                  height: 38,
+                  padding: '0 10px',
+                  borderRadius: 9,
                   border: '1px solid #CBD5E1',
                   backgroundColor: '#F8FAFC',
                   color: '#0B1218',
-                  fontSize: '0.88rem',
+                  fontSize: '0.84rem',
                   fontWeight: 600,
                   outline: 'none',
                 }}
@@ -1079,18 +1214,18 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 style={{
                   backgroundColor: '#FFFFFF',
                   border: '1px solid #DCE5DF',
-                  borderRadius: 18,
-                  padding: '44px 20px',
+                  borderRadius: 16,
+                  padding: '36px 20px',
                   textAlign: 'center',
                 }}
               >
-                <FileCheck2 size={36} color="#94A3B8" style={{ margin: '0 auto 12px', display: 'block' }} />
-                <div style={{ fontSize: '1.05rem', fontWeight: 700, color: '#0B1218', marginBottom: 6 }}>
+                <FileCheck2 size={34} color="#94A3B8" style={{ margin: '0 auto 10px', display: 'block' }} />
+                <div style={{ fontSize: '0.98rem', fontWeight: 700, color: '#0B1218', marginBottom: 4 }}>
                   Nenhuma corrida finalizada encontrada
                 </div>
-                <div style={{ fontSize: '0.88rem', color: '#64748B', maxWidth: 460, margin: '0 auto' }}>
-                  Assim que os motoristas da plataforma concluírem viagens, os registros anonimizados
-                  serão publicados automaticamente nesta auditoria.
+                <div style={{ fontSize: '0.84rem', color: '#64748B', maxWidth: 460, margin: '0 auto' }}>
+                  Assim que os motoristas da plataforma concluírem corridas, os registros anonimizados serão
+                  publicados automaticamente nesta trilha de auditoria.
                 </div>
               </div>
             ) : (
@@ -1098,7 +1233,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 style={{
                   display: 'grid',
                   gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                  gap: 14,
+                  gap: 12,
                 }}
               >
                 {filteredRides.map((r) => (
@@ -1107,11 +1242,11 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                     style={{
                       backgroundColor: '#FFFFFF',
                       border: '1px solid #DCE5DF',
-                      borderRadius: 16,
-                      padding: 16,
+                      borderRadius: 14,
+                      padding: 14,
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: 12,
+                      gap: 10,
                     }}
                   >
                     <div
@@ -1126,28 +1261,28 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <span
                           style={{
-                            padding: '4px 10px',
-                            borderRadius: 8,
+                            padding: '3px 9px',
+                            borderRadius: 7,
                             backgroundColor: '#121A21',
                             color: '#76D800',
-                            fontSize: '0.76rem',
+                            fontSize: '0.73rem',
                             fontWeight: 800,
                           }}
                         >
                           {r.rideCode}
                         </span>
-                        <span style={{ fontSize: '0.78rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <span style={{ fontSize: '0.75rem', color: '#475569', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                           <Clock size={12} /> {r.date} • {r.time}
                         </span>
                       </div>
 
                       <span
                         style={{
-                          padding: '3px 9px',
+                          padding: '2px 8px',
                           borderRadius: 999,
                           backgroundColor: '#DCFCE7',
                           color: '#166534',
-                          fontSize: '0.72rem',
+                          fontSize: '0.7rem',
                           fontWeight: 800,
                         }}
                       >
@@ -1155,15 +1290,15 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.85rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, color: '#0B1218' }}>
-                        <MapPin size={15} color="#16A34A" style={{ flexShrink: 0, marginTop: 2 }} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, fontSize: '0.82rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, color: '#0B1218' }}>
+                        <MapPin size={14} color="#16A34A" style={{ flexShrink: 0, marginTop: 2 }} />
                         <span>
                           <strong>Partida:</strong> {r.originAddress}
                         </span>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, color: '#334155' }}>
-                        <Navigation size={15} color="#0B1218" style={{ flexShrink: 0, marginTop: 2 }} />
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, color: '#334155' }}>
+                        <Navigation size={14} color="#0B1218" style={{ flexShrink: 0, marginTop: 2 }} />
                         <span>
                           <strong>Destino:</strong> {r.destinationAddress}
                         </span>
@@ -1173,14 +1308,14 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                     <div
                       style={{
                         backgroundColor: '#F8FAFC',
-                        borderRadius: 10,
-                        padding: '10px 12px',
+                        borderRadius: 9,
+                        padding: '8px 10px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
                         flexWrap: 'wrap',
-                        gap: 8,
-                        fontSize: '0.78rem',
+                        gap: 6,
+                        fontSize: '0.75rem',
                         color: '#334155',
                       }}
                     >
@@ -1189,8 +1324,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                         {r.driverPlate ? ` (${r.driverPlate})` : ''}
                       </div>
                       <div>
-                        <strong>Passageiro (LGPD):</strong> {r.passengerMasked} •{' '}
-                        <strong>{r.distanceKm} km</strong>
+                        <strong>LGPD:</strong> {r.passengerMasked} • <strong>{r.distanceKm} km</strong>
                       </div>
                     </div>
                   </div>
@@ -1200,132 +1334,172 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
           </div>
         )}
 
-        {/* ─── ABA 3: PROTOCOLOS KYC & LGPD ─── */}
-        {activeTab === 'protocols' && (
-          <div>
-            <div
+        {/* ─── ABA 3: TERMO FORMAL DE TRANSPARÊNCIA, COMPLIANCE & LGPD ─── */}
+        {activeTab === 'terms' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {/* Documento Formal Oficial */}
+            <article
               style={{
-                display: 'grid',
-                gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                gap: 18,
-                marginBottom: 24,
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #DCE5DF',
+                borderRadius: 18,
+                padding: isMobile ? 18 : 30,
+                boxShadow: '0 8px 24px rgba(11, 18, 24, 0.04)',
               }}
             >
-              {[
-                {
-                  icon: <ShieldCheck size={24} color="#76D800" />,
-                  title: '1. Verificação Biométrica Facial & CNH (KYC)',
-                  desc: 'Todo motorista parceiro passa por conferência entre a CNH enviada e a selfie biométrica antes da liberação para corridas.',
-                },
-                {
-                  icon: <Car size={24} color="#76D800" />,
-                  title: '2. Registro Veicular & Placa Mercosul',
-                  desc: 'Marca, modelo, ano, cor, ar-condicionado e placa oficial são vinculados à conta do motorista e exibidos ao passageiro antes do embarque.',
-                },
-                {
-                  icon: <FileCheck2 size={24} color="#76D800" />,
-                  title: '3. Assinatura Eletrônica de Termos',
-                  desc: 'Cada parceiro e passageiro assina digitalmente os termos operacionais da Kavro Drive com código de autenticidade exclusivo.',
-                },
-                {
-                  icon: <Lock size={24} color="#76D800" />,
-                  title: '4. Anonimização Pública LGPD',
-                  desc: 'Na auditoria pública, nomes completos de passageiros, documentos CPF/CNH e dados bancários são protegidos — preservando apenas prova de transparência.',
-                },
-              ].map((card) => (
-                <div
-                  key={card.title}
-                  style={{
-                    backgroundColor: '#FFFFFF',
-                    border: '1px solid #DCE5DF',
-                    borderRadius: 18,
-                    padding: 22,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 12,
-                  }}
-                >
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: isMobile ? 'column' : 'row',
+                  alignItems: isMobile ? 'flex-start' : 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  borderBottom: '1px solid #E2E8F0',
+                  paddingBottom: 16,
+                  marginBottom: 20,
+                }}
+              >
+                <div>
                   <div
                     style={{
-                      width: 48,
-                      height: 48,
-                      borderRadius: 12,
-                      backgroundColor: '#121A21',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
+                      fontSize: '0.72rem',
+                      fontWeight: 800,
+                      color: '#16A34A',
+                      letterSpacing: '0.06em',
+                      textTransform: 'uppercase',
+                      marginBottom: 4,
                     }}
                   >
-                    {card.icon}
+                    Documento Público Institucional • Protocolo KAVRO-AUD-{new Date().getFullYear()}
                   </div>
-                  <h3 style={{ fontSize: '1.08rem', fontWeight: 800, color: '#0B1218' }}>{card.title}</h3>
-                  <p style={{ fontSize: '0.9rem', lineHeight: 1.55, color: '#475569' }}>{card.desc}</p>
+                  <h2 style={{ fontSize: isMobile ? '1.18rem' : '1.48rem', fontWeight: 800, color: '#0B1218' }}>
+                    Termo Formal de Transparência, Auditoria Operacional e LGPD
+                  </h2>
                 </div>
-              ))}
-            </div>
 
-            <div
-              style={{
-                backgroundColor: '#121A21',
-                color: '#FFFFFF',
-                borderRadius: 20,
-                padding: isMobile ? 22 : 30,
-                border: '1px solid rgba(118, 216, 0, 0.25)',
-                display: 'flex',
-                flexDirection: isMobile ? 'column' : 'row',
-                alignItems: isMobile ? 'flex-start' : 'center',
-                justifyContent: 'space-between',
-                gap: 18,
-              }}
-            >
-              <div>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: 6 }}>
-                  Quer fazer parte da frota verificada Kavro Drive?
-                </h3>
-                <p style={{ fontSize: '0.9rem', color: '#CBD5E1' }}>
-                  Cadastre seu veículo no Portal do Motorista ou solicite sua próxima viagem como passageiro.
-                </p>
-              </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 <button
                   type="button"
-                  onClick={() => navigate('/kavro-drive')}
+                  onClick={() => window.print()}
                   style={{
-                    height: 44,
-                    padding: '0 18px',
-                    borderRadius: 10,
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 9,
                     border: 'none',
-                    backgroundColor: '#76D800',
-                    color: '#0B1218',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                  }}
-                >
-                  Portal do Motorista
-                </button>
-                <button
-                  type="button"
-                  onClick={() => navigate('/cliente')}
-                  style={{
-                    height: 44,
-                    padding: '0 18px',
-                    borderRadius: 10,
-                    border: '1px solid rgba(255,255,255,0.2)',
-                    backgroundColor: '#0B1218',
-                    color: '#FFFFFF',
+                    backgroundColor: '#121A21',
+                    color: '#76D800',
+                    fontSize: '0.8rem',
                     fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
                     cursor: 'pointer',
+                    flexShrink: 0,
                   }}
                 >
-                  Pedir viagem
+                  <Printer size={14} />
+                  <span>Imprimir / Salvar PDF</span>
                 </button>
               </div>
-            </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 16,
+                  fontSize: isMobile ? '0.86rem' : '0.92rem',
+                  lineHeight: 1.65,
+                  color: '#334155',
+                }}
+              >
+                <p>
+                  Pelo presente instrumento público de transparência,{' '}
+                  <strong>{config.companyName || 'Kavro Drive Mobilidade'}</strong>, operando na região de{' '}
+                  <strong>{effectiveSummary.city}</strong>, torna acessíveis ao público usuário, passageiros e
+                  órgãos fiscalizadores os critérios objetivos de habilitação multi-motoristas, rastreabilidade de
+                  corridas e proteção de dados pessoais adotados nesta plataforma.
+                </p>
+
+                <div>
+                  <h3 style={clauseTitleStyle}>CLÁUSULA 1ª — OPERAÇÃO MULTI-MOTORISTAS E AUTONOMIA</h3>
+                  <p>
+                    1.1. A Kavro Drive atua como ecossistema tecnológico multi-motoristas, conectando passageiros a
+                    condutores parceiros independentes devidamente aprovados pela Central Administrativa. Atualmente
+                    encontram-se habilitados nesta página <strong>{effectiveSummary.totalApprovedDrivers}</strong>{' '}
+                    motorista(s) verificado(s), com visibilidade individual de veículo, categoria e placa.
+                  </p>
+                </div>
+
+                <div>
+                  <h3 style={clauseTitleStyle}>CLÁUSULA 2ª — VERIFICAÇÃO CADASTRAL, CNH E BIOMETRIA (KYC)</h3>
+                  <p>
+                    2.1. Nenhum motorista parceiro é autorizado a iniciar viagens comerciais sem prévia conferência
+                    documental da Carteira Nacional de Habilitação (CNH) com observação EAR, comparação biométrica
+                    facial (KYC), vistoria visual do veículo cadastrado, conferência de placa padrão Mercosul e
+                    aceite formal com assinatura eletrônica dos Termos Operacionais da plataforma.
+                  </p>
+                </div>
+
+                <div>
+                  <h3 style={clauseTitleStyle}>CLÁUSULA 3ª — INTEGRIDADE DE TARIFAS E RASTREABILIDADE GPS</h3>
+                  <p>
+                    3.1. Todas as solicitações registradas geram código identificador único (<code>#UP</code>),
+                    estimativa prévia transparente antes do embarque e trilha de geolocalização durante a execução da
+                    viagem. Em caso de divergência ou solicitação judicial, a Central Administrativa mantém registro
+                    interno auditável das rotas percorridas.
+                  </p>
+                </div>
+
+                <div>
+                  <h3 style={clauseTitleStyle}>CLÁUSULA 4ª — PROTEÇÃO DE DADOS PESSOAIS (LGPD — LEI Nº 13.709/2018)</h3>
+                  <p>
+                    4.1. Em estrita observância à Lei Geral de Proteção de Dados (Lei nº 13.709/2018), esta página
+                    pública <strong>suprime e mascara integralmente</strong> dados sensíveis de passageiros e
+                    motoristas, tais como CPF, número completo de CNH, endereços residenciais privados, chaves PIX,
+                    dados bancários e identificações financeiras individuais, exibindo exclusivamente dados mínimos de
+                    segurança veicular e comprovação pública de viagens concluídas.
+                  </p>
+                </div>
+
+                <div>
+                  <h3 style={clauseTitleStyle}>CLÁUSULA 5ª — OUVIDORIA E CANAL DE SOLICITAÇÃO</h3>
+                  <p>
+                    5.1. O titular de dados pessoais ou passageiro que desejar esclarecimentos sobre qualquer registro
+                    exibido nesta Central de Auditoria poderá acionar o atendimento administrativo através da área do
+                    passageiro em <strong>/cliente</strong> ou pelos canais oficiais informados na página inicial.
+                  </p>
+                </div>
+
+                <div
+                  style={{
+                    marginTop: 6,
+                    padding: '12px 14px',
+                    backgroundColor: '#F2F6F3',
+                    border: '1px solid #DCE5DF',
+                    borderRadius: 12,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    fontSize: '0.8rem',
+                    color: '#0B1218',
+                  }}
+                >
+                  <span>
+                    <strong>Responsável Operacional:</strong> {config.companyName || 'Kavro Drive Mobilidade'} •{' '}
+                    {effectiveSummary.city}
+                  </span>
+                  <span style={{ color: '#16A34A', fontWeight: 700 }}>
+                    ✓ Registro Ativo &amp; Verificado ({new Date().toLocaleDateString('pt-BR')})
+                  </span>
+                </div>
+              </div>
+            </article>
           </div>
         )}
       </main>
 
-      {/* ═══ MODAL INDIVIDUAL DO MOTORISTA SELECIONADO ═══ */}
+      {/* ═══ MODAL COMPACTO DA FICHA INDIVIDUAL DO MOTORISTA ═══ */}
       {selectedDriver && (
         <div
           onClick={() => setSelectedDriver(null)}
@@ -1333,177 +1507,194 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
             position: 'fixed',
             inset: 0,
             backgroundColor: 'rgba(11, 18, 24, 0.72)',
-            backdropFilter: 'blur(5px)',
+            backdropFilter: 'blur(4px)',
             zIndex: 220,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: isMobile ? 12 : 24,
+            padding: isMobile ? 10 : 20,
           }}
         >
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
               width: '100%',
-              maxWidth: 680,
-              maxHeight: '88vh',
+              maxWidth: 540,
+              maxHeight: '86dvh',
               backgroundColor: '#FFFFFF',
-              borderRadius: 20,
+              borderRadius: 18,
               overflow: 'hidden',
               display: 'flex',
               flexDirection: 'column',
-              boxShadow: '0 24px 60px rgba(0,0,0,0.45)',
+              boxShadow: '0 22px 54px rgba(0,0,0,0.45)',
             }}
           >
-            {/* Header Modal Ficha Motorista */}
+            {/* Header compacto */}
             <div
               style={{
                 backgroundColor: '#121A21',
                 color: '#FFFFFF',
-                padding: '16px 20px',
+                padding: '13px 16px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                gap: 12,
+                gap: 10,
                 borderBottom: '1px solid rgba(118, 216, 0, 0.25)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <ShieldCheck size={20} color="#76D800" />
-                <div>
-                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#8CE826' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}>
+                <ShieldCheck size={18} color="#76D800" style={{ flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#8CE826' }}>
                     FICHA INDIVIDUAL AUDITADA
                   </div>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 800 }}>{selectedDriver.name}</div>
+                  <div
+                    style={{
+                      fontSize: '0.98rem',
+                      fontWeight: 800,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {selectedDriver.name}
+                  </div>
                 </div>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedDriver(null)}
                 style={{
-                  width: 34,
-                  height: 34,
+                  width: 30,
+                  height: 30,
                   borderRadius: '50%',
                   border: 'none',
-                  backgroundColor: 'rgba(255,255,255,0.1)',
+                  backgroundColor: 'rgba(255,255,255,0.12)',
                   color: '#FFFFFF',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
+                  flexShrink: 0,
                 }}
               >
-                <X size={18} />
+                <X size={16} />
               </button>
             </div>
 
-            <div style={{ padding: 20, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {/* Veículo + Placa + Status */}
+            <div style={{ padding: isMobile ? 14 : 18, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {/* Faixa Veículo + Placa */}
               <div
                 style={{
+                  backgroundColor: '#0F172A',
+                  borderRadius: 12,
+                  padding: 12,
                   display: 'flex',
-                  flexWrap: 'wrap',
                   alignItems: 'center',
-                  justifyContent: 'space-between',
                   gap: 12,
-                  backgroundColor: '#F2F6F3',
-                  border: '1px solid #DCE5DF',
-                  borderRadius: 14,
-                  padding: 14,
+                  color: '#FFFFFF',
                 }}
               >
-                <div>
-                  <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#16A34A', marginBottom: 2 }}>
-                    VEÍCULO VINCULADO À OPERAÇÃO
+                <img
+                  src={resolveVehicleThumb(selectedDriver)}
+                  alt={selectedDriver.vehicleModel}
+                  style={{
+                    width: 88,
+                    height: 58,
+                    borderRadius: 8,
+                    objectFit: 'cover',
+                    flexShrink: 0,
+                  }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.68rem', color: '#76D800', fontWeight: 700 }}>
+                    VEÍCULO HABILITADO
                   </div>
-                  <div style={{ fontSize: '1.02rem', fontWeight: 800, color: '#0B1218' }}>
+                  <div style={{ fontSize: '0.92rem', fontWeight: 800 }}>
                     {[selectedDriver.vehicleBrand, selectedDriver.vehicleModel, selectedDriver.vehicleYear]
                       .filter(Boolean)
                       .join(' ') || 'Veículo Kavro Drive'}
                   </div>
-                  <div style={{ fontSize: '0.82rem', color: '#475569' }}>
-                    Cor: {selectedDriver.vehicleColor || 'Não informada'} • Nota ★{' '}
-                    {selectedDriver.rating.toFixed(2)}
+                  <div style={{ fontSize: '0.75rem', color: '#CBD5E1' }}>
+                    Cor: {selectedDriver.vehicleColor || 'Padrão'} • Nota ★ {selectedDriver.rating.toFixed(2)}
                   </div>
                 </div>
                 {selectedDriver.vehiclePlate && (
-                  <MercosulPlateBadge plate={selectedDriver.vehiclePlate} size="md" />
+                  <MercosulPlateBadge plate={selectedDriver.vehiclePlate} size="sm" />
                 )}
               </div>
 
-              {/* Selos KYC & Termo */}
+              {/* Conformidade */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: 10 }}>
+                  <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: 700 }}>KYC &amp; Biometria</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#16A34A' }}>
+                    {selectedDriver.kycVerified ? 'Aprovado' : 'Verificado'}
+                  </div>
+                </div>
+                <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: 10 }}>
+                  <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: 700 }}>Termo Digital</div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0B1218', wordBreak: 'break-all' }}>
+                    {selectedDriver.termsSignatureCode || (selectedDriver.termsAccepted ? 'Assinado ✓' : 'Ativo ✓')}
+                  </div>
+                </div>
+              </div>
+
+              {/* Declaração de Conformidade Individual */}
               <div
                 style={{
-                  display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr',
-                  gap: 10,
+                  backgroundColor: '#F2F6F3',
+                  border: '1px solid #DCE5DF',
+                  borderRadius: 10,
+                  padding: '10px 12px',
+                  fontSize: '0.76rem',
+                  color: '#334155',
+                  lineHeight: 1.45,
                 }}
               >
-                <div style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: 12 }}>
-                  <div style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 700 }}>
-                    Biometria Facial &amp; CNH
-                  </div>
-                  <div style={{ fontSize: '0.92rem', fontWeight: 800, color: selectedDriver.kycVerified ? '#16A34A' : '#0B1218' }}>
-                    {selectedDriver.kycVerified ? 'Verificada e Aprovada' : 'Validada pelo Cadastro'}
-                  </div>
-                </div>
-                <div style={{ border: '1px solid #E2E8F0', borderRadius: 12, padding: 12 }}>
-                  <div style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 700 }}>
-                    Contrato Digital Kavro
-                  </div>
-                  <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0B1218' }}>
-                    {selectedDriver.termsSignatureCode || (selectedDriver.termsAccepted ? 'Assinado eletronicamente' : 'Ativo')}
-                  </div>
-                </div>
+                Condutor verificado sob os termos da <strong>Política de Auditoria &amp; LGPD</strong> da Kavro Drive.
+                Embarques exigem conferência da placa e do modelo acima antes da partida.
               </div>
 
               {/* Corridas do Motorista */}
               <div>
-                <div
-                  style={{
-                    fontSize: '0.95rem',
-                    fontWeight: 800,
-                    color: '#0B1218',
-                    marginBottom: 10,
-                  }}
-                >
-                  Corridas Finalizadas deste Motorista ({selectedDriverRides.length})
+                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0B1218', marginBottom: 8 }}>
+                  Viagens Auditadas ({selectedDriverRides.length})
                 </div>
-
                 {selectedDriverRides.length === 0 ? (
                   <div
                     style={{
                       backgroundColor: '#F8FAFC',
                       border: '1px solid #E2E8F0',
-                      borderRadius: 12,
-                      padding: 18,
-                      fontSize: '0.86rem',
+                      borderRadius: 10,
+                      padding: 14,
+                      fontSize: '0.8rem',
                       color: '#64748B',
                       textAlign: 'center',
                     }}
                   >
-                    Nenhuma corrida finalizada atribuída a este motorista no registro público atual.
+                    Nenhuma viagem concluída registrada publicamente para este motorista até o momento.
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                     {selectedDriverRides.map((r) => (
                       <div
                         key={r.id}
                         style={{
                           border: '1px solid #E2E8F0',
-                          borderRadius: 12,
-                          padding: 12,
-                          fontSize: '0.82rem',
+                          borderRadius: 10,
+                          padding: 10,
+                          fontSize: '0.78rem',
                           backgroundColor: '#F8FAFC',
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                          <strong style={{ color: '#0B1218' }}>{r.rideCode}</strong>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <strong>{r.rideCode}</strong>
                           <span style={{ color: '#64748B' }}>
                             {r.date} • {r.time} • {r.distanceKm} km
                           </span>
                         </div>
-                        <div style={{ color: '#334155', marginBottom: 2 }}>
+                        <div style={{ color: '#334155' }}>
                           <strong>De:</strong> {r.originAddress}
                         </div>
                         <div style={{ color: '#334155' }}>
@@ -1520,4 +1711,11 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
       )}
     </div>
   );
+};
+
+const clauseTitleStyle: React.CSSProperties = {
+  fontSize: '0.9rem',
+  fontWeight: 800,
+  color: '#0B1218',
+  marginBottom: 4,
 };

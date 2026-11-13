@@ -1,7 +1,7 @@
 import React from 'react';
 import { getCarColorProfile } from '../services/vehicleService';
 import { MercosulPlateBadge } from './MercosulPlateBadge';
-import { ShieldCheck, Sparkles, Camera } from 'lucide-react';
+import { Camera } from 'lucide-react';
 
 interface VehiclePhotoPreviewProps {
   photoUrl?: string;
@@ -33,8 +33,19 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
   const isCompact = size === 'compact';
   const isLarge = size === 'large';
   const containerHeight = photoUrl
-    ? (isCompact ? 155 : isLarge ? 250 : 210)
-    : (isCompact ? 130 : isLarge ? 220 : 170);
+    ? (isCompact ? 132 : isLarge ? 240 : 195)
+    : (isCompact ? 124 : isLarge ? 215 : 168);
+
+  const pickStudioVehiclePhoto = () => {
+    const ref = `${model} ${category} ${colorName}`.toLowerCase();
+    if (/suv|lux|black|select|exec|bag|van|compass|creta|tracker|t-cross|tcross|corolla cross/i.test(ref)) {
+      return '/vehicles/kavro-suv-ev.jpg';
+    }
+    if (/onix|polo|hb20|argo|kwid|mobi|hatch|plus|vermelh|granada|red/i.test(ref)) {
+      return '/vehicles/kavro-compact-ev.jpg';
+    }
+    return '/vehicles/kavro-sedan-ev.jpg';
+  };
 
   return (
     <div
@@ -147,27 +158,45 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
             </div>
           </div>
         ) : (
-          /* Renderização Vetorial / 3D Estilizada com a Cor Exata do Carro */
+          /* Veículo Elétrico Minimalista de Estúdio (fallback fotorrealista Kavro Drive) */
           <div
             style={{
               width: '100%',
               height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
               position: 'relative',
-              padding: '10px 14px',
+              overflow: 'hidden',
+              backgroundColor: '#090D12',
             }}
           >
-            {/* Badge de Cor e Representação */}
+            <img
+              src={pickStudioVehiclePhoto()}
+              alt={fullName}
+              style={{
+                width: '100%',
+                height: '100%',
+                objectFit: 'cover',
+                objectPosition: 'center 56%',
+                display: 'block',
+              }}
+            />
+
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                background: 'linear-gradient(to top, rgba(11,18,24,0.72) 0%, rgba(11,18,24,0.08) 48%, rgba(11,18,24,0.3) 100%)',
+                pointerEvents: 'none',
+              }}
+            />
+
+            {/* Badge discreta de Cor */}
             <div
               style={{
                 position: 'absolute',
                 top: 8,
                 left: 10,
-                backgroundColor: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.15)',
+                backgroundColor: 'rgba(11,18,24,0.78)',
+                border: '1px solid rgba(118,216,0,0.28)',
                 color: '#E2E8F0',
                 fontSize: '0.64rem',
                 fontWeight: 700,
@@ -176,7 +205,7 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
                 display: 'flex',
                 alignItems: 'center',
                 gap: 5,
-                backdropFilter: 'blur(4px)',
+                backdropFilter: 'blur(6px)',
               }}
             >
               <div
@@ -185,137 +214,11 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
                   height: 8,
                   borderRadius: '50%',
                   backgroundColor: colorProfile.hex,
-                  border: '1px solid rgba(255,255,255,0.5)',
-                  boxShadow: `0 0 6px ${colorProfile.hex}`,
+                  border: '1px solid rgba(255,255,255,0.65)',
                 }}
               />
               <span>{colorProfile.label}</span>
             </div>
-
-            {/* Ilustração Vetorial de Silhueta de Carro Executivo com Cor Dinâmica */}
-            <svg
-              viewBox="0 0 520 220"
-              style={{
-                width: isCompact ? '82%' : '88%',
-                maxWidth: 420,
-                height: 'auto',
-                filter: 'drop-shadow(0 14px 18px rgba(0,0,0,0.65))',
-              }}
-            >
-              <defs>
-                {/* Gradiente da Carroceria com a Cor Escolhida */}
-                <linearGradient id="bodyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor={colorProfile.accent} stopOpacity="1" />
-                  <stop offset="25%" stopColor={colorProfile.hex} stopOpacity="1" />
-                  <stop offset="70%" stopColor={colorProfile.hex} stopOpacity="1" />
-                  <stop offset="100%" stopColor={colorProfile.accent} stopOpacity="1" />
-                </linearGradient>
-
-                {/* Reflexo Metálico Superior */}
-                <linearGradient id="metalHighlight" x1="0%" y1="0%" x2="100%" y2="0%">
-                  <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.0" />
-                  <stop offset="45%" stopColor="#FFFFFF" stopOpacity="0.35" />
-                  <stop offset="75%" stopColor="#FFFFFF" stopOpacity="0.05" />
-                </linearGradient>
-
-                {/* Vidros Fumê Executivos */}
-                <linearGradient id="windowTint" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#1E293B" stopOpacity="0.95" />
-                  <stop offset="100%" stopColor="#0B132B" stopOpacity="0.98" />
-                </linearGradient>
-
-                {/* Roda e Pneu */}
-                <radialGradient id="tireGrad" cx="50%" cy="50%" r="50%">
-                  <stop offset="0%" stopColor="#334155" />
-                  <stop offset="70%" stopColor="#1E293B" />
-                  <stop offset="100%" stopColor="#0F172A" />
-                </radialGradient>
-
-                <linearGradient id="rimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-                  <stop offset="0%" stopColor="#F1F5F9" />
-                  <stop offset="50%" stopColor="#94A3B8" />
-                  <stop offset="100%" stopColor="#475569" />
-                </linearGradient>
-              </defs>
-
-              {/* Sombra no Asfalto */}
-              <ellipse cx="260" cy="195" rx="220" ry="14" fill="#000000" opacity="0.65" />
-
-              {/* Corpo Principal da Carroceria (Sedan / SUV Executivo) */}
-              <path
-                d="M 55 155 
-                   C 60 148, 75 142, 105 142 
-                   C 118 142, 130 135, 145 115 
-                   C 175 75, 230 68, 320 68 
-                   C 365 68, 410 88, 435 118 
-                   L 468 132 
-                   C 485 138, 495 148, 495 158 
-                   C 495 168, 482 172, 470 172 
-                   L 425 172 
-                   C 420 145, 360 145, 355 172 
-                   L 175 172 
-                   C 170 145, 110 145, 105 172 
-                   L 60 172 
-                   C 48 172, 45 165, 55 155 Z"
-                fill="url(#bodyGradient)"
-                stroke="#1E293B"
-                strokeWidth="2"
-              />
-
-              {/* Brilho da Linha de Cintura */}
-              <path
-                d="M 55 155 Q 260 138 495 158"
-                stroke="url(#metalHighlight)"
-                strokeWidth="4"
-                fill="none"
-              />
-
-              {/* Cabine / Janelas com Vidros Fumê */}
-              <path
-                d="M 152 114 
-                   C 178 78, 226 73, 316 73 
-                   C 356 73, 396 90, 422 116 
-                   C 424 122, 400 126, 320 126 
-                   C 240 126, 160 122, 152 114 Z"
-                fill="url(#windowTint)"
-                stroke="#475569"
-                strokeWidth="2"
-              />
-
-              {/* Colunas das Portas (B-Pillar) */}
-              <line x1="285" y1="73" x2="285" y2="126" stroke="#0F172A" strokeWidth="6" />
-
-              {/* Farol Dianteiro com Led */}
-              <polygon points="465,134 492,142 485,152 460,145" fill="#E0F2FE" opacity="0.9" />
-              <polygon points="472,136 490,142 484,148 468,143" fill="#38BDF8" opacity="0.7" />
-
-              {/* Lanterna Traseira Vermelha */}
-              <polygon points="56,152 75,148 70,160 54,162" fill="#DC2626" opacity="0.9" />
-
-              {/* Roda Dianteira */}
-              <g transform="translate(390, 172)">
-                <circle cx="0" cy="0" r="32" fill="url(#tireGrad)" stroke="#0F172A" strokeWidth="2" />
-                <circle cx="0" cy="0" r="22" fill="url(#rimGrad)" stroke="#334155" strokeWidth="2" />
-                <circle cx="0" cy="0" r="7" fill="#0F172A" />
-                {/* Raios da Roda de Liga Leve */}
-                <line x1="-18" y1="0" x2="18" y2="0" stroke="#E2E8F0" strokeWidth="3" />
-                <line x1="0" y1="-18" x2="0" y2="18" stroke="#E2E8F0" strokeWidth="3" />
-                <line x1="-13" y1="-13" x2="13" y2="13" stroke="#E2E8F0" strokeWidth="3" />
-                <line x1="-13" y1="13" x2="13" y2="-13" stroke="#E2E8F0" strokeWidth="3" />
-              </g>
-
-              {/* Roda Traseira */}
-              <g transform="translate(140, 172)">
-                <circle cx="0" cy="0" r="32" fill="url(#tireGrad)" stroke="#0F172A" strokeWidth="2" />
-                <circle cx="0" cy="0" r="22" fill="url(#rimGrad)" stroke="#334155" strokeWidth="2" />
-                <circle cx="0" cy="0" r="7" fill="#0F172A" />
-                {/* Raios da Roda */}
-                <line x1="-18" y1="0" x2="18" y2="0" stroke="#E2E8F0" strokeWidth="3" />
-                <line x1="0" y1="-18" x2="0" y2="18" stroke="#E2E8F0" strokeWidth="3" />
-                <line x1="-13" y1="-13" x2="13" y2="13" stroke="#E2E8F0" strokeWidth="3" />
-                <line x1="-13" y1="13" x2="13" y2="-13" stroke="#E2E8F0" strokeWidth="3" />
-              </g>
-            </svg>
           </div>
         )}
       </div>
