@@ -12,7 +12,7 @@ import { DriverPortalScreen } from './views/DriverPortalScreen';
 import { LandingScreen } from './views/LandingScreen';
 import { PassengerTrackingScreen } from './views/PassengerTrackingScreen';
 import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
-import { DriverPublicAuditModal } from './components/DriverPublicAuditModal';
+import { PublicAuditScreen } from './views/PublicAuditScreen';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
 import { PushPermissionPrompt } from './components/PushNotifications';
@@ -878,20 +878,10 @@ export const App: React.FC = () => {
         element={<PassengerTrackingScreen config={config} rides={rides} refreshData={refreshData} />}
       />
 
-      {/* Rota pública de Perfil do Motorista & Auditoria de Corridas Finalizadas */}
+      {/* Rota pública de Transparência & Auditoria Multi-Motoristas */}
       <Route
         path="/auditoria"
-        element={
-          <DriverPublicAuditModal
-            isOpen={true}
-            onClose={() => {
-              window.location.href = '/cliente';
-            }}
-            config={config}
-            rides={rides}
-            isAdminView={false}
-          />
-        }
+        element={<PublicAuditScreen config={config} rides={rides} />}
       />
 
       {/* Landing Page Oficial na Raiz (/) estilo Uber — Desktop e Mobile */}

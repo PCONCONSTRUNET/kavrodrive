@@ -1066,6 +1066,125 @@ async function handleApiRequest(req, res) {
       }
     }
 
+    // 2.1 AUDITORIA PÚBLICA MULTI-MOTORISTA (DADOS SANITIZADOS LGPD)
+    if (pathname === '/api/public/audit' && method === 'GET') {
+      const [cfgRes, allDrivers, ridesRes] = await Promise.all([
+        db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
+        finance.listDrivers(),
+        db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC')
+      ]);
+
+      const cfg = sanitizePublicConfig(cfgRes.rows[0]?.config || {}, false) || {};
+      const allFormattedRides = ridesRes.rows.map(formatRideFromDb);
+      const completedRides = allFormattedRides.filter(r => r.status === 'finalizada');
+      const registeredCount = allFormattedRides.filter(r => r.status !== 'cancelada').length;
+
+      const driverStatsMap = new Map();
+      completedRides.forEach((r) => {
+        if (!r.driverId) return;
+        const prev = driverStatsMap.get(r.driverId) || { rides: 0, km: 0, passengers: 0 };
+        prev.rides += 1;
+        prev.km += Number(r.distanceKm) || 0;
+        prev.passengers += Number(r.passengers) || 1;
+        driverStatsMap.set(r.driverId, prev);
+      });
+
+      const approvedDrivers = allDrivers
+        .filter(d => d.approvalStatus === 'aprovado')
+        .map(d => {
+          const st = driverStatsMap.get(d.id) || { rides: 0, km: 0, passengers: 0 };
+          const kycOk = Boolean(d.kyc && (d.kyc.status === 'aprovado' || d.kyc.verified));
+          const termsOk = Boolean(d.termsSignature && d.termsSignature.acceptedAt);
+          return {
+            id: d.id,
+            name: d.name || 'Motorista Parceiro',
+            photo: d.photo || '',
+            city: d.city || cfg.driverCarCity || '',
+            bio: d.bio || '',
+            vehicleBrand: d.vehicleBrand || '',
+            vehicleModel: d.vehicleModel || '',
+            vehicleVersion: d.vehicleVersion || '',
+            vehicleYear: d.vehicleYear || '',
+            vehicleColor: d.vehicleColor || '',
+            vehiclePlate: d.vehiclePlate || '',
+            vehicleCategory: d.vehicleCategory || 'kavro_go',
+            vehiclePhoto: d.vehiclePhoto || '',
+            eligibleCategories: Array.isArray(d.eligibleCategories) ? d.eligibleCategories : [],
+            enabledCategories: Array.isArray(d.enabledCategories) ? d.enabledCategories : [],
+            hasAirConditioning: d.hasAirConditioning !== false,
+            hasFourDoors: d.hasFourDoors !== false,
+            isOnline: Boolean(d.isOnline),
+            rating: Number(d.rating || 5.0),
+            kycVerified: kycOk,
+            termsAccepted: termsOk,
+            termsSignatureCode: d.termsSignature?.signatureCode || '',
+            completedRidesCount: Math.max(st.rides, Number(d.totalRides || 0)),
+            auditedRidesCount: st.rides,
+            auditedKm: Number(st.km.toFixed(1)),
+            passengersServed: st.passengers,
+            createdAt: d.createdAt,
+          };
+        });
+
+      const driverById = new Map(approvedDrivers.map(d => [d.id, d]));
+
+      const maskClientName = (fullName) => {
+        const s = String(fullName || '').trim();
+        if (!s) return 'Passageiro Verificado';
+        const parts = s.split(/\s+/);
+        if (parts.length === 1) return `${parts[0].slice(0, 3)}•••`;
+        return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}. •••`;
+      };
+
+      const publicRides = completedRides.slice(0, 200).map((r) => {
+        const drv = r.driverId ? driverById.get(r.driverId) : null;
+        return {
+          id: r.id,
+          rideCode: r.rideCode,
+          date: r.date,
+          time: r.time,
+          originAddress: r.origin?.address || 'Origem registrada',
+          destinationAddress: r.destination?.address || 'Destino registrado',
+          distanceKm: Number(r.distanceKm || 0),
+          passengers: Number(r.passengers || 1),
+          category: r.category,
+          categoryName: r.categoryName || r.category,
+          paymentMethod: r.paymentMethod || 'pix',
+          paymentStatus: r.paymentStatus || 'confirmado',
+          driverId: r.driverId || '',
+          driverName: r.driverName || drv?.name || 'Motorista Verificado',
+          driverVehicle:
+            r.driverVehicle ||
+            [drv?.vehicleBrand, drv?.vehicleModel, drv?.vehicleYear].filter(Boolean).join(' ') ||
+            'Veículo Verificado',
+          driverPlate: r.driverPlate || drv?.vehiclePlate || '',
+          passengerMasked: maskClientName(r.clientName),
+        };
+      });
+
+      const totalKm = completedRides.reduce((acc, r) => acc + (Number(r.distanceKm) || 0), 0);
+      const totalPassengers = completedRides.reduce((acc, r) => acc + (Number(r.passengers) || 1), 0);
+      const avgRating = approvedDrivers.length > 0
+        ? Number((approvedDrivers.reduce((acc, d) => acc + (d.rating || 5), 0) / approvedDrivers.length).toFixed(2))
+        : 5.0;
+
+      return sendJson(res, 200, {
+        ok: true,
+        summary: {
+          city: cfg.driverCarCity || 'Operação Regional',
+          totalApprovedDrivers: approvedDrivers.length,
+          onlineDrivers: approvedDrivers.filter(d => d.isOnline).length,
+          totalCompletedRides: completedRides.length,
+          totalRegisteredRides: registeredCount,
+          totalKm: Number(totalKm.toFixed(1)),
+          totalPassengers,
+          avgRating,
+        },
+        drivers: approvedDrivers,
+        rides: publicRides,
+      });
+    }
+
     // ============================================================
     // 2.5 MOTORISTAS (CADASTRO ESTILO UBER, LOGIN, ONLINE/OFFLINE, CARTEIRA)
     // ============================================================
