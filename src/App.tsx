@@ -13,6 +13,7 @@ import { LandingScreen } from './views/LandingScreen';
 import { PassengerTrackingScreen } from './views/PassengerTrackingScreen';
 import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
 import { PublicAuditScreen } from './views/PublicAuditScreen';
+import { HelpCenterScreen } from './views/HelpCenterScreen';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
 import { PushPermissionPrompt } from './components/PushNotifications';
@@ -882,6 +883,20 @@ export const App: React.FC = () => {
       <Route
         path="/auditoria"
         element={<PublicAuditScreen config={config} rides={rides} />}
+      />
+
+      {/* Rota pública da Central de Ajuda Clean */}
+      <Route
+        path="/ajuda"
+        element={<HelpCenterScreen config={config} />}
+      />
+      <Route
+        path="/central-de-ajuda"
+        element={<Navigate to="/ajuda" replace />}
+      />
+      <Route
+        path="/suporte"
+        element={<Navigate to="/ajuda" replace />}
       />
 
       {/* Landing Page Oficial na Raiz (/) estilo Uber — Desktop e Mobile */}

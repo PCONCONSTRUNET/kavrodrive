@@ -139,7 +139,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
   const [aboutMenuOpen, setAboutMenuOpen] = useState<boolean>(false);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState<boolean>(false);
   const [activeServiceModal, setActiveServiceModal] = useState<ServiceItem | null>(null);
-  const [helpModalOpen, setHelpModalOpen] = useState<boolean>(false);
   const [businessModalOpen, setBusinessModalOpen] = useState<boolean>(false);
 
   // Etapa ativa do "Como funciona" (0 a 4)
@@ -470,6 +469,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               <button type="button" onClick={() => scrollToSection('empresas')} style={navBtnStyle}>
                 Empresas
               </button>
+              <button type="button" onClick={() => navigate('/ajuda')} style={navBtnStyle}>
+                Ajuda
+              </button>
 
               <div style={{ position: 'relative' }}>
                 <button
@@ -525,7 +527,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                       type="button"
                       onClick={() => {
                         setAboutMenuOpen(false);
-                        setHelpModalOpen(true);
+                        navigate('/ajuda');
                       }}
                       style={darkDropdownItemStyle}
                     >
@@ -673,7 +675,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             type="button"
             onClick={() => {
               setMobileDrawerOpen(false);
-              setHelpModalOpen(true);
+              navigate('/ajuda');
             }}
             style={{
               width: '100%',
@@ -2141,7 +2143,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               </p>
               <button
                 type="button"
-                onClick={() => setHelpModalOpen(true)}
+                onClick={() => navigate('/ajuda')}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -2198,7 +2200,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 <button type="button" onClick={() => setCityModalOpen(true)} style={footerLinkStyle}>
                   Cidades atendidas
                 </button>
-                <button type="button" onClick={() => setHelpModalOpen(true)} style={footerLinkStyle}>
+                <button type="button" onClick={() => navigate('/ajuda')} style={footerLinkStyle}>
                   Suporte ao usuário
                 </button>
               </div>
@@ -2469,91 +2471,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         </div>
       )}
 
-      {/* ═══ MODAL CENTRAL DE AJUDA ═══ */}
-      {helpModalOpen && (
-        <div style={modalBackdropStyle} onClick={() => setHelpModalOpen(false)}>
-          <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
-            <div style={modalHeaderStyle}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <HelpCircle size={20} color="#16A34A" />
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0B1218' }}>
-                  Central de Ajuda Kavro Drive
-                </h3>
-              </div>
-              <button type="button" onClick={() => setHelpModalOpen(false)} style={modalCloseBtnStyle}>
-                <X size={20} />
-              </button>
-            </div>
-            <p style={{ fontSize: '0.92rem', color: '#374151', lineHeight: 1.55, marginBottom: 16 }}>
-              Precisa de ajuda com uma viagem, cadastro de passageiro ou parceria como motorista?
-            </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setHelpModalOpen(false);
-                  openClientFlow('login');
-                }}
-                style={{
-                  width: '100%',
-                  height: 44,
-                  borderRadius: 10,
-                  border: 'none',
-                  backgroundColor: '#121A21',
-                  color: '#76D800',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Acessar Área do Passageiro
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setHelpModalOpen(false);
-                  navigate('/kavro-drive');
-                }}
-                style={{
-                  width: '100%',
-                  height: 44,
-                  borderRadius: 10,
-                  border: '1px solid #CBD5E1',
-                  backgroundColor: '#F2F6F3',
-                  color: '#0B1218',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Acessar Portal do Motorista
-              </button>
-              {config.driverPhone && (
-                <a
-                  href={`https://wa.me/${config.driverPhone.replace(/\D/g, '')}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{
-                    width: '100%',
-                    height: 44,
-                    borderRadius: 10,
-                    border: '1px solid #D1D5DB',
-                    backgroundColor: '#FFFFFF',
-                    color: '#0B1218',
-                    fontWeight: 700,
-                    fontSize: '0.92rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textDecoration: 'none',
-                  }}
-                >
-                  Falar com suporte via WhatsApp
-                </a>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      </div>
   );
 };
 

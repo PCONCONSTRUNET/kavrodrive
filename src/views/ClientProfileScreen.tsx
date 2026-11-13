@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   User, Phone, Mail, LogOut, 
   MapPin, Trash2, Home, Briefcase, Star,
@@ -6,7 +7,7 @@ import {
   CheckCircle2, ShieldCheck, Car, Clock,
   Save, Check, Plus, CreditCard, ChevronRight,
   Headphones, Sparkles, ShieldAlert, Bell,
-  Camera, Lock, Send, XCircle
+  Camera, Lock, Send, XCircle, HelpCircle
 } from 'lucide-react';
 import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
@@ -32,6 +33,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   currentUser: propUser,
   onUserChange
 }) => {
+  const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ClientProfile | null>(
     propUser !== undefined ? propUser : StorageService.getCurrentUser()
   );
@@ -1343,6 +1345,49 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
               </div>
               <ChevronRight size={16} color="#16A34A" />
             </a>
+
+            {/* Central de Ajuda Clean */}
+            <button
+              type="button"
+              onClick={() => navigate('/ajuda')}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '10px 12px',
+                borderRadius: 12,
+                backgroundColor: '#F8FAFC',
+                border: '1px solid #E2E8F0',
+                cursor: 'pointer',
+                textAlign: 'left',
+                width: '100%'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  backgroundColor: '#0F172A',
+                  color: '#8CE826',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  <HelpCircle size={17} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
+                    Central de Ajuda &amp; FAQ
+                  </div>
+                  <div style={{ fontSize: '0.70rem', color: '#64748B' }}>
+                    Dúvidas sobre corridas, Pix, perfil e segurança
+                  </div>
+                </div>
+              </div>
+              <ChevronRight size={16} color="#64748B" />
+            </button>
 
             {/* Botão de Emergência SOS */}
             <button
