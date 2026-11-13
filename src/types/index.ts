@@ -19,6 +19,7 @@ export type PaymentStatus =
   | 'pendente'
   | 'falhou'
   | 'reembolsado'
+  | 'taxa_cancelamento'
   | 'contestado'
   | 'pago'      // compatibilidade com código existente (= confirmado)
   | 'parcial';  // compatibilidade com código existente (= parcialmente_pago)
@@ -548,6 +549,8 @@ export interface Ride {
   commissionPercent?: number;
   commissionAmount?: number;
   driverNetAmount?: number;
+  cancellationFeeApplied?: number;
+  cancelledBy?: 'passenger' | 'driver' | 'admin';
   paymentMethod: PaymentMethod;
   paymentStatus: PaymentStatus;
   paymentTxId?: string;
@@ -727,4 +730,54 @@ export interface NotificationItem {
   type: 'ride_new' | 'ride_confirmed' | 'ride_cancelled' | 'payment' | 'sos_alert' | 'reminder' | 'general' | string;
   rideId?: string;
   driverId?: string;
+}
+
+export type AuditCategory =
+  | 'taxas_financeiras'
+  | 'tarifas_regras'
+  | 'categorias'
+  | 'financeiro_corridas'
+  | 'saques_repasses'
+  | 'motoristas_kyc'
+  | 'acessos';
+
+export interface AuditLogChange {
+  field: string;
+  label: string;
+  before: string;
+  after: string;
+  summary: string;
+}
+
+export interface AuditLogRecord {
+  id: number;
+  auditCode: string;
+  auditUuid: string;
+  category: AuditCategory | string;
+  categoryLabel: string;
+  actionKey: string;
+  title: string;
+  summary: string;
+  severity: 'info' | 'atencao' | 'critico';
+  actorRole: 'admin_master' | 'motorista' | 'passageiro' | 'gateway' | 'sistema' | string;
+  actorId?: string | null;
+  actorName: string;
+  actorEmail?: string | null;
+  entityType?: string | null;
+  entityId?: string | null;
+  entityLabel?: string | null;
+  relatedIds?: Record<string, string | number | null | undefined>;
+  changes: AuditLogChange[];
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  checksum: string;
+  createdAt: string;
+}
+
+export interface AuditLogsResponse {
+  ok: boolean;
+  logs: AuditLogRecord[];
+  total: number;
+  latestDbId: number;
+  summaryByCategory: Record<string, number>;
 }

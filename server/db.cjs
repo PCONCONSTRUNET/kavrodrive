@@ -155,6 +155,7 @@ function getInitialStore() {
     ride_trail_points: [],
     ride_chat_messages: [],
     password_reset_codes: [],
+    audit_logs: [],
     sos_alerts: {}
   };
 }
@@ -174,6 +175,7 @@ function loadLocalStore() {
       if (!Array.isArray(merged.withdrawal_requests)) merged.withdrawal_requests = [];
       if (!Array.isArray(merged.ride_chat_messages)) merged.ride_chat_messages = [];
       if (!Array.isArray(merged.password_reset_codes)) merged.password_reset_codes = [];
+      if (!Array.isArray(merged.audit_logs)) merged.audit_logs = [];
       return merged;
     }
   } catch {

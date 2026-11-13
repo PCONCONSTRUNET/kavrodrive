@@ -99,6 +99,11 @@ class RealtimeClient {
         window.dispatchEvent(new CustomEvent('up_realtime_config', { detail }));
       });
 
+      es.addEventListener('audit:created', (evt: MessageEvent) => {
+        const detail = parseDetail(evt);
+        window.dispatchEvent(new CustomEvent('up_realtime_audit', { detail }));
+      });
+
       es.onerror = () => {
         this.cleanupSource();
         if (this.refCount > 0) {

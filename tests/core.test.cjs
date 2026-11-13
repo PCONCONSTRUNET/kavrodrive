@@ -15,6 +15,7 @@ const originalLocalDbRaw = hadLocalDbFile ? fs.readFileSync(LOCAL_DB_PATH, 'utf8
 
 const db = require('../server/db.cjs');
 const finance = require('../server/financeEngine.cjs');
+const audit = require('../server/auditEngine.cjs');
 const realtimeHub = require('../server/realtimeHub.cjs');
 const { handleApiRequest } = require('../server/apiHandler.cjs');
 
@@ -479,4 +480,149 @@ test('Taxas financeiras por meio de pagamento e saque são aplicadas em corridas
   // Taxa = 1% de 50 (0.50) + fixo 2.00 = 2.50 -> Líquido = 47.50
   assert.equal(wdRes.json.withdrawal.feeAmount, 2.5);
   assert.equal(wdRes.json.withdrawal.netPayoutAmount, 47.5);
+});
+
+test('Multa de cancelamento, cashDeductFromBalanceFirst=false e Auditoria em Português com IDs do banco', async () => {
+  const prevConfig = db.localStore.system_config?.default?.config || {};
+  const nextConfig = {
+    ...prevConfig,
+    platformCommissionPercent: 20,
+    paymentMethodCommissionPercents: {
+      pix: 20,
+      cartao_credito: 20,
+      cartao_debito: 20,
+      dinheiro: 20
+    },
+    cancellationFeeAmount: 12,
+    cashDeductFromBalanceFirst: false,
+    maxDriverDebtLimit: 100
+  };
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify(nextConfig)]
+  );
+
+  // 1. Testa diff automático 100% português e gravação de registro de auditoria com ID/UUID/Checksum
+  const diffs = audit.buildConfigChangesDiff(prevConfig, nextConfig);
+  assert.ok(diffs.some(d => d.field === 'cancellationFeeAmount' && d.after.includes('12,00')));
+  assert.ok(diffs.some(d => d.field === 'cashDeductFromBalanceFirst'));
+
+  const auditRec = await audit.recordAuditEvent({
+    category: 'taxas_financeiras',
+    actionKey: 'system_config_updated',
+    title: 'Alteração de Taxas Financeiras & Regras de Cobrança',
+    summary: 'Multa de cancelamento definida para R$ 12,00 e regra de dinheiro sem abater saldo livre.',
+    severity: 'atencao',
+    actorRole: 'admin_master',
+    actorId: 'adm-1',
+    actorName: 'Administrador Master',
+    actorEmail: 'appuberadmin@gmail.com',
+    entityType: 'configuracao_sistema',
+    entityId: 'system_config:default',
+    changes: diffs
+  });
+  assert.ok(auditRec);
+  assert.match(auditRec.auditCode, /^AUD-\d{6}$/);
+  assert.ok(auditRec.auditUuid);
+  assert.ok(auditRec.checksum);
+
+  const verifiedAudit = await audit.verifyAuditRecord(auditRec.auditCode);
+  assert.ok(verifiedAudit);
+  assert.equal(verifiedAudit.integrityOk, true);
+
+  // 2. Testa cashDeductFromBalanceFirst = false (saldo livre não é abatido pela comissão do dinheiro)
+  const drvLogin = await apiJson('/api/drivers/login', {
+    method: 'POST',
+    body: { identifier: 'motorista.teste@kavro.test', password: '1234' }
+  });
+  assert.equal(drvLogin.status, 200);
+  const drvToken = drvLogin.json.driverToken;
+  const drvId = drvLogin.json.driver.id;
+
+  const walletBeforeCash = await finance.getDriverWallet(drvId);
+  const availBeforeCash = walletBeforeCash.availableBalance;
+
+  await finance.settleCashRideToLedger(
+    {
+      id: 'UP-CASH-SEP-1',
+      rideCode: '#UP - 901',
+      driverId: drvId,
+      driverName: 'Motorista Teste',
+      clientName: 'Cliente Dinheiro',
+      totalPrice: 50,
+      commissionPercent: 20
+    },
+    50,
+    'confirmado'
+  );
+
+  const walletAfterCash = await finance.getDriverWallet(drvId);
+  // Saldo livre deve permanecer intacto; comissão de R$ 10 vai para dívida separada
+  assert.equal(walletAfterCash.availableBalance, availBeforeCash);
+  assert.equal(walletAfterCash.separateDebtBalance, 10);
+  assert.equal(walletAfterCash.debtBalance, 10);
+
+  // Quitação PIX da dívida zera o saldo devedor separado mantendo o saldo livre intacto
+  await finance.confirmDriverDebtSettlementWebhook({
+    driverId: drvId,
+    amount: 10,
+    gatewayTxId: 'gw_cash_debt_sep_1'
+  });
+  const walletAfterSettle = await finance.getDriverWallet(drvId);
+  assert.equal(walletAfterSettle.availableBalance, availBeforeCash);
+  assert.equal(walletAfterSettle.debtBalance, 0);
+
+  // 3. Testa cobrança da multa de cancelamento (R$ 12,00) quando passageiro cancela corrida aceita
+  const cliLogin = await apiJson('/api/clients/login', {
+    method: 'POST',
+    body: { identifier: 'taxas.passageiro@kavro.test', password: 'senhaSegura123' }
+  });
+  assert.equal(cliLogin.status, 200);
+  const cliToken = cliLogin.json.clientToken;
+  const cliId = cliLogin.json.client.id;
+
+  const cashRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Taxas',
+      clientPhone: '(48) 99333-4455',
+      originAddress: 'Centro',
+      destinationAddress: 'Rodoviária',
+      distanceKm: 6,
+      durationMin: 12,
+      totalPrice: 40,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(cashRide.status, 200);
+  const cancelRideId = cashRide.json.ride.id;
+
+  const acceptCancelRide = await apiJson(`/api/rides/${encodeURIComponent(cancelRideId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvId }
+  });
+  assert.equal(acceptCancelRide.status, 200);
+
+  const availBeforeCancelFee = (await finance.getDriverWallet(drvId)).availableBalance;
+  const cancelRes = await apiJson(`/api/rides/${encodeURIComponent(cancelRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cliToken },
+    body: { status: 'cancelada' }
+  });
+  assert.equal(cancelRes.status, 200);
+  assert.equal(cancelRes.json.cancellationFeeApplied, 12);
+  assert.equal(cancelRes.json.ride.cancellationFeeApplied, 12);
+  // 80% de R$ 12,00 = R$ 9,60 creditados para o motorista
+  const availAfterCancelFee = (await finance.getDriverWallet(drvId)).availableBalance;
+  assert.equal(Number((availAfterCancelFee - availBeforeCancelFee).toFixed(2)), 9.6);
+
+  // Confirma que o cancelamento também entrou automaticamente na Auditoria em Português
+  const listedAudit = await audit.listAuditLogs({ category: 'financeiro_corridas', search: cancelRideId });
+  assert.ok(listedAudit.total >= 1);
+  assert.ok(listedAudit.logs[0].title.includes('Cancelamento com multa aplicada'));
 });

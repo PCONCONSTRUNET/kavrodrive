@@ -13,7 +13,9 @@ import {
   WithdrawalRequest,
   FinancialLedgerEntry,
   RideChatMessage,
-  PaymentMethod
+  PaymentMethod,
+  AuditLogsResponse,
+  AuditLogRecord
 } from '../types';
 import { formatRideCode, getNextSequentialRideId } from '../utils/format';
 import {
@@ -1057,6 +1059,69 @@ export const StorageService = {
       return await res.json();
     } catch {
       return { ok: false, error: 'Erro ao executar ação financeira.' };
+    }
+  },
+
+  async fetchAdminAuditLogs(params: {
+    category?: string;
+    search?: string;
+    severity?: string;
+    limit?: number;
+    offset?: number;
+  } = {}): Promise<AuditLogsResponse & { error?: string }> {
+    try {
+      const qs = new URLSearchParams();
+      if (params.category) qs.set('category', params.category);
+      if (params.search) qs.set('search', params.search);
+      if (params.severity) qs.set('severity', params.severity);
+      if (params.limit) qs.set('limit', String(params.limit));
+      if (params.offset) qs.set('offset', String(params.offset));
+      qs.set('_t', String(Date.now()));
+      const res = await fetch(`/api/admin/audit-logs?${qs.toString()}`, {
+        headers: {
+          'x-admin-pin': this.getAdminPin()
+        }
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          ok: false,
+          logs: [],
+          total: 0,
+          latestDbId: 0,
+          summaryByCategory: {},
+          error: data?.error || 'Falha ao carregar registros de auditoria.'
+        };
+      }
+      return data;
+    } catch {
+      return {
+        ok: false,
+        logs: [],
+        total: 0,
+        latestDbId: 0,
+        summaryByCategory: {},
+        error: 'Erro de conexão ao consultar auditoria no banco.'
+      };
+    }
+  },
+
+  async verifyAdminAuditRecord(identifier: string): Promise<{
+    ok: boolean;
+    record?: AuditLogRecord;
+    integrityOk?: boolean;
+    expectedChecksum?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/admin/audit-logs/${encodeURIComponent(identifier)}/verify`, {
+        headers: {
+          'x-admin-pin': this.getAdminPin()
+        }
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao verificar autenticidade do registro no banco.' };
     }
   },
 

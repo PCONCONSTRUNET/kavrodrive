@@ -1378,6 +1378,7 @@ async function getDriverWallet(driverId) {
   const withdrawals = await listWithdrawals(driverId);
 
   let netDigitalAvailable = 0;
+  let separateCashDebtDelta = 0;
   let pendingBalance = 0;
   let totalGrossEarnings = 0;
   let totalNetEarnings = 0;
@@ -1392,11 +1393,13 @@ async function getDriverWallet(driverId) {
 
     if (item.balanceBucket === 'pending' && item.status === 'pendente_liberacao') {
       pendingBalance += item.balanceDelta;
+    } else if (item.balanceBucket === 'cash_debt') {
+      separateCashDebtDelta += item.balanceDelta;
     } else if (item.balanceBucket === 'available' || item.balanceBucket === 'debt') {
       netDigitalAvailable += item.balanceDelta;
     }
 
-    if (item.entryType === 'ride_earning_credit') {
+    if (item.entryType === 'ride_earning_credit' || item.entryType === 'cancellation_fee_credit') {
       totalGrossEarnings += item.grossAmount;
       totalNetEarnings += item.driverNetAmount;
       totalCommissionPaid += item.commissionAmount;
@@ -1415,7 +1418,8 @@ async function getDriverWallet(driverId) {
   }
 
   const availableBalance = netDigitalAvailable > 0 ? round2(netDigitalAvailable) : 0;
-  const debtBalance = netDigitalAvailable < 0 ? round2(Math.abs(netDigitalAvailable)) : 0;
+  const separateDebtBalance = separateCashDebtDelta < 0 ? round2(Math.abs(separateCashDebtDelta)) : 0;
+  const debtBalance = round2((netDigitalAvailable < 0 ? Math.abs(netDigitalAvailable) : 0) + separateDebtBalance);
   const maxDebtLimit = Number(cfg.maxDriverDebtLimit ?? 100);
   const isDelinquent = Boolean(
     driver?.financialBlocked ||
@@ -1451,6 +1455,7 @@ async function getDriverWallet(driverId) {
     totalCommissionPaid: round2(totalCommissionPaid + Math.max(0, totalCashCommissionDebited - debtBalance)),
     totalCommissionPending: round2(debtBalance),
     debtBalance: round2(debtBalance),
+    separateDebtBalance: round2(separateDebtBalance),
     maxDebtLimit: round2(maxDebtLimit),
     isDelinquent,
     financialBlocked: Boolean(driver?.financialBlocked || isDelinquent),
@@ -2324,14 +2329,20 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'dinheiro')
   );
 
-  // Saldo livre antes do lançamento (sistema Uber: desconta primeiro do saldo livre; o excedente vira saldo devedor)
+  const deductFromBalanceFirst = cfg.cashDeductFromBalanceFirst !== false;
   const walletBefore = await getDriverWallet(driverId);
   const availableBefore = Math.max(0, round2(walletBefore.availableBalance || 0));
-  const deductedFromBalance = round2(Math.min(availableBefore, split.commissionAmount));
+  const deductedFromBalance = deductFromBalanceFirst
+    ? round2(Math.min(availableBefore, split.commissionAmount))
+    : 0;
   const addedToDebt = round2(Math.max(0, split.commissionAmount - deductedFromBalance));
+  const commissionBucket = !deductFromBalanceFirst
+    ? 'cash_debt'
+    : (deductedFromBalance >= split.commissionAmount ? 'available' : 'debt');
 
-  const debitDescription =
-    deductedFromBalance >= split.commissionAmount
+  const debitDescription = !deductFromBalanceFirst
+    ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) lançada no Saldo Devedor separado (sem abater Saldo Livre) ref. corrida em dinheiro ${ride.rideCode || ride.id}`
+    : deductedFromBalance >= split.commissionAmount
       ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) descontada do Saldo Livre ref. corrida em dinheiro ${ride.rideCode || ride.id}`
       : deductedFromBalance > 0
         ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}): R$ ${deductedFromBalance.toFixed(2)} descontado do Saldo Livre + R$ ${addedToDebt.toFixed(2)} no Saldo Devedor ref. corrida ${ride.rideCode || ride.id}`
@@ -2358,7 +2369,7 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     description: `Recebimento em Dinheiro na corrida ${ride.rideCode || ride.id} (Valor cobrado: R$ ${grossFare.toFixed(2)} | Recebido: R$ ${actualPaid.toFixed(2)})`
   });
 
-  // 2. Débito automático da comissão da Kavro Drive (desconta do saldo livre e, se faltar, acumula na dívida)
+  // 2. Débito automático da comissão da Kavro Drive
   const { entry: debitEntry } = await recordLedgerEntry({
     idempotencyKey: `cash_comm_debit_${ride.id}`,
     driverId,
@@ -2374,11 +2385,12 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     commissionAmount: split.commissionAmount,
     driverNetAmount: split.driverNetAmount,
     balanceDelta: -split.commissionAmount,
-    balanceBucket: deductedFromBalance >= split.commissionAmount ? 'available' : 'debt',
+    balanceBucket: commissionBucket,
     status: 'confirmado',
     description: debitDescription,
     metadata: {
-      uberCashAccounting: true,
+      uberCashAccounting: deductFromBalanceFirst,
+      cashDeductFromBalanceFirst: deductFromBalanceFirst,
       availableBalanceBefore: availableBefore,
       deductedFromBalance,
       addedToDebt
@@ -2453,24 +2465,196 @@ async function confirmDriverDebtSettlementWebhook({ driverId, amount, gatewayTxI
   const cleanAmount = round2(amount);
   if (cleanAmount <= 0) throw new Error('Valor de quitação inválido.');
 
-  const { entry, idempotent } = await recordLedgerEntry({
-    idempotencyKey: `debt_settle_${driverId}_${gatewayTxId || Date.now()}`,
-    driverId,
-    driverName: driver?.name || 'Motorista',
-    entryType: 'debt_pix_settlement',
-    paymentMethod: 'pix',
-    grossAmount: cleanAmount,
-    commissionPercent: 0,
-    commissionAmount: 0,
-    driverNetAmount: cleanAmount,
-    balanceDelta: +cleanAmount,
-    balanceBucket: 'available',
-    status: 'confirmado',
-    description: `Quitação de saldo devedor via PIX confirmada pelo gateway (R$ ${cleanAmount.toFixed(2)})`
-  });
+  const walletBefore = await getDriverWallet(driverId);
+  const separateDebt = Math.max(0, round2(walletBefore.separateDebtBalance || 0));
+  const cashDebtPortion = separateDebt > 0 ? round2(Math.min(separateDebt, cleanAmount)) : 0;
+  const remainingPortion = round2(cleanAmount - cashDebtPortion);
+  const baseKey = `debt_settle_${driverId}_${gatewayTxId || Date.now()}`;
+
+  let primaryResult = null;
+  if (cashDebtPortion > 0) {
+    primaryResult = await recordLedgerEntry({
+      idempotencyKey: `${baseKey}_cash`,
+      driverId,
+      driverName: driver?.name || 'Motorista',
+      entryType: 'debt_pix_settlement',
+      paymentMethod: 'pix',
+      grossAmount: cashDebtPortion,
+      commissionPercent: 0,
+      commissionAmount: 0,
+      driverNetAmount: cashDebtPortion,
+      balanceDelta: +cashDebtPortion,
+      balanceBucket: 'cash_debt',
+      status: 'confirmado',
+      description: `Quitação de dívida em dinheiro via PIX confirmada pelo gateway (R$ ${cashDebtPortion.toFixed(2)})`
+    });
+  }
+
+  if (remainingPortion > 0 || !primaryResult) {
+    const resAvail = await recordLedgerEntry({
+      idempotencyKey: baseKey,
+      driverId,
+      driverName: driver?.name || 'Motorista',
+      entryType: 'debt_pix_settlement',
+      paymentMethod: 'pix',
+      grossAmount: remainingPortion > 0 ? remainingPortion : cleanAmount,
+      commissionPercent: 0,
+      commissionAmount: 0,
+      driverNetAmount: remainingPortion > 0 ? remainingPortion : cleanAmount,
+      balanceDelta: +(remainingPortion > 0 ? remainingPortion : cleanAmount),
+      balanceBucket: 'available',
+      status: 'confirmado',
+      description: `Quitação de saldo devedor via PIX confirmada pelo gateway (R$ ${(remainingPortion > 0 ? remainingPortion : cleanAmount).toFixed(2)})`
+    });
+    if (!primaryResult) primaryResult = resAvail;
+  }
 
   const wallet = await getDriverWallet(driverId);
-  return { entry, idempotent, wallet };
+  return { entry: primaryResult.entry, idempotent: primaryResult.idempotent, wallet };
+}
+
+// Aplica regra de estorno e multa de cancelamento (cancellationFeeAmount) no cancelamento da corrida
+async function processRideCancellationFinance(before, { cancelledBy = 'passenger', waiveCancellationFee = false } = {}) {
+  const cfg = await getSystemConfig();
+  const id = before.id;
+  const tx = await getPaymentTxByRide(id);
+  const postAcceptStatuses = ['confirmada', 'na_fila', 'a_caminho', 'no_local', 'em_andamento'];
+  const wasAccepted = Boolean(before.driverId && postAcceptStatuses.includes(before.status));
+  const configuredCancelFee = round2(cfg.cancellationFeeAmount || 0);
+  const isPassengerCancel = cancelledBy === 'passenger';
+
+  const shouldChargeFee = Boolean(
+    before.status !== 'cancelada' &&
+    before.status !== 'finalizada' &&
+    wasAccepted &&
+    configuredCancelFee > 0 &&
+    isPassengerCancel &&
+    !waiveCancellationFee
+  );
+
+  const maxBillable = before.totalPrice > 0 ? round2(Math.min(before.totalPrice, configuredCancelFee)) : configuredCancelFee;
+  const appliedCancellationFee = shouldChargeFee ? maxBillable : 0;
+
+  let nextPaymentStatus = before.paymentStatus;
+  let refundAmount = 0;
+  let feeSplit = null;
+  let savedTx = tx || null;
+
+  const wasDigitalPaid = before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago';
+
+  if (wasDigitalPaid) {
+    const totalPaid = round2(tx?.paidAmount || tx?.finalAmount || before.totalPrice || 0);
+    const feeFromPaid = appliedCancellationFee > 0 ? round2(Math.min(totalPaid, appliedCancellationFee)) : 0;
+    refundAmount = round2(Math.max(0, totalPaid - feeFromPaid));
+    nextPaymentStatus = refundAmount > 0 ? 'reembolsado' : 'taxa_cancelamento';
+
+    if (tx) {
+      if (refundAmount > 0) {
+        await refundGatewayPayment(tx, refundAmount);
+      }
+      savedTx = await savePaymentTransaction({
+        ...tx,
+        status: nextPaymentStatus,
+        finalAmount: feeFromPaid > 0 ? feeFromPaid : tx.finalAmount,
+        paidAmount: feeFromPaid > 0 ? feeFromPaid : tx.paidAmount,
+        refundedAmount: refundAmount
+      });
+    }
+
+    if (before.driverId) {
+      const driverLedger = await listLedgerEntries(before.driverId);
+      const existingCredit = driverLedger.find(
+        e => e.rideId === id && e.entryType === 'ride_earning_credit' && e.status !== 'revertido'
+      );
+      if (existingCredit) {
+        await recordLedgerEntry({
+          idempotencyKey: `refund_cancel_${id}`,
+          driverId: before.driverId,
+          driverName: before.driverName || 'Motorista',
+          rideId: id,
+          rideCode: before.rideCode,
+          clientId: before.clientId,
+          clientName: before.clientName,
+          entryType: 'refund_debit',
+          paymentMethod: before.paymentMethod,
+          grossAmount: totalPaid,
+          commissionPercent: existingCredit.commissionPercent || before.commissionPercent || 20,
+          commissionAmount: existingCredit.commissionAmount || before.commissionAmount || 0,
+          driverNetAmount: existingCredit.driverNetAmount || before.driverNetAmount || 0,
+          balanceDelta: -(existingCredit.driverNetAmount || before.driverNetAmount || 0),
+          balanceBucket: 'available',
+          status: 'confirmado',
+          description: `Estorno por cancelamento da corrida ${before.rideCode || id}`
+        });
+      }
+    }
+  }
+
+  if (appliedCancellationFee > 0 && before.driverId) {
+    const commPct = before.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, before.paymentMethod);
+    feeSplit = calculateSplit(appliedCancellationFee, commPct);
+
+    if (!wasDigitalPaid) {
+      const isCardMethod = before.paymentMethod === 'cartao_credito' || before.paymentMethod === 'cartao_debito';
+      let capturedGatewayId = tx?.gatewayTxId || `cancel_fee_${id}`;
+      if (isCardMethod && before.paymentStatus === 'autorizado') {
+        const cap = await captureCardForRide(before, appliedCancellationFee);
+        if (cap.captured && cap.gatewayTxId) capturedGatewayId = cap.gatewayTxId;
+      }
+
+      nextPaymentStatus = before.paymentMethod === 'dinheiro' ? 'pendente' : 'taxa_cancelamento';
+      savedTx = await savePaymentTransaction({
+        ...(tx || {}),
+        rideId: id,
+        rideCode: before.rideCode || id,
+        driverId: before.driverId,
+        driverName: before.driverName || 'Motorista',
+        clientId: before.clientId || null,
+        clientName: before.clientName,
+        method: before.paymentMethod || 'dinheiro',
+        status: nextPaymentStatus,
+        estimatedAmount: before.estimatedPrice || before.totalPrice || appliedCancellationFee,
+        finalAmount: appliedCancellationFee,
+        paidAmount: before.paymentMethod === 'dinheiro' ? 0 : appliedCancellationFee,
+        commissionPercent: feeSplit.commissionPercent,
+        commissionAmount: feeSplit.commissionAmount,
+        driverNetAmount: feeSplit.driverNetAmount,
+        gatewayTxId: capturedGatewayId
+      });
+    }
+
+    await recordLedgerEntry({
+      idempotencyKey: `cancel_fee_credit_${id}`,
+      driverId: before.driverId,
+      driverName: before.driverName || 'Motorista',
+      rideId: id,
+      rideCode: before.rideCode || id,
+      clientId: before.clientId || null,
+      clientName: before.clientName,
+      entryType: 'cancellation_fee_credit',
+      paymentMethod: before.paymentMethod || 'dinheiro',
+      grossAmount: appliedCancellationFee,
+      commissionPercent: feeSplit.commissionPercent,
+      commissionAmount: feeSplit.commissionAmount,
+      driverNetAmount: feeSplit.driverNetAmount,
+      balanceDelta: +feeSplit.driverNetAmount,
+      balanceBucket: 'available',
+      status: 'confirmado',
+      description: `Compensação por multa de cancelamento pós-aceite na corrida ${before.rideCode || id} (Multa R$ ${appliedCancellationFee.toFixed(2)} • Líquido motorista R$ ${feeSplit.driverNetAmount.toFixed(2)})`,
+      metadata: {
+        cancellationFeeApplied: appliedCancellationFee,
+        cancelledBy
+      }
+    });
+  }
+
+  return {
+    appliedCancellationFee,
+    refundAmount,
+    feeSplit,
+    nextPaymentStatus,
+    transactionId: savedTx?.id || null
+  };
 }
 
 // ============================================================
@@ -2625,6 +2809,7 @@ module.exports = {
   settleCashRideToLedger,
   createDriverDebtSettlementPix,
   confirmDriverDebtSettlementWebhook,
+  processRideCancellationFinance,
   getPlatformFinancialOverview
 };
 

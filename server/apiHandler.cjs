@@ -7,6 +7,7 @@ const kycStorage = require('./kycStorage.cjs');
 const driverTermsContract = require('./driverTermsContract.cjs');
 const passengerTermsContract = require('./passengerTermsContract.cjs');
 const realtimeHub = require('./realtimeHub.cjs');
+const audit = require('./auditEngine.cjs');
 
 function getRequestClientIp(req) {
   return (
@@ -662,6 +663,20 @@ async function isAuthorizedAdmin(req) {
   return verifySupabaseMasterAccountActive(payload.sub, payload.email);
 }
 
+function getAdminActorContext(req) {
+  const authHeader = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const tokenHeader = authHeader || String(req.headers['x-admin-pin'] || '').trim();
+  const payload = tokenHeader ? verifyAdminSessionToken(tokenHeader) : null;
+  return {
+    actorRole: 'admin_master',
+    actorId: payload?.sub || 'admin-master',
+    actorName: 'Administrador Master',
+    actorEmail: payload?.email || getAllowedMasterAdminEmail(),
+    ipAddress: getRequestClientIp(req),
+    userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+  };
+}
+
 function parseBody(req) {
   let preParsed;
   try { preParsed = req.body; } catch { return Promise.resolve({}); }
@@ -757,6 +772,8 @@ function formatRideFromDb(row) {
     category: row.category || 'kavro_go',
     categoryName: row.category_name ?? row.categoryName ?? undefined,
     appliedFareSnapshot: row.applied_fare_snapshot ?? row.appliedFareSnapshot ?? undefined,
+    cancellationFeeApplied: (row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.cancellationFeeApplied ?? undefined,
+    cancelledBy: (row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.cancelledBy ?? undefined,
     distanceKm: Number(row.distance_km ?? row.distanceKm ?? 0),
     durationMin: Number(row.duration_min ?? row.durationMin ?? 0),
     baseFare: Number(row.base_fare ?? row.baseFare ?? 8),
@@ -1311,6 +1328,23 @@ async function handleApiRequest(req, res) {
         return sendJson(res, check.status || 401, { ok: false, error: check.error || 'Acesso negado.' });
       }
       const session = signAdminSessionToken(check.user);
+      await audit.recordAuditEvent({
+        category: 'acessos',
+        actionKey: 'admin_login',
+        title: 'Acesso ao Painel Master autenticado',
+        summary: `Sessão administrativa iniciada por ${check.user.email}.`,
+        severity: 'info',
+        actorRole: 'admin_master',
+        actorId: check.user.id || check.user.sub || 'admin-master',
+        actorName: 'Administrador Master',
+        actorEmail: check.user.email,
+        entityType: 'sessao_admin',
+        entityId: String(check.user.id || check.user.email || 'admin-master'),
+        entityLabel: check.user.email,
+        relatedIds: { adminEmail: check.user.email },
+        ipAddress: getRequestClientIp(req),
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+      });
       return sendJson(res, 200, {
         ok: true,
         token: session.token,
@@ -1504,11 +1538,42 @@ async function handleApiRequest(req, res) {
           return sendJson(res, 401, { error: 'Acesso não autorizado: PIN de administrador inválido ou ausente.' });
         }
         const body = await parseBody(req);
+        const beforeRes = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
+        const beforeCfg = beforeRes.rows[0]?.config || {};
         await db.query(`
           INSERT INTO public.system_config (id, config, updated_at)
           VALUES ('default', $1, NOW())
           ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();
         `, [JSON.stringify(body)]);
+
+        const changes = audit.buildConfigChangesDiff(beforeCfg, body);
+        if (changes.length > 0) {
+          const hasFeeChange = changes.some(c => audit.FEE_FIELDS.has(c.field));
+          const hasCatChange = changes.some(c => String(c.field).startsWith('rideCategories.'));
+          const category = hasFeeChange ? 'taxas_financeiras' : (hasCatChange ? 'categorias' : 'tarifas_regras');
+          const previewText = changes.slice(0, 3).map(c => c.summary).join(' • ');
+          const actor = getAdminActorContext(req);
+          await audit.recordAuditEvent({
+            ...actor,
+            category,
+            actionKey: 'system_config_updated',
+            title: hasFeeChange
+              ? 'Alteração de Taxas Financeiras & Regras de Cobrança'
+              : hasCatChange
+                ? 'Alteração de Categorias e Comissões de Corrida'
+                : 'Alteração de Tarifas & Configurações Operacionais',
+            summary: `${changes.length} campo(s) alterado(s): ${previewText}${changes.length > 3 ? ` (+${changes.length - 3})` : ''}`,
+            severity: hasFeeChange ? 'atencao' : 'info',
+            entityType: 'configuracao_sistema',
+            entityId: 'system_config:default',
+            entityLabel: body.companyName || 'Kavro Drive',
+            relatedIds: { configId: 'default' },
+            changes,
+            snapshotBefore: beforeCfg,
+            snapshotAfter: body
+          });
+        }
+
         realtimeHub.publish('config:updated', { updatedAt: new Date().toISOString() });
         return sendJson(res, 200, { ok: true, config: body });
       }
@@ -1936,6 +2001,27 @@ async function handleApiRequest(req, res) {
           pixType: body.pixType
         });
         const wallet = await finance.getDriverWallet(driverId);
+        await audit.recordAuditEvent({
+          category: 'saques_repasses',
+          actionKey: 'withdrawal_requested',
+          title: 'Solicitação de saque PIX registrada',
+          summary: `Motorista ${wallet?.driverName || driverId} solicitou saque de ${audit.formatMoneyPt(wd.amount)} (taxa ${audit.formatMoneyPt(wd.feeAmount || 0)}, líquido ${audit.formatMoneyPt(wd.netPayoutAmount ?? wd.amount)}).`,
+          severity: 'info',
+          actorRole: isAdmin ? 'admin_master' : 'motorista',
+          actorId: isAdmin ? getAdminActorContext(req).actorId : driverId,
+          actorName: isAdmin ? 'Administrador Master' : (wallet?.driverName || driverId),
+          entityType: 'saque',
+          entityId: wd.id,
+          entityLabel: `${wallet?.driverName || driverId} • ${audit.formatMoneyPt(wd.netPayoutAmount ?? wd.amount)}`,
+          relatedIds: { withdrawalId: wd.id, driverId, pixKey: wd.pixKey },
+          changes: [
+            { field: 'amount', label: 'Valor Bruto Solicitado', before: 'R$ 0,00', after: audit.formatMoneyPt(wd.amount), summary: `Bruto: ${audit.formatMoneyPt(wd.amount)}` },
+            { field: 'feeAmount', label: 'Taxa de Transferência', before: 'R$ 0,00', after: audit.formatMoneyPt(wd.feeAmount || 0), summary: `Taxa: ${audit.formatMoneyPt(wd.feeAmount || 0)}` },
+            { field: 'netPayoutAmount', label: 'Valor Líquido a Repassar', before: 'R$ 0,00', after: audit.formatMoneyPt(wd.netPayoutAmount ?? wd.amount), summary: `Líquido: ${audit.formatMoneyPt(wd.netPayoutAmount ?? wd.amount)}` }
+          ],
+          ipAddress: getRequestClientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+        });
         return sendJson(res, 200, { ok: true, withdrawal: wd, wallet });
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err.message });
@@ -2634,6 +2720,30 @@ async function handleApiRequest(req, res) {
         ...purgedFields
       });
 
+      const actor = getAdminActorContext(req);
+      const actionPt = action === 'aprovado' ? 'Aprovado' : action === 'rejeitado' ? 'Recusado' : 'Correção Solicitada';
+      await audit.recordAuditEvent({
+        ...actor,
+        category: 'motoristas_kyc',
+        actionKey: `kyc_${action}`,
+        title: `Análise de KYC: ${actionPt}`,
+        summary: `Cadastro de ${updated.name} (${updated.id}) marcado como "${actionPt}". ${notes || actionDesc}`,
+        severity: action === 'rejeitado' ? 'critico' : action === 'correcao_solicitada' ? 'atencao' : 'info',
+        entityType: 'motorista',
+        entityId: updated.id,
+        entityLabel: updated.name,
+        relatedIds: { driverId: updated.id, kycAuditId: newAudit.id },
+        changes: [
+          {
+            field: 'approvalStatus',
+            label: 'Status do Cadastro (KYC)',
+            before: String(driver.approvalStatus || 'pendente'),
+            after: action,
+            summary: `Status alterado de "${driver.approvalStatus || 'pendente'}" para "${action}"`
+          }
+        ]
+      });
+
       realtimeHub.publish('driver:updated', { driverId: updated.id, driver: updated });
       return sendJson(res, 200, { ok: true, driver: updated, autoPurged: true });
     }
@@ -3311,6 +3421,31 @@ async function handleApiRequest(req, res) {
       const wallet = await finance.getDriverWallet(driverId);
       const [enrichedCompletedRide] = await attachClientRatingsToRides([completedRide]);
       await push.handleRideChange(ride, enrichedCompletedRide);
+      await audit.recordAuditEvent({
+        category: 'financeiro_corridas',
+        actionKey: 'ride_completed_settled',
+        title: `Corrida ${enrichedCompletedRide.rideCode || enrichedCompletedRide.id} finalizada e liquidada`,
+        summary: `Pagamento (${String(ride.paymentMethod || 'pix').toUpperCase()}) de ${audit.formatMoneyPt(finalPrice)} • Comissão ${split.commissionPercent}% (${audit.formatMoneyPt(split.commissionAmount)}) • Motorista ${audit.formatMoneyPt(split.driverNetAmount)}.`,
+        severity: 'info',
+        actorRole: isAdmin ? 'admin_master' : 'motorista',
+        actorId: isAdmin ? getAdminActorContext(req).actorId : driverId,
+        actorName: isAdmin ? 'Administrador Master' : (driver?.name || ride.driverName || driverId),
+        entityType: 'corrida',
+        entityId: enrichedCompletedRide.id,
+        entityLabel: enrichedCompletedRide.rideCode || enrichedCompletedRide.id,
+        relatedIds: { rideId: enrichedCompletedRide.id, rideCode: enrichedCompletedRide.rideCode, driverId },
+        changes: [
+          {
+            field: 'status',
+            label: 'Situação da Corrida',
+            before: String(ride.status),
+            after: 'finalizada',
+            summary: `Bruto ${audit.formatMoneyPt(finalPrice)} | Comissão ${split.commissionPercent}% (${audit.formatMoneyPt(split.commissionAmount)})`
+          }
+        ],
+        ipAddress: getRequestClientIp(req),
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+      });
       realtimeHub.publish(
         'ride:updated',
         { rideId: enrichedCompletedRide.id, status: enrichedCompletedRide.status, promotedNextRideId: promotedNextRide?.id || null },
@@ -3362,47 +3497,88 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para alterar status da corrida.' });
       }
 
-      // Se a corrida for cancelada e já tinha Pix confirmado, processa reembolso automático no gateway/livro-razão
+      // Se a corrida for cancelada, aplica regra de estorno automático e multa de cancelamento (cancellationFeeAmount)
       let nextPaymentStatus = before.paymentStatus;
-      if (body.status === 'cancelada' && (before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago')) {
-        nextPaymentStatus = 'reembolsado';
-        const tx = await finance.getPaymentTxByRide(id);
-        if (tx) {
-          await finance.savePaymentTransaction({
-            ...tx,
-            status: 'reembolsado',
-            refundedAmount: tx.paidAmount || tx.finalAmount
-          });
-        }
+      let cancelFinance = null;
+      const cancelledByRole = isDriver
+        ? 'driver'
+        : isAdmin && body.cancelledBy !== 'passenger'
+          ? 'admin'
+          : 'passenger';
+
+      if (body.status === 'cancelada' && before.status !== 'cancelada') {
+        cancelFinance = await finance.processRideCancellationFinance(before, {
+          cancelledBy: cancelledByRole,
+          waiveCancellationFee: Boolean(isAdmin && body.waiveCancellationFee === true)
+        });
+        nextPaymentStatus = cancelFinance.nextPaymentStatus;
+
         if (before.driverId) {
-          await finance.recordLedgerEntry({
-            idempotencyKey: `refund_cancel_${id}`,
-            driverId: before.driverId,
-            driverName: before.driverName || 'Motorista',
-            rideId: id,
-            rideCode: before.rideCode,
-            clientId: before.clientId,
-            clientName: before.clientName,
-            entryType: 'refund_debit',
-            paymentMethod: before.paymentMethod,
-            grossAmount: before.totalPrice,
-            commissionPercent: before.commissionPercent || 20,
-            commissionAmount: before.commissionAmount || 0,
-            driverNetAmount: before.driverNetAmount || 0,
-            balanceDelta: -(before.driverNetAmount || 0),
-            balanceBucket: 'available',
-            status: 'confirmado',
-            description: `Estorno por cancelamento da corrida ${before.rideCode || id}`
-          });
+          const drv = await finance.getDriverById(before.driverId);
+          if (drv && (drv.currentRideId === id || drv.queuedRideId === id)) {
+            await finance.saveDriverRecord({
+              ...drv,
+              currentRideId: drv.currentRideId === id ? null : drv.currentRideId,
+              queuedRideId: drv.queuedRideId === id ? null : drv.queuedRideId
+            });
+          }
         }
       }
+
+      const nextSnapshot =
+        cancelFinance && cancelFinance.appliedCancellationFee > 0
+          ? {
+              ...(before.appliedFareSnapshot || {}),
+              cancellationFeeApplied: cancelFinance.appliedCancellationFee,
+              cancelledBy: cancelledByRole
+            }
+          : before.appliedFareSnapshot;
 
       const updated = await upsertFullRide({
         ...before,
         status: body.status,
         paymentStatus: nextPaymentStatus,
+        appliedFareSnapshot: nextSnapshot,
         isQueuedRide: body.status === 'na_fila'
       });
+
+      if (body.status === 'cancelada' && before.status !== 'cancelada') {
+        const feeVal = cancelFinance?.appliedCancellationFee || 0;
+        const refundVal = cancelFinance?.refundAmount || 0;
+        const actorRoleLabel = cancelledByRole === 'driver' ? 'motorista' : (cancelledByRole === 'admin' ? 'admin_master' : 'passageiro');
+        await audit.recordAuditEvent({
+          category: 'financeiro_corridas',
+          actionKey: 'ride_cancelled',
+          title: feeVal > 0
+            ? `Cancelamento com multa aplicada (${before.rideCode || id})`
+            : `Corrida cancelada (${before.rideCode || id})`,
+          summary: [
+            `Cancelada por ${cancelledByRole === 'driver' ? 'Motorista' : cancelledByRole === 'admin' ? 'Admin Master' : 'Passageiro'} (status anterior: ${before.status}).`,
+            feeVal > 0 ? `Multa cobrada: ${audit.formatMoneyPt(feeVal)} (Líquido motorista: ${audit.formatMoneyPt(cancelFinance?.feeSplit?.driverNetAmount || 0)}).` : 'Sem multa de cancelamento.',
+            refundVal > 0 ? `Estorno automático: ${audit.formatMoneyPt(refundVal)}.` : ''
+          ].filter(Boolean).join(' '),
+          severity: feeVal > 0 || refundVal > 0 ? 'atencao' : 'info',
+          actorRole: actorRoleLabel,
+          actorId: isAdmin ? getAdminActorContext(req).actorId : (isDriver ? driverSession.sub : (clientSession?.sub || before.clientId || null)),
+          actorName: isAdmin ? 'Administrador Master' : (isDriver ? (before.driverName || 'Motorista') : (before.clientName || 'Passageiro')),
+          entityType: 'corrida',
+          entityId: id,
+          entityLabel: before.rideCode || id,
+          relatedIds: {
+            rideId: id,
+            rideCode: before.rideCode,
+            driverId: before.driverId || null,
+            transactionId: cancelFinance?.transactionId || null
+          },
+          changes: [
+            { field: 'status', label: 'Status da Corrida', before: String(before.status), after: 'cancelada', summary: `${before.status} -> cancelada` },
+            ...(feeVal > 0 ? [{ field: 'cancellationFeeApplied', label: 'Multa de Cancelamento', before: 'R$ 0,00', after: audit.formatMoneyPt(feeVal), summary: `Multa: ${audit.formatMoneyPt(feeVal)}` }] : []),
+            ...(refundVal > 0 ? [{ field: 'refundAmount', label: 'Valor Estornado', before: 'R$ 0,00', after: audit.formatMoneyPt(refundVal), summary: `Estorno: ${audit.formatMoneyPt(refundVal)}` }] : [])
+          ],
+          ipAddress: getRequestClientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+        });
+      }
 
       const [enrichedUpdated] = await attachClientRatingsToRides([updated]);
       await push.handleRideChange(before, enrichedUpdated);
@@ -3411,7 +3587,14 @@ async function handleApiRequest(req, res) {
         { rideId: enrichedUpdated.id, status: enrichedUpdated.status },
         { rideId: enrichedUpdated.id }
       );
-      return sendJson(res, 200, { ok: true, id, status: enrichedUpdated.status, ride: enrichedUpdated });
+      return sendJson(res, 200, {
+        ok: true,
+        id,
+        status: enrichedUpdated.status,
+        ride: enrichedUpdated,
+        cancellationFeeApplied: cancelFinance?.appliedCancellationFee || 0,
+        refundAmount: cancelFinance?.refundAmount || 0
+      });
     }
 
     // LIVE GPS LOCATION SYNC
@@ -4060,6 +4243,31 @@ async function handleApiRequest(req, res) {
           amount: body.amount,
           gatewayTxId: body.gatewayTxId || `gw_debt_${Date.now()}`
         });
+        await audit.recordAuditEvent({
+          category: 'financeiro_corridas',
+          actionKey: 'driver_debt_settled',
+          title: 'Quitação de dívida de motorista via PIX',
+          summary: `Dívida de ${result.wallet?.driverName || body.driverId} quitada em ${audit.formatMoneyPt(body.amount)}. Saldo devedor atual: ${audit.formatMoneyPt(result.wallet?.debtBalance || 0)}.`,
+          severity: 'info',
+          actorRole: isAdmin ? 'admin_master' : (hasValidWebhookSecret ? 'gateway' : 'motorista'),
+          actorId: isAdmin ? getAdminActorContext(req).actorId : String(body.driverId),
+          actorName: isAdmin ? 'Administrador Master' : (hasValidWebhookSecret ? 'Gateway Webhook' : (result.wallet?.driverName || String(body.driverId))),
+          entityType: 'motorista',
+          entityId: String(body.driverId),
+          entityLabel: result.wallet?.driverName || String(body.driverId),
+          relatedIds: { driverId: String(body.driverId), gatewayTxId: body.gatewayTxId || null, ledgerId: result.entry?.id || null },
+          changes: [
+            {
+              field: 'debtBalance',
+              label: 'Quitação de Saldo Devedor',
+              before: 'Dívida Pendente',
+              after: audit.formatMoneyPt(result.wallet?.debtBalance || 0),
+              summary: `Pago via PIX: ${audit.formatMoneyPt(body.amount)}`
+            }
+          ],
+          ipAddress: getRequestClientIp(req),
+          userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+        });
         return sendJson(res, 200, { ok: true, ...result });
       }
 
@@ -4201,6 +4409,33 @@ async function handleApiRequest(req, res) {
     // ============================================================
     // 3.8 ROTAS ADMINISTRATIVAS MASTER (MOTORISTAS, COMISSÕES, REPASSES, AUDITORIA)
     // ============================================================
+    if (pathname === '/api/admin/audit-logs' && method === 'GET') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const result = await audit.listAuditLogs({
+        category: url.searchParams.get('category') || '',
+        search: url.searchParams.get('search') || '',
+        severity: url.searchParams.get('severity') || '',
+        limit: Number(url.searchParams.get('limit') || 150),
+        offset: Number(url.searchParams.get('offset') || 0)
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    }
+
+    const adminAuditVerifyMatch = pathname.match(/^\/api\/admin\/audit-logs\/([^/]+)\/verify$/);
+    if (adminAuditVerifyMatch && method === 'GET') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const identifier = decodeURIComponent(adminAuditVerifyMatch[1]);
+      const verified = await audit.verifyAuditRecord(identifier);
+      if (!verified) {
+        return sendJson(res, 404, { ok: false, error: 'Registro de auditoria não encontrado no banco.' });
+      }
+      return sendJson(res, 200, { ok: true, ...verified });
+    }
+
     if (pathname === '/api/admin/finance/overview' && method === 'GET') {
       if (!await isAuthorizedAdmin(req)) {
         return sendJson(res, 401, { error: 'Acesso restrito ao Administrador Master.' });
@@ -4228,6 +4463,41 @@ async function handleApiRequest(req, res) {
         financialBlockReason: body.financialBlockReason !== undefined ? body.financialBlockReason : driver.financialBlockReason,
         isOnline: body.approvalStatus && body.approvalStatus !== 'aprovado' ? false : driver.isOnline
       });
+
+      const driverStatusChanges = [];
+      if (body.approvalStatus && body.approvalStatus !== driver.approvalStatus) {
+        driverStatusChanges.push({
+          field: 'approvalStatus',
+          label: 'Status de Aprovação',
+          before: String(driver.approvalStatus),
+          after: String(updated.approvalStatus),
+          summary: `${driver.approvalStatus} -> ${updated.approvalStatus}`
+        });
+      }
+      if (body.financialBlocked !== undefined && Boolean(body.financialBlocked) !== Boolean(driver.financialBlocked)) {
+        driverStatusChanges.push({
+          field: 'financialBlocked',
+          label: 'Bloqueio Financeiro',
+          before: driver.financialBlocked ? 'Bloqueado' : 'Liberado',
+          after: updated.financialBlocked ? 'Bloqueado' : 'Liberado',
+          summary: `${driver.financialBlocked ? 'Bloqueado' : 'Liberado'} -> ${updated.financialBlocked ? 'Bloqueado' : 'Liberado'}`
+        });
+      }
+      if (driverStatusChanges.length > 0) {
+        await audit.recordAuditEvent({
+          ...getAdminActorContext(req),
+          category: 'motoristas_kyc',
+          actionKey: 'driver_status_updated',
+          title: `Alteração de status do motorista ${updated.name}`,
+          summary: driverStatusChanges.map(c => c.summary).join(' • ') + (updated.financialBlockReason ? ` (${updated.financialBlockReason})` : ''),
+          severity: updated.financialBlocked ? 'critico' : 'atencao',
+          entityType: 'motorista',
+          entityId: updated.id,
+          entityLabel: updated.name,
+          relatedIds: { driverId: updated.id },
+          changes: driverStatusChanges
+        });
+      }
       return sendJson(res, 200, { ok: true, driver: updated });
     }
 
@@ -4243,6 +4513,34 @@ async function handleApiRequest(req, res) {
           withdrawalId,
           action: body.action || 'approve',
           notes: body.notes
+        });
+        const act = String(body.action || 'approve').toLowerCase();
+        const isApprove = act === 'approve' || act === 'aprovar' || act === 'pay' || act === 'pagar';
+        const wdObj = resProc?.withdrawal || {};
+        await audit.recordAuditEvent({
+          ...getAdminActorContext(req),
+          category: 'saques_repasses',
+          actionKey: isApprove ? 'withdrawal_approved' : 'withdrawal_rejected',
+          title: isApprove ? `Repasse de saque aprovado (${withdrawalId})` : `Solicitação de saque rejeitada (${withdrawalId})`,
+          summary: `${isApprove ? 'Repasse autorizado' : 'Saque recusado'} para ${wdObj.driverName || wdObj.driverId || 'motorista'} no valor líquido de ${audit.formatMoneyPt(wdObj.netPayoutAmount ?? wdObj.amount ?? 0)}.${body.notes ? ` Obs.: ${body.notes}` : ''}`,
+          severity: isApprove ? 'info' : 'atencao',
+          entityType: 'saque',
+          entityId: withdrawalId,
+          entityLabel: `${wdObj.driverName || withdrawalId} • ${audit.formatMoneyPt(wdObj.netPayoutAmount ?? wdObj.amount ?? 0)}`,
+          relatedIds: {
+            withdrawalId,
+            driverId: wdObj.driverId || null,
+            payoutProviderTxId: wdObj.payoutProviderTxId || null
+          },
+          changes: [
+            {
+              field: 'status',
+              label: 'Situação do Repasse',
+              before: 'pendente',
+              after: String(wdObj.status || (isApprove ? 'pago' : 'rejeitado')),
+              summary: `Status alterado para ${wdObj.status || (isApprove ? 'pago' : 'rejeitado')}`
+            }
+          ]
         });
         return sendJson(res, 200, resProc);
       } catch (err) {
@@ -4307,6 +4605,38 @@ async function handleApiRequest(req, res) {
           paymentStatus: nextStatus
         });
       }
+
+      await audit.recordAuditEvent({
+        ...getAdminActorContext(req),
+        category: 'financeiro_corridas',
+        actionKey: action === 'refund' ? 'admin_payment_refund' : 'admin_payment_dispute',
+        title: action === 'refund'
+          ? `Estorno manual executado (${tx.rideCode || tx.rideId})`
+          : `Contestação financeira registrada (${tx.rideCode || tx.rideId})`,
+        summary: action === 'refund'
+          ? `Reembolso administrativo de ${audit.formatMoneyPt(updatedTx.refundedAmount || tx.finalAmount)} na transação ${tx.id}.`
+          : `Transação ${tx.id} marcada como contestada (${updatedTx.disputeReason || 'sem motivo'}).`,
+        severity: 'critico',
+        entityType: 'transacao',
+        entityId: tx.id,
+        entityLabel: `${tx.rideCode || tx.rideId} • ${audit.formatMoneyPt(tx.finalAmount)}`,
+        relatedIds: {
+          transactionId: tx.id,
+          rideId: tx.rideId,
+          rideCode: tx.rideCode,
+          driverId: tx.driverId || null,
+          gatewayTxId: tx.gatewayTxId || null
+        },
+        changes: [
+          {
+            field: 'status',
+            label: 'Status da Transação',
+            before: String(tx.status),
+            after: nextStatus,
+            summary: `${tx.status} -> ${nextStatus}`
+          }
+        ]
+      });
 
       return sendJson(res, 200, { ok: true, transaction: updatedTx });
     }
@@ -5135,6 +5465,30 @@ async function handleApiRequest(req, res) {
         ...extraRootFields,
         activeVehicleId: nextActiveId,
         vehicles: currentVehicles
+      });
+
+      await audit.recordAuditEvent({
+        ...getAdminActorContext(req),
+        category: 'motoristas_kyc',
+        actionKey: decision === 'aprovar' ? 'vehicle_crlv_approved' : 'vehicle_crlv_rejected',
+        title: decision === 'aprovar'
+          ? `CRLV e veículo aprovados (${nextPlate})`
+          : `CRLV e veículo recusados (${nextPlate})`,
+        summary: vehAuditEntry.notes,
+        severity: decision === 'recusar' ? 'atencao' : 'info',
+        entityType: 'veiculo',
+        entityId: vehicleId,
+        entityLabel: `${nextBrand} ${nextModel} • ${nextPlate}`,
+        relatedIds: { driverId: updated.id, vehicleId, plate: nextPlate, vehicleAuditId: vehAuditEntry.id },
+        changes: [
+          {
+            field: 'approvalStatus',
+            label: 'Situação do Veículo/CRLV',
+            before: String(targetVeh.approvalStatus || 'pendente_aprovacao'),
+            after: decision === 'aprovar' ? 'aprovado' : 'rejeitado',
+            summary: `${targetVeh.approvalStatus || 'pendente_aprovacao'} -> ${decision === 'aprovar' ? 'aprovado' : 'rejeitado'}`
+          }
+        ]
       });
 
       realtimeHub.publish('driver:updated', { driverId: updated.id, driver: updated });

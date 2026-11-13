@@ -7,7 +7,7 @@ import {
   Calculator, HelpCircle, Zap, Moon, Sun, Check, X, Sparkles, User, Luggage,
   Menu, LayoutDashboard, Car, LogOut, Search, UserPlus, Award, Edit2, Trash2,
   Fuel, Wrench, Wallet, ArrowUpRight, ArrowDownRight, Share2, Coins, CreditCard, Lock, RefreshCw, Bell,
-  Route, ShieldAlert, FileCheck2, Percent
+  Route, ShieldAlert, ShieldCheck, FileCheck2, Percent
 } from 'lucide-react';
 import { playNewRideSound } from '../utils/soundAndVoice';
 import { Ride, SystemConfig, Expense, ClientProfile, RideStatus, PaymentStatus, PaymentMethod } from '../types';
@@ -28,6 +28,7 @@ import { RideRoutePlaybackModal } from '../components/RideRoutePlaybackModal';
 import { AdminRecordedRoutesTab } from '../components/AdminRecordedRoutesTab';
 import { AdminPlatformFinanceTab } from '../components/AdminPlatformFinanceTab';
 import { AdminFinancialFeesTab } from '../components/AdminFinancialFeesTab';
+import { AdminAuditTab } from '../components/AdminAuditTab';
 import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
 import { AdminSosCenterTab } from '../components/AdminSosCenterTab';
@@ -54,7 +55,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'taxas' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'taxas' | 'auditoria' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
 
@@ -1747,6 +1748,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           {
             groupTitle: 'Auditoria & Dados',
             items: [
+              { id: 'auditoria', label: 'Auditoria', icon: ShieldCheck, badge: null },
               { id: 'rotas', label: 'Rotas GPS', icon: Route, badge: completedRoutesCount > 0 ? String(completedRoutesCount) : null },
               { id: 'clientes', label: 'Passageiros', icon: Users, badge: null },
               { id: 'notificacoes', label: 'Notificações & Push', icon: Bell, badge: null },
@@ -2012,6 +2014,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'categorias' && 'Categorias de Corridas'}
                 {activeTab === 'financeiro' && 'Financeiro & Split'}
                 {activeTab === 'taxas' && 'Taxas Financeiras'}
+                {activeTab === 'auditoria' && 'Auditoria & Trilha do Banco'}
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
                 {activeTab === 'clientes' && 'Passageiros'}
@@ -4754,6 +4757,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               onRefreshData();
             }}
           />
+        )}
+
+        {activeTab === 'auditoria' && (
+          <AdminAuditTab />
         )}
 
         {/* LEGADO DESATIVADO NO MASTER */}
