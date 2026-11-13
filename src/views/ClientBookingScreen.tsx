@@ -6,7 +6,7 @@ import {
   Copy, QrCode, Plus, RefreshCw, AlertCircle, Lock, Sparkles, Banknote, Clock
 } from 'lucide-react';
 import { LocationPoint, PaymentMethod, Ride, SystemConfig, SavedCard } from '../types';
-import { calculateHaversineDistance, estimateDurationMinutes } from '../utils/geo';
+import { calculateHaversineDistance, estimateDurationMinutes, reverseGeocode } from '../utils/geo';
 import { calculateRidePrice, StorageService } from '../services/storage';
 import { AddressPickerModal } from '../components/AddressPickerModal';
 import { RouteMapPreview } from '../components/RouteMapPreview';
@@ -96,6 +96,34 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
   const [copiedPix, setCopiedPix] = useState(false);
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
+  const [locatingOriginGps, setLocatingOriginGps] = useState(false);
+
+  const handleUseCurrentGpsForOrigin = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!navigator.geolocation) {
+      setIsPickingOrigin(true);
+      return;
+    }
+    setLocatingOriginGps(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        let resolvedAddr = 'Minha localização atual (GPS)';
+        try {
+          const rev = await reverseGeocode(lat, lng);
+          if (rev) resolvedAddr = rev;
+        } catch {}
+        setOrigin({ address: resolvedAddr, lat, lng });
+        setLocatingOriginGps(false);
+      },
+      () => {
+        setLocatingOriginGps(false);
+        setIsPickingOrigin(true);
+      },
+      { enableHighAccuracy: true, timeout: 7000 }
+    );
+  };
 
   // Detecta GPS atual para preencher embarque automaticamente se vazio
   useEffect(() => {
@@ -967,14 +995,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         </div>
       </div>
 
-      {/* Mapa ao Vivo + Origem e Destino */}
+      {/* Mapa ao Vivo + Seleção de Origem e Destino (Estilo Clean Uber/Kavro) */}
       <div style={{
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#000000',
         borderRadius: 20,
         overflow: 'hidden',
-        border: '1.5px solid #E2E8F0',
+        border: '1px solid #1E293B',
         marginBottom: 12,
-        boxShadow: '0 4px 18px rgba(15, 23, 42, 0.05)'
+        boxShadow: '0 8px 26px rgba(0, 0, 0, 0.16)'
       }}>
         {origin && destination && (
           <RouteMapPreview
@@ -985,60 +1013,151 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           />
         )}
 
-        <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <button
-            type="button"
-            onClick={() => setIsPickingOrigin(true)}
-            style={{
-              width: '100%',
-              padding: '11px 12px',
-              borderRadius: 13,
-              backgroundColor: '#F8FAFC',
-              border: '1.5px solid #E2E8F0',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              textAlign: 'left',
-              cursor: 'pointer'
-            }}
-          >
-            <div style={{ width: 10, height: 10, borderRadius: '50%', backgroundColor: '#16A34A', flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>
-                Local de Embarque (Agora)
-              </div>
-              <div style={{ fontSize: '0.86rem', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {origin ? origin.address : 'Toque para selecionar onde você está'}
-              </div>
-            </div>
-          </button>
+        <div style={{ padding: '16px 16px 18px 16px' }}>
+          <div style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            backgroundColor: '#FFFFFF',
+            color: '#000000',
+            borderRadius: 999,
+            padding: '6px 12px',
+            fontSize: '0.78rem',
+            fontWeight: 700,
+            marginBottom: 14
+          }}>
+            <Clock size={14} strokeWidth={2.3} />
+            <span>Agora</span>
+          </div>
 
-          <button
-            type="button"
-            onClick={() => setIsPickingDestination(true)}
-            style={{
-              width: '100%',
-              padding: '11px 12px',
-              borderRadius: 13,
-              backgroundColor: destination ? '#F8FAFC' : '#F0FDF4',
-              border: destination ? '1.5px solid #E2E8F0' : '1.5px solid #76D800',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 10,
-              textAlign: 'left',
-              cursor: 'pointer'
-            }}
-          >
-            <MapPin size={16} color="#DC2626" style={{ flexShrink: 0 }} />
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: '0.66rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase' }}>
-                Para onde vamos?
-              </div>
-              <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {destination ? destination.address : 'Informe o endereço de destino'}
-              </div>
+          <div style={{ position: 'relative' }}>
+            {/* Linha conectora preta entre o círculo (partida) e o quadrado (chegada) */}
+            <div style={{
+              position: 'absolute',
+              left: 22,
+              top: 32,
+              bottom: 32,
+              width: 1.5,
+              backgroundColor: '#000000',
+              zIndex: 3,
+              pointerEvents: 'none'
+            }} />
+
+            {/* Local de partida */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => setIsPickingOrigin(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsPickingOrigin(true);
+                }
+              }}
+              style={{
+                position: 'relative',
+                backgroundColor: '#FFFFFF',
+                borderRadius: 10,
+                height: 52,
+                display: 'flex',
+                alignItems: 'center',
+                paddingLeft: 42,
+                paddingRight: 48,
+                marginBottom: 12,
+                cursor: 'pointer'
+              }}
+            >
+              <span style={{
+                position: 'absolute',
+                left: 17,
+                width: 11,
+                height: 11,
+                borderRadius: '50%',
+                border: '3px solid #000000',
+                backgroundColor: '#FFFFFF',
+                zIndex: 4,
+                boxSizing: 'border-box'
+              }} />
+              <span style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: '0.94rem',
+                fontWeight: origin ? 500 : 400,
+                color: origin ? '#000000' : '#545454',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}>
+                {origin ? origin.address : 'Local de partida'}
+              </span>
+              <button
+                type="button"
+                title="Usar minha localização atual"
+                onClick={handleUseCurrentGpsForOrigin}
+                style={{
+                  position: 'absolute',
+                  right: 10,
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: '#000000',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  opacity: locatingOriginGps ? 0.45 : 1
+                }}
+              >
+                <Navigation size={17} fill="#000000" color="#000000" />
+              </button>
             </div>
-          </button>
+
+            {/* Local de chegada */}
+            <button
+              type="button"
+              onClick={() => setIsPickingDestination(true)}
+              style={{
+                width: '100%',
+                position: 'relative',
+                backgroundColor: '#FFFFFF',
+                border: 'none',
+                borderRadius: 10,
+                height: 52,
+                display: 'flex',
+                alignItems: 'center',
+                paddingLeft: 42,
+                paddingRight: 16,
+                textAlign: 'left',
+                cursor: 'pointer'
+              }}
+            >
+              <span style={{
+                position: 'absolute',
+                left: 17,
+                width: 11,
+                height: 11,
+                borderRadius: 2,
+                border: '3px solid #000000',
+                backgroundColor: '#FFFFFF',
+                zIndex: 4,
+                boxSizing: 'border-box'
+              }} />
+              <span style={{
+                flex: 1,
+                minWidth: 0,
+                fontSize: '0.94rem',
+                fontWeight: destination ? 500 : 400,
+                color: destination ? '#000000' : '#545454',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}>
+                {destination ? destination.address : 'Local de chegada'}
+              </span>
+            </button>
+          </div>
         </div>
       </div>
 
