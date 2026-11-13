@@ -778,6 +778,162 @@ function formatRideFromDb(row) {
   };
 }
 
+const VEHICLE_PHOTO_CACHE = new Map();
+const VEHICLE_PHOTO_TTL_MS = 6 * 60 * 60 * 1000;
+
+function extractCleanBaseModel(rawModel) {
+  const cleaned = String(rawModel || '')
+    .replace(/\b(xei|xli|gli|altis|premier|ltz|lt|ls|rs|highline|comfortline|trendline|sense|intense|zen|iconic|diamond|titanium|sel|se|le|lx|ex|exl|touring|flex|turbo|tfsi|tsi|tgdi|t-gdi|mpi|vvt-?i|cvt|at|mt|4x4|4x2|hev|hybrid|ev|1\.0t?|1\.2|1\.3|1\.4|1\.5|1\.6|1\.8|2\.0)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return cleaned || String(rawModel || '').trim();
+}
+
+function mapPtColorToEnglishTerms(rawColor) {
+  const q = String(rawColor || '').toLowerCase();
+  if (/prata|silver/.test(q)) return ['silver', 'grey', 'gray'];
+  if (/branc|white|perol/.test(q)) return ['white', 'pearl'];
+  if (/pret|black|onix/.test(q)) return ['black'];
+  if (/cinza|grafite|chumbo|gray|grey/.test(q)) return ['grey', 'gray', 'silver'];
+  if (/vermelh|granada|red/.test(q)) return ['red'];
+  if (/azul|blue|safira/.test(q)) return ['blue'];
+  if (/vinho|bordo|burgundy/.test(q)) return ['red', 'burgundy', 'maroon'];
+  if (/marrom|bronze|brown/.test(q)) return ['brown', 'bronze'];
+  if (/verde|green/.test(q)) return ['green'];
+  return [];
+}
+
+function scoreWikimediaVehicleCandidate(page, { baseModel, targetYear, colorTerms }) {
+  const title = String(page?.title || '').replace(/^File:/i, '');
+  const info = Array.isArray(page?.imageinfo) ? page.imageinfo[0] : null;
+  if (!info || !info.thumburl) return null;
+
+  const mime = String(info.mime || '').toLowerCase();
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(mime)) return null;
+  if (Number(info.width || 0) < 420 || Number(info.height || 0) > Number(info.width || 0) * 1.05) {
+    return null;
+  }
+
+  const lower = title.toLowerCase();
+  let score = 50;
+
+  if (/\b(rear|back|tail|interior|cockpit|dashboard|steering|wheel|rim|engine|motor|badge|emblem|logo|emblema|crash|wreck|btcc|rally|racing|race|cup|nascar|toy|scale|model car|diecast|sketch|svg|drawing)\b/.test(lower)) {
+    score -= 120;
+  }
+  if (!/cross/i.test(baseModel) && /\bcross\b/.test(lower)) score -= 85;
+  if (!/touring|wagon|fielder|verso|sw\b/i.test(baseModel) && /\b(touring|wagon|fielder|verso)\b/.test(lower)) {
+    score -= 85;
+  }
+  if (!/hatch/i.test(baseModel) && /sedan|plus/i.test(baseModel) && /\bhatch(back)?\b/.test(lower)) {
+    score -= 45;
+  }
+
+  // Prioriza ano próximo no nome do modelo (ignorando data de upload mm-dd-yyyy)
+  const strippedDateTitle = lower.replace(/\b\d{2}-\d{2}-\d{4}\b/g, ' ').replace(/\(\d{4}-\d{2}-\d{2}\)/g, ' ');
+  const yearMatches = strippedDateTitle.match(/\b(19\d{2}|20[0-2]\d)\b/g) || [];
+  if (targetYear && yearMatches.length > 0) {
+    const modelYear = Number(yearMatches[0]);
+    const diff = Math.abs(modelYear - targetYear);
+    if (diff === 0) score += 45;
+    else if (diff <= 2) score += 28;
+    else if (diff <= 4) score += 10;
+    else score -= 65;
+  }
+
+  if (colorTerms.some(term => new RegExp(`\\b${term}\\b`, 'i').test(lower))) {
+    score += 38;
+  }
+  if (/\b(front|three[- ]quarter|3\/4)\b/.test(lower)) score += 16;
+  if (/\b(brazil|brasil|mercosul)\b/.test(lower)) score += 14;
+  if (/\bsedan\b/.test(lower) && /corolla|civic|virtus|cronos|city|hb20s|plus|versa|sentra/i.test(baseModel)) {
+    score += 12;
+  }
+
+  return {
+    title,
+    url: info.thumburl,
+    score,
+  };
+}
+
+async function queryCommonsVehicles(searchQuery) {
+  try {
+    const u = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrnamespace=6&gsrsearch=${encodeURIComponent(searchQuery)}&gsrlimit=10&prop=imageinfo&iiprop=url|mime|dimensions&iiurlwidth=640&format=json`;
+    const res = await fetch(u, {
+      headers: { 'User-Agent': 'KavroDrive/1.0 (https://kavrodrive.vercel.app)' },
+      signal: AbortSignal.timeout(4500),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const pages = data?.query?.pages ? Object.values(data.query.pages) : [];
+    return pages;
+  } catch {
+    return [];
+  }
+}
+
+async function resolveVehiclePhotoCached({ brand, model, year, color }) {
+  const baseModel = extractCleanBaseModel(model);
+  const targetYear = Number(String(year || '').replace(/\D/g, '').slice(0, 4)) || 0;
+  const colorTerms = mapPtColorToEnglishTerms(color);
+  const cacheKey = `${brand.toLowerCase()}|${baseModel.toLowerCase()}|${targetYear}|${colorTerms[0] || ''}`;
+
+  const cached = VEHICLE_PHOTO_CACHE.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.payload;
+  }
+
+  const brandModel = [brand, baseModel].filter(Boolean).join(' ').trim();
+  const queries = [];
+  if (brandModel && targetYear && colorTerms[0]) {
+    queries.push(`intitle:"${brandModel}" ${targetYear} ${colorTerms[0]}`);
+  }
+  if (brandModel && targetYear) {
+    queries.push(`intitle:"${brandModel}" ${targetYear}`);
+  }
+  if (brandModel) {
+    queries.push(`intitle:"${brandModel}"`);
+  }
+
+  const candidateMap = new Map();
+  for (const q of queries) {
+    const pages = await queryCommonsVehicles(q);
+    for (const p of pages) {
+      const scored = scoreWikimediaVehicleCandidate(p, { baseModel, targetYear, colorTerms });
+      if (scored && scored.score > 15) {
+        const existing = candidateMap.get(scored.url);
+        if (!existing || scored.score > existing.score) {
+          candidateMap.set(scored.url, scored);
+        }
+      }
+    }
+    const bestSoFar = Array.from(candidateMap.values()).sort((a, b) => b.score - a.score)[0];
+    if (bestSoFar && bestSoFar.score >= 70) break;
+  }
+
+  const candidates = Array.from(candidateMap.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 4);
+
+  const payload = {
+    ok: true,
+    brand,
+    model: baseModel,
+    year: targetYear || year || '',
+    color: color || '',
+    primaryUrl: candidates[0]?.url || '',
+    candidates,
+    source: candidates.length > 0 ? 'exact_lookup' : 'studio_fallback',
+  };
+
+  VEHICLE_PHOTO_CACHE.set(cacheKey, {
+    payload,
+    expiresAt: Date.now() + VEHICLE_PHOTO_TTL_MS,
+  });
+
+  return payload;
+}
+
 async function handleApiRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
@@ -1185,6 +1341,21 @@ async function handleApiRequest(req, res) {
       });
     }
 
+    // 2.2 IDENTIFICAÇÃO & BUSCA DE FOTO EXATA DO VEÍCULO (MARCA + MODELO + ANO + COR)
+    if (pathname === '/api/vehicles/photo' && method === 'GET') {
+      const brand = String(url.searchParams.get('brand') || '').trim();
+      const model = String(url.searchParams.get('model') || '').trim();
+      const year = String(url.searchParams.get('year') || '').trim();
+      const color = String(url.searchParams.get('color') || '').trim();
+
+      if (!brand && !model) {
+        return sendJson(res, 400, { ok: false, error: 'Informe marca ou modelo do veículo.' });
+      }
+
+      const result = await resolveVehiclePhotoCached({ brand, model, year, color });
+      return sendJson(res, 200, result);
+    }
+
     // ============================================================
     // 2.5 MOTORISTAS (CADASTRO ESTILO UBER, LOGIN, ONLINE/OFFLINE, CARTEIRA)
     // ============================================================
@@ -1239,7 +1410,22 @@ async function handleApiRequest(req, res) {
       }
 
       const photoUrl = body.photo ? await kycStorage.savePublicMedia(targetId, 'avatar', body.photo) : '';
-      const vehiclePhotoUrl = body.vehiclePhoto ? await kycStorage.savePublicMedia(targetId, 'vehicle', body.vehiclePhoto) : '';
+      let vehiclePhotoUrl = body.vehiclePhoto ? await kycStorage.savePublicMedia(targetId, 'vehicle', body.vehiclePhoto) : '';
+      if (!vehiclePhotoUrl && (vehicleBrand || vehicleModel)) {
+        try {
+          const resolvedVehicle = await resolveVehiclePhotoCached({
+            brand: vehicleBrand,
+            model: vehicleModel,
+            year: vehicleYear,
+            color: vehicleColor || 'Prata',
+          });
+          if (resolvedVehicle?.primaryUrl) {
+            vehiclePhotoUrl = resolvedVehicle.primaryUrl;
+          }
+        } catch {
+          // Non-fatal: fallback rendering handles missing photoUrl cleanly
+        }
+      }
 
       const clientIp = getRequestClientIp(req);
 

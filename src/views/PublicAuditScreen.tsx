@@ -25,7 +25,11 @@ import {
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
-import { getCarColorProfile } from '../services/vehicleService';
+import {
+  getCarColorProfile,
+  getStudioVehicleFallback,
+  resolveVehiclePhotoExact,
+} from '../services/vehicleService';
 import { formatRideCode } from '../utils/format';
 
 interface PublicAuditScreenProps {
@@ -102,24 +106,65 @@ function maskFallbackName(fullName: string): string {
   return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}. •••`;
 }
 
-function resolveVehicleThumb(driver: {
-  vehiclePhoto?: string;
-  vehicleModel?: string;
-  vehicleCategory?: string;
-  vehicleColor?: string;
-}): string {
-  if (driver.vehiclePhoto && driver.vehiclePhoto.trim()) {
-    return driver.vehiclePhoto;
-  }
-  const ref = `${driver.vehicleModel || ''} ${driver.vehicleCategory || ''} ${driver.vehicleColor || ''}`.toLowerCase();
-  if (/suv|lux|black|select|exec|bag|van|compass|creta|tracker|t-cross|tcross/i.test(ref)) {
-    return '/vehicles/kavro-suv-ev.jpg';
-  }
-  if (/onix|polo|hb20|argo|kwid|mobi|hatch|plus|vermelh|granada|red/i.test(ref)) {
-    return '/vehicles/kavro-compact-ev.jpg';
-  }
-  return '/vehicles/kavro-sedan-ev.jpg';
-}
+const ResolvedVehicleImg: React.FC<{
+  driver: {
+    vehiclePhoto?: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    vehicleYear?: string;
+    vehicleColor?: string;
+    vehicleCategory?: string;
+  };
+  alt: string;
+  style?: React.CSSProperties;
+}> = ({ driver, alt, style }) => {
+  const studioFallback = getStudioVehicleFallback(
+    driver.vehicleModel,
+    driver.vehicleCategory,
+    driver.vehicleColor
+  );
+  const [src, setSrc] = useState<string>(driver.vehiclePhoto?.trim() || studioFallback);
+
+  useEffect(() => {
+    let active = true;
+    if (driver.vehiclePhoto && driver.vehiclePhoto.trim()) {
+      setSrc(driver.vehiclePhoto.trim());
+      return;
+    }
+    setSrc(studioFallback);
+    resolveVehiclePhotoExact({
+      brand: driver.vehicleBrand,
+      model: driver.vehicleModel,
+      year: driver.vehicleYear,
+      color: driver.vehicleColor,
+      category: driver.vehicleCategory,
+    }).then((res) => {
+      if (active && res.photoUrl) setSrc(res.photoUrl);
+    });
+    return () => {
+      active = false;
+    };
+  }, [
+    driver.vehiclePhoto,
+    driver.vehicleBrand,
+    driver.vehicleModel,
+    driver.vehicleYear,
+    driver.vehicleColor,
+    driver.vehicleCategory,
+    studioFallback,
+  ]);
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => {
+        if (src !== studioFallback) setSrc(studioFallback);
+      }}
+      style={style}
+    />
+  );
+};
 
 export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, rides }) => {
   const navigate = useNavigate();
@@ -800,7 +845,6 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                   const vehicleLabel =
                     [drv.vehicleBrand, drv.vehicleModel, drv.vehicleVersion].filter(Boolean).join(' ') ||
                     'Veículo Kavro Drive';
-                  const thumbSrc = resolveVehicleThumb(drv);
                   const colorInfo = getCarColorProfile(drv.vehicleColor || '');
 
                   return (
@@ -957,8 +1001,8 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                             backgroundColor: '#0B1218',
                           }}
                         >
-                          <img
-                            src={thumbSrc}
+                          <ResolvedVehicleImg
+                            driver={drv}
                             alt={vehicleLabel}
                             style={{
                               width: '100%',
@@ -1595,8 +1639,8 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                   color: '#FFFFFF',
                 }}
               >
-                <img
-                  src={resolveVehicleThumb(selectedDriver)}
+                <ResolvedVehicleImg
+                  driver={selectedDriver}
                   alt={selectedDriver.vehicleModel}
                   style={{
                     width: 88,

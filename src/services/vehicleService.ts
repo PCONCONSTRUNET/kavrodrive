@@ -216,3 +216,168 @@ export function findVehicleTemplate(brand: string, model: string): VehicleCatalo
     v.brand.toLowerCase() === b && (v.model.toLowerCase() === m || m.includes(v.model.toLowerCase()))
   ) || null;
 }
+
+export interface DetectedVehicleResult {
+  brand: string;
+  model: string;
+  year: string;
+  color: string;
+  category: 'kavro_go' | 'kavro_plus' | 'kavro_exec';
+  hasLargeTrunk: boolean;
+  hasLeatherSeats: boolean;
+}
+
+/** Identifica automaticamente Marca, Modelo, Ano, Cor e Categoria a partir de uma descrição livre */
+export function detectVehicleFromDescription(rawText: string): DetectedVehicleResult | null {
+  const text = (rawText || '').trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+
+  // 1. Ano (ex: 2018..2027)
+  const yearMatch = text.match(/\b(20[0-2]\d|199\d)\b/);
+  const year = yearMatch ? yearMatch[1] : '';
+
+  // 2. Cor
+  const matchedColor = POPULAR_CAR_COLORS.find((c) => {
+    const baseName = c.name.toLowerCase();
+    return lower.includes(baseName) || lower.includes(baseName.slice(0, 5));
+  });
+  const color = matchedColor ? matchedColor.label : '';
+
+  // 3. Modelo e Marca do catálogo (prioriza nome de modelo mais longo primeiro para diferenciar Onix vs Onix Plus)
+  const sortedCatalog = [...POPULAR_VEHICLES_CATALOG].sort((a, b) => b.model.length - a.model.length);
+  const matchedVehicle = sortedCatalog.find((v) => {
+    const mLower = v.model.toLowerCase();
+    const firstWord = mLower.split(' ')[0];
+    return lower.includes(mLower) || (firstWord.length >= 3 && lower.includes(firstWord) && (!v.model.includes('Plus') || lower.includes('plus')));
+  });
+
+  if (matchedVehicle) {
+    return {
+      brand: matchedVehicle.brand,
+      model: matchedVehicle.model,
+      year,
+      color,
+      category: matchedVehicle.category,
+      hasLargeTrunk: matchedVehicle.hasLargeTrunk,
+      hasLeatherSeats: matchedVehicle.hasLeatherSeats,
+    };
+  }
+
+  // Fallback identificando apenas a marca se o modelo for incomum
+  const matchedBrand = POPULAR_VEHICLE_BRANDS.find((b) => lower.includes(b.toLowerCase()));
+  const cleanedModel = text
+    .replace(/\b(20[0-2]\d|199\d)\b/g, ' ')
+    .replace(new RegExp(matchedBrand || '^$', 'i'), ' ')
+    .replace(new RegExp(matchedColor?.name || '^$', 'i'), ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!matchedBrand && !cleanedModel && !year && !color) return null;
+
+  return {
+    brand: matchedBrand || '',
+    model: cleanedModel,
+    year,
+    color,
+    category: 'kavro_go',
+    hasLargeTrunk: false,
+    hasLeatherSeats: false,
+  };
+}
+
+export function getStudioVehicleFallback(model?: string, category?: string, color?: string): string {
+  const ref = `${model || ''} ${category || ''} ${color || ''}`.toLowerCase();
+  if (/suv|lux|black|select|exec|bag|van|compass|creta|tracker|t-cross|tcross|corolla cross/i.test(ref)) {
+    return '/vehicles/kavro-suv-ev.jpg';
+  }
+  if (/onix|polo|hb20|argo|kwid|mobi|hatch|plus|vermelh|granada|red/i.test(ref)) {
+    return '/vehicles/kavro-compact-ev.jpg';
+  }
+  return '/vehicles/kavro-sedan-ev.jpg';
+}
+
+export interface VehiclePhotoResolution {
+  photoUrl: string;
+  candidates: { title: string; url: string; score: number }[];
+  source: 'driver' | 'exact_lookup' | 'studio';
+}
+
+const CLIENT_VEHICLE_PHOTO_MEM = new Map<string, VehiclePhotoResolution>();
+
+/** Busca a foto real exata do carro pela combinação Marca + Modelo + Ano + Cor */
+export async function resolveVehiclePhotoExact(params: {
+  brand?: string;
+  model?: string;
+  year?: string;
+  color?: string;
+  category?: string;
+  existingPhoto?: string;
+}): Promise<VehiclePhotoResolution> {
+  if (params.existingPhoto && params.existingPhoto.trim()) {
+    return {
+      photoUrl: params.existingPhoto.trim(),
+      candidates: [],
+      source: 'driver',
+    };
+  }
+
+  const brand = (params.brand || '').trim();
+  const model = (params.model || '').trim();
+  const year = (params.year || '').trim();
+  const color = (params.color || '').trim();
+  const studioFallback = getStudioVehicleFallback(model, params.category, color);
+
+  if (!brand && !model) {
+    return { photoUrl: studioFallback, candidates: [], source: 'studio' };
+  }
+
+  const key = `kavro_vphoto_${brand.toLowerCase()}|${model.toLowerCase()}|${year}|${color.toLowerCase()}`;
+  const mem = CLIENT_VEHICLE_PHOTO_MEM.get(key);
+  if (mem) return mem;
+
+  try {
+    const cachedRaw = sessionStorage.getItem(key);
+    if (cachedRaw) {
+      const parsed = JSON.parse(cachedRaw) as VehiclePhotoResolution;
+      if (parsed?.photoUrl) {
+        CLIENT_VEHICLE_PHOTO_MEM.set(key, parsed);
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore storage failures
+  }
+
+  try {
+    const qs = new URLSearchParams({ brand, model, year, color });
+    const res = await fetch(`/api/vehicles/photo?${qs.toString()}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.primaryUrl) {
+        const result: VehiclePhotoResolution = {
+          photoUrl: data.primaryUrl,
+          candidates: Array.isArray(data.candidates) ? data.candidates : [],
+          source: 'exact_lookup',
+        };
+        CLIENT_VEHICLE_PHOTO_MEM.set(key, result);
+        try {
+          sessionStorage.setItem(key, JSON.stringify(result));
+        } catch {
+          // ignore
+        }
+        return result;
+      }
+    }
+  } catch {
+    // fallback silencioso
+  }
+
+  const fallbackRes: VehiclePhotoResolution = {
+    photoUrl: studioFallback,
+    candidates: [],
+    source: 'studio',
+  };
+  CLIENT_VEHICLE_PHOTO_MEM.set(key, fallbackRes);
+  return fallbackRes;
+}

@@ -1,5 +1,9 @@
-import React from 'react';
-import { getCarColorProfile } from '../services/vehicleService';
+import React, { useEffect, useState } from 'react';
+import {
+  getCarColorProfile,
+  getStudioVehicleFallback,
+  resolveVehiclePhotoExact,
+} from '../services/vehicleService';
 import { MercosulPlateBadge } from './MercosulPlateBadge';
 import { Camera } from 'lucide-react';
 
@@ -36,16 +40,32 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
     ? (isCompact ? 132 : isLarge ? 240 : 195)
     : (isCompact ? 124 : isLarge ? 215 : 168);
 
-  const pickStudioVehiclePhoto = () => {
-    const ref = `${model} ${category} ${colorName}`.toLowerCase();
-    if (/suv|lux|black|select|exec|bag|van|compass|creta|tracker|t-cross|tcross|corolla cross/i.test(ref)) {
-      return '/vehicles/kavro-suv-ev.jpg';
-    }
-    if (/onix|polo|hb20|argo|kwid|mobi|hatch|plus|vermelh|granada|red/i.test(ref)) {
-      return '/vehicles/kavro-compact-ev.jpg';
-    }
-    return '/vehicles/kavro-sedan-ev.jpg';
-  };
+  const studioFallback = getStudioVehicleFallback(model, category, colorName);
+  const [resolvedAutoUrl, setResolvedAutoUrl] = useState<string>(studioFallback);
+  const [isExactMatch, setIsExactMatch] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (photoUrl) return;
+    let active = true;
+    setResolvedAutoUrl(studioFallback);
+    setIsExactMatch(false);
+    resolveVehiclePhotoExact({
+      brand,
+      model,
+      year,
+      color: colorName,
+      category,
+    }).then((res) => {
+      if (!active) return;
+      if (res.photoUrl) {
+        setResolvedAutoUrl(res.photoUrl);
+        setIsExactMatch(res.source === 'exact_lookup');
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [photoUrl, brand, model, year, colorName, category, studioFallback]);
 
   return (
     <div
@@ -169,8 +189,14 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
             }}
           >
             <img
-              src={pickStudioVehiclePhoto()}
+              src={resolvedAutoUrl}
               alt={fullName}
+              onError={() => {
+                if (resolvedAutoUrl !== studioFallback) {
+                  setResolvedAutoUrl(studioFallback);
+                  setIsExactMatch(false);
+                }
+              }}
               style={{
                 width: '100%',
                 height: '100%',
@@ -189,14 +215,14 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
               }}
             />
 
-            {/* Badge discreta de Cor */}
+            {/* Badge discreta de Cor + Identificação */}
             <div
               style={{
                 position: 'absolute',
                 top: 8,
                 left: 10,
-                backgroundColor: 'rgba(11,18,24,0.78)',
-                border: '1px solid rgba(118,216,0,0.28)',
+                backgroundColor: 'rgba(11,18,24,0.82)',
+                border: '1px solid rgba(118,216,0,0.3)',
                 color: '#E2E8F0',
                 fontSize: '0.64rem',
                 fontWeight: 700,
@@ -217,7 +243,10 @@ export const VehiclePhotoPreview: React.FC<VehiclePhotoPreviewProps> = ({
                   border: '1px solid rgba(255,255,255,0.65)',
                 }}
               />
-              <span>{colorProfile.label}</span>
+              <span>
+                {colorProfile.label}
+                {isExactMatch && year ? ` • ${year}` : ''}
+              </span>
             </div>
           </div>
         )}

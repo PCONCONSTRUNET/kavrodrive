@@ -27,8 +27,11 @@ import {
   POPULAR_VEHICLES_CATALOG,
   POPULAR_VEHICLE_BRANDS,
   findVehicleTemplate,
-  POPULAR_CAR_COLORS
+  POPULAR_CAR_COLORS,
+  detectVehicleFromDescription,
+  resolveVehiclePhotoExact
 } from '../services/vehicleService';
+import { VehiclePhotoPreview } from '../components/VehiclePhotoPreview';
 import { DriverChatModal } from '../components/DriverChatModal';
 import { DriverPreferencesModal } from '../components/DriverPreferencesModal';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
@@ -118,6 +121,10 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [regTermsAccepted, setRegTermsAccepted] = useState(false);
   const [isRegTermsModalOpen, setIsRegTermsModalOpen] = useState(false);
   const [isDriverSignedContractOpen, setIsDriverSignedContractOpen] = useState(false);
+  const [regQuickVehicleInput, setRegQuickVehicleInput] = useState('');
+  const [regVehiclePhoto, setRegVehiclePhoto] = useState('');
+  const [vehiclePhotoCandidates, setVehiclePhotoCandidates] = useState<{ title: string; url: string; score: number }[]>([]);
+  const [isResolvingVehiclePhoto, setIsResolvingVehiclePhoto] = useState(false);
 
   // Edição de chave PIX após aprovação (na aba Carteira)
   const [pixEditType, setPixEditType] = useState<'cpf' | 'cnpj' | 'telefone' | 'email' | 'aleatoria'>('cpf');
@@ -131,6 +138,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const handleApplyVehicleTemplate = (brand: string, model: string) => {
     setRegBrand(brand);
     setRegModel(model);
+    setRegVehiclePhoto('');
     const tmpl = findVehicleTemplate(brand, model);
     if (tmpl) {
       setRegHasFourDoors(true);
@@ -140,6 +148,53 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       setRegCategory(tmpl.category);
     }
   };
+
+  // Identifica marca, modelo, ano e cor automaticamente a partir de descrição livre (ex: "Corolla 2024 Prata")
+  const handleQuickVehicleIdentify = (text: string) => {
+    setRegQuickVehicleInput(text);
+    const detected = detectVehicleFromDescription(text);
+    if (!detected) return;
+    if (detected.brand) setRegBrand(detected.brand);
+    if (detected.model) setRegModel(detected.model);
+    if (detected.year) setRegYear(detected.year);
+    if (detected.color) {
+      const matchedColor = POPULAR_CAR_COLORS.find(
+        c => c.label.toLowerCase() === detected.color.toLowerCase() || c.name.toLowerCase() === detected.color.toLowerCase()
+      );
+      setRegColor(matchedColor ? matchedColor.name : detected.color);
+    }
+    setRegHasFourDoors(true);
+    setRegHasAc(true);
+    setRegHasLargeTrunk(detected.hasLargeTrunk);
+    setRegHasLeatherSeats(detected.hasLeatherSeats);
+    setRegCategory(detected.category);
+    setRegVehiclePhoto('');
+  };
+
+  useEffect(() => {
+    if (regStep !== 7 || (!regBrand.trim() && !regModel.trim())) return;
+    let active = true;
+    setIsResolvingVehiclePhoto(true);
+    resolveVehiclePhotoExact({
+      brand: regBrand,
+      model: regModel,
+      year: regYear,
+      color: regColor,
+      category: regCategory
+    }).then((res) => {
+      if (!active) return;
+      setVehiclePhotoCandidates(res.candidates || []);
+      if (res.source === 'exact_lookup' && res.photoUrl) {
+        setRegVehiclePhoto(res.photoUrl);
+      } else {
+        setRegVehiclePhoto('');
+      }
+      setIsResolvingVehiclePhoto(false);
+    }).catch(() => {
+      if (active) setIsResolvingVehiclePhoto(false);
+    });
+    return () => { active = false; };
+  }, [regStep, regBrand, regModel, regYear, regColor, regCategory]);
 
   const platformCategories = normalizeCategoriesFromConfig(config);
 
@@ -403,6 +458,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       vehicleColor: regColor,
       vehicleYear: regYear,
       vehiclePlate: regPlate.toUpperCase(),
+      vehiclePhoto: regVehiclePhoto || undefined,
       crlvNumber: regCrlvNumber,
       crlvRegular: regCrlvRegular,
       hasFourDoors: regHasFourDoors,
@@ -981,6 +1037,23 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                       ))}
                   </datalist>
 
+                  <div style={{ padding: 12, borderRadius: 12, background: '#F6F7F9', border: '1px solid #E2E5EA' }}>
+                    <label style={{ ...uLabel, color: '#111827', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Zap size={13} color="#16A34A" />
+                      Identificação rápida por texto
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Corolla 2024 Prata ou Onix Plus 2023 Preto"
+                      value={regQuickVehicleInput}
+                      onChange={(e) => handleQuickVehicleIdentify(e.target.value)}
+                      style={{ ...uInput, background: '#FFFFFF' }}
+                    />
+                    <div style={{ marginTop: 6, fontSize: 11, color: '#64748B' }}>
+                      Digite modelo, ano e cor para preencher os campos e localizar a foto exata automaticamente.
+                    </div>
+                  </div>
+
                   <div>
                     <label style={{ ...uLabel, color: '#6B6B6B', fontWeight: 500 }}>Mais comuns</label>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -1003,19 +1076,19 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                   <div>
                     <label style={uLabel}>Marca</label>
                     <input type="text" list="kavro-brands-list" placeholder="Ex: Toyota" value={regBrand}
-                      onChange={(e) => { const v = e.target.value; setRegBrand(v); const t = findVehicleTemplate(v, regModel); if (t) handleApplyVehicleTemplate(t.brand, t.model); }}
+                      onChange={(e) => { const v = e.target.value; setRegBrand(v); setRegVehiclePhoto(''); const t = findVehicleTemplate(v, regModel); if (t) handleApplyVehicleTemplate(t.brand, t.model); }}
                       style={uInput} />
                   </div>
                   <div>
                     <label style={uLabel}>Modelo</label>
                     <input type="text" list="kavro-models-list" placeholder="Ex: Corolla" value={regModel}
-                      onChange={(e) => { const v = e.target.value; setRegModel(v); const t = findVehicleTemplate(regBrand, v); if (t) handleApplyVehicleTemplate(t.brand, t.model); }}
+                      onChange={(e) => { const v = e.target.value; setRegModel(v); setRegVehiclePhoto(''); const t = findVehicleTemplate(regBrand, v); if (t) handleApplyVehicleTemplate(t.brand, t.model); }}
                       style={uInput} />
                   </div>
                 </>
               )}
 
-              {/* 7. Ano e cor */}
+              {/* 7. Ano, cor e prévia automática do veículo */}
               {regStep === 7 && (
                 <>
                   <div>
@@ -1033,6 +1106,62 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                       ))}
                     </div>
                   </div>
+
+                  {(regBrand || regModel) && (
+                    <div style={{ marginTop: 4 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontSize: 12, fontWeight: 700, color: '#0F172A' }}>
+                          Foto identificada ({regBrand} {regModel} {regYear} • {regColor})
+                        </span>
+                        {isResolvingVehiclePhoto && (
+                          <span style={{ fontSize: 11, color: '#64748B' }}>Buscando foto exata...</span>
+                        )}
+                      </div>
+                      <VehiclePhotoPreview
+                        photoUrl={regVehiclePhoto || undefined}
+                        brand={regBrand}
+                        model={regModel}
+                        year={regYear}
+                        colorName={regColor}
+                        plate={regPlate}
+                        category={regCategory}
+                        size="compact"
+                        showPlate={false}
+                      />
+                      {vehiclePhotoCandidates.length > 1 && (
+                        <div style={{ display: 'flex', gap: 6, marginTop: 8, overflowX: 'auto', paddingBottom: 2 }}>
+                          {vehiclePhotoCandidates.map((cand, idx) => {
+                            const selected = regVehiclePhoto === cand.url;
+                            return (
+                              <button
+                                key={cand.url + idx}
+                                type="button"
+                                onClick={() => setRegVehiclePhoto(cand.url)}
+                                title={cand.title}
+                                style={{
+                                  flexShrink: 0,
+                                  width: 68,
+                                  height: 44,
+                                  padding: 0,
+                                  borderRadius: 8,
+                                  overflow: 'hidden',
+                                  border: selected ? '2px solid #84CC16' : '1px solid #E2E8F0',
+                                  background: '#0F172A',
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                <img
+                                  src={cand.url}
+                                  alt={cand.title}
+                                  style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                                />
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
 
