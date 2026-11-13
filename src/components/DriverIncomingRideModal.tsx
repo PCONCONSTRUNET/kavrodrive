@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, User, Zap, Star } from 'lucide-react';
+import { X, User, Star } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { getCategoryById } from '../utils/categoryEngine';
 
@@ -153,7 +153,7 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
           </div>
         </div>
 
-        {/* Avaliação do Passageiro & Demanda Bônus */}
+        {/* Avaliação do Passageiro */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -166,20 +166,6 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Star size={15} fill="#0F172A" color="#0F172A" />
             <span>4,92 ({ride.clientName.split(' ')[0]})</span>
-          </div>
-
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 4,
-            color: '#15803D',
-            backgroundColor: '#DCFCE7',
-            padding: '2px 8px',
-            borderRadius: 6,
-            fontSize: '0.76rem'
-          }}>
-            <Zap size={13} fill="#15803D" />
-            <span>+R$ 1,50 dinâmico incluído</span>
           </div>
         </div>
 

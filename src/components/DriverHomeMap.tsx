@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Polyline, Marker, Circle, useMap } from 'react-leaflet';
+import { MapContainer, TileLayer, Polyline, Marker, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Ride } from '../types';
@@ -76,27 +76,6 @@ const createUberGreenTargetPin = () =>
     `,
     iconSize: [34, 48],
     iconAnchor: [17, 46],
-  });
-
-const createSurgeDemandIcon = (amountText: string) =>
-  L.divIcon({
-    className: 'kavro-surge-pill',
-    html: `
-      <div style="
-        background: #B91C1C;
-        color: #FFFFFF;
-        padding: 4px 11px;
-        border-radius: 999px;
-        font-size: 12px;
-        font-weight: 800;
-        white-space: nowrap;
-        box-shadow: 0 4px 12px rgba(185,28,28,0.38);
-        border: 1.5px solid rgba(255,255,255,0.3);
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      ">${amountText}</div>
-    `,
-    iconSize: [68, 28],
-    iconAnchor: [34, 14],
   });
 
 const MapViewportController: React.FC<{
@@ -288,13 +267,6 @@ export const DriverHomeMap: React.FC<DriverHomeMapProps> = ({
 
   const driverIcon = useMemo(() => createUberArrowPuckIcon(liveHeading), [liveHeading]);
   const greenPinIcon = useMemo(() => createUberGreenTargetPin(), []);
-  const surgeIcon = useMemo(() => createSurgeDemandIcon('+R$ 4'), []);
-
-  // Posição sutil de demanda dinâmica na região (para visual Radar estilo Uber)
-  const surgeCoords: [number, number] = useMemo(
-    () => [currentCenter[0] + 0.0085, currentCenter[1] - 0.011],
-    [currentCenter[0], currentCenter[1]]
-  );
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1, backgroundColor: '#E8EDF3' }}>
@@ -316,22 +288,6 @@ export const DriverHomeMap: React.FC<DriverHomeMapProps> = ({
           bounds={activeBounds}
           recenterSignal={recenterSignal}
         />
-
-        {/* Área sutil de demanda dinâmica quando sem corrida ativa (idêntico ao print Uber Driver) */}
-        {!activeRide && (
-          <>
-            <Circle
-              center={surgeCoords}
-              radius={850}
-              pathOptions={{
-                color: 'transparent',
-                fillColor: isOnline ? '#DC2626' : '#EF4444',
-                fillOpacity: isOnline ? 0.22 : 0.14,
-              }}
-            />
-            <Marker position={surgeCoords} icon={surgeIcon} interactive={false} />
-          </>
-        )}
 
         {/* Rota preta crisp estilo Uber Driver Turn-by-Turn */}
         {activeRide && routeCoords.length >= 2 && (
