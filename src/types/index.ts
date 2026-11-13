@@ -508,6 +508,8 @@ export interface Ride {
   driverRating?: number | null;
   passengerRating?: number | null;
   passengerNotes?: string | null;
+  clientRatedStars?: number | null;
+  clientRating?: number | null;
   isQueuedRide?: boolean;
   queuedForDriverId?: string | null;
   declinedDriverIds?: string[];
@@ -568,6 +570,15 @@ export interface Ride {
   isManualBooking?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface RideChatMessage {
+  id: string;
+  rideId: string;
+  sender: 'driver' | 'client';
+  senderName: string;
+  text: string;
+  createdAt: string;
 }
 
 export interface Expense {

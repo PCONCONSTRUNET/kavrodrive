@@ -6,6 +6,7 @@ const finance = require('./financeEngine.cjs');
 const kycStorage = require('./kycStorage.cjs');
 const driverTermsContract = require('./driverTermsContract.cjs');
 const passengerTermsContract = require('./passengerTermsContract.cjs');
+const realtimeHub = require('./realtimeHub.cjs');
 
 function getRequestClientIp(req) {
   return (
@@ -300,6 +301,7 @@ async function upsertFullRide(rideObj) {
     driver_rating: rideObj.driverRating ?? 5.0,
     passenger_rating: rideObj.passengerRating ?? null,
     passenger_notes: rideObj.passengerNotes ?? null,
+    client_rated_stars: rideObj.clientRatedStars ?? null,
     is_queued_ride: Boolean(rideObj.isQueuedRide),
     queued_for_driver_id: rideObj.queuedForDriverId ?? null,
     declined_driver_ids: Array.isArray(rideObj.declinedDriverIds) ? rideObj.declinedDriverIds : [],
@@ -353,7 +355,7 @@ async function upsertFullRide(rideObj) {
     `INSERT INTO public.rides (
       id, ride_number, client_name, client_phone, client_id,
       driver_id, driver_name, driver_phone, driver_photo, driver_vehicle, driver_plate, driver_car_color, driver_rating,
-      passenger_rating, passenger_notes,
+      passenger_rating, passenger_notes, client_rated_stars,
       is_queued_ride, queued_for_driver_id, declined_driver_ids,
       origin, destination, date, time, passengers, has_luggage, category, category_name, applied_fare_snapshot,
       distance_km, duration_min, estimated_price, total_price, paid_amount,
@@ -361,7 +363,7 @@ async function upsertFullRide(rideObj) {
       payment_method, payment_status, payment_tx_id, pix_qr_code, pix_copy_paste,
       card_id, card_last4, card_brand, status, driver_notes, notes, is_manual_booking, updated_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,NOW()
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,NOW()
     )
     ON CONFLICT (id) DO UPDATE SET
       driver_id = EXCLUDED.driver_id,
@@ -374,6 +376,7 @@ async function upsertFullRide(rideObj) {
       driver_rating = EXCLUDED.driver_rating,
       passenger_rating = COALESCE(EXCLUDED.passenger_rating, public.rides.passenger_rating),
       passenger_notes = COALESCE(EXCLUDED.passenger_notes, public.rides.passenger_notes),
+      client_rated_stars = COALESCE(EXCLUDED.client_rated_stars, public.rides.client_rated_stars),
       is_queued_ride = EXCLUDED.is_queued_ride,
       queued_for_driver_id = EXCLUDED.queued_for_driver_id,
       declined_driver_ids = EXCLUDED.declined_driver_ids,
@@ -412,7 +415,7 @@ async function upsertFullRide(rideObj) {
       row.id, row.ride_number, row.client_name, row.client_phone, row.client_id,
       row.driver_id, row.driver_name, row.driver_phone, row.driver_photo, row.driver_vehicle,
       row.driver_plate, row.driver_car_color, row.driver_rating,
-      row.passenger_rating, row.passenger_notes,
+      row.passenger_rating, row.passenger_notes, row.client_rated_stars,
       row.is_queued_ride, row.queued_for_driver_id, JSON.stringify(row.declined_driver_ids),
       JSON.stringify(row.origin), JSON.stringify(row.destination), row.date, row.time,
       row.passengers, row.has_luggage, row.category, row.category_name,
@@ -440,6 +443,7 @@ async function ensureClientsSchema() {
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS terms_signature JSONB;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS photo TEXT;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS profile_change_request JSONB;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS rating NUMERIC;
     `);
     await finance.ensureExtendedSchema();
     clientsSchemaReady = true;
@@ -603,6 +607,7 @@ function sanitizeClientRow(row, isAdmin = false) {
     photo: row.photo || undefined,
     profileChangeRequest: row.profile_change_request || row.profileChangeRequest || undefined,
     blocked: Boolean(row.blocked),
+    rating: row.rating !== undefined && row.rating !== null ? Number(row.rating) : null,
     savedAddresses: row.saved_addresses || [],
     termsAcceptedAt: row.terms_accepted_at || undefined,
     termsSignature: row.terms_signature || undefined,
@@ -734,6 +739,8 @@ function formatRideFromDb(row) {
     driverRating: row.driver_rating ? Number(row.driver_rating) : 5.0,
     passengerRating: row.passenger_rating !== undefined && row.passenger_rating !== null ? Number(row.passenger_rating) : null,
     passengerNotes: row.passenger_notes ?? row.passengerNotes ?? null,
+    clientRatedStars: row.client_rated_stars !== undefined && row.client_rated_stars !== null ? Number(row.client_rated_stars) : (row.clientRatedStars ?? null),
+    clientRating: row.client_rating !== undefined && row.client_rating !== null ? Number(row.client_rating) : (row.clientRating ?? null),
     isQueuedRide: Boolean(row.is_queued_ride ?? row.isQueuedRide),
     queuedForDriverId: row.queued_for_driver_id ?? row.queuedForDriverId ?? null,
     declinedDriverIds: Array.isArray(row.declined_driver_ids)
@@ -934,6 +941,124 @@ async function resolveVehiclePhotoCached({ brand, model, year, color }) {
   return payload;
 }
 
+function hashOtpCode(code) {
+  return crypto.createHash('sha256').update(String(code || '').trim()).digest('hex');
+}
+
+function normalizePhoneDigitsServer(raw) {
+  return String(raw || '').replace(/\D/g, '');
+}
+
+async function attachClientRatingsToRides(ridesList) {
+  if (!Array.isArray(ridesList) || ridesList.length === 0) return ridesList || [];
+  try {
+    let clientRows = [];
+    if (db.pool) {
+      await ensureClientsSchema();
+      const res = await db.query('SELECT id, phone, rating FROM public.clients');
+      clientRows = res.rows || [];
+    } else {
+      clientRows = db.localStore?.clients || [];
+    }
+    const ratingById = new Map();
+    const ratingByPhone = new Map();
+    for (const c of clientRows) {
+      if (c.rating !== undefined && c.rating !== null && Number(c.rating) > 0) {
+        const val = Number(Number(c.rating).toFixed(2));
+        if (c.id) ratingById.set(String(c.id), val);
+        const digits = normalizePhoneDigitsServer(c.phone);
+        if (digits.length >= 8) ratingByPhone.set(digits, val);
+      }
+    }
+    return ridesList.map(r => {
+      if (r.clientRating !== undefined && r.clientRating !== null && Number(r.clientRating) > 0) {
+        return r;
+      }
+      const fromId = r.clientId ? ratingById.get(String(r.clientId)) : undefined;
+      const phoneDigits = normalizePhoneDigitsServer(r.clientPhone);
+      const fromPhone = phoneDigits.length >= 8 ? ratingByPhone.get(phoneDigits) : undefined;
+      return {
+        ...r,
+        clientRating: fromId ?? fromPhone ?? null
+      };
+    });
+  } catch {
+    return ridesList;
+  }
+}
+
+async function dispatchOtpDelivery({ role, user, code }) {
+  const channels = [];
+  const firstName = String(user?.name || '').trim().split(/\s+/)[0] || 'Usuário';
+  const extId = role === 'driver'
+    ? push.driverExternalId(user.id, user.phone)
+    : push.clientExternalId(user.phone);
+
+  if (extId && process.env.ONESIGNAL_REST_API_KEY) {
+    try {
+      await push.sendToExternalIds(
+        [extId],
+        '🔐 Código de recuperação Kavro Drive',
+        `Olá ${firstName}, seu código temporário é ${code} (válido por 10 minutos).`,
+        { data: { type: 'password_recovery' } }
+      );
+      channels.push('push');
+    } catch {
+      // ignore
+    }
+  }
+
+  const resendKey = String(process.env.RESEND_API_KEY || '').trim();
+  if (resendKey && user?.email) {
+    try {
+      const fromAddr = String(process.env.OTP_EMAIL_FROM || 'Kavro Drive <onboarding@resend.dev>').trim();
+      const emailRes = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${resendKey}`
+        },
+        body: JSON.stringify({
+          from: fromAddr,
+          to: [user.email],
+          subject: 'Código de recuperação de senha — Kavro Drive',
+          html: `<p>Olá <strong>${firstName}</strong>,</p><p>Seu código de verificação para redefinir sua senha no Kavro Drive é:</p><h2 style="letter-spacing:4px;">${code}</h2><p>Válido por 10 minutos.</p>`
+        })
+      });
+      if (emailRes.ok) channels.push('email');
+    } catch {
+      // ignore
+    }
+  }
+
+  const otpWebhook = String(process.env.OTP_WEBHOOK_URL || '').trim();
+  if (otpWebhook) {
+    try {
+      const wRes = await fetch(otpWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          role,
+          userId: user.id,
+          name: user.name,
+          phone: user.phone,
+          email: user.email || null,
+          code
+        })
+      });
+      if (wRes.ok) channels.push('webhook');
+    } catch {
+      // ignore
+    }
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    console.info(`[OTP Recovery] role=${role} user=${user.id} code=${code}`);
+  }
+
+  return channels;
+}
+
 async function handleApiRequest(req, res) {
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
@@ -949,10 +1074,172 @@ async function handleApiRequest(req, res) {
   }
 
   try {
-    // 0. HEALTH CHECK
+    // 0. HEALTH CHECK & REAL-TIME READINESS
     if (pathname === '/api/health') {
       const dbRes = await db.query('SELECT NOW() as now');
-      return sendJson(res, 200, { ok: true, now: dbRes.rows[0].now });
+      return sendJson(res, 200, {
+        ok: true,
+        now: dbRes.rows[0].now,
+        storage: db.pool ? 'postgresql' : 'local_json',
+        uptimeSeconds: Math.round(process.uptime()),
+        realtime: realtimeHub.getStats(),
+        services: {
+          databaseConfigured: Boolean(db.pool),
+          pushConfigured: Boolean(process.env.ONESIGNAL_REST_API_KEY),
+          googleAuthConfigured: Boolean(getGoogleClientId()),
+          turnstileConfigured: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
+          mercadopagoConfigured: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MERCADOPAGO_PUBLIC_KEY),
+          otpEmailConfigured: Boolean(process.env.RESEND_API_KEY),
+          otpWebhookConfigured: Boolean(process.env.OTP_WEBHOOK_URL)
+        }
+      });
+    }
+
+    // 0.0.1 REAL-TIME STREAM (Server-Sent Events)
+    if (pathname === '/api/realtime/stream' && method === 'GET') {
+      return realtimeHub.handleStreamRequest(req, res, url);
+    }
+
+    // 0.0.2 RECUPERAÇÃO DE SENHA VIA OTP IN-APP (Passageiro e Motorista)
+    if (pathname === '/api/auth/recovery/request' && method === 'POST') {
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const role = body.role === 'driver' ? 'driver' : 'client';
+      const rawIdentifier = String(body.identifier || '').trim();
+      if (!rawIdentifier) {
+        return sendJson(res, 400, { ok: false, error: 'Informe seu WhatsApp, E-mail ou CPF cadastrado.' });
+      }
+
+      let user = null;
+      if (role === 'driver') {
+        user = await finance.findDriverByIdentifier(rawIdentifier);
+      } else {
+        const isEmail = rawIdentifier.includes('@');
+        const cleanEmail = isEmail ? rawIdentifier.toLowerCase() : '';
+        const cleanPhone = !isEmail ? normalizePhoneDigitsServer(rawIdentifier) : '';
+        const foundRes = await db.query(
+          `SELECT * FROM public.clients
+           WHERE ($1 <> '' AND LOWER(COALESCE(email, '')) = $1)
+              OR ($2 <> '' AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2)
+           LIMIT 1`,
+          [cleanEmail, cleanPhone]
+        );
+        user = foundRes.rows[0] || null;
+      }
+
+      if (!user) {
+        return sendJson(res, 404, {
+          ok: false,
+          error: role === 'driver'
+            ? 'Nenhuma conta de motorista encontrada para este identificador.'
+            : 'Nenhuma conta de passageiro encontrada com este E-mail ou WhatsApp.'
+        });
+      }
+
+      const code = String(crypto.randomInt(100000, 999999));
+      const codeHash = hashOtpCode(code);
+      const resetId = `otp-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
+
+      await db.query(
+        `INSERT INTO public.password_reset_codes (id, role, user_id, identifier, code_hash, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [resetId, role, user.id, rawIdentifier, codeHash, expiresAt]
+      );
+
+      const channels = await dispatchOtpDelivery({ role, user, code });
+      const canExposeDevPreview =
+        !process.env.VERCEL &&
+        process.env.NODE_ENV !== 'production' &&
+        channels.length === 0;
+
+      const phoneStr = String(user.phone || '').replace(/\D/g, '');
+      const maskedPhone = phoneStr.length >= 4 ? `••••-${phoneStr.slice(-4)}` : '';
+      const maskedEmail = user.email
+        ? String(user.email).replace(/(^.).*(@.*$)/, '$1•••$2')
+        : '';
+
+      return sendJson(res, 200, {
+        ok: true,
+        role,
+        expiresInMinutes: 10,
+        channels,
+        maskedDestination: maskedEmail || maskedPhone || 'conta cadastrada',
+        ...(canExposeDevPreview ? { devCode: code } : {})
+      });
+    }
+
+    if (pathname === '/api/auth/recovery/reset' && method === 'POST') {
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const role = body.role === 'driver' ? 'driver' : 'client';
+      const rawIdentifier = String(body.identifier || '').trim();
+      const code = String(body.code || '').replace(/\D/g, '').trim();
+      const newPassword = String(body.newPassword || '');
+
+      if (!rawIdentifier || code.length !== 6) {
+        return sendJson(res, 400, { ok: false, error: 'Informe o identificador e o código de 6 dígitos.' });
+      }
+      if (newPassword.length < 4) {
+        return sendJson(res, 400, { ok: false, error: 'A nova senha deve ter pelo menos 4 caracteres.' });
+      }
+
+      let user = null;
+      if (role === 'driver') {
+        user = await finance.findDriverByIdentifier(rawIdentifier);
+      } else {
+        const isEmail = rawIdentifier.includes('@');
+        const cleanEmail = isEmail ? rawIdentifier.toLowerCase() : '';
+        const cleanPhone = !isEmail ? normalizePhoneDigitsServer(rawIdentifier) : '';
+        const foundRes = await db.query(
+          `SELECT * FROM public.clients
+           WHERE ($1 <> '' AND LOWER(COALESCE(email, '')) = $1)
+              OR ($2 <> '' AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2)
+           LIMIT 1`,
+          [cleanEmail, cleanPhone]
+        );
+        user = foundRes.rows[0] || null;
+      }
+
+      if (!user) {
+        return sendJson(res, 404, { ok: false, error: 'Conta não encontrada.' });
+      }
+
+      const otpRes = await db.query(
+        `SELECT * FROM public.password_reset_codes
+         WHERE role = $1 AND user_id = $2 AND used_at IS NULL
+         ORDER BY created_at DESC LIMIT 1`,
+        [role, user.id]
+      );
+      const otpRow = otpRes.rows[0];
+      if (!otpRow) {
+        return sendJson(res, 400, { ok: false, error: 'Nenhum código ativo encontrado. Solicite um novo código.' });
+      }
+      if (new Date(otpRow.expires_at).getTime() < Date.now()) {
+        return sendJson(res, 400, { ok: false, error: 'Código expirado. Solicite um novo código.' });
+      }
+      if (Number(otpRow.attempts || 0) >= 5) {
+        return sendJson(res, 429, { ok: false, error: 'Limite de tentativas excedido. Solicite um novo código.' });
+      }
+
+      const incomingHash = hashOtpCode(code);
+      if (incomingHash !== otpRow.code_hash) {
+        await db.query('UPDATE public.password_reset_codes SET attempts = attempts + 1 WHERE id = $1', [otpRow.id]);
+        return sendJson(res, 401, { ok: false, error: 'Código inválido. Verifique os 6 dígitos informados.' });
+      }
+
+      const newPasswordHash = hashPassword(newPassword);
+      if (role === 'driver') {
+        await db.query('UPDATE public.drivers SET password_hash = $1 WHERE id = $2', [newPasswordHash, user.id]);
+      } else {
+        await db.query('UPDATE public.clients SET password_hash = $1 WHERE id = $2', [newPasswordHash, user.id]);
+      }
+      await db.query('UPDATE public.password_reset_codes SET used_at = NOW() WHERE id = $1', [otpRow.id]);
+
+      return sendJson(res, 200, {
+        ok: true,
+        message: 'Senha redefinida com sucesso! Você já pode entrar com a nova senha.'
+      });
     }
 
     // 0.1 DYNAMIC PWA MANIFEST
@@ -1104,9 +1391,11 @@ async function handleApiRequest(req, res) {
           blockedSlotsMap[r.date] = r.slots || [];
         });
 
+        const adminRidesWithRatings = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
+
         return sendJson(res, 200, {
           config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, true),
-          rides: ridesRes.rows.map(formatRideFromDb),
+          rides: adminRidesWithRatings,
           drivers: allDrivers,
           onlineDriversCount: onlineDriversPublic.length,
           expenses: expRes.rows.map(r => ({
@@ -1146,7 +1435,7 @@ async function handleApiRequest(req, res) {
           blockedSlotsMap[r.date] = r.slots || [];
         });
 
-        const formattedRides = ridesRes.rows.map(formatRideFromDb);
+        const formattedRides = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
         const driverScopedRides = formattedRides.filter(
           r => r.driverId === verifiedDriverId || (r.status === 'aguardando_confirmacao' && !r.driverId)
         );
@@ -1189,9 +1478,11 @@ async function handleApiRequest(req, res) {
         blockedSlotsMap[r.date] = r.slots || [];
       });
 
+      const publicRidesWithRatings = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
+
       return sendJson(res, 200, {
         config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, false),
-        rides: ridesRes.rows.map(r => sanitizeRideForPublic(formatRideFromDb(r), verifiedClientId, verifiedClientPhoneDigits)),
+        rides: publicRidesWithRatings.map(r => sanitizeRideForPublic(r, verifiedClientId, verifiedClientPhoneDigits)),
         onlineDrivers: onlineDriversPublic,
         onlineDriversCount: onlineDriversPublic.length,
         expenses: [],
@@ -1723,6 +2014,11 @@ async function handleApiRequest(req, res) {
           updatedAt: new Date().toISOString()
         }
       });
+      realtimeHub.publish('driver:updated', {
+        driverId: updated.id,
+        isOnline: updated.isOnline,
+        location: updated.location
+      });
       return sendJson(res, 200, { ok: true, driver: updated });
     }
 
@@ -1745,6 +2041,11 @@ async function handleApiRequest(req, res) {
         updatedAt: new Date().toISOString()
       };
       const updated = await finance.saveDriverRecord({ ...driver, location: loc });
+      realtimeHub.publish('driver:updated', {
+        driverId: updated.id,
+        isOnline: updated.isOnline,
+        location: updated.location
+      });
       return sendJson(res, 200, { ok: true, driver: updated });
     }
 
@@ -2418,7 +2719,7 @@ async function handleApiRequest(req, res) {
           ? String(clientSession.phone || '').replace(/\D/g, '')
           : '';
         const r = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC');
-        const formatted = r.rows.map(formatRideFromDb);
+        const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
         if (isAdmin) return sendJson(res, 200, formatted);
         if (driverSession?.sub) {
           return sendJson(
@@ -2599,8 +2900,14 @@ async function handleApiRequest(req, res) {
           }
         }
 
-        await push.handleRideChange(before, savedRide);
-        return sendJson(res, 200, { ok: true, ride: savedRide });
+        const [enrichedSavedRide] = await attachClientRatingsToRides([savedRide]);
+        await push.handleRideChange(before, enrichedSavedRide);
+        realtimeHub.publish(
+          before ? 'ride:updated' : 'ride:created',
+          { rideId: enrichedSavedRide.id, status: enrichedSavedRide.status },
+          { rideId: enrichedSavedRide.id }
+        );
+        return sendJson(res, 200, { ok: true, ride: enrichedSavedRide });
       }
     }
 
@@ -2699,10 +3006,16 @@ async function handleApiRequest(req, res) {
         });
       }
 
-      await push.handleRideChange(ride, updatedRide);
+      const [enrichedAcceptedRide] = await attachClientRatingsToRides([updatedRide]);
+      await push.handleRideChange(ride, enrichedAcceptedRide);
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: enrichedAcceptedRide.id, status: enrichedAcceptedRide.status, driverId: driver.id },
+        { rideId: enrichedAcceptedRide.id }
+      );
       return sendJson(res, 200, {
         ok: true,
-        ride: updatedRide,
+        ride: enrichedAcceptedRide,
         isQueued,
         activeRideId: currentActiveRide?.id || null
       });
@@ -2735,7 +3048,7 @@ async function handleApiRequest(req, res) {
 
       const patch = raterRole === 'cliente'
         ? { passengerRating: stars, passengerNotes: combinedNotes || ride.passengerNotes }
-        : { driverRating: stars, driverNotes: combinedNotes || ride.driverNotes };
+        : { driverRating: stars, clientRatedStars: stars, driverNotes: combinedNotes || ride.driverNotes };
 
       const updatedRide = await upsertFullRide({ ...ride, ...patch });
 
@@ -2787,7 +3100,41 @@ async function handleApiRequest(req, res) {
         }
       }
 
-      return sendJson(res, 200, { ok: true, ride: updatedRide, updatedDriverRating, tipCredited });
+      let updatedClientRating = null;
+      if (raterRole === 'motorista' && (ride.clientId || ride.clientPhone)) {
+        const cleanClientPhone = normalizePhoneDigitsServer(ride.clientPhone);
+        const cliRidesRes = await db.query(
+          `SELECT client_rated_stars FROM public.rides
+           WHERE client_rated_stars IS NOT NULL AND client_rated_stars > 0
+             AND (($1 <> '' AND client_id = $1)
+              OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2))`,
+          [ride.clientId || '', cleanClientPhone]
+        );
+        const cliVals = (cliRidesRes.rows || []).map(x => Number(x.client_rated_stars)).filter(n => n > 0);
+        if (cliVals.length > 0) {
+          updatedClientRating = Number((cliVals.reduce((a, b) => a + b, 0) / cliVals.length).toFixed(2));
+          if (ride.clientId) {
+            await db.query('UPDATE public.clients SET rating = $1 WHERE id = $2', [updatedClientRating, ride.clientId]);
+          }
+          if (!db.pool && cleanClientPhone.length >= 8 && Array.isArray(db.localStore?.clients)) {
+            const matchedCli = db.localStore.clients.find(
+              c => (ride.clientId && c.id === ride.clientId) || normalizePhoneDigitsServer(c.phone) === cleanClientPhone
+            );
+            if (matchedCli) {
+              matchedCli.rating = updatedClientRating;
+              db.saveLocalStore();
+            }
+          }
+        }
+      }
+
+      const [enrichedRatedRide] = await attachClientRatingsToRides([updatedRide]);
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: enrichedRatedRide.id, status: enrichedRatedRide.status },
+        { rideId: enrichedRatedRide.id }
+      );
+      return sendJson(res, 200, { ok: true, ride: enrichedRatedRide, updatedDriverRating, updatedClientRating, tipCredited });
     }
 
     const rideDeclineMatch = pathname.match(/^\/api\/rides\/([^/]+)\/decline$/);
@@ -2811,6 +3158,7 @@ async function handleApiRequest(req, res) {
         declinedDriverIds: declined
       });
 
+      realtimeHub.publish('ride:updated', { rideId: updatedRide.id, status: updatedRide.status }, { rideId: updatedRide.id });
       return sendJson(res, 200, { ok: true, ride: updatedRide });
     }
 
@@ -2939,11 +3287,17 @@ async function handleApiRequest(req, res) {
       }
 
       const wallet = await finance.getDriverWallet(driverId);
-      await push.handleRideChange(ride, completedRide);
+      const [enrichedCompletedRide] = await attachClientRatingsToRides([completedRide]);
+      await push.handleRideChange(ride, enrichedCompletedRide);
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: enrichedCompletedRide.id, status: enrichedCompletedRide.status, promotedNextRideId: promotedNextRide?.id || null },
+        { rideId: enrichedCompletedRide.id }
+      );
 
       return sendJson(res, 200, {
         ok: true,
-        ride: completedRide,
+        ride: enrichedCompletedRide,
         promotedNextRide,
         wallet
       });
@@ -2961,6 +3315,7 @@ async function handleApiRequest(req, res) {
         await push.handleRideChange(formatRideFromDb(prevDel.rows[0]), { ...formatRideFromDb(prevDel.rows[0]), status: 'finalizada' });
       }
       await db.query('DELETE FROM public.rides WHERE id = $1', [id]);
+      realtimeHub.publish('ride:deleted', { rideId: id }, { rideId: id });
       return sendJson(res, 200, { ok: true, deleted: id });
     }
 
@@ -3027,8 +3382,14 @@ async function handleApiRequest(req, res) {
         isQueuedRide: body.status === 'na_fila'
       });
 
-      await push.handleRideChange(before, updated);
-      return sendJson(res, 200, { ok: true, id, status: updated.status, ride: updated });
+      const [enrichedUpdated] = await attachClientRatingsToRides([updated]);
+      await push.handleRideChange(before, enrichedUpdated);
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: enrichedUpdated.id, status: enrichedUpdated.status },
+        { rideId: enrichedUpdated.id }
+      );
+      return sendJson(res, 200, { ok: true, id, status: enrichedUpdated.status, ride: enrichedUpdated });
     }
 
     // LIVE GPS LOCATION SYNC
@@ -3089,6 +3450,18 @@ async function handleApiRequest(req, res) {
           }
         }
 
+        realtimeHub.publish(
+          'gps:location',
+          {
+            rideId: row.id,
+            role,
+            status: row.status,
+            driverLocation: row.driver_location || null,
+            clientLocation: row.client_location || null
+          },
+          { rideId: row.id }
+        );
+
         return sendJson(res, 200, {
           ok: true,
           id: row.id,
@@ -3097,6 +3470,118 @@ async function handleApiRequest(req, res) {
           driverLocation: row.driver_location || null,
           clientLocation: row.client_location || null
         });
+      }
+    }
+
+    // CHAT EM TEMPO REAL DA CORRIDA (Motorista <-> Passageiro)
+    const rideMessagesMatch = pathname.match(/^\/api\/rides\/([^/]+)\/messages$/);
+    if (rideMessagesMatch) {
+      await finance.ensureExtendedSchema();
+      const id = normalizeRideId(decodeURIComponent(rideMessagesMatch[1]));
+      const rideRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!rideRes.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const ride = formatRideFromDb(rideRes.rows[0]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const headerClientId = String(req.headers['x-client-id'] || '').trim();
+      const headerClientPhone = normalizePhoneDigitsServer(req.headers['x-client-phone'] || '');
+      const headerDriverId = String(req.headers['x-driver-id'] || '').trim();
+
+      const rideClientPhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
+      const isAssignedDriver = Boolean(
+        (driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId) ||
+        (headerDriverId && ride.driverId && headerDriverId === ride.driverId)
+      );
+      const isOwnerClient = Boolean(
+        (clientSession?.sub && (!ride.clientId || clientSession.sub === ride.clientId)) ||
+        (clientSession?.phone && rideClientPhoneDigits && normalizePhoneDigitsServer(clientSession.phone) === rideClientPhoneDigits) ||
+        (headerClientId && ride.clientId && headerClientId === ride.clientId) ||
+        (headerClientPhone && rideClientPhoneDigits && headerClientPhone === rideClientPhoneDigits) ||
+        !ride.clientId
+      );
+
+      if (!isAdmin && !isAssignedDriver && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Sem permissão para acessar o chat desta corrida.' });
+      }
+
+      if (method === 'GET') {
+        const msgRes = await db.query(
+          `SELECT id, ride_id, sender_role, sender_name, text, created_at
+           FROM public.ride_chat_messages
+           WHERE ride_id = $1
+           ORDER BY created_at ASC`,
+          [id]
+        );
+        const messages = (msgRes.rows || []).map(m => ({
+          id: m.id,
+          rideId: m.ride_id,
+          sender: m.sender_role === 'driver' ? 'driver' : 'client',
+          senderName: m.sender_name,
+          text: m.text,
+          createdAt: m.created_at
+        }));
+        return sendJson(res, 200, { ok: true, rideId: id, messages });
+      }
+
+      if (method === 'POST') {
+        const body = await parseBody(req);
+        const rawText = String(body.text || '').trim();
+        if (!rawText) {
+          return sendJson(res, 400, { ok: false, error: 'Mensagem vazia não pode ser enviada.' });
+        }
+        if (rawText.length > 1000) {
+          return sendJson(res, 400, { ok: false, error: 'Mensagem muito longa (máximo 1000 caracteres).' });
+        }
+
+        const senderRole = body.senderRole === 'driver' && (isAssignedDriver || isAdmin)
+          ? 'driver'
+          : isAssignedDriver && body.senderRole !== 'client'
+            ? 'driver'
+            : 'client';
+
+        const senderName = String(
+          body.senderName ||
+          (senderRole === 'driver' ? (ride.driverName || 'Motorista') : (ride.clientName || 'Passageiro'))
+        ).trim();
+
+        const msgId = `msg-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+        const createdAt = new Date().toISOString();
+
+        await db.query(
+          `INSERT INTO public.ride_chat_messages (id, ride_id, sender_role, sender_name, text, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [msgId, id, senderRole, senderName, rawText, createdAt]
+        );
+
+        const message = {
+          id: msgId,
+          rideId: id,
+          sender: senderRole,
+          senderName,
+          text: rawText,
+          createdAt
+        };
+
+        realtimeHub.publish('chat:message', { rideId: id, message }, { rideId: id });
+
+        if (process.env.ONESIGNAL_REST_API_KEY) {
+          const targetExtId = senderRole === 'driver'
+            ? push.clientExternalId(ride.clientPhone)
+            : push.driverExternalId(ride.driverId, ride.driverPhone);
+          if (targetExtId) {
+            push.sendToExternalIds(
+              [targetExtId],
+              `💬 Mensagem de ${senderName.split(' ')[0]}`,
+              rawText.slice(0, 140),
+              { data: { type: 'ride_chat', rideId: id } }
+            ).catch(() => {});
+          }
+        }
+
+        return sendJson(res, 200, { ok: true, message });
       }
     }
 
@@ -3304,6 +3789,15 @@ async function handleApiRequest(req, res) {
         ).catch(() => {});
       }
 
+      realtimeHub.publish('sos:updated', {
+        sosId: alertData.id,
+        lat: alertData.lat,
+        lng: alertData.lng,
+        active: true,
+        address: alertData.address,
+        updatedAt: alertData.updatedAt
+      });
+
       return sendJson(res, 200, {
         ok: true,
         alert: {
@@ -3385,6 +3879,7 @@ async function handleApiRequest(req, res) {
         sosMemoryStore.set(id, { ...curr, active: false });
       }
       await db.query('UPDATE public.sos_alerts SET active = false, updated_at = NOW() WHERE id = $1', [id]).catch(() => {});
+      realtimeHub.publish('sos:updated', { sosId: id, active: false, resolved: true });
       return sendJson(res, 200, { ok: true, id, resolved: true });
     }
 
@@ -3630,6 +4125,11 @@ async function handleApiRequest(req, res) {
       ).catch(() => {});
 
       await push.handleRideChange(before, updatedRide, { source: 'webhook' });
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: updatedRide.id, status: updatedRide.status, paymentStatus: updatedRide.paymentStatus },
+        { rideId: updatedRide.id }
+      );
       return sendJson(res, 200, { ok: true, ride: updatedRide, split });
     }
 

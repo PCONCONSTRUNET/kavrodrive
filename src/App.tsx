@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-
 import { Home, Calendar, Clock, User, MapPin, PhoneCall, ArrowRight, Sparkles, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { SystemConfig, Ride, LocationPoint, ClientProfile } from './types';
 import { StorageService } from './services/storage';
+import { RealtimeService } from './services/realtime';
 import { ClientHomeScreen } from './views/ClientHomeScreen';
 import { ClientBookingScreen } from './views/ClientBookingScreen';
 import { ClientMyRidesScreen } from './views/ClientMyRidesScreen';
@@ -820,19 +821,62 @@ export const App: React.FC = () => {
     refreshData();
   }, [location.pathname]);
 
-  // Sincronização em tempo real com banco de dados Supabase PostgreSQL (sem precisar fechar/abrir o app)
+  // Sincronização em tempo real via SSE + fallback seguro de rede (sem precisar fechar/abrir o app)
   useEffect(() => {
+    const releaseRealtime = RealtimeService.acquire('app');
+
+    let syncInFlight = false;
     const syncNow = () => {
-      if (document.visibilityState === 'hidden') return;
-      StorageService.syncFromDatabase().then(() => {
-        refreshData();
-      }).catch(() => {});
+      if (document.visibilityState === 'hidden' || syncInFlight) return;
+      syncInFlight = true;
+      StorageService.syncFromDatabase()
+        .then(() => {
+          refreshData();
+        })
+        .catch(() => {})
+        .finally(() => {
+          syncInFlight = false;
+        });
     };
 
     syncNow();
 
-    // Polling inteligente e rápido (a cada 2s) para motorista e cliente receberem confirmações e status na hora
-    const pollInterval = setInterval(syncNow, 2000);
+    // Se SSE está conectado, eventos chegam instantaneamente; mantém fallback leve de 12s (ou 2.5s se cair em fallback)
+    let pollInterval: number | null = null;
+    const resetPollingSpeed = () => {
+      if (pollInterval !== null) clearInterval(pollInterval);
+      const intervalMs = RealtimeService.isConnected() ? 12000 : 2500;
+      pollInterval = window.setInterval(syncNow, intervalMs);
+    };
+    resetPollingSpeed();
+
+    const handleRealtimeRide = () => syncNow();
+    const handleRealtimeGps = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (!detail?.rideId) return;
+      const ridesStr = localStorage.getItem('up_mobilidade_rides');
+      if (!ridesStr) return;
+      try {
+        const list: Ride[] = JSON.parse(ridesStr);
+        let changed = false;
+        const nextList = list.map(r => {
+          if (r.id !== detail.rideId) return r;
+          changed = true;
+          return {
+            ...r,
+            driverLocation: detail.driverLocation ?? r.driverLocation,
+            clientLocation: detail.clientLocation ?? r.clientLocation,
+            status: detail.status ?? r.status
+          };
+        });
+        if (changed) {
+          localStorage.setItem('up_mobilidade_rides', JSON.stringify(nextList));
+          window.dispatchEvent(new CustomEvent('up_rides_updated', { detail: { rideId: detail.rideId } }));
+        }
+      } catch {
+        // ignore
+      }
+    };
 
     const handleSynced = () => {
       refreshData();
@@ -841,6 +885,10 @@ export const App: React.FC = () => {
       if (document.visibilityState === 'visible') syncNow();
     };
 
+    window.addEventListener('up_realtime_ride', handleRealtimeRide);
+    window.addEventListener('up_realtime_driver', handleRealtimeRide);
+    window.addEventListener('up_realtime_gps', handleRealtimeGps);
+    window.addEventListener('up_realtime_status', resetPollingSpeed);
     window.addEventListener('up_database_synced', handleSynced);
     window.addEventListener('up_rides_updated', handleSynced);
     window.addEventListener('up_push_received', syncNow);
@@ -848,7 +896,12 @@ export const App: React.FC = () => {
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
-      clearInterval(pollInterval);
+      releaseRealtime();
+      if (pollInterval !== null) clearInterval(pollInterval);
+      window.removeEventListener('up_realtime_ride', handleRealtimeRide);
+      window.removeEventListener('up_realtime_driver', handleRealtimeRide);
+      window.removeEventListener('up_realtime_gps', handleRealtimeGps);
+      window.removeEventListener('up_realtime_status', resetPollingSpeed);
       window.removeEventListener('up_database_synced', handleSynced);
       window.removeEventListener('up_rides_updated', handleSynced);
       window.removeEventListener('up_push_received', syncNow);

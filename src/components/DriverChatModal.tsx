@@ -1,99 +1,133 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, Phone, Send, AlertTriangle, CheckCheck, Clock } from 'lucide-react';
-import { Ride } from '../types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { ArrowLeft, Phone, Send, AlertTriangle, CheckCheck } from 'lucide-react';
+import { Ride, RideChatMessage } from '../types';
+import { StorageService } from '../services/storage';
+import { RealtimeService } from '../services/realtime';
 import { getCleanWhatsappNumber } from '../utils/format';
-
-interface ChatMessage {
-  id: string;
-  sender: 'driver' | 'client';
-  text: string;
-  timestamp: string;
-}
 
 interface DriverChatModalProps {
   isOpen: boolean;
   ride: Ride;
-  driverName: string;
+  driverName?: string;
+  viewerRole?: 'driver' | 'client';
   onClose: () => void;
 }
 
-export const DriverChatModal: React.FC<DriverChatModalProps> = ({
+export const RideChatModal: React.FC<DriverChatModalProps> = ({
   isOpen,
   ride,
   driverName,
+  viewerRole = 'driver',
   onClose,
 }) => {
   const [inputText, setInputText] = useState('');
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    // Carrega mensagens salvas no localStorage para esta corrida
-    const storageKey = `kavro_chat_ride_${ride.id}`;
-    const saved = localStorage.getItem(storageKey);
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {}
-    }
-    // Mensagens iniciais padrão
-    return [
-      {
-        id: 'init-1',
-        sender: 'client',
-        text: `Olá! Estou aguardando em ${ride.origin.address.split(',')[0] || 'no ponto de embarque'}.`,
-        timestamp: new Date(Date.now() - 1000 * 60 * 2).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-      }
-    ];
-  });
-
+  const [messages, setMessages] = useState<RideChatMessage[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [sendError, setSendError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const fetchMessages = useCallback(async () => {
+    const res = await StorageService.getRideMessages(ride.id);
+    if (res.ok) {
+      setMessages(res.messages);
+    }
+  }, [ride.id]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setSendError('');
+    setIsLoading(true);
+    fetchMessages().finally(() => setIsLoading(false));
+
+    const handleRealtimeChat = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (!detail || detail.rideId !== ride.id || !detail.message) return;
+      const incoming: RideChatMessage = detail.message;
+      setMessages(prev => (prev.some(m => m.id === incoming.id) ? prev : [...prev, incoming]));
+    };
+
+    window.addEventListener('up_realtime_chat', handleRealtimeChat);
+    const fallbackInterval = window.setInterval(() => {
+      if (!RealtimeService.isConnected()) {
+        fetchMessages();
+      }
+    }, 4000);
+
+    return () => {
+      clearInterval(fallbackInterval);
+      window.removeEventListener('up_realtime_chat', handleRealtimeChat);
+    };
+  }, [isOpen, ride.id, fetchMessages]);
 
   useEffect(() => {
     if (isOpen) {
-      const storageKey = `kavro_chat_ride_${ride.id}`;
-      localStorage.setItem(storageKey, JSON.stringify(messages));
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [messages, isOpen, ride.id]);
+  }, [messages.length, isOpen]);
 
   if (!isOpen) return null;
 
-  const quickReplies = [
-    'Cheguei',
-    'Ok, entendi',
-    'Estou a caminho',
-    'Estou no local de embarque',
-    'O trânsito está um pouco lento',
-    'Pode me confirmar o ponto de referência?'
-  ];
+  const isDriverView = viewerRole === 'driver';
+  const quickReplies = isDriverView
+    ? [
+        'Cheguei',
+        'Estou a caminho',
+        'Estou no local de embarque',
+        'O trânsito está um pouco lento',
+        'Pode confirmar o ponto de referência?'
+      ]
+    : [
+        'Já estou descendo',
+        'Estou no ponto de embarque',
+        'Ok, obrigado!',
+        'Pode aguardar 1 minuto?',
+        'Estou aqui na entrada'
+      ];
 
-  const handleSendMessage = (textToSend?: string) => {
-    const text = (textToSend || inputText).trim();
-    if (!text) return;
+  const handleSendMessage = async (textToSend?: string) => {
+    const text = (textToSend ?? inputText).trim();
+    if (!text || isSending) return;
 
-    const newMsg: ChatMessage = {
-      id: `msg-${Date.now()}`,
-      sender: 'driver',
-      text,
-      timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    };
-
-    setMessages(prev => [...prev, newMsg]);
+    setSendError('');
+    setIsSending(true);
     if (!textToSend) setInputText('');
 
-    // Resposta automática simulada do passageiro após 2.5 segundos para teste realista
-    if (text.toLowerCase().includes('cheguei') || text.toLowerCase().includes('caminho')) {
-      setTimeout(() => {
-        const autoReply: ChatMessage = {
-          id: `reply-${Date.now()}`,
-          sender: 'client',
-          text: 'Perfeito, já estou saindo! Obrigado.',
-          timestamp: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-        };
-        setMessages(prev => [...prev, autoReply]);
-      }, 2500);
+    const res = await StorageService.sendRideMessage(ride.id, {
+      text,
+      senderRole: viewerRole,
+      senderName: isDriverView ? (driverName || ride.driverName || 'Motorista') : (ride.clientName || 'Passageiro')
+    });
+
+    setIsSending(false);
+
+    if (!res.ok || !res.message) {
+      if (!textToSend) setInputText(text);
+      setSendError(res.error || 'Erro ao enviar mensagem.');
+      return;
     }
+
+    const created = res.message;
+    setMessages(prev => (prev.some(m => m.id === created.id) ? prev : [...prev, created]));
   };
 
-  const cleanPhone = getCleanWhatsappNumber(ride.clientPhone || '');
+  const counterpartName = isDriverView
+    ? (ride.clientName || 'Passageiro')
+    : (ride.driverName || driverName || 'Motorista Parceiro');
+  const counterpartSub = isDriverView
+    ? 'Passageiro Kavro Drive • Tempo real'
+    : `${ride.driverVehicle || 'Motorista Parceiro'} • Tempo real`;
+  const counterpartPhone = isDriverView
+    ? getCleanWhatsappNumber(ride.clientPhone || '')
+    : getCleanWhatsappNumber(ride.driverPhone || '');
+
+  const formatTime = (iso: string) => {
+    try {
+      return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
 
   return (
     <div style={{
@@ -120,6 +154,7 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
           <button
             type="button"
             onClick={onClose}
+            aria-label="Voltar do chat"
             style={{
               background: 'none',
               border: 'none',
@@ -135,37 +170,45 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
           </button>
           <div>
             <div style={{ fontSize: '1.1rem', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.02em' }}>
-              {ride.clientName || 'Passageiro'}
+              {counterpartName}
             </div>
-            <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>
-              Passageiro Kavro Drive
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.72rem', color: '#94A3B8' }}>
+              <span style={{
+                width: 7,
+                height: 7,
+                borderRadius: '50%',
+                backgroundColor: '#22C55E',
+                display: 'inline-block'
+              }} />
+              <span>{counterpartSub}</span>
             </div>
           </div>
         </div>
 
-        {/* Botão de Ligação / WhatsApp */}
-        <a
-          href={cleanPhone ? `https://wa.me/${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(ride.clientName)}%2C%20sou%20seu%20motorista%20Kavro%20Drive!` : '#'}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: '50%',
-            backgroundColor: '#232E3B',
-            color: '#FFFFFF',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            textDecoration: 'none',
-            border: '1px solid #334155'
-          }}
-        >
-          <Phone size={18} />
-        </a>
+        {/* Botão de Ligação direta */}
+        {counterpartPhone && (
+          <a
+            href={`tel:${counterpartPhone}`}
+            aria-label="Ligar"
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: '50%',
+              backgroundColor: '#232E3B',
+              color: '#FFFFFF',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textDecoration: 'none',
+              border: '1px solid #334155'
+            }}
+          >
+            <Phone size={18} />
+          </a>
+        )}
       </header>
 
-      {/* Corpo com mensagens e Aviso de Segurança estilo Uber */}
+      {/* Corpo com mensagens e Aviso de Segurança */}
       <div style={{
         flex: 1,
         overflowY: 'auto',
@@ -174,7 +217,6 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
         flexDirection: 'column',
         gap: 12
       }}>
-        {/* Data centralizada */}
         <div style={{
           textAlign: 'center',
           fontSize: '0.74rem',
@@ -182,33 +224,44 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
           fontWeight: 600,
           marginBottom: 4
         }}>
-          {new Date().toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' })} às {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+          Corrida {ride.rideCode || ride.id} • {new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })}
         </div>
 
-        {/* Card Oficial de Aviso Uber Driver */}
+        {/* Card Oficial de Aviso */}
         <div style={{
           backgroundColor: 'rgba(30, 41, 59, 0.7)',
           border: '1px solid #334155',
           borderRadius: 16,
-          padding: '16px 14px',
+          padding: '14px',
           textAlign: 'center',
           maxWidth: 320,
-          margin: '0 auto 12px auto'
+          margin: '0 auto 8px auto'
         }}>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 8, color: '#F59E0B' }}>
-            <AlertTriangle size={32} />
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 6, color: '#F59E0B' }}>
+            <AlertTriangle size={28} />
           </div>
-          <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#FFFFFF', marginBottom: 6 }}>
-            Mensagem de aviso
+          <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#FFFFFF', marginBottom: 4 }}>
+            Chat direto da viagem
           </div>
-          <div style={{ fontSize: '0.8rem', color: '#94A3B8', lineHeight: 1.45 }}>
-            Para a segurança da sua conta, nunca compartilhe informações pessoais ou da sua conta neste chat.
+          <div style={{ fontSize: '0.78rem', color: '#94A3B8', lineHeight: 1.45 }}>
+            Para sua segurança, nunca compartilhe senhas ou dados bancários neste chat. Mensagens sincronizadas em tempo real.
           </div>
         </div>
 
-        {/* Lista de Mensagens do Chat */}
+        {isLoading && messages.length === 0 && (
+          <div style={{ textAlign: 'center', fontSize: '0.84rem', color: '#94A3B8', padding: '20px 0' }}>
+            Carregando histórico do chat...
+          </div>
+        )}
+
+        {!isLoading && messages.length === 0 && (
+          <div style={{ textAlign: 'center', fontSize: '0.82rem', color: '#64748B', padding: '16px 12px' }}>
+            Nenhuma mensagem ainda. Use um atalho abaixo ou digite para iniciar a conversa ao vivo.
+          </div>
+        )}
+
         {messages.map(msg => {
-          const isMe = msg.sender === 'driver';
+          const isMe = msg.sender === viewerRole;
           return (
             <div
               key={msg.id}
@@ -241,7 +294,7 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
                 marginTop: 3,
                 padding: '0 4px'
               }}>
-                <span>{msg.timestamp}</span>
+                <span>{formatTime(msg.createdAt)}</span>
                 {isMe && <CheckCheck size={12} color="#60A5FA" />}
               </div>
             </div>
@@ -250,7 +303,7 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Seção Inferior: Chips Rápidos + Campo de Texto estilo Uber Driver */}
+      {/* Seção Inferior: Chips Rápidos + Campo de Texto */}
       <div style={{
         padding: '10px 14px calc(14px + env(safe-area-inset-bottom, 0px)) 14px',
         backgroundColor: '#161F28',
@@ -260,7 +313,12 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
         flexDirection: 'column',
         gap: 10
       }}>
-        {/* Chips de Resposta Rápida com scroll horizontal */}
+        {sendError && (
+          <div style={{ fontSize: '0.78rem', color: '#FCA5A5', fontWeight: 600 }}>
+            {sendError}
+          </div>
+        )}
+
         <div style={{
           display: 'flex',
           gap: 8,
@@ -272,6 +330,7 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
             <button
               key={index}
               type="button"
+              disabled={isSending}
               onClick={() => handleSendMessage(reply)}
               style={{
                 padding: '8px 15px',
@@ -291,7 +350,6 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
           ))}
         </div>
 
-        {/* Input Bar com Botão Enviar */}
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -305,7 +363,7 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
         >
           <input
             type="text"
-            placeholder="Mensagem..."
+            placeholder="Mensagem em tempo real..."
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             style={{
@@ -323,18 +381,19 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
 
           <button
             type="submit"
-            disabled={!inputText.trim()}
+            disabled={!inputText.trim() || isSending}
+            aria-label="Enviar mensagem"
             style={{
               width: 46,
               height: 46,
               borderRadius: '50%',
-              backgroundColor: inputText.trim() ? '#2563EB' : '#232E3B',
+              backgroundColor: inputText.trim() && !isSending ? '#2563EB' : '#232E3B',
               border: 'none',
               color: '#FFFFFF',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              cursor: inputText.trim() ? 'pointer' : 'default',
+              cursor: inputText.trim() && !isSending ? 'pointer' : 'default',
               transition: 'all 0.15s ease'
             }}
           >
@@ -346,3 +405,4 @@ export const DriverChatModal: React.FC<DriverChatModalProps> = ({
   );
 };
 
+export const DriverChatModal = RideChatModal;

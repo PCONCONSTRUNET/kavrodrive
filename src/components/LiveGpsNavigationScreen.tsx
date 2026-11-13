@@ -669,7 +669,25 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           setGpsFixed(true);
         }
       };
+      const handleRealtimeGps = (e: Event) => {
+        const detail = (e as CustomEvent)?.detail;
+        if (!detail || detail.rideId !== ride.id) return;
+        if (detail.driverLocation?.lat) {
+          updateDriverPosIfChanged(
+            detail.driverLocation.lat,
+            detail.driverLocation.lng,
+            detail.driverLocation.heading || 0
+          );
+          setSpeed(detail.driverLocation.speedKmH || 0);
+          setGpsFixed(true);
+        }
+        if (detail.status && detail.status !== rideStatus) {
+          setRideStatus(detail.status);
+        }
+      };
+
       window.addEventListener('up_driver_location_update', handleDriverLocEvent);
+      window.addEventListener('up_realtime_gps', handleRealtimeGps);
 
       return () => {
         clearInterval(pollInterval);
@@ -677,6 +695,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           navigator.geolocation.clearWatch(watchId);
         }
         window.removeEventListener('up_driver_location_update', handleDriverLocEvent);
+        window.removeEventListener('up_realtime_gps', handleRealtimeGps);
       };
     }
   }, [isOpen, isDriver, ride.id]);

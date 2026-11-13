@@ -9,9 +9,11 @@ import {
 import { LocationPoint, PaymentMethod, Ride, SystemConfig, SavedCard } from '../types';
 import { calculateHaversineDistance, estimateDurationMinutes, reverseGeocode } from '../utils/geo';
 import { calculateRidePrice, StorageService } from '../services/storage';
+import { RealtimeService } from '../services/realtime';
 import { AddressPickerModal } from '../components/AddressPickerModal';
 import { PassengerLiveMap, OnlineDriverMapDot } from '../components/PassengerLiveMap';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
+import { RideChatModal } from '../components/DriverChatModal';
 import { formatRideCode, getCleanWhatsappNumber } from '../utils/format';
 import {
   normalizeCategoriesFromConfig,
@@ -97,6 +99,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [requestError, setRequestError] = useState('');
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [isRatingSheetOpen, setIsRatingSheetOpen] = useState(false);
   const [ratedRideSheetShownId, setRatedRideSheetShownId] = useState<string>('');
   const [copiedPix, setCopiedPix] = useState(false);
@@ -161,26 +165,39 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   }, [currentUser?.id, currentUser?.phone]);
 
-  // Atualiza em tempo real o status da corrida solicitada (Pix confirmado -> motorista aceitou -> fila -> a caminho)
+  // Atualiza em tempo real o status da corrida solicitada (SSE + fallback leve)
   useEffect(() => {
     if (!activeRide) return;
+    setUnreadChatCount(0);
     const syncActive = () => {
       const latest = StorageService.getRides().find(r => r.id === activeRide.id);
       if (latest) {
         setActiveRide(latest);
       }
     };
+    const handleRealtimeChat = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (!detail || detail.rideId !== activeRide.id || !detail.message) return;
+      if (detail.message.sender === 'driver' && !isChatOpen) {
+        setUnreadChatCount(c => c + 1);
+      }
+    };
     window.addEventListener('up_rides_updated', syncActive);
     window.addEventListener('up_database_synced', syncActive);
+    window.addEventListener('up_realtime_ride', syncActive);
+    window.addEventListener('up_realtime_chat', handleRealtimeChat);
+    const intervalMs = RealtimeService.isConnected() ? 10000 : 2000;
     const interval = setInterval(() => {
       StorageService.syncFromDatabase().then(syncActive);
-    }, 1800);
+    }, intervalMs);
     return () => {
       clearInterval(interval);
       window.removeEventListener('up_rides_updated', syncActive);
       window.removeEventListener('up_database_synced', syncActive);
+      window.removeEventListener('up_realtime_ride', syncActive);
+      window.removeEventListener('up_realtime_chat', handleRealtimeChat);
     };
-  }, [activeRide?.id]);
+  }, [activeRide?.id, isChatOpen]);
 
   // Abre automaticamente o bottom sheet estilo Uber assim que a corrida finaliza
   useEffect(() => {
@@ -805,13 +822,15 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 )}
               </div>
 
-              {/* Ações rápidas com o motorista (Enviar mensagem + Ligar) */}
-              {activeRide.driverPhone && (
+              {/* Ações rápidas com o motorista (Chat ao vivo no app + Ligar) */}
+              {activeRide.driverId && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
-                  <a
-                    href={`https://wa.me/${cleanDriverPhone}?text=${encodeURIComponent(`Olá ${activeRide.driverName || ''}, sou o passageiro da corrida ${formatRideCode(activeRide)}!`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnreadChatCount(0);
+                      setIsChatOpen(true);
+                    }}
                     style={{
                       flex: 1,
                       height: 40,
@@ -823,34 +842,55 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                       fontWeight: 700,
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 8,
+                      justifyContent: 'space-between',
                       padding: '0 14px',
-                      textDecoration: 'none'
+                      cursor: 'pointer'
                     }}
                   >
-                    <MessageSquare size={15} color="#4B5563" />
-                    <span>Enviar mensagem...</span>
-                  </a>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <MessageSquare size={15} color="#2563EB" />
+                      <span>Mensagem em tempo real...</span>
+                    </span>
+                    {unreadChatCount > 0 && (
+                      <span style={{
+                        minWidth: 18,
+                        height: 18,
+                        padding: '0 5px',
+                        borderRadius: 999,
+                        backgroundColor: '#2563EB',
+                        color: '#FFFFFF',
+                        fontSize: '0.7rem',
+                        fontWeight: 900,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        {unreadChatCount}
+                      </span>
+                    )}
+                  </button>
 
-                  <a
-                    href={`tel:${cleanDriverPhone}`}
-                    aria-label="Ligar para motorista"
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: '50%',
-                      backgroundColor: '#FFFFFF',
-                      border: '1px solid #D1D5DB',
-                      color: '#111111',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      textDecoration: 'none',
-                      flexShrink: 0
-                    }}
-                  >
-                    <Phone size={16} />
-                  </a>
+                  {activeRide.driverPhone && (
+                    <a
+                      href={`tel:${cleanDriverPhone}`}
+                      aria-label="Ligar para motorista"
+                      style={{
+                        width: 40,
+                        height: 40,
+                        borderRadius: '50%',
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #D1D5DB',
+                        color: '#111111',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        textDecoration: 'none',
+                        flexShrink: 0
+                      }}
+                    >
+                      <Phone size={16} />
+                    </a>
+                  )}
                 </div>
               )}
             </div>
@@ -986,6 +1026,13 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             setIsRatingSheetOpen(false);
             setActiveRide(null);
           }}
+        />
+
+        <RideChatModal
+          isOpen={isChatOpen}
+          ride={activeRide}
+          viewerRole="client"
+          onClose={() => setIsChatOpen(false)}
         />
       </div>
     );

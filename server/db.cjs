@@ -137,6 +137,8 @@ function getInitialStore() {
     notifications: [],
     blocked_slots: {},
     ride_trail_points: [],
+    ride_chat_messages: [],
+    password_reset_codes: [],
     sos_alerts: {}
   };
 }
@@ -154,6 +156,8 @@ function loadLocalStore() {
       if (!Array.isArray(merged.payment_transactions)) merged.payment_transactions = [];
       if (!Array.isArray(merged.saved_cards)) merged.saved_cards = [];
       if (!Array.isArray(merged.withdrawal_requests)) merged.withdrawal_requests = [];
+      if (!Array.isArray(merged.ride_chat_messages)) merged.ride_chat_messages = [];
+      if (!Array.isArray(merged.password_reset_codes)) merged.password_reset_codes = [];
       return merged;
     }
   } catch {
@@ -225,6 +229,24 @@ async function localQuery(text, params = []) {
     if (upper.includes('WHERE ID = $1')) {
       const found = localStore.rides.find(r => r.id === params[0]);
       return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
+    }
+    if (upper.includes('WHERE DRIVER_ID = $1') && upper.includes('PASSENGER_RATING')) {
+      const rows = localStore.rides.filter(
+        r => r.driver_id === params[0] && Number(r.passenger_rating) > 0
+      );
+      return { rows, rowCount: rows.length };
+    }
+    if (upper.includes('CLIENT_RATED_STARS') && (upper.includes('WHERE CLIENT_ID = $1') || upper.includes('WHERE CLIENT_PHONE'))) {
+      const pId = String(params[0] || '');
+      const pPhone = String(params[1] || '').replace(/\D/g, '');
+      const rows = localStore.rides.filter(r => {
+        if (!(Number(r.client_rated_stars) > 0)) return false;
+        const matchId = pId && r.client_id === pId;
+        const rPhone = String(r.client_phone || '').replace(/\D/g, '');
+        const matchPhone = pPhone && pPhone.length >= 8 && rPhone === pPhone;
+        return Boolean(matchId || matchPhone);
+      });
+      return { rows, rowCount: rows.length };
     }
     const sorted = [...localStore.rides].sort((a, b) => {
       const cmpCreated = String(b.created_at || '').localeCompare(String(a.created_at || ''));
@@ -484,6 +506,11 @@ async function localQuery(text, params = []) {
       if (c) { c.password_hash = params[0]; saveLocalStore(); }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
     }
+    if (upper.includes('SET RATING = $1 WHERE ID = $2')) {
+      const c = localStore.clients.find(item => item.id === params[1]);
+      if (c) { c.rating = Number(params[0]); saveLocalStore(); }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
     if (upper.includes('SET NAME = $1, PHONE = $2, EMAIL = $3 WHERE ID = $4')) {
       const c = localStore.clients.find(item => item.id === params[3]);
       if (c) {
@@ -594,6 +621,73 @@ async function localQuery(text, params = []) {
     }
     saveLocalStore();
     return { rows: [], rowCount: 1 };
+  }
+
+  // 9. drivers password reset
+  if (upper.startsWith('UPDATE PUBLIC.DRIVERS') && upper.includes('SET PASSWORD_HASH = $1 WHERE ID = $2')) {
+    const d = localStore.drivers.find(item => item.id === params[1]);
+    if (d) { d.password_hash = params[0]; d.updated_at = new Date().toISOString(); saveLocalStore(); }
+    return { rows: d ? [d] : [], rowCount: d ? 1 : 0 };
+  }
+
+  // 10. ride_chat_messages
+  if (upper.startsWith('SELECT') && upper.includes('FROM PUBLIC.RIDE_CHAT_MESSAGES')) {
+    const rideId = params[0];
+    const rows = (localStore.ride_chat_messages || [])
+      .filter(m => m.ride_id === rideId)
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    return { rows, rowCount: rows.length };
+  }
+  if (upper.startsWith('INSERT INTO PUBLIC.RIDE_CHAT_MESSAGES')) {
+    const row = {
+      id: params[0],
+      ride_id: params[1],
+      sender_role: params[2],
+      sender_name: params[3],
+      text: params[4],
+      created_at: params[5] || new Date().toISOString()
+    };
+    if (!Array.isArray(localStore.ride_chat_messages)) localStore.ride_chat_messages = [];
+    localStore.ride_chat_messages.push(row);
+    saveLocalStore();
+    return { rows: [row], rowCount: 1 };
+  }
+
+  // 11. password_reset_codes
+  if (upper.startsWith('INSERT INTO PUBLIC.PASSWORD_RESET_CODES')) {
+    if (!Array.isArray(localStore.password_reset_codes)) localStore.password_reset_codes = [];
+    const row = {
+      id: params[0],
+      role: params[1],
+      user_id: params[2],
+      identifier: params[3],
+      code_hash: params[4],
+      attempts: 0,
+      expires_at: params[5],
+      used_at: null,
+      created_at: new Date().toISOString()
+    };
+    localStore.password_reset_codes.unshift(row);
+    localStore.password_reset_codes = localStore.password_reset_codes.slice(0, 200);
+    saveLocalStore();
+    return { rows: [row], rowCount: 1 };
+  }
+  if (upper.startsWith('SELECT') && upper.includes('FROM PUBLIC.PASSWORD_RESET_CODES')) {
+    const role = params[0];
+    const userId = params[1];
+    const rows = (localStore.password_reset_codes || [])
+      .filter(c => c.role === role && c.user_id === userId && !c.used_at)
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    return { rows: rows.slice(0, 1), rowCount: rows.length > 0 ? 1 : 0 };
+  }
+  if (upper.startsWith('UPDATE PUBLIC.PASSWORD_RESET_CODES')) {
+    const entry = (localStore.password_reset_codes || []).find(c => c.id === params[0]);
+    if (entry) {
+      if (upper.includes('USED_AT')) entry.used_at = new Date().toISOString();
+      if (upper.includes('ATTEMPTS')) entry.attempts = Number(entry.attempts || 0) + 1;
+      saveLocalStore();
+    }
+    return { rows: entry ? [entry] : [], rowCount: entry ? 1 : 0 };
   }
 
   return { rows: [], rowCount: 0 };

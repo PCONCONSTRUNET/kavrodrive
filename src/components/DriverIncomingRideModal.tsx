@@ -2,10 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { X, User, Star } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { getCategoryById } from '../utils/categoryEngine';
+import { calculateHaversineDistance } from '../utils/geo';
 
 interface DriverIncomingRideModalProps {
   ride: Ride | null;
   config: SystemConfig;
+  driverLocation?: { lat: number; lng: number } | null;
   onAccept: (rideId: string) => void;
   onDecline: (rideId: string) => void;
 }
@@ -13,6 +15,7 @@ interface DriverIncomingRideModalProps {
 export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = ({
   ride,
   config,
+  driverLocation,
   onAccept,
   onDecline,
 }) => {
@@ -40,6 +43,25 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
   const driverNet = ride.driverNetAmount || (ride.totalPrice * (1 - (ride.commissionPercent || 20) / 100));
   const kmEst = (driverNet / Math.max(1, ride.distanceKm || 3)).toFixed(2).replace('.', ',');
   const progressPercent = (timeLeft / 25) * 100;
+
+  const clientFirstName = (ride.clientName || 'Passageiro').split(' ')[0];
+  const clientRatingLabel =
+    typeof ride.clientRating === 'number' && ride.clientRating > 0
+      ? ride.clientRating.toFixed(2).replace('.', ',')
+      : 'Novo';
+
+  const hasPickupCoords = Boolean(
+    driverLocation &&
+    typeof driverLocation.lat === 'number' &&
+    typeof driverLocation.lng === 'number' &&
+    ride.origin &&
+    typeof ride.origin.lat === 'number' &&
+    typeof ride.origin.lng === 'number'
+  );
+  const pickupDistKm = hasPickupCoords
+    ? calculateHaversineDistance(driverLocation!.lat, driverLocation!.lng, ride.origin.lat, ride.origin.lng)
+    : null;
+  const pickupEtaMin = pickupDistKm !== null ? Math.max(1, Math.round(pickupDistKm * 2.5)) : null;
 
   return (
     <div style={{
@@ -165,7 +187,7 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
             <Star size={15} fill="#0F172A" color="#0F172A" />
-            <span>4,92 ({ride.clientName.split(' ')[0]})</span>
+            <span>{clientRatingLabel} ({clientFirstName})</span>
           </div>
         </div>
 
@@ -199,7 +221,9 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
               boxShadow: '0 0 0 2px #2563EB'
             }} />
             <div style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: 700 }}>
-              ~3 min ({ride.distanceKm ? (ride.distanceKm * 0.2).toFixed(1) : '1.2'} km até embarque)
+              {pickupDistKm !== null && pickupEtaMin !== null
+                ? `~${pickupEtaMin} min (${pickupDistKm.toFixed(1)} km até embarque)`
+                : 'Ponto de embarque'}
             </div>
             <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.3 }}>
               {ride.origin.address}

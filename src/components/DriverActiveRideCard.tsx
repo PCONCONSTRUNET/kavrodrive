@@ -18,6 +18,7 @@ interface DriverActiveRideCardProps {
     step: RouteStepSummary;
   } | null;
   onOpenChat: () => void;
+  unreadChatCount?: number;
   onOpenGps: () => void;
   onOpenPreferences?: () => void;
   onOpenSos?: () => void;
@@ -32,6 +33,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
   config,
   routeInfo,
   onOpenChat,
+  unreadChatCount = 0,
   onOpenGps,
   onOpenPreferences,
   onOpenSos,
@@ -464,6 +466,23 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                   >
                     <MessageSquare size={15} />
                     <span>Mensagem</span>
+                    {unreadChatCount > 0 && (
+                      <span style={{
+                        minWidth: 18,
+                        height: 18,
+                        padding: '0 5px',
+                        borderRadius: 999,
+                        backgroundColor: '#2563EB',
+                        color: '#FFFFFF',
+                        fontSize: '0.7rem',
+                        fontWeight: 900,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        {unreadChatCount}
+                      </span>
+                    )}
                   </button>
 
                   {cleanPhone && (

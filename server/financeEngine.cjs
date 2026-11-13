@@ -260,6 +260,28 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_provider_tx_id TEXT;
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_status TEXT;
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_provider TEXT;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS rating NUMERIC;
+      ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS client_rated_stars NUMERIC;
+      CREATE TABLE IF NOT EXISTS public.ride_chat_messages (
+        id VARCHAR(64) PRIMARY KEY,
+        ride_id VARCHAR(50) NOT NULL,
+        sender_role VARCHAR(20) NOT NULL,
+        sender_name TEXT NOT NULL,
+        text TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_ride_chat_messages_ride_id ON public.ride_chat_messages (ride_id, created_at);
+      CREATE TABLE IF NOT EXISTS public.password_reset_codes (
+        id VARCHAR(64) PRIMARY KEY,
+        role VARCHAR(20) NOT NULL,
+        user_id VARCHAR(64) NOT NULL,
+        identifier TEXT NOT NULL,
+        code_hash VARCHAR(128) NOT NULL,
+        attempts INTEGER DEFAULT 0,
+        expires_at TIMESTAMPTZ NOT NULL,
+        used_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
     `);
     extendedSchemaReady = true;
   } catch (err) {

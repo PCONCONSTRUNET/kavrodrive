@@ -11,7 +11,8 @@ import {
   SavedCard,
   PaymentTransaction,
   WithdrawalRequest,
-  FinancialLedgerEntry
+  FinancialLedgerEntry,
+  RideChatMessage
 } from '../types';
 import { formatRideCode, getNextSequentialRideId } from '../utils/format';
 import {
@@ -1886,6 +1887,108 @@ export const StorageService = {
     city?: string
   ) {
     return calculateRidePrice(distanceKm, durationMin, timeStr, config, categoryId, city);
+  },
+
+  async getRideMessages(rideId: string): Promise<{ ok: boolean; messages: RideChatMessage[]; error?: string }> {
+    try {
+      const currentUser = this.getCurrentUser();
+      const currentDriver = this.getCurrentDriver();
+      const headers: Record<string, string> = this.getAuthHeaders();
+      if (currentUser?.id) headers['x-client-id'] = currentUser.id;
+      if (currentUser?.phone) headers['x-client-phone'] = currentUser.phone;
+      if (currentDriver?.id) headers['x-driver-id'] = currentDriver.id;
+
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/messages?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, messages: [], error: data.error || 'Erro ao carregar mensagens.' };
+      }
+      return { ok: true, messages: Array.isArray(data.messages) ? data.messages : [] };
+    } catch {
+      return { ok: false, messages: [], error: 'Erro de conexão ao carregar chat.' };
+    }
+  },
+
+  async sendRideMessage(
+    rideId: string,
+    payload: { text: string; senderRole: 'driver' | 'client'; senderName?: string }
+  ): Promise<{ ok: boolean; message?: RideChatMessage; error?: string }> {
+    try {
+      const currentUser = this.getCurrentUser();
+      const currentDriver = this.getCurrentDriver();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...this.getAuthHeaders()
+      };
+      if (currentUser?.id) headers['x-client-id'] = currentUser.id;
+      if (currentUser?.phone) headers['x-client-phone'] = currentUser.phone;
+      if (currentDriver?.id) headers['x-driver-id'] = currentDriver.id;
+
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/messages`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error || 'Não foi possível enviar a mensagem.' };
+      }
+      return { ok: true, message: data.message };
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao enviar mensagem.' };
+    }
+  },
+
+  async requestPasswordRecovery(
+    role: 'client' | 'driver',
+    identifier: string
+  ): Promise<{
+    ok: boolean;
+    maskedDestination?: string;
+    channels?: string[];
+    expiresInMinutes?: number;
+    devCode?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/auth/recovery/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, identifier })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error || 'Não foi possível iniciar a recuperação.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao solicitar código de recuperação.' };
+    }
+  },
+
+  async resetPasswordWithOtp(
+    role: 'client' | 'driver',
+    identifier: string,
+    code: string,
+    newPassword: string
+  ): Promise<{ ok: boolean; message?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/auth/recovery/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role, identifier, code, newPassword })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data.error || 'Não foi possível redefinir a senha.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao redefinir a senha.' };
+    }
   }
 };
 

@@ -1,0 +1,357 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+
+// Força modo armazenamento local isolado antes de carregar db.cjs/env.cjs
+process.env.DATABASE_URL = ' ';
+process.env.NODE_ENV = 'test';
+
+const LOCAL_DB_PATH = path.resolve(__dirname, '..', 'server', '.local-db.json');
+const hadLocalDbFile = fs.existsSync(LOCAL_DB_PATH);
+const originalLocalDbRaw = hadLocalDbFile ? fs.readFileSync(LOCAL_DB_PATH, 'utf8') : null;
+
+const db = require('../server/db.cjs');
+const finance = require('../server/financeEngine.cjs');
+const realtimeHub = require('../server/realtimeHub.cjs');
+const { handleApiRequest } = require('../server/apiHandler.cjs');
+
+// Garante que chaves de serviços externos carregadas do .env não disparem chamadas externas em testes
+delete process.env.TURNSTILE_SECRET_KEY;
+delete process.env.RESEND_API_KEY;
+delete process.env.OTP_WEBHOOK_URL;
+delete process.env.ONESIGNAL_REST_API_KEY;
+delete process.env.VERCEL;
+
+const originalStoreSnapshot = JSON.parse(JSON.stringify(db.localStore));
+
+let server;
+let baseUrl;
+let activeSseRequests = new Set();
+
+function scryptHash(password) {
+  const salt = 'upmob2026salt0000';
+  const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `scrypt:${salt}:${derived}`;
+}
+
+async function apiJson(route, options = {}) {
+  const res = await fetch(`${baseUrl}${route}`, {
+    method: options.method || 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    },
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+  });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = text ? JSON.parse(text) : null;
+  } catch {
+    json = { raw: text };
+  }
+  return { status: res.status, headers: res.headers, json };
+}
+
+test.before(async () => {
+  server = http.createServer((req, res) => {
+    handleApiRequest(req, res).catch((err) => {
+      if (!res.headersSent) {
+        res.statusCode = 500;
+        res.end(JSON.stringify({ error: err.message }));
+      }
+    });
+  });
+
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const addr = server.address();
+  baseUrl = `http://127.0.0.1:${addr.port}`;
+});
+
+test.after(async () => {
+  for (const req of activeSseRequests) {
+    try {
+      req.destroy();
+    } catch {}
+  }
+  activeSseRequests.clear();
+
+  if (server) {
+    await new Promise((resolve) => server.close(resolve));
+  }
+
+  // Restaura db.localStore em memória sem perder a referência exportada
+  for (const key of Object.keys(db.localStore)) {
+    delete db.localStore[key];
+  }
+  Object.assign(db.localStore, JSON.parse(JSON.stringify(originalStoreSnapshot)));
+
+  if (hadLocalDbFile) {
+    fs.writeFileSync(LOCAL_DB_PATH, originalLocalDbRaw, 'utf8');
+  } else if (fs.existsSync(LOCAL_DB_PATH)) {
+    fs.unlinkSync(LOCAL_DB_PATH);
+  }
+});
+
+test('financeEngine: calculateSplit e resolveCommissionPercentForRide calculam repasse corretamente', () => {
+  const split = finance.calculateSplit(50, 20);
+  assert.equal(split.grossAmount, 50);
+  assert.equal(split.commissionPercent, 20);
+  assert.equal(split.commissionAmount, 10);
+  assert.equal(split.driverNetAmount, 40);
+
+  const commCat = finance.resolveCommissionPercentForRide(
+    { platformCommissionPercent: 20, paymentMethodCommissionPercents: { pix: 15, dinheiro: 25 } },
+    { commissionPercent: 18 },
+    'pix'
+  );
+  assert.equal(commCat, 15);
+});
+
+test('realtimeHub: publish respeita escopo por rideId e atualiza métricas', () => {
+  const beforeCount = realtimeHub.getStats().totalEventsPublished;
+  const received = [];
+  const handler = (item) => {
+    received.push(item);
+  };
+  realtimeHub.hubEmitter.on('*', handler);
+
+  try {
+    const evt = realtimeHub.publish('chat:message', { rideId: 'UP-900', text: 'Oi' }, { rideId: 'UP-900' });
+    assert.equal(evt.type, 'chat:message');
+    assert.equal(evt.text, 'Oi');
+    assert.equal(received.length, 1);
+    assert.equal(received[0].scope.rideId, 'UP-900');
+    assert.equal(realtimeHub.getStats().totalEventsPublished, beforeCount + 1);
+  } finally {
+    realtimeHub.hubEmitter.off('*', handler);
+  }
+});
+
+test('GET /api/health retorna diagnóstico de prontidão e status SSE', async () => {
+  const { status, json } = await apiJson('/api/health');
+  assert.equal(status, 200);
+  assert.equal(json.ok, true);
+  assert.equal(json.storage, 'local_json');
+  assert.equal(typeof json.uptimeSeconds, 'number');
+  assert.equal(typeof json.realtime?.activeConnections, 'number');
+  assert.equal(typeof json.services?.turnstileConfigured, 'boolean');
+});
+
+test('GET /api/realtime/stream abre stream SSE e transmite evento ao vivo', async () => {
+  await new Promise((resolve, reject) => {
+    const req = http.get(`${baseUrl}/api/realtime/stream?rideId=UP-SSE-1`, (res) => {
+      assert.equal(res.statusCode, 200);
+      assert.ok(String(res.headers['content-type'] || '').includes('text/event-stream'));
+
+      let buffer = '';
+      let sentPublish = false;
+
+      const timer = setTimeout(() => {
+        req.destroy();
+        reject(new Error(`Timeout aguardando eventos SSE. Buffer recebido: ${buffer}`));
+      }, 4000);
+
+      res.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        if (!sentPublish && buffer.includes('event: connected')) {
+          sentPublish = true;
+          realtimeHub.publish('chat:message', { rideId: 'UP-SSE-1', message: { id: 'm-1', text: 'Olá!' } }, { rideId: 'UP-SSE-1' });
+        }
+        if (buffer.includes('event: chat:message') && buffer.includes('Olá!')) {
+          clearTimeout(timer);
+          req.destroy();
+          resolve();
+        }
+      });
+
+      res.on('error', (err) => {
+        if (err && err.code === 'ECONNRESET') return;
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    activeSseRequests.add(req);
+    req.on('close', () => activeSseRequests.delete(req));
+    req.on('error', (err) => {
+      if (err && err.code === 'ECONNRESET') return;
+      reject(err);
+    });
+  });
+});
+
+test('Fluxo Auth + Recuperação de Senha via OTP + Chat Persistido + Avaliação Real do Passageiro', async () => {
+  // 1. Seed de motorista aprovado isolado para o teste
+  const testDriverId = 'drv-test-999';
+  db.localStore.drivers = db.localStore.drivers.filter(d => d.id !== testDriverId);
+  db.localStore.drivers.push({
+    id: testDriverId,
+    name: 'Motorista Teste',
+    phone: '(48) 99111-2233',
+    email: 'motorista.teste@kavro.test',
+    document: '12345678909',
+    cnh: '99887766554',
+    password_hash: scryptHash('1234'),
+    photo: '',
+    vehicle_brand: 'Hyundai',
+    vehicle_model: 'HB20S 1.0',
+    vehicle_color: 'Branco',
+    vehicle_year: '2024',
+    vehicle_plate: 'TST1A23',
+    vehicle_category: 'standard',
+    eligible_categories: ['kavro_go', 'standard'],
+    approval_status: 'aprovado',
+    financial_blocked: false,
+    is_online: true,
+    rating: 5.0,
+    total_rides: 10,
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  });
+
+  // 2. Registro do passageiro
+  const regRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Lucas Passageiro',
+      phone: '(48) 99222-3344',
+      email: 'lucas.teste@kavro.test',
+      password: 'senhaAntiga123',
+      termsAcceptance: { accepted: true, version: '2026.1' }
+    }
+  });
+  assert.equal(regRes.status, 200);
+  assert.equal(regRes.json.ok, true);
+  assert.ok(regRes.json.clientToken);
+  const clientId = regRes.json.client.id;
+
+  // 3. Solicitação de recuperação via OTP -> código inválido falha -> código válido redefine senha -> login funciona
+  const reqOtp = await apiJson('/api/auth/recovery/request', {
+    method: 'POST',
+    body: { role: 'client', identifier: 'lucas.teste@kavro.test' }
+  });
+  assert.equal(reqOtp.status, 200);
+  assert.equal(reqOtp.json.ok, true);
+  assert.match(String(reqOtp.json.devCode || ''), /^\d{6}$/);
+
+  const wrongReset = await apiJson('/api/auth/recovery/reset', {
+    method: 'POST',
+    body: {
+      role: 'client',
+      identifier: 'lucas.teste@kavro.test',
+      code: '000000',
+      newPassword: 'novaSenha456'
+    }
+  });
+  assert.equal(wrongReset.status, 401);
+
+  const okReset = await apiJson('/api/auth/recovery/reset', {
+    method: 'POST',
+    body: {
+      role: 'client',
+      identifier: 'lucas.teste@kavro.test',
+      code: reqOtp.json.devCode,
+      newPassword: 'novaSenha456'
+    }
+  });
+  assert.equal(okReset.status, 200);
+  assert.equal(okReset.json.ok, true);
+
+  const loginNew = await apiJson('/api/clients/login', {
+    method: 'POST',
+    body: { identifier: 'lucas.teste@kavro.test', password: 'novaSenha456' }
+  });
+  assert.equal(loginNew.status, 200);
+  assert.equal(loginNew.json.ok, true);
+  const clientToken = loginNew.json.clientToken;
+
+  // 4. Passageiro cria corrida (sem nota falsa inicial)
+  const createRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': clientToken },
+    body: {
+      clientId,
+      clientName: 'Lucas Passageiro',
+      clientPhone: '(48) 99222-3344',
+      originAddress: 'Rua A, 100 - Centro',
+      destinationAddress: 'Av B, 200 - Bairro',
+      distanceKm: 5.2,
+      durationMin: 12,
+      totalPrice: 24.5,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(createRide.status, 200);
+  assert.equal(createRide.json.ok, true);
+  const rideId = createRide.json.ride.id;
+  assert.equal(createRide.json.ride.clientRating ?? null, null);
+
+  // 5. Login do motorista e aceite da corrida
+  const drvLogin = await apiJson('/api/drivers/login', {
+    method: 'POST',
+    body: { identifier: 'motorista.teste@kavro.test', password: '1234' }
+  });
+  assert.equal(drvLogin.status, 200);
+  const driverToken = drvLogin.json.driverToken;
+
+  const acceptRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': driverToken },
+    body: { driverId: testDriverId }
+  });
+  assert.equal(acceptRes.status, 200);
+  assert.equal(acceptRes.json.ride.driverId, testDriverId);
+
+  // 6. Chat bidirecional real persistido em banco + histórico GET
+  const msgFromClient = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/messages`, {
+    method: 'POST',
+    headers: { 'x-client-token': clientToken },
+    body: { text: 'Estou no portão azul', senderRole: 'client', senderName: 'Lucas Passageiro' }
+  });
+  assert.equal(msgFromClient.status, 200);
+  assert.equal(msgFromClient.json.message.sender, 'client');
+
+  const msgFromDriver = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/messages`, {
+    method: 'POST',
+    headers: { 'x-driver-token': driverToken },
+    body: { text: 'Chegando em 2 minutos!', senderRole: 'driver', senderName: 'Motorista Teste' }
+  });
+  assert.equal(msgFromDriver.status, 200);
+  assert.equal(msgFromDriver.json.message.sender, 'driver');
+
+  const chatHistory = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/messages`, {
+    headers: { 'x-client-token': clientToken }
+  });
+  assert.equal(chatHistory.status, 200);
+  assert.equal(chatHistory.json.messages.length, 2);
+  assert.equal(chatHistory.json.messages[0].text, 'Estou no portão azul');
+  assert.equal(chatHistory.json.messages[1].text, 'Chegando em 2 minutos!');
+
+  // 7. Motorista avalia o passageiro e a média real (clientRating) é persistida no passageiro
+  const rateClient = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/rate`, {
+    method: 'POST',
+    headers: { 'x-driver-token': driverToken },
+    body: {
+      stars: 4,
+      raterRole: 'motorista',
+      comment: 'Passageiro pontual',
+      tags: ['Pontual']
+    }
+  });
+  assert.equal(rateClient.status, 200);
+  assert.equal(rateClient.json.ok, true);
+  assert.equal(rateClient.json.updatedClientRating, 4);
+
+  const ridesList = await apiJson('/api/rides', {
+    headers: { 'x-driver-token': driverToken }
+  });
+  assert.equal(ridesList.status, 200);
+  const updatedRide = ridesList.json.find(r => r.id === rideId);
+  assert.ok(updatedRide);
+  assert.equal(updatedRide.clientRating, 4);
+});

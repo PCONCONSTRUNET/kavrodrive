@@ -6,6 +6,7 @@ import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { TurnstileWidget, isTurnstileEnabled } from './TurnstileWidget';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
+import { PasswordRecoveryModal } from './PasswordRecoveryModal';
 import {
   PASSENGER_TERMS_AFFIRMATIVE_TEXT,
   PASSENGER_TERMS_CONTRACT_ID,
@@ -1066,14 +1067,21 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
               </button>
 
               <div style={{ textAlign: 'center', marginTop: 4 }}>
-                <a
-                  href={`https://wa.me/${getCleanWhatsappNumber(config.companyWhatsapp)}?text=Ol%C3%A1%2C%20esqueci%20minha%20senha%20de%20passageiro%20para%20o%20telefone%20${phone}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ fontSize: '0.85rem', color: '#15803D', fontWeight: 600, textDecoration: 'none' }}
+                <button
+                  type="button"
+                  onClick={() => setActiveModal('find_account')}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: '0.85rem',
+                    color: '#111111',
+                    fontWeight: 700,
+                    textDecoration: 'underline',
+                    cursor: 'pointer'
+                  }}
                 >
-                  Esqueci minha senha • Recuperar via WhatsApp
-                </a>
+                  Esqueci minha senha • Redefinir com código
+                </button>
               </div>
             </form>
           </div>
@@ -1647,82 +1655,26 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         </div>
       )}
 
-      {/* 5. Modal: Encontrar minha conta */}
-      {activeModal === 'find_account' && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.55)',
-          zIndex: 9999,
-          display: 'flex',
-          alignItems: 'flex-end',
-          justifyContent: 'center'
-        }}>
-          <div style={{
-            width: '100%',
-            maxWidth: 480,
-            maxHeight: '92dvh',
-            overflowY: 'auto',
-            backgroundColor: '#FFFFFF',
-            borderTopLeftRadius: 20,
-            borderTopRightRadius: 20,
-            padding: '20px 20px 28px 20px',
-            boxSizing: 'border-box'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <div>
-                <h3 style={{ fontSize: '1.25rem', fontWeight: 800, margin: '0 0 4px 0', color: '#000000' }}>
-                  Recuperar Conta
-                </h3>
-                <p style={{ fontSize: '0.85rem', color: '#6B7280', margin: 0 }}>
-                  Encontre seus dados pelo WhatsApp ou com a central
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveModal(null)}
-                style={{
-                  width: 32, height: 32, borderRadius: '50%',
-                  backgroundColor: '#F3F4F6', border: 'none',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', color: '#374151'
-                }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <p style={{ fontSize: '0.9rem', color: '#4B5563', lineHeight: 1.45, margin: 0 }}>
-                Se você já viajou conosco ou não lembra sua senha, chame nossa central no WhatsApp para redefinição imediata do seu acesso.
-              </p>
-
-              <a
-                href={`https://wa.me/${getCleanWhatsappNumber(config.companyWhatsapp)}?text=Ol%C3%A1%2C%20gostaria%20de%20localizar%20ou%20recuperar%20minha%20conta%20no%20app%20Kavro%20Drive`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  height: 50,
-                  backgroundColor: '#15803D',
-                  color: '#FFFFFF',
-                  borderRadius: 10,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
-                  fontSize: '0.95rem',
-                  fontWeight: 700,
-                  textDecoration: 'none',
-                  marginTop: 6
-                }}
-              >
-                <WhatsAppIcon size={20} />
-                <span>Falar no WhatsApp da Central</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 5. Modal: Recuperar Conta & Senha com Código OTP */}
+      <PasswordRecoveryModal
+        isOpen={activeModal === 'find_account'}
+        role="client"
+        initialIdentifier={emailIdentifier.trim() || phone.trim()}
+        companyWhatsapp={config.companyWhatsapp}
+        onClose={() => setActiveModal(null)}
+        onRecovered={(idVal) => {
+          if (idVal.includes('@')) {
+            setEmailIdentifier(idVal);
+            setEmailPassword('');
+            setIsEmailRegister(false);
+            setActiveModal('email_login');
+          } else {
+            setPhone(idVal);
+            setLoginPassword('');
+            setActiveModal('password_login');
+          }
+        }}
+      />
 
       <PassengerTermsContractModal
         isOpen={isTermsModalOpen}

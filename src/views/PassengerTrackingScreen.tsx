@@ -3,10 +3,12 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { 
   Car, MapPin, Clock, Calendar, CheckCircle2, AlertCircle, 
   Phone, Navigation, ShieldCheck, ArrowLeft, Printer, 
-  Copy, Check, Share2, Sparkles, User, RefreshCw, X, FileText, Play, Star
+  Copy, Check, Share2, Sparkles, User, RefreshCw, X, FileText, Play, Star, MessageSquare
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { RealtimeService } from '../services/realtime';
+import { RideChatModal } from '../components/DriverChatModal';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { PassengerLiveMap } from '../components/PassengerLiveMap';
@@ -40,6 +42,8 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
   const [isSosOpen, setIsSosOpen] = useState(false);
   const [isRatingSheetOpen, setIsRatingSheetOpen] = useState(false);
   const [ratingAutoShownId, setRatingAutoShownId] = useState<string>('');
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
 
   // Busca a corrida correspondente
   const ride =
@@ -112,14 +116,33 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
-  // Auto-refresh a cada 3 segundos para pegar status e GPS atualizado do motorista em tempo real
+  // Atualização em tempo real via SSE + fallback de polling (sem precisar recarregar)
   useEffect(() => {
+    if (!ride?.id) return;
+    const handleChatMsg = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (!detail || detail.rideId !== ride.id || !detail.message) return;
+      if (detail.message.sender === 'driver' && !isChatOpen) {
+        setUnreadChatCount(c => c + 1);
+      }
+    };
+    const handleRealtimeUpdate = () => {
+      StorageService.syncFromDatabase().then(refreshData);
+    };
+    window.addEventListener('up_realtime_chat', handleChatMsg);
+    window.addEventListener('up_realtime_ride', handleRealtimeUpdate);
+
+    const intervalMs = RealtimeService.isConnected() ? 10000 : 3000;
     const interval = setInterval(async () => {
       await StorageService.syncFromDatabase();
       refreshData();
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [refreshData]);
+    }, intervalMs);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('up_realtime_chat', handleChatMsg);
+      window.removeEventListener('up_realtime_ride', handleRealtimeUpdate);
+    };
+  }, [refreshData, ride?.id, isChatOpen]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
@@ -755,7 +778,50 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
           </div>
 
           {/* Botões de Ação Direta com o Motorista */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setUnreadChatCount(0);
+                setIsChatOpen(true);
+              }}
+              style={{
+                backgroundColor: '#111111',
+                color: '#FFFFFF',
+                border: 'none',
+                borderRadius: 12,
+                padding: '10px 10px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                fontSize: '0.82rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                position: 'relative'
+              }}
+            >
+              <MessageSquare size={16} color="#76D800" />
+              <span>Chat</span>
+              {unreadChatCount > 0 && (
+                <span style={{
+                  minWidth: 18,
+                  height: 18,
+                  padding: '0 5px',
+                  borderRadius: 999,
+                  backgroundColor: '#2563EB',
+                  color: '#FFFFFF',
+                  fontSize: '0.7rem',
+                  fontWeight: 900,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}>
+                  {unreadChatCount}
+                </span>
+              )}
+            </button>
+
             <a
               href={`https://wa.me/${driverPhone}?text=Ol%C3%A1,%20sou%20o%20passageiro%20${encodeURIComponent(ride.clientName)}%20sobre%20a%20viagem%20${ride.id}.`}
               target="_blank"
@@ -1040,6 +1106,16 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
           currentLocationText={`${ride.origin.address} ➔ ${ride.destination.address}`}
           rideId={ride.id}
           driverPhone={config?.driverPhone || config?.companyPhone || config?.companyWhatsapp}
+        />
+      )}
+
+      {/* Chat em Tempo Real com o Motorista */}
+      {ride && (
+        <RideChatModal
+          isOpen={isChatOpen}
+          ride={ride}
+          viewerRole="client"
+          onClose={() => setIsChatOpen(false)}
         />
       )}
     </div>

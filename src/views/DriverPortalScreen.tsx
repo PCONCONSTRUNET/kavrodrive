@@ -44,6 +44,7 @@ import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { DriverKycVerificationModal } from '../components/DriverKycVerificationModal';
 import { DriverTermsContractModal } from '../components/DriverTermsContractModal';
 import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
+import { PasswordRecoveryModal } from '../components/PasswordRecoveryModal';
 import {
   DRIVER_TERMS_AFFIRMATIVE_TEXT,
   DRIVER_TERMS_CONTRACT_ID,
@@ -106,6 +107,8 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
+  const [unreadChatCount, setUnreadChatCount] = useState(0);
+  const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
   const [isGpsOpen, setIsGpsOpen] = useState(false);
   const [isKycModalOpen, setIsKycModalOpen] = useState(false);
   const [isSosOpen, setIsSosOpen] = useState(false);
@@ -353,6 +356,31 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     }
     prevRadarIdsRef.current = ids;
   }, [rides, currentDriver?.isOnline, currentDriver?.id, currentDriver?.approvalStatus, currentDriver?.enabledCategories]);
+
+  // Controle de mensagens não lidas em tempo real no chat da corrida ativa
+  const topLevelActiveRideId = currentDriver
+    ? rides.find(
+        r => r.driverId === currentDriver.id &&
+          (r.status === 'a_caminho' || r.status === 'no_local' || r.status === 'em_andamento')
+      )?.id || null
+    : null;
+
+  useEffect(() => {
+    setUnreadChatCount(0);
+  }, [topLevelActiveRideId]);
+
+  useEffect(() => {
+    if (!topLevelActiveRideId) return;
+    const handleChatMsg = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (!detail || detail.rideId !== topLevelActiveRideId || !detail.message) return;
+      if (detail.message.sender === 'client' && !isChatOpen) {
+        setUnreadChatCount(c => c + 1);
+      }
+    };
+    window.addEventListener('up_realtime_chat', handleChatMsg);
+    return () => window.removeEventListener('up_realtime_chat', handleChatMsg);
+  }, [topLevelActiveRideId, isChatOpen]);
 
   // Handlers de Autenticação
   const handleLogoutDriver = () => {
@@ -1071,6 +1099,23 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 <button type="submit" disabled={isLoadingAuth} style={{ ...uPrimaryBtn(isLoadingAuth), marginTop: 8 }}>
                   {isLoadingAuth ? 'Entrando...' : 'Entrar'}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsRecoveryOpen(true)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#111111',
+                    fontSize: '0.86rem',
+                    fontWeight: 700,
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    padding: '6px 0'
+                  }}
+                >
+                  Esqueci minha senha • Redefinir com código
+                </button>
               </form>
             )
           ) : (
@@ -1480,6 +1525,19 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           onAccept={() => {
             setRegTermsAccepted(true);
             setAuthError('');
+          }}
+        />
+
+        <PasswordRecoveryModal
+          isOpen={isRecoveryOpen}
+          role="driver"
+          initialIdentifier={loginIdentifier}
+          companyWhatsapp={config.companyWhatsapp}
+          onClose={() => setIsRecoveryOpen(false)}
+          onRecovered={(idVal) => {
+            setLoginIdentifier(idVal);
+            setLoginStep('password');
+            setLoginPassword('');
           }}
         />
       </div>
@@ -2236,7 +2294,11 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           ride={activeRide}
           config={config}
           routeInfo={activeRouteInfo}
-          onOpenChat={() => setIsChatOpen(true)}
+          onOpenChat={() => {
+            setUnreadChatCount(0);
+            setIsChatOpen(true);
+          }}
+          unreadChatCount={unreadChatCount}
           onOpenGps={() => setIsGpsOpen(true)}
           onOpenPreferences={() => setIsPreferencesOpen(true)}
           onOpenSos={() => setIsSosOpen(true)}
@@ -2254,6 +2316,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         <DriverIncomingRideModal
           ride={incomingRide}
           config={config}
+          driverLocation={currentDriver.location || null}
           onAccept={handleAcceptRide}
           onDecline={handleDeclineRide}
         />
@@ -2327,6 +2390,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           isOpen={isChatOpen}
           ride={activeRide}
           driverName={currentDriver.name}
+          viewerRole="driver"
           onClose={() => setIsChatOpen(false)}
         />
       )}
