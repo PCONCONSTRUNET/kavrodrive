@@ -10,14 +10,18 @@ import {
   DollarSign,
   Eye,
   FileText,
+  Loader2,
   Lock,
   Mail,
   MapPin,
+  Menu,
   Phone,
   Plus,
   QrCode,
   Send,
+  Settings,
   ShieldCheck,
+  Sparkles,
   Star,
   Trash2,
   Upload,
@@ -41,6 +45,7 @@ import {
   resolveVehiclePhotoExact
 } from '../services/vehicleService';
 import { VehiclePhotoPreview } from './VehiclePhotoPreview';
+import { readCrlvDocumentFile } from '../utils/crlvReader';
 
 interface DriverSecondaryTabsProps {
   activeTab: 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
@@ -54,6 +59,8 @@ interface DriverSecondaryTabsProps {
   isSavingPix: boolean;
   pixSaveNotice: string;
   onChangeTab: (tab: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil') => void;
+  onOpenDrawer?: () => void;
+  onOpenPreferences?: () => void;
   onDriverUpdated: (driver: DriverProfile) => void;
   onOpenWithdrawModal: () => void;
   onOpenDebtPixModal: () => void;
@@ -134,6 +141,8 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   isSavingPix,
   pixSaveNotice,
   onChangeTab,
+  onOpenDrawer,
+  onOpenPreferences,
   onDriverUpdated,
   onOpenWithdrawModal,
   onOpenDebtPixModal,
@@ -320,6 +329,13 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   const [isSwitchingVehicleId, setIsSwitchingVehicleId] = useState<string | null>(null);
   const [vehicleFeedback, setVehicleFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const [previewCrlvModal, setPreviewCrlvModal] = useState<{ title: string; crlvNumber: string; url: string } | null>(null);
+  const [isReadingCrlv, setIsReadingCrlv] = useState(false);
+  const [crlvReadProgress, setCrlvReadProgress] = useState('');
+  const [crlvParsedSummary, setCrlvParsedSummary] = useState<{
+    filledFields: string[];
+    source: 'pdf-text' | 'ocr';
+  } | null>(null);
+  const [showQuickManualSearch, setShowQuickManualSearch] = useState(false);
 
   const driverVehicles: DriverVehicle[] = (() => {
     if (Array.isArray(currentDriver.vehicles) && currentDriver.vehicles.length > 0) {
@@ -396,33 +412,96 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
     e.target.value = '';
     if (!file) return;
     setVehicleFeedback(null);
-    if (file.type === 'application/pdf') {
-      if (file.size > 4 * 1024 * 1024) {
-        setVehicleFeedback({ type: 'err', text: 'PDF do CRLV deve ter no máximo 4 MB.' });
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setVehCrlvDocPhoto(reader.result);
-          setVehCrlvFileName(file.name);
-        }
-      };
-      reader.readAsDataURL(file);
+    setCrlvParsedSummary(null);
+
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    if (isPdf && file.size > 4 * 1024 * 1024) {
+      setVehicleFeedback({ type: 'err', text: 'PDF do CRLV deve ter no máximo 4 MB.' });
       return;
     }
+
+    let preparedDataUrl = '';
+    let imageUrlForOcr: string | undefined;
+
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
+      const rawDataUrl = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('Falha ao ler imagem do CRLV.'));
+        reader.onerror = () => reject(new Error('Falha ao ler arquivo do CRLV.'));
         reader.readAsDataURL(file);
       });
-      const compressed = await compressDataUrlForUpload(dataUrl, 1200, 0.82);
-      setVehCrlvDocPhoto(compressed);
+
+      if (isPdf) {
+        preparedDataUrl = rawDataUrl;
+      } else {
+        // Imagem para OCR em alta nitidez + versão comprimida para upload
+        imageUrlForOcr = await compressDataUrlForUpload(rawDataUrl, 1600, 0.9);
+        preparedDataUrl = await compressDataUrlForUpload(rawDataUrl, 1200, 0.82);
+      }
+
+      setVehCrlvDocPhoto(preparedDataUrl);
       setVehCrlvFileName(file.name);
     } catch {
       setVehicleFeedback({ type: 'err', text: 'Não foi possível ler o arquivo do CRLV.' });
+      return;
+    }
+
+    // Leitura automática dos campos do CRLV (PDF nativo ou OCR de imagem)
+    setIsReadingCrlv(true);
+    setCrlvReadProgress('Analisando documento CRLV...');
+    try {
+      const parsed = await readCrlvDocumentFile(file, imageUrlForOcr, (status) => {
+        setCrlvReadProgress(status);
+      });
+
+      const filledFields: string[] = [];
+      if (parsed.brand) {
+        setVehBrand(parsed.brand);
+        filledFields.push('Marca');
+      }
+      if (parsed.model) {
+        setVehModel(parsed.model);
+        filledFields.push('Modelo');
+      }
+      if (parsed.year) {
+        setVehYear(parsed.year);
+        filledFields.push('Ano');
+      }
+      if (parsed.color) {
+        setVehColor(parsed.color);
+        filledFields.push('Cor');
+      }
+      if (parsed.plate) {
+        setVehPlate(formatMercosulPlate(parsed.plate));
+        filledFields.push('Placa');
+      }
+      if (parsed.crlvNumber) {
+        setVehCrlvNumber(parsed.crlvNumber);
+        filledFields.push('Nº CRLV');
+      }
+      if (typeof parsed.hasLargeTrunk === 'boolean') {
+        setVehHasLargeTrunk(parsed.hasLargeTrunk);
+      }
+      if (typeof parsed.hasLeatherSeats === 'boolean') {
+        setVehHasLeatherSeats(parsed.hasLeatherSeats);
+      }
+
+      if (filledFields.length > 0) {
+        setCrlvParsedSummary({ filledFields, source: parsed.source });
+      } else {
+        setVehicleFeedback({
+          type: 'ok',
+          text: 'CRLV anexado! Não foi possível ler os campos automaticamente nesta foto — preencha ou confira os dados abaixo.'
+        });
+      }
+    } catch {
+      setVehicleFeedback({
+        type: 'ok',
+        text: 'CRLV anexado! Preencha ou confira os dados do veículo abaixo para enviar para análise.'
+      });
+    } finally {
+      setIsReadingCrlv(false);
+      setCrlvReadProgress('');
     }
   };
 
@@ -435,7 +514,7 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
       return;
     }
     if (!vehCrlvNumber.trim() || !vehCrlvDocPhoto) {
-      setVehicleFeedback({ type: 'err', text: 'Informe o número do CRLV e anexe a foto ou PDF do CRLV.' });
+      setVehicleFeedback({ type: 'err', text: 'Anexe o CRLV e confira o número / código de segurança do CRLV.' });
       return;
     }
     setIsSavingVehicle(true);
@@ -469,6 +548,9 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
     setVehCrlvFileName('');
     setVehPhotoUrl('');
     setVehPhotoCandidates([]);
+    setCrlvParsedSummary(null);
+    setCrlvReadProgress('');
+    setShowQuickManualSearch(false);
     setVehicleFeedback({
       type: 'ok',
       text: 'Veículo e CRLV enviados para análise! Acompanhe o status abaixo.'
@@ -602,15 +684,63 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
       boxSizing: 'border-box',
       paddingBottom: 'calc(28px + env(safe-area-inset-bottom, 0px))'
     }}>
-      {/* Top Header Sticky estilo Uber */}
-      <div style={{
-        position: 'sticky',
-        top: 0,
-        zIndex: 10,
-        backgroundColor: '#FFFFFF',
-        borderBottom: '1px solid #E5E7EB',
-        padding: 'calc(12px + env(safe-area-inset-top, 0px)) 16px 12px 16px'
-      }}>
+      <style>{`
+        .kavro-drv-shell {
+          min-height: 100%;
+          display: flex;
+          flex-direction: column;
+        }
+        .kavro-drv-sidebar {
+          display: none;
+        }
+        .kavro-drv-mobile-top {
+          display: block;
+          position: sticky;
+          top: 0;
+          z-index: 10;
+          background-color: #FFFFFF;
+          border-bottom: 1px solid #E5E7EB;
+          padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px 16px;
+        }
+        .kavro-drv-content {
+          flex: 1;
+          width: 100%;
+          max-width: 580px;
+          margin: 0 auto;
+          padding: 16px;
+          box-sizing: border-box;
+        }
+        @media (min-width: 768px) {
+          .kavro-drv-shell {
+            flex-direction: row;
+            align-items: flex-start;
+          }
+          .kavro-drv-sidebar {
+            display: flex;
+            flex-direction: column;
+            width: 268px;
+            flex-shrink: 0;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            background-color: #FFFFFF;
+            border-right: 1px solid #E5E7EB;
+            padding: 20px 16px;
+            box-sizing: border-box;
+            overflow-y: auto;
+          }
+          .kavro-drv-mobile-top {
+            display: none;
+          }
+          .kavro-drv-content {
+            max-width: 680px;
+            padding: 24px 28px 40px 28px;
+          }
+        }
+      `}</style>
+
+      {/* Top Header Mobile (com Menu Lateral + Voltar ao Mapa) */}
+      <div className="kavro-drv-mobile-top">
         <div style={{
           maxWidth: 560,
           margin: '0 auto',
@@ -621,23 +751,24 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
         }}>
           <button
             type="button"
-            onClick={() => onChangeTab('radar')}
+            onClick={() => (onOpenDrawer ? onOpenDrawer() : onChangeTab('radar'))}
+            aria-label="Abrir menu lateral"
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              padding: '8px 12px',
-              borderRadius: 999,
+              padding: '8px 11px',
+              borderRadius: 10,
               border: '1px solid #E5E7EB',
-              backgroundColor: '#F3F4F6',
+              backgroundColor: '#F9FAFB',
               color: '#111111',
-              fontWeight: 700,
-              fontSize: '0.82rem',
+              fontWeight: 800,
+              fontSize: '0.8rem',
               cursor: 'pointer'
             }}
           >
-            <ArrowLeft size={15} />
-            <span>Mapa</span>
+            <Menu size={16} />
+            <span>Menu</span>
           </button>
 
           <div style={{ fontWeight: 900, fontSize: '1.02rem', color: '#111111', letterSpacing: '-0.02em' }}>
@@ -650,60 +781,216 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
               : 'Conta do Motorista'}
           </div>
 
-          <div style={{ width: 68 }} />
-        </div>
-
-        {/* Sub-navegação limpa entre as 4 abas */}
-        <div style={{
-          maxWidth: 560,
-          margin: '10px auto 0 auto',
-          display: 'grid',
-          gridTemplateColumns: 'repeat(4, 1fr)',
-          gap: 4,
-          backgroundColor: '#F3F4F6',
-          padding: 4,
-          borderRadius: 12
-        }}>
-          {([
-            { id: 'ganhos', label: 'Ganhos', icon: DollarSign },
-            { id: 'carteira', label: 'Carteira', icon: Wallet },
-            { id: 'veiculos', label: 'Veículos', icon: Car },
-            { id: 'perfil', label: 'Perfil', icon: User }
-          ] as const).map(item => {
-            const Icon = item.icon;
-            const isActive = activeTab === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                onClick={() => onChangeTab(item.id)}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 5,
-                  padding: '8px 4px',
-                  borderRadius: 9,
-                  border: 'none',
-                  backgroundColor: isActive ? '#111111' : 'transparent',
-                  color: isActive ? '#FFFFFF' : '#4B5563',
-                  fontSize: '0.76rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                <Icon size={13} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
+          <button
+            type="button"
+            onClick={() => onChangeTab('radar')}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              padding: '8px 11px',
+              borderRadius: 999,
+              border: '1px solid #E5E7EB',
+              backgroundColor: '#F3F4F6',
+              color: '#111111',
+              fontWeight: 700,
+              fontSize: '0.78rem',
+              cursor: 'pointer'
+            }}
+          >
+            <ArrowLeft size={14} />
+            <span>Mapa</span>
+          </button>
         </div>
       </div>
 
-      {/* Container Principal */}
-      <div style={{ maxWidth: 560, margin: '0 auto', padding: '16px' }}>
+      <div className="kavro-drv-shell">
+        {/* Aba Lateral Fixa (Desktop/Tablet) */}
+        <aside className="kavro-drv-sidebar">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 11, paddingBottom: 16, borderBottom: '1px solid #E5E7EB', marginBottom: 14 }}>
+            <div style={{
+              width: 46,
+              height: 46,
+              borderRadius: '50%',
+              backgroundColor: '#111111',
+              color: '#FFFFFF',
+              overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 900,
+              fontSize: '1.05rem',
+              flexShrink: 0,
+              border: '2px solid #E5E7EB'
+            }}>
+              {currentDriver.photo ? (
+                <img src={currentDriver.photo} alt={currentDriver.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                currentDriver.name.charAt(0).toUpperCase()
+              )}
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '0.94rem', fontWeight: 900, color: '#111111', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {currentDriver.name}
+              </div>
+              <div style={{ fontSize: '0.72rem', color: '#6B7280', fontWeight: 700, marginTop: 2 }}>
+                ★ {(currentDriver.rating || 4.98).toFixed(2)} • Parceiro Kavro
+              </div>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => onChangeTab('radar')}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              padding: '10px 12px',
+              borderRadius: 11,
+              border: '1px solid #E5E7EB',
+              backgroundColor: '#F9FAFB',
+              color: '#111111',
+              fontWeight: 800,
+              fontSize: '0.82rem',
+              cursor: 'pointer',
+              marginBottom: 14
+            }}
+          >
+            <ArrowLeft size={15} />
+            <span>Voltar ao Mapa &amp; Radar</span>
+          </button>
+
+          <div style={{ fontSize: '0.68rem', fontWeight: 800, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '0 6px 8px 6px' }}>
+            Painel do Motorista
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flex: 1 }}>
+            {([
+              { id: 'ganhos', label: 'Ganhos', sub: 'Resumo e corridas', icon: DollarSign },
+              { id: 'carteira', label: 'Carteira & PIX', sub: 'Saques e chaves PIX', icon: Wallet },
+              {
+                id: 'veiculos',
+                label: 'Meus Veículos',
+                sub: 'CRLV, frota e carro do dia',
+                icon: Car,
+                badge: driverVehicles.length > 0 ? `${driverVehicles.length}/6` : undefined
+              },
+              { id: 'perfil', label: 'Minha Conta', sub: 'Dados, KYC e termos', icon: User }
+            ] as Array<{
+              id: 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
+              label: string;
+              sub: string;
+              icon: React.ComponentType<{ size?: number }>;
+              badge?: string;
+            }>).map(item => {
+              const Icon = item.icon;
+              const isActive = activeTab === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => onChangeTab(item.id)}
+                  style={{
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    padding: '10px 11px',
+                    borderRadius: 12,
+                    border: 'none',
+                    backgroundColor: isActive ? '#111111' : 'transparent',
+                    color: isActive ? '#FFFFFF' : '#111111',
+                    textAlign: 'left',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    <div style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: 9,
+                      backgroundColor: isActive ? '#1F2937' : '#F3F4F6',
+                      color: isActive ? '#A3E635' : '#111111',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <Icon size={16} />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.86rem', fontWeight: 800, color: isActive ? '#FFFFFF' : '#111111' }}>
+                        {item.label}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: isActive ? '#D1D5DB' : '#6B7280' }}>
+                        {item.sub}
+                      </div>
+                    </div>
+                  </div>
+                  {item.badge && (
+                    <span style={{
+                      fontSize: '0.66rem',
+                      fontWeight: 800,
+                      padding: '2px 7px',
+                      borderRadius: 999,
+                      backgroundColor: isActive ? '#A3E635' : '#E5E7EB',
+                      color: '#111111',
+                      flexShrink: 0
+                    }}>
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {onOpenPreferences && (
+              <button
+                type="button"
+                onClick={onOpenPreferences}
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  padding: '10px 11px',
+                  borderRadius: 12,
+                  border: 'none',
+                  backgroundColor: 'transparent',
+                  color: '#374151',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  marginTop: 4
+                }}
+              >
+                <div style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 9,
+                  backgroundColor: '#F3F4F6',
+                  color: '#111111',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  <Settings size={16} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#111111' }}>Preferências</div>
+                  <div style={{ fontSize: '0.7rem', color: '#6B7280' }}>Categorias de viagem</div>
+                </div>
+              </button>
+            )}
+          </div>
+        </aside>
+
+        {/* Container Principal */}
+        <div className="kavro-drv-content">
         {/* ============================================================ */}
         {/* ABA GANHOS                                                   */}
         {/* ============================================================ */}
@@ -1734,19 +2021,141 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                         .map(v => <option key={`${v.brand}-${v.model}`} value={v.model} label={v.brand} />)}
                     </datalist>
 
-                    <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.73rem', fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
-                        <Zap size={13} color="#16A34A" />
-                        <span>Identificação rápida (ex: Onix Plus 2024 Preto)</span>
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Digite modelo, ano e cor para preencher automático..."
-                        value={vehQuickText}
-                        onChange={(e) => handleVehQuickIdentify(e.target.value)}
-                        style={{ ...INPUT_STYLE, paddingLeft: 12, backgroundColor: '#FFFFFF' }}
-                      />
+                    <input
+                      ref={crlvFileInputRef}
+                      type="file"
+                      accept="image/*,application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={handleCrlvFileUpload}
+                    />
+
+                    {/* ETAPA 1: Enviar CRLV p/ Leitura Automática */}
+                    <div style={{
+                      padding: 13,
+                      borderRadius: 12,
+                      backgroundColor: vehCrlvDocPhoto ? '#F0FDF4' : '#F8FAFC',
+                      border: vehCrlvDocPhoto ? '1.5px solid #16A34A' : '1.5px dashed #111111'
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', fontWeight: 900, color: '#0F172A' }}>
+                          <Sparkles size={15} color="#16A34A" />
+                          <span>1. Envie o CRLV-e (PDF ou Foto) para leitura automática</span>
+                        </div>
+                        {vehCrlvDocPhoto && (
+                          <span style={{
+                            fontSize: '0.66rem',
+                            fontWeight: 800,
+                            padding: '2px 8px',
+                            borderRadius: 999,
+                            backgroundColor: '#DCFCE7',
+                            color: '#15803D'
+                          }}>
+                            Anexado
+                          </span>
+                        )}
+                      </div>
+
+                      <div style={{ fontSize: '0.72rem', color: '#475569', lineHeight: 1.4, marginBottom: 9 }}>
+                        O sistema lê automaticamente <strong>Placa, Marca, Modelo, Ano, Cor e Código do CRLV</strong> e preenche os campos abaixo para você.
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={isReadingCrlv}
+                        onClick={() => crlvFileInputRef.current?.click()}
+                        style={{
+                          width: '100%',
+                          padding: '12px 14px',
+                          borderRadius: 10,
+                          border: 'none',
+                          backgroundColor: isReadingCrlv ? '#1F2937' : '#111111',
+                          color: '#FFFFFF',
+                          fontSize: '0.8rem',
+                          fontWeight: 800,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 8,
+                          cursor: isReadingCrlv ? 'wait' : 'pointer'
+                        }}
+                      >
+                        {isReadingCrlv ? (
+                          <>
+                            <Loader2 size={15} className="animate-spin" />
+                            <span>{crlvReadProgress || 'Lendo documento CRLV...'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Upload size={15} />
+                            <span>
+                              {vehCrlvDocPhoto
+                                ? `Trocar CRLV (${vehCrlvFileName || 'Documento pronto'})`
+                                : 'Ler CRLV automático (PDF ou Foto)'}
+                            </span>
+                          </>
+                        )}
+                      </button>
+
+                      {crlvParsedSummary && (
+                        <div style={{
+                          marginTop: 9,
+                          padding: '8px 10px',
+                          borderRadius: 9,
+                          backgroundColor: '#DCFCE7',
+                          border: '1px solid #BBF7D0',
+                          color: '#15803D',
+                          fontSize: '0.73rem',
+                          fontWeight: 700,
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: 6
+                        }}>
+                          <CheckCircle2 size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+                          <span>
+                            CRLV lido ({crlvParsedSummary.source === 'pdf-text' ? 'PDF oficial' : 'OCR'}): preenchemos{' '}
+                            <strong>{crlvParsedSummary.filledFields.join(', ')}</strong>. Confira abaixo antes de enviar!
+                          </span>
+                        </div>
+                      )}
                     </div>
+
+                    {/* ETAPA 2: Conferência / Ajuste dos Dados */}
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 2 }}>
+                      <div style={{ fontSize: '0.75rem', fontWeight: 900, color: '#111111' }}>
+                        2. Confira os dados do veículo
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowQuickManualSearch(prev => !prev)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          padding: 0,
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          color: '#15803D',
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4
+                        }}
+                      >
+                        <Zap size={12} />
+                        <span>{showQuickManualSearch ? 'Ocultar busca rápida' : 'Preencher por nome'}</span>
+                      </button>
+                    </div>
+
+                    {showQuickManualSearch && (
+                      <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                        <input
+                          type="text"
+                          placeholder="Digite modelo, ano e cor (ex: Onix Plus 2024 Preto)..."
+                          value={vehQuickText}
+                          onChange={(e) => handleVehQuickIdentify(e.target.value)}
+                          style={{ ...INPUT_STYLE, paddingLeft: 12, backgroundColor: '#FFFFFF' }}
+                        />
+                      </div>
+                    )}
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                       <div>
@@ -1892,51 +2301,12 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                       </label>
                       <input
                         type="text"
-                        placeholder="Ex: 01234567890"
+                        placeholder="Preenchido pelo CRLV ou digite (Ex: 01234567890)"
                         value={vehCrlvNumber}
                         onChange={(e) => setVehCrlvNumber(e.target.value)}
                         style={{ ...INPUT_STYLE, paddingLeft: 12 }}
                         required
                       />
-                    </div>
-
-                    <div>
-                      <input
-                        ref={crlvFileInputRef}
-                        type="file"
-                        accept="image/*,application/pdf"
-                        style={{ display: 'none' }}
-                        onChange={handleCrlvFileUpload}
-                      />
-                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>
-                        Documento CRLV / CRLV-e (Foto nítida ou PDF)
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => crlvFileInputRef.current?.click()}
-                        style={{
-                          width: '100%',
-                          padding: '12px',
-                          borderRadius: 10,
-                          border: vehCrlvDocPhoto ? '1.5px solid #16A34A' : '1.5px dashed #9CA3AF',
-                          backgroundColor: vehCrlvDocPhoto ? '#F0FDF4' : '#F9FAFB',
-                          color: vehCrlvDocPhoto ? '#15803D' : '#111111',
-                          fontSize: '0.8rem',
-                          fontWeight: 700,
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          gap: 8,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        <Upload size={15} />
-                        <span>
-                          {vehCrlvDocPhoto
-                            ? `CRLV anexado: ${vehCrlvFileName || 'Documento pronto'}`
-                            : 'Enviar Foto ou PDF do CRLV em dia'}
-                        </span>
-                      </button>
                     </div>
 
                     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: '0.75rem', color: '#374151' }}>
@@ -2480,6 +2850,7 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
             </div>
           </div>
         )}
+        </div>
       </div>
 
       {/* Modal Visualizador de CRLV do Motorista */}

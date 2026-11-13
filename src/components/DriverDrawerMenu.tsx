@@ -8,6 +8,7 @@ import { DriverProfile } from '../types';
 interface DriverDrawerMenuProps {
   isOpen: boolean;
   driver: DriverProfile;
+  activeTab?: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
   onClose: () => void;
   onSelectTab: (tab: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil') => void;
   onOpenPreferences: () => void;
@@ -18,6 +19,7 @@ interface DriverDrawerMenuProps {
 export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
   isOpen,
   driver,
+  activeTab,
   onClose,
   onSelectTab,
   onOpenPreferences,
@@ -26,63 +28,79 @@ export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
 }) => {
   if (!isOpen) return null;
 
+  const vehiclesList = Array.isArray(driver.vehicles) ? driver.vehicles : [];
+  const vehiclesCount = vehiclesList.length || (driver.vehiclePlate ? 1 : 0);
+  const hasPendingVehicle = vehiclesList.some(v => v.approvalStatus === 'pendente_aprovacao');
+
   const menuItems: Array<{
+    id?: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
     label: string;
     subtitle?: string;
+    badge?: { text: string; bg: string; color: string };
     icon: React.ReactNode;
     onClick: () => void;
   }> = [
     {
+      id: 'radar',
       label: 'Mapa e Radar',
       subtitle: 'Receber chamadas em tempo real',
-      icon: <Car size={20} color="#111111" />,
+      icon: <Car size={20} color="currentColor" />,
       onClick: () => {
         onSelectTab('radar');
         onClose();
       },
     },
     {
+      id: 'ganhos',
       label: 'Ganhos',
       subtitle: 'Resumo do dia, semana e corridas',
-      icon: <DollarSign size={20} color="#111111" />,
+      icon: <DollarSign size={20} color="currentColor" />,
       onClick: () => {
         onSelectTab('ganhos');
         onClose();
       },
     },
     {
-      label: 'Carteira',
-      subtitle: 'Repasses PIX e saldo disponível',
-      icon: <Wallet size={20} color="#111111" />,
+      id: 'carteira',
+      label: 'Carteira & PIX',
+      subtitle: 'Repasses PIX, chaves e histórico de saques',
+      icon: <Wallet size={20} color="currentColor" />,
       onClick: () => {
         onSelectTab('carteira');
         onClose();
       },
     },
     {
-      label: 'Preferências',
-      subtitle: 'Categorias e filtros de viagem',
-      icon: <Settings size={20} color="#111111" />,
-      onClick: () => {
-        onOpenPreferences();
-        onClose();
-      },
-    },
-    {
+      id: 'veiculos',
       label: 'Meus Veículos',
-      subtitle: 'Cadastrar carro, CRLV e veículo do dia',
-      icon: <Car size={20} color="#111111" />,
+      subtitle: 'Leitura de CRLV, cadastro e carro do dia',
+      badge: vehiclesCount > 0
+        ? hasPendingVehicle
+          ? { text: `${vehiclesCount} • Em análise`, bg: '#FEF3C7', color: '#B45309' }
+          : { text: `${vehiclesCount} cadastrado${vehiclesCount > 1 ? 's' : ''}`, bg: '#DCFCE7', color: '#15803D' }
+        : undefined,
+      icon: <Car size={20} color="currentColor" />,
       onClick: () => {
         onSelectTab('veiculos');
         onClose();
       },
     },
     {
+      id: 'perfil',
       label: 'Minha Conta',
       subtitle: 'Foto, dados, KYC e termos',
-      icon: <User size={20} color="#111111" />,
+      icon: <User size={20} color="currentColor" />,
       onClick: () => {
         onSelectTab('perfil');
+        onClose();
+      },
+    },
+    {
+      label: 'Preferências',
+      subtitle: 'Categorias e filtros de viagem',
+      icon: <Settings size={20} color="currentColor" />,
+      onClick: () => {
+        onOpenPreferences();
         onClose();
       },
     },
@@ -229,52 +247,70 @@ export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
           flexDirection: 'column',
           gap: 4
         }}>
-          {menuItems.map((item) => (
-            <button
-              key={item.label}
-              type="button"
-              onClick={item.onClick}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '12px 10px',
-                borderRadius: 12,
-                backgroundColor: 'transparent',
-                border: 'none',
-                color: '#111111',
-                cursor: 'pointer',
-                textAlign: 'left',
-                transition: 'background 0.15s ease'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div style={{
-                  width: 38,
-                  height: 38,
-                  borderRadius: 10,
-                  backgroundColor: '#F3F4F6',
+          {menuItems.map((item) => {
+            const isSelected = Boolean(item.id && activeTab === item.id);
+            return (
+              <button
+                key={item.label}
+                type="button"
+                onClick={item.onClick}
+                style={{
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  {item.icon}
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.96rem', fontWeight: 700, color: '#111111' }}>
-                    {item.label}
+                  justifyContent: 'space-between',
+                  padding: '11px 10px',
+                  borderRadius: 12,
+                  backgroundColor: isSelected ? '#111111' : 'transparent',
+                  border: 'none',
+                  color: isSelected ? '#FFFFFF' : '#111111',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  transition: 'background 0.15s ease'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                  <div style={{
+                    width: 38,
+                    height: 38,
+                    borderRadius: 10,
+                    backgroundColor: isSelected ? '#1F2937' : '#F3F4F6',
+                    color: isSelected ? '#A3E635' : '#111111',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}>
+                    {item.icon}
                   </div>
-                  {item.subtitle && (
-                    <div style={{ fontSize: '0.74rem', color: '#6B7280', marginTop: 1 }}>
-                      {item.subtitle}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <span style={{ fontSize: '0.95rem', fontWeight: 700, color: isSelected ? '#FFFFFF' : '#111111' }}>
+                        {item.label}
+                      </span>
+                      {item.badge && (
+                        <span style={{
+                          fontSize: '0.64rem',
+                          fontWeight: 800,
+                          padding: '2px 7px',
+                          borderRadius: 999,
+                          backgroundColor: item.badge.bg,
+                          color: item.badge.color
+                        }}>
+                          {item.badge.text}
+                        </span>
+                      )}
                     </div>
-                  )}
+                    {item.subtitle && (
+                      <div style={{ fontSize: '0.73rem', color: isSelected ? '#D1D5DB' : '#6B7280', marginTop: 1 }}>
+                        {item.subtitle}
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-              <ChevronRight size={18} color="#9CA3AF" />
-            </button>
-          ))}
+                <ChevronRight size={18} color={isSelected ? '#A3E635' : '#9CA3AF'} style={{ flexShrink: 0 }} />
+              </button>
+            );
+          })}
         </div>
 
         {/* Rodapé */}

@@ -2132,7 +2132,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       )}
 
       {/* =========================================================================
-          TELAS SECUNDÁRIAS: GANHOS, CARTEIRA, PERFIL
+          TELAS SECUNDÁRIAS: GANHOS, CARTEIRA, VEÍCULOS, PERFIL
          ========================================================================= */}
       {activeTab !== 'radar' && (
         <DriverSecondaryTabs
@@ -2147,6 +2147,8 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           isSavingPix={isSavingPix}
           pixSaveNotice={pixSaveNotice}
           onChangeTab={(t) => setActiveTab(t)}
+          onOpenDrawer={() => setIsDrawerOpen(true)}
+          onOpenPreferences={() => setIsPreferencesOpen(true)}
           onDriverUpdated={(d) => {
             setCurrentDriver(d);
             StorageService.setCurrentDriver(d);
@@ -2173,6 +2175,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       <DriverDrawerMenu
         isOpen={isDrawerOpen}
         driver={currentDriver}
+        activeTab={activeTab}
         onClose={() => setIsDrawerOpen(false)}
         onSelectTab={(tab) => setActiveTab(tab)}
         onOpenPreferences={() => setIsPreferencesOpen(true)}
