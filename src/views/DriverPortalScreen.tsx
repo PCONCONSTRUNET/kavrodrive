@@ -57,6 +57,40 @@ interface DriverPortalScreenProps {
   refreshData: () => void;
 }
 
+const StartModalVehicleThumb: React.FC<{
+  brand?: string;
+  model?: string;
+  year?: string;
+  color?: string;
+  photoUrl?: string;
+}> = ({ brand, model, year, color, photoUrl }) => {
+  const [src, setSrc] = useState<string>(photoUrl || '/vehicles/kavro-sedan-ev.jpg');
+
+  useEffect(() => {
+    if (photoUrl) {
+      setSrc(photoUrl);
+      return;
+    }
+    if (!brand && !model) return;
+    let active = true;
+    resolveVehiclePhotoExact({ brand, model, year, color })
+      .then((res) => {
+        if (active && res?.photoUrl) setSrc(res.photoUrl);
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [brand, model, year, color, photoUrl]);
+
+  return (
+    <img
+      src={src}
+      alt={`${brand || ''} ${model || ''}`.trim() || 'Veículo'}
+      onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/vehicles/kavro-sedan-ev.jpg'; }}
+      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+    />
+  );
+};
+
 export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   rides,
   config,
@@ -2614,26 +2648,36 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               backdropFilter: 'blur(3px)',
               zIndex: 100010,
               display: 'flex',
-              alignItems: 'center',
+              alignItems: 'flex-end',
               justifyContent: 'center',
-              padding: 16
+              padding: 0
             }}
           >
             <div
               onClick={(e) => e.stopPropagation()}
               style={{
                 width: '100%',
-                maxWidth: 400,
+                maxWidth: 520,
                 backgroundColor: '#FFFFFF',
                 color: '#111111',
-                borderRadius: 20,
-                padding: 18,
-                boxShadow: '0 20px 44px rgba(0,0,0,0.28)',
-                border: '1px solid #E5E7EB',
-                maxHeight: '86vh',
-                overflowY: 'auto'
+                borderRadius: '26px 26px 0 0',
+                padding: '10px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
+                boxShadow: '0 -12px 36px rgba(0,0,0,0.24)',
+                borderTop: '1px solid #E5E7EB',
+                maxHeight: '82vh',
+                overflowY: 'auto',
+                boxSizing: 'border-box'
               }}
             >
+              {/* Barra puxadora do Bottom Sheet */}
+              <div style={{
+                width: 40,
+                height: 4,
+                borderRadius: 999,
+                backgroundColor: '#CBD5E1',
+                margin: '0 auto 12px auto'
+              }} />
+
               <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
                 <div>
                   <div style={{ fontSize: '1.02rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
@@ -2715,9 +2759,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                         }}
                       >
                         <div style={{
-                          width: 60,
-                          height: 40,
-                          borderRadius: 8,
+                          width: 66,
+                          height: 44,
+                          borderRadius: 9,
                           overflow: 'hidden',
                           backgroundColor: '#0F172A',
                           flexShrink: 0,
@@ -2725,16 +2769,13 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                           alignItems: 'center',
                           justifyContent: 'center'
                         }}>
-                          {veh.vehiclePhoto ? (
-                            <img
-                              src={veh.vehiclePhoto}
-                              alt={`${veh.brand} ${veh.model}`}
-                              onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/vehicles/kavro-sedan-ev.jpg'; }}
-                              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-                            />
-                          ) : (
-                            <Car size={18} color="#94A3B8" />
-                          )}
+                          <StartModalVehicleThumb
+                            brand={veh.brand}
+                            model={veh.model}
+                            year={veh.year}
+                            color={veh.color}
+                            photoUrl={veh.vehiclePhoto}
+                          />
                         </div>
 
                         <div style={{ flex: 1, minWidth: 0 }}>
