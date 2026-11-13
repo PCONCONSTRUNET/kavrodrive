@@ -720,6 +720,22 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
 
           {/* Ficha Visual do Carro (Foto Real ou Modelo com Cor Exata e Placa Mercosul) */}
           <div style={{ marginBottom: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                padding: '3px 9px',
+                borderRadius: 999,
+                backgroundColor: '#DCFCE7',
+                color: '#15803D',
+                border: '1px solid #BBF7D0'
+              }}>
+                ✓ Veículo &amp; CRLV Aprovado
+              </span>
+            </div>
             <VehiclePhotoPreview
               photoUrl={config.driverCarPhoto}
               brand={config.driverCarBrand}

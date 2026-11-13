@@ -9,7 +9,7 @@ interface DriverDrawerMenuProps {
   isOpen: boolean;
   driver: DriverProfile;
   onClose: () => void;
-  onSelectTab: (tab: 'radar' | 'ganhos' | 'carteira' | 'perfil') => void;
+  onSelectTab: (tab: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil') => void;
   onOpenPreferences: () => void;
   onOpenSos?: () => void;
   onLogout: () => void;
@@ -69,8 +69,17 @@ export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
       },
     },
     {
-      label: 'Conta e Veículo',
-      subtitle: 'Documentos, KYC e avaliação',
+      label: 'Meus Veículos',
+      subtitle: 'Cadastrar carro, CRLV e veículo do dia',
+      icon: <Car size={20} color="#111111" />,
+      onClick: () => {
+        onSelectTab('veiculos');
+        onClose();
+      },
+    },
+    {
+      label: 'Minha Conta',
+      subtitle: 'Foto, dados, KYC e termos',
       icon: <User size={20} color="#111111" />,
       onClick: () => {
         onSelectTab('perfil');

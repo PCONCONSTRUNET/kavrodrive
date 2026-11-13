@@ -65,7 +65,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const navigate = useNavigate();
   const [currentDriver, setCurrentDriver] = useState<DriverProfile | null>(() => StorageService.getCurrentDriver());
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [activeTab, setActiveTab] = useState<'radar' | 'ganhos' | 'carteira' | 'perfil'>('radar');
+  const [activeTab, setActiveTab] = useState<'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil'>('radar');
 
   // Modais estilo Uber
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);

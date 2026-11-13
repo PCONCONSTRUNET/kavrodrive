@@ -754,6 +754,20 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                     <div style={{ fontSize: '0.78rem', color: '#4B5563', fontWeight: 600, marginTop: 2 }}>
                       {activeRide.driverVehicle || 'Veículo Parceiro'} {activeRide.driverCarColor ? `(${activeRide.driverCarColor})` : ''}
                     </div>
+                    <div style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      marginTop: 4,
+                      padding: '2px 8px',
+                      borderRadius: 999,
+                      backgroundColor: '#DCFCE7',
+                      color: '#15803D',
+                      fontSize: '0.67rem',
+                      fontWeight: 800
+                    }}>
+                      <span>✓ Veículo &amp; CRLV Aprovado</span>
+                    </div>
                   </div>
                 </div>
                 {activeRide.driverPlate && (
