@@ -589,6 +589,123 @@ function validateAndNormalizeDriverPixKeys(rawKeys, driverCtx = {}, options = {}
   return normalizedList;
 }
 
+function normalizeDriverVehicles(rawVehicles, driverCtx = {}, categoriesConfig = null) {
+  const cats = categoriesConfig || normalizeCategoriesServer();
+  const driverApproved = String(driverCtx.approvalStatus || driverCtx.approval_status || '').toLowerCase() === 'aprovado';
+
+  if (!Array.isArray(rawVehicles) || rawVehicles.length === 0) {
+    const legacyPlate = String(driverCtx.vehiclePlate ?? driverCtx.vehicle_plate ?? '').toUpperCase().trim();
+    const legacyBrand = String(driverCtx.vehicleBrand ?? driverCtx.vehicle_brand ?? '').trim();
+    const legacyModel = String(driverCtx.vehicleModel ?? driverCtx.vehicle_model ?? '').trim();
+    if (!legacyPlate && !legacyBrand && !legacyModel) return [];
+
+    const evalRes = computeDriverCategoriesServer({
+      cnhHasEar: driverCtx.cnhHasEar ?? true,
+      vehicleBrand: legacyBrand,
+      vehicleModel: legacyModel,
+      vehicleVersion: driverCtx.vehicleVersion || '',
+      vehicleYear: String(driverCtx.vehicleYear ?? driverCtx.vehicle_year ?? '2024'),
+      crlvRegular: driverCtx.crlvRegular !== false,
+      hasFourDoors: driverCtx.hasFourDoors !== false,
+      hasAirConditioning: driverCtx.hasAirConditioning !== false,
+      hasLargeTrunk: Boolean(driverCtx.hasLargeTrunk),
+      hasLeatherSeats: Boolean(driverCtx.hasLeatherSeats),
+      rating: Number(driverCtx.rating || 5.0),
+      totalRides: Number(driverCtx.totalRides ?? driverCtx.total_rides ?? 0)
+    }, cats);
+
+    return [{
+      id: driverCtx.activeVehicleId || 'veh-primary',
+      brand: legacyBrand,
+      model: legacyModel,
+      version: String(driverCtx.vehicleVersion || '').trim(),
+      color: String(driverCtx.vehicleColor ?? driverCtx.vehicle_color ?? 'Prata').trim(),
+      year: String(driverCtx.vehicleYear ?? driverCtx.vehicle_year ?? '2024').trim(),
+      plate: legacyPlate,
+      vehiclePhoto: String(driverCtx.vehiclePhoto ?? driverCtx.vehicle_photo ?? '').trim(),
+      crlvNumber: String(driverCtx.crlvNumber || '').trim(),
+      crlvDocumentPhoto: String(driverCtx.crlvDocumentPhoto || '').trim(),
+      crlvRegular: driverCtx.crlvRegular !== false,
+      hasFourDoors: driverCtx.hasFourDoors !== false,
+      hasAirConditioning: driverCtx.hasAirConditioning !== false,
+      hasLargeTrunk: Boolean(driverCtx.hasLargeTrunk),
+      hasLeatherSeats: Boolean(driverCtx.hasLeatherSeats),
+      eligibleCategories: evalRes.eligibleCategories,
+      enabledCategories: evalRes.enabledCategories,
+      approvalStatus: driverApproved ? 'aprovado' : 'pendente_aprovacao',
+      isActive: true,
+      submittedAt: driverCtx.createdAt || driverCtx.created_at || new Date().toISOString()
+    }];
+  }
+
+  const list = rawVehicles.map((v, idx) => {
+    const evalRes = computeDriverCategoriesServer({
+      cnhHasEar: driverCtx.cnhHasEar ?? true,
+      vehicleBrand: v.brand || '',
+      vehicleModel: v.model || '',
+      vehicleVersion: v.version || '',
+      vehicleYear: String(v.year || '2024'),
+      crlvRegular: v.crlvRegular !== false,
+      hasFourDoors: v.hasFourDoors !== false,
+      hasAirConditioning: v.hasAirConditioning !== false,
+      hasLargeTrunk: Boolean(v.hasLargeTrunk),
+      hasLeatherSeats: Boolean(v.hasLeatherSeats),
+      rating: Number(driverCtx.rating || 5.0),
+      totalRides: Number(driverCtx.totalRides ?? driverCtx.total_rides ?? 0)
+    }, cats);
+
+    return {
+      id: String(v.id || `veh-${Date.now()}-${idx}`),
+      brand: String(v.brand || '').trim(),
+      model: String(v.model || '').trim(),
+      version: String(v.version || '').trim(),
+      color: String(v.color || 'Prata').trim(),
+      year: String(v.year || '2024').trim(),
+      plate: String(v.plate || '').toUpperCase().trim(),
+      vehiclePhoto: String(v.vehiclePhoto || '').trim(),
+      crlvNumber: String(v.crlvNumber || '').trim(),
+      crlvDocumentPhoto: String(v.crlvDocumentPhoto || '').trim(),
+      crlvRegular: v.crlvRegular !== false,
+      hasFourDoors: v.hasFourDoors !== false,
+      hasAirConditioning: v.hasAirConditioning !== false,
+      hasLargeTrunk: Boolean(v.hasLargeTrunk),
+      hasLeatherSeats: Boolean(v.hasLeatherSeats),
+      eligibleCategories: evalRes.eligibleCategories,
+      enabledCategories: Array.isArray(v.enabledCategories) && v.enabledCategories.length > 0
+        ? v.enabledCategories
+        : evalRes.enabledCategories,
+      approvalStatus: ['aprovado', 'rejeitado', 'pendente_aprovacao'].includes(v.approvalStatus)
+        ? v.approvalStatus
+        : 'pendente_aprovacao',
+      rejectionReason: v.rejectionReason || undefined,
+      isActive: Boolean(v.isActive),
+      submittedAt: v.submittedAt || new Date().toISOString(),
+      reviewedAt: v.reviewedAt || undefined,
+      reviewedBy: v.reviewedBy || undefined
+    };
+  });
+
+  if (list.length > 0) {
+    const activeId = driverCtx.activeVehicleId;
+    let activeAssigned = false;
+    for (const v of list) {
+      const shouldBeActive = activeId ? v.id === activeId : v.isActive;
+      if (shouldBeActive && v.approvalStatus === 'aprovado' && !activeAssigned) {
+        v.isActive = true;
+        activeAssigned = true;
+      } else {
+        v.isActive = false;
+      }
+    }
+    if (!activeAssigned) {
+      const firstApproved = list.find(v => v.approvalStatus === 'aprovado') || list[0];
+      firstApproved.isActive = true;
+    }
+  }
+
+  return list;
+}
+
 function formatDriverRow(row, categoriesConfig) {
   if (!row) return null;
   const meta = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
@@ -668,6 +785,33 @@ function formatDriverRow(row, categoriesConfig) {
     location: row.location || null,
     rating: Number(row.rating || 5.0),
     totalRides: Number(row.total_rides ?? row.totalRides ?? 0),
+    vehicles: normalizeDriverVehicles(
+      Array.isArray(row.vehicles) ? row.vehicles : (Array.isArray(meta.vehicles) ? meta.vehicles : undefined),
+      {
+        approval_status: row.approval_status || row.approvalStatus,
+        cnhHasEar: row.cnhHasEar ?? meta.cnhHasEar ?? true,
+        vehicleBrand: row.vehicle_brand || row.vehicleBrand || '',
+        vehicleModel: row.vehicle_model || row.vehicleModel || '',
+        vehicleVersion: row.vehicleVersion ?? meta.vehicleVersion ?? '',
+        vehicleColor: row.vehicle_color || row.vehicleColor || '',
+        vehicleYear: row.vehicle_year || row.vehicleYear || '',
+        vehiclePlate: row.vehicle_plate || row.vehiclePlate || '',
+        vehiclePhoto: row.vehicle_photo || row.vehiclePhoto || '',
+        crlvNumber: row.crlvNumber ?? meta.crlvNumber ?? '',
+        crlvDocumentPhoto: row.crlvDocumentPhoto ?? meta.crlvDocumentPhoto ?? '',
+        crlvRegular: row.crlvRegular ?? meta.crlvRegular ?? true,
+        hasFourDoors: row.hasFourDoors ?? meta.hasFourDoors ?? true,
+        hasAirConditioning: row.hasAirConditioning ?? meta.hasAirConditioning ?? true,
+        hasLargeTrunk: row.hasLargeTrunk ?? meta.hasLargeTrunk,
+        hasLeatherSeats: row.hasLeatherSeats ?? meta.hasLeatherSeats,
+        activeVehicleId: row.activeVehicleId || meta.activeVehicleId || '',
+        rating: Number(row.rating || 5.0),
+        totalRides: Number(row.total_rides ?? row.totalRides ?? 0),
+        createdAt: row.created_at || row.createdAt
+      },
+      categoriesConfig
+    ),
+    activeVehicleId: row.activeVehicleId || meta.activeVehicleId || undefined,
     profileChangeRequest: row.profileChangeRequest || meta.profileChangeRequest || null,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
     updatedAt: row.updated_at || row.updatedAt || new Date().toISOString()
@@ -842,6 +986,33 @@ async function saveDriverRecord(driverRow) {
       },
       { strict: false }
     ),
+    vehicles: normalizeDriverVehicles(
+      Array.isArray(driverRow.vehicles) ? driverRow.vehicles : (Array.isArray(prevMeta.vehicles) ? prevMeta.vehicles : undefined),
+      {
+        approval_status: driverRow.approval_status ?? driverRow.approvalStatus,
+        cnhHasEar: driverRow.cnhHasEar !== undefined ? Boolean(driverRow.cnhHasEar) : (prevMeta.cnhHasEar ?? true),
+        vehicleBrand: driverRow.vehicle_brand ?? driverRow.vehicleBrand ?? '',
+        vehicleModel: driverRow.vehicle_model ?? driverRow.vehicleModel ?? '',
+        vehicleVersion: driverRow.vehicleVersion ?? prevMeta.vehicleVersion ?? '',
+        vehicleColor: driverRow.vehicle_color ?? driverRow.vehicleColor ?? '',
+        vehicleYear: driverRow.vehicle_year ?? driverRow.vehicleYear ?? '',
+        vehiclePlate: driverRow.vehicle_plate ?? driverRow.vehiclePlate ?? '',
+        vehiclePhoto: driverRow.vehicle_photo ?? driverRow.vehiclePhoto ?? '',
+        crlvNumber: driverRow.crlvNumber ?? prevMeta.crlvNumber ?? '',
+        crlvDocumentPhoto: driverRow.crlvDocumentPhoto ?? prevMeta.crlvDocumentPhoto ?? '',
+        crlvRegular: driverRow.crlvRegular !== undefined ? Boolean(driverRow.crlvRegular) : (prevMeta.crlvRegular ?? true),
+        hasFourDoors: driverRow.hasFourDoors !== undefined ? Boolean(driverRow.hasFourDoors) : (prevMeta.hasFourDoors ?? true),
+        hasAirConditioning: driverRow.hasAirConditioning !== undefined ? Boolean(driverRow.hasAirConditioning) : (prevMeta.hasAirConditioning ?? true),
+        hasLargeTrunk: driverRow.hasLargeTrunk !== undefined ? Boolean(driverRow.hasLargeTrunk) : prevMeta.hasLargeTrunk,
+        hasLeatherSeats: driverRow.hasLeatherSeats !== undefined ? Boolean(driverRow.hasLeatherSeats) : prevMeta.hasLeatherSeats,
+        activeVehicleId: driverRow.activeVehicleId || prevMeta.activeVehicleId || '',
+        rating: Number(driverRow.rating || 5.0),
+        totalRides: Number(driverRow.total_rides ?? driverRow.totalRides ?? 0),
+        createdAt: driverRow.created_at || driverRow.createdAt
+      },
+      cats
+    ),
+    activeVehicleId: driverRow.activeVehicleId !== undefined ? driverRow.activeVehicleId : (prevMeta.activeVehicleId || undefined),
     profileChangeRequest: driverRow.profileChangeRequest !== undefined ? driverRow.profileChangeRequest : (prevMeta.profileChangeRequest || null)
   };
 
@@ -2361,6 +2532,8 @@ module.exports = {
   normalizeCategoriesServer,
   mapLegacyCategoryIdServer,
   validateAndNormalizeDriverPixKeys,
+  normalizeDriverVehicles,
+  computeDriverCategoriesServer,
   listDrivers,
   getDriverById,
   findDriverByIdentifier,

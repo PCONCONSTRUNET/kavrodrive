@@ -338,7 +338,9 @@ async function purgeDriverDocuments(driverId, docInfos = []) {
  */
 async function savePublicMedia(driverId, mediaType, dataUrlOrUrl) {
   if (!dataUrlOrUrl || typeof dataUrlOrUrl !== 'string') return dataUrlOrUrl || '';
-  if (!dataUrlOrUrl.startsWith('data:image/')) return dataUrlOrUrl;
+  if (!dataUrlOrUrl.startsWith('data:image/') && !dataUrlOrUrl.startsWith('data:application/pdf')) {
+    return dataUrlOrUrl;
+  }
 
   const r2 = getCloudflareR2();
   const publicBase = (process.env.CLOUDFLARE_R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
@@ -347,13 +349,19 @@ async function savePublicMedia(driverId, mediaType, dataUrlOrUrl) {
     return dataUrlOrUrl;
   }
 
-  const match = dataUrlOrUrl.match(/^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/);
+  const match = dataUrlOrUrl.match(/^data:((?:image\/[a-zA-Z0-9+.-]+)|application\/pdf);base64,(.+)$/);
   if (!match) return dataUrlOrUrl;
 
   const mimeType = match[1];
-  const ext = mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg';
+  const ext = mimeType.includes('pdf')
+    ? 'pdf'
+    : mimeType.includes('png')
+    ? 'png'
+    : mimeType.includes('webp')
+    ? 'webp'
+    : 'jpg';
   const buffer = Buffer.from(match[2], 'base64');
-  const safeType = mediaType === 'vehicle' ? 'vehicle' : 'avatar';
+  const safeType = mediaType === 'vehicle' ? 'vehicle' : mediaType === 'crlv' ? 'crlv' : 'avatar';
   const key = `drivers/${driverId}/${safeType}_${Date.now()}.${ext}`;
 
   try {

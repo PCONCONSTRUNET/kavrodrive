@@ -340,9 +340,37 @@ export interface DriverProfile {
   } | null;
   rating: number;
   totalRides: number;
+  vehicles?: DriverVehicle[];
+  activeVehicleId?: string;
   profileChangeRequest?: ProfileChangeRequest | null;
   createdAt: string;
   updatedAt?: string;
+}
+
+export interface DriverVehicle {
+  id: string;
+  brand: string;
+  model: string;
+  version?: string;
+  color: string;
+  year: string;
+  plate: string;
+  vehiclePhoto?: string;
+  crlvNumber: string;
+  crlvDocumentPhoto: string;
+  crlvRegular?: boolean;
+  hasFourDoors: boolean;
+  hasAirConditioning: boolean;
+  hasLargeTrunk?: boolean;
+  hasLeatherSeats?: boolean;
+  eligibleCategories?: string[];
+  enabledCategories?: string[];
+  approvalStatus: 'pendente_aprovacao' | 'aprovado' | 'rejeitado';
+  rejectionReason?: string;
+  isActive?: boolean;
+  submittedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
 }
 
 export type LedgerEntryType =

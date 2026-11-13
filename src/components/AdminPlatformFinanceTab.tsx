@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import {
   DriverProfile,
+  DriverVehicle,
   DriverWalletSummary,
   FinancialLedgerEntry,
   PaymentTransaction,
@@ -65,6 +66,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   const [driverStatusFilter, setDriverStatusFilter] = useState<'todos' | 'em_analise' | 'correcao_solicitada' | 'pendente_aprovacao' | 'aprovado' | 'rejeitado' | 'inadimplentes'>('todos');
   const [reviewingKycDriver, setReviewingKycDriver] = useState<DriverProfile | null>(null);
   const [termsViewerDriver, setTermsViewerDriver] = useState<DriverProfile | null>(null);
+  const [crlvPreviewModal, setCrlvPreviewModal] = useState<{
+    driverName: string;
+    vehicleLabel: string;
+    crlvNumber: string;
+    url: string;
+  } | null>(null);
 
   // Estado do Modal de Histórico Completo (Avaliação, Corridas, Saques, Extrato e Cadastro)
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
@@ -129,7 +136,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       const synced = StorageService.getDrivers();
       setDrivers(synced);
       const digest = synced
-        .map(d => `${d.id}:${d.approvalStatus}:${d.kyc?.status || ''}:${d.kyc?.submittedAt || ''}:${d.termsSignature?.signed ? '1' : '0'}:${d.profileChangeRequest?.id || ''}:${d.profileChangeRequest?.status || ''}`)
+        .map(d => `${d.id}:${d.approvalStatus}:${d.kyc?.status || ''}:${d.kyc?.submittedAt || ''}:${d.termsSignature?.signed ? '1' : '0'}:${d.profileChangeRequest?.id || ''}:${d.profileChangeRequest?.status || ''}:${(d.vehicles || []).map(v => `${v.id}:${v.approvalStatus}`).join(',')}`)
         .join('|');
       if (lastDriverDigestRef.current && digest !== lastDriverDigestRef.current) {
         StorageService.fetchAdminFinanceOverview().then(fin => {
@@ -176,6 +183,28 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const res = await StorageService.reviewProfileChangeRequest('driver', driver.id, decision, rejectionReason);
     if (!res.ok) {
       window.alert(res.error || 'Erro ao analisar solicitação de alteração cadastral.');
+      return;
+    }
+    await loadAll();
+  };
+
+  const handleReviewDriverVehicle = async (
+    driver: DriverProfile,
+    vehicle: DriverVehicle,
+    decision: 'aprovar' | 'recusar'
+  ) => {
+    let rejectionReason: string | undefined;
+    if (decision === 'recusar') {
+      const reason = window.prompt(
+        `Motivo da recusa do veículo ${vehicle.brand} ${vehicle.model} (${vehicle.plate}) de ${driver.name}:`,
+        'CRLV ilegível, vencido ou placa divergente'
+      );
+      if (reason === null) return;
+      rejectionReason = reason.trim() || undefined;
+    }
+    const res = await StorageService.reviewDriverVehicleAdmin(driver.id, vehicle.id, decision, rejectionReason);
+    if (!res.ok) {
+      window.alert(res.error || 'Erro ao analisar veículo.');
       return;
     }
     await loadAll();
@@ -784,6 +813,102 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     </div>
                   </div>
                 </div>
+
+                {/* Card Frota Multi-Veículos & Documentos CRLV deste Motorista */}
+                {Array.isArray(selectedDriver.vehicles) && selectedDriver.vehicles.length > 0 && (
+                  <div style={{ padding: 16, borderRadius: 8, border: '1px solid #E2E8F0', backgroundColor: '#FFFFFF', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.78rem', fontWeight: 800, color: '#0F172A', textTransform: 'uppercase' }}>
+                        <Car size={15} /> Frota &amp; Documentos CRLV ({selectedDriver.vehicles.length})
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {selectedDriver.vehicles.map((veh) => {
+                        const isPendingVeh = veh.approvalStatus === 'pendente_aprovacao';
+                        const isApprovedVeh = veh.approvalStatus === 'aprovado';
+                        return (
+                          <div key={veh.id} style={{
+                            padding: '10px 12px',
+                            borderRadius: 8,
+                            border: isPendingVeh ? '1px solid #FCD34D' : '1px solid #E2E8F0',
+                            backgroundColor: isPendingVeh ? '#FFFBEB' : '#F8FAFC',
+                            display: 'flex',
+                            flexWrap: 'wrap',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 10
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                              <img
+                                src={veh.vehiclePhoto || '/vehicles/kavro-sedan-ev.jpg'}
+                                alt={`${veh.brand} ${veh.model}`}
+                                onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/vehicles/kavro-sedan-ev.jpg'; }}
+                                style={{ width: 64, height: 42, borderRadius: 6, objectFit: 'cover', backgroundColor: '#0F172A' }}
+                              />
+                              <div style={{ fontSize: '0.76rem' }}>
+                                <div style={{ fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <span>{veh.brand} {veh.model} {veh.year} ({veh.color})</span>
+                                  <span style={{
+                                    padding: '2px 7px',
+                                    borderRadius: 999,
+                                    fontSize: '0.66rem',
+                                    backgroundColor: isApprovedVeh ? '#DCFCE7' : isPendingVeh ? '#FEF3C7' : '#FEE2E2',
+                                    color: isApprovedVeh ? '#15803D' : isPendingVeh ? '#B45309' : '#B91C1C'
+                                  }}>
+                                    {isApprovedVeh ? 'Aprovado' : isPendingVeh ? 'Aguardando CRLV' : 'Recusado'}
+                                  </span>
+                                  {veh.isActive && (
+                                    <span style={{ padding: '2px 7px', borderRadius: 999, fontSize: '0.66rem', backgroundColor: '#0F172A', color: '#A3E635' }}>
+                                      Ativo no dia
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ color: '#475569', marginTop: 2 }}>
+                                  Placa <strong style={{ fontFamily: 'monospace' }}>{veh.plate}</strong> • CRLV: <strong>{veh.crlvNumber || 'Não informado'}</strong>
+                                </div>
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              {veh.crlvDocumentPhoto && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCrlvPreviewModal({
+                                    driverName: selectedDriver.name,
+                                    vehicleLabel: `${veh.brand} ${veh.model} (${veh.plate})`,
+                                    crlvNumber: veh.crlvNumber || 'CRLV',
+                                    url: veh.crlvDocumentPhoto
+                                  })}
+                                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                                >
+                                  <Eye size={13} />
+                                  <span>Ver CRLV</span>
+                                </button>
+                              )}
+                              {isPendingVeh && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReviewDriverVehicle(selectedDriver, veh, 'aprovar')}
+                                    style={{ padding: '5px 10px', borderRadius: 6, border: 'none', backgroundColor: '#16A34A', color: '#FFFFFF', fontSize: '0.72rem', fontWeight: 800, cursor: 'pointer' }}
+                                  >
+                                    ✓ Aprovar
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReviewDriverVehicle(selectedDriver, veh, 'recusar')}
+                                    style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #FCA5A5', backgroundColor: '#FFFFFF', color: '#DC2626', fontSize: '0.72rem', fontWeight: 800, cursor: 'pointer' }}
+                                  >
+                                    ✕ Recusar
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Card Contrato & Termos de Uso Assinados Digitalmente */}
                 <div style={{
@@ -1602,6 +1727,142 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Banner acionável quando há novos veículos + CRLV enviados para análise */}
+        {(() => {
+          const pendingVehiclesList: { driver: DriverProfile; vehicle: DriverVehicle }[] = [];
+          drivers.forEach(drv => {
+            (drv.vehicles || []).forEach(v => {
+              if (v.approvalStatus === 'pendente_aprovacao' && v.id !== 'veh-primary') {
+                pendingVehiclesList.push({ driver: drv, vehicle: v });
+              }
+            });
+          });
+          if (pendingVehiclesList.length === 0) return null;
+          return (
+            <div style={{
+              backgroundColor: '#ECFDF5',
+              border: '1px solid #6EE7B7',
+              borderRadius: 12,
+              padding: '14px 16px',
+              marginBottom: 14,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#065F46', fontSize: '0.84rem', fontWeight: 800 }}>
+                <Car size={18} color="#059669" />
+                <span>
+                  Veículos &amp; CRLV Aguardando Aprovação Master: {pendingVehiclesList.length} solicitação(ões)
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {pendingVehiclesList.map(({ driver: drv, vehicle: veh }) => (
+                  <div
+                    key={`${drv.id}-${veh.id}`}
+                    style={{
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #A7F3D0',
+                      borderRadius: 10,
+                      padding: '10px 14px',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <img
+                        src={veh.vehiclePhoto || '/vehicles/kavro-sedan-ev.jpg'}
+                        alt={`${veh.brand} ${veh.model}`}
+                        onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/vehicles/kavro-sedan-ev.jpg'; }}
+                        style={{ width: 64, height: 44, borderRadius: 7, objectFit: 'cover', backgroundColor: '#0F172A' }}
+                      />
+                      <div style={{ fontSize: '0.78rem', color: '#111827', lineHeight: 1.45 }}>
+                        <div style={{ fontWeight: 800, color: '#0F172A' }}>
+                          {drv.name} → {veh.brand} {veh.model} {veh.year} ({veh.color})
+                        </div>
+                        <div style={{ color: '#475569' }}>
+                          Placa: <strong style={{ fontFamily: 'monospace' }}>{veh.plate}</strong> • CRLV: <strong>{veh.crlvNumber || 'Não informado'}</strong>
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {veh.crlvDocumentPhoto && (
+                        <button
+                          type="button"
+                          onClick={() => setCrlvPreviewModal({
+                            driverName: drv.name,
+                            vehicleLabel: `${veh.brand} ${veh.model} (${veh.plate})`,
+                            crlvNumber: veh.crlvNumber || 'CRLV',
+                            url: veh.crlvDocumentPhoto
+                          })}
+                          style={{
+                            padding: '6px 11px',
+                            borderRadius: 7,
+                            border: '1px solid #CBD5E1',
+                            backgroundColor: '#F8FAFC',
+                            color: '#0F172A',
+                            fontSize: '0.74rem',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}
+                        >
+                          <Eye size={14} />
+                          <span>Ver CRLV</span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleReviewDriverVehicle(drv, veh, 'aprovar')}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 7,
+                          border: 'none',
+                          backgroundColor: '#16A34A',
+                          color: '#FFFFFF',
+                          fontSize: '0.74rem',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4
+                        }}
+                      >
+                        <Check size={14} />
+                        <span>Aprovar Veículo &amp; CRLV</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleReviewDriverVehicle(drv, veh, 'recusar')}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 7,
+                          border: '1px solid #FCA5A5',
+                          backgroundColor: '#FFFFFF',
+                          color: '#DC2626',
+                          fontSize: '0.74rem',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4
+                        }}
+                      >
+                        <X size={14} />
+                        <span>Recusar</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           );
@@ -2951,6 +3212,66 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
               </table>
             </div>
           )}
+        </div>
+      )}
+      {/* Modal de Inspeção do Documento CRLV (Painel Master) */}
+      {crlvPreviewModal && (
+        <div
+          onClick={() => setCrlvPreviewModal(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.78)',
+            zIndex: 100200,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: 14,
+              padding: 18,
+              width: '100%',
+              maxWidth: 620,
+              maxHeight: '90vh',
+              overflowY: 'auto'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div>
+                <div style={{ fontSize: '1rem', fontWeight: 800, color: '#0F172A' }}>
+                  Inspeção de CRLV — {crlvPreviewModal.vehicleLabel}
+                </div>
+                <div style={{ fontSize: '0.78rem', color: '#64748B' }}>
+                  Motorista: {crlvPreviewModal.driverName} • CRLV nº {crlvPreviewModal.crlvNumber}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCrlvPreviewModal(null)}
+                style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#F8FAFC', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {crlvPreviewModal.url.startsWith('data:application/pdf') || crlvPreviewModal.url.toLowerCase().endsWith('.pdf') ? (
+              <iframe
+                src={crlvPreviewModal.url}
+                title="CRLV PDF"
+                style={{ width: '100%', height: 480, border: '1px solid #CBD5E1', borderRadius: 10 }}
+              />
+            ) : (
+              <img
+                src={crlvPreviewModal.url}
+                alt="Documento CRLV"
+                style={{ width: '100%', maxHeight: 520, objectFit: 'contain', borderRadius: 10, border: '1px solid #CBD5E1' }}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>

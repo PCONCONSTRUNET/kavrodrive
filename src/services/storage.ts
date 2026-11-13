@@ -6,6 +6,7 @@ import {
   NotificationItem,
   LocationPoint,
   DriverProfile,
+  DriverVehicle,
   DriverWalletSummary,
   SavedCard,
   PaymentTransaction,
@@ -671,6 +672,106 @@ export const StorageService = {
       return data;
     } catch {
       return { ok: false, error: 'Erro de conexão ao enviar solicitação de alteração.' };
+    }
+  },
+
+  async registerDriverVehicle(
+    driverId: string,
+    payload: {
+      brand: string;
+      model: string;
+      version?: string;
+      color: string;
+      year: string;
+      plate: string;
+      vehiclePhoto?: string;
+      crlvNumber: string;
+      crlvDocumentPhoto: string;
+      hasFourDoors: boolean;
+      hasAirConditioning: boolean;
+      hasLargeTrunk?: boolean;
+      hasLeatherSeats?: boolean;
+    }
+  ): Promise<{ ok: boolean; driver?: DriverProfile; vehicle?: DriverVehicle; error?: string }> {
+    try {
+      const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/vehicles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data?.driver) {
+        this.setCurrentDriver(data.driver);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao registrar veículo.' };
+    }
+  },
+
+  async selectDriverActiveVehicle(
+    driverId: string,
+    vehicleId: string
+  ): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
+    try {
+      const res = await fetch(
+        `/api/drivers/${encodeURIComponent(driverId)}/vehicles/${encodeURIComponent(vehicleId)}/select`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+          body: JSON.stringify({})
+        }
+      );
+      const data = await res.json();
+      if (data?.driver) {
+        this.setCurrentDriver(data.driver);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao selecionar veículo ativo.' };
+    }
+  },
+
+  async deleteDriverVehicle(
+    driverId: string,
+    vehicleId: string
+  ): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
+    try {
+      const res = await fetch(
+        `/api/drivers/${encodeURIComponent(driverId)}/vehicles/${encodeURIComponent(vehicleId)}`,
+        {
+          method: 'DELETE',
+          headers: { ...this.getAuthHeaders() }
+        }
+      );
+      const data = await res.json();
+      if (data?.driver) {
+        this.setCurrentDriver(data.driver);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao remover veículo.' };
+    }
+  },
+
+  async reviewDriverVehicleAdmin(
+    driverId: string,
+    vehicleId: string,
+    decision: 'aprovar' | 'recusar',
+    rejectionReason?: string
+  ): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
+    try {
+      const res = await fetch(
+        `/api/admin/drivers/${encodeURIComponent(driverId)}/vehicles/${encodeURIComponent(vehicleId)}/review`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+          body: JSON.stringify({ decision, rejectionReason })
+        }
+      );
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao analisar veículo.' };
     }
   },
 

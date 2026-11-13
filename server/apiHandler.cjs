@@ -1893,6 +1893,200 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, { ok: true, driver: updated, profileChangeRequest });
     }
 
+    // ===== MULTI-VEÍCULOS DO MOTORISTA + CRLV PARA ANÁLISE MASTER =====
+    const driverVehiclesListMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/vehicles$/);
+    if (driverVehiclesListMatch && method === 'POST') {
+      const driverId = decodeURIComponent(driverVehiclesListMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
+      const driver = await finance.getDriverById(driverId);
+      if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+
+      const body = await parseBody(req);
+      const brand = String(body.brand || '').trim();
+      const model = String(body.model || '').trim();
+      const version = String(body.version || '').trim();
+      const color = String(body.color || 'Prata').trim();
+      const year = String(body.year || '2024').replace(/\D/g, '').slice(0, 4) || '2024';
+      const plate = String(body.plate || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
+      const crlvNumber = String(body.crlvNumber || '').trim();
+      const crlvDocumentPhotoRaw = String(body.crlvDocumentPhoto || '').trim();
+
+      if (!brand || !model || plate.length < 7) {
+        return sendJson(res, 400, { ok: false, error: 'Informe marca, modelo e placa Mercosul válida (7 caracteres).' });
+      }
+      if (!crlvNumber || !crlvDocumentPhotoRaw) {
+        return sendJson(res, 400, { ok: false, error: 'Informe o número do CRLV e envie a foto/PDF do documento CRLV para análise.' });
+      }
+
+      const currentVehicles = Array.isArray(driver.vehicles) ? [...driver.vehicles] : [];
+      if (currentVehicles.length >= 6) {
+        return sendJson(res, 400, { ok: false, error: 'Limite máximo de 6 veículos por motorista.' });
+      }
+      const dupPlate = currentVehicles.some(v => String(v.plate || '').replace(/[^A-Z0-9]/g, '').toUpperCase() === plate);
+      if (dupPlate) {
+        return sendJson(res, 409, { ok: false, error: `A placa ${plate} já está cadastrada em sua frota.` });
+      }
+
+      let vehiclePhotoUrl = body.vehiclePhoto ? await kycStorage.savePublicMedia(driver.id, 'vehicle', body.vehiclePhoto) : '';
+      if (!vehiclePhotoUrl) {
+        try {
+          const resolved = await resolveVehiclePhotoCached({ brand, model, year, color });
+          if (resolved?.primaryUrl) vehiclePhotoUrl = resolved.primaryUrl;
+        } catch {
+          // Non-fatal fallback
+        }
+      }
+      const crlvDocumentUrl = await kycStorage.savePublicMedia(driver.id, 'crlv', crlvDocumentPhotoRaw);
+
+      const cfg = await finance.getSystemConfig();
+      const cats = finance.normalizeCategoriesServer(cfg);
+      const evalRes = finance.computeDriverCategoriesServer({
+        cnhHasEar: driver.cnhHasEar ?? true,
+        vehicleBrand: brand,
+        vehicleModel: model,
+        vehicleVersion: version,
+        vehicleYear: year,
+        crlvRegular: true,
+        hasFourDoors: body.hasFourDoors !== false,
+        hasAirConditioning: body.hasAirConditioning !== false,
+        hasLargeTrunk: Boolean(body.hasLargeTrunk),
+        hasLeatherSeats: Boolean(body.hasLeatherSeats),
+        rating: driver.rating || 5.0,
+        totalRides: driver.totalRides || 0
+      }, cats);
+
+      const newVehicle = {
+        id: `veh-${Date.now()}`,
+        brand,
+        model,
+        version,
+        color,
+        year,
+        plate,
+        vehiclePhoto: vehiclePhotoUrl,
+        crlvNumber,
+        crlvDocumentPhoto: crlvDocumentUrl,
+        crlvRegular: true,
+        hasFourDoors: body.hasFourDoors !== false,
+        hasAirConditioning: body.hasAirConditioning !== false,
+        hasLargeTrunk: Boolean(body.hasLargeTrunk),
+        hasLeatherSeats: Boolean(body.hasLeatherSeats),
+        eligibleCategories: evalRes.eligibleCategories,
+        enabledCategories: evalRes.enabledCategories,
+        approvalStatus: isAdmin ? 'aprovado' : 'pendente_aprovacao',
+        isActive: currentVehicles.length === 0 && isAdmin,
+        submittedAt: new Date().toISOString()
+      };
+
+      const updatedVehicles = [...currentVehicles, newVehicle];
+      const updated = await finance.saveDriverRecord({
+        ...driver,
+        vehicles: updatedVehicles
+      });
+
+      await db.query(
+        `INSERT INTO public.notifications (id, title, message, type, read, timestamp)
+         VALUES ($1, $2, $3, 'vehicle_new', false, NOW())`,
+        [
+          `notif-veh-${Date.now()}`,
+          `🚗 Novo Veículo & CRLV p/ Analisar: ${driver.name}`,
+          `${brand} ${model} ${year} (${color}) • Placa ${plate} • CRLV ${crlvNumber}`
+        ]
+      ).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, driver: updated, vehicle: newVehicle });
+    }
+
+    const driverVehicleSelectMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/vehicles\/([^/]+)\/select$/);
+    if (driverVehicleSelectMatch && method === 'POST') {
+      const driverId = decodeURIComponent(driverVehicleSelectMatch[1]);
+      const vehicleId = decodeURIComponent(driverVehicleSelectMatch[2]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
+      const driver = await finance.getDriverById(driverId);
+      if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+
+      const currentVehicles = Array.isArray(driver.vehicles) ? [...driver.vehicles] : [];
+      const target = currentVehicles.find(v => v.id === vehicleId);
+      if (!target) return sendJson(res, 404, { ok: false, error: 'Veículo não encontrado no perfil.' });
+      if (target.approvalStatus !== 'aprovado') {
+        return sendJson(res, 400, {
+          ok: false,
+          error: target.approvalStatus === 'rejeitado'
+            ? 'Este veículo foi recusado pelo Painel Master e não pode ser selecionado.'
+            : 'Este veículo ainda aguarda análise e aprovação do CRLV no Painel Master.'
+        });
+      }
+
+      const nextVehicles = currentVehicles.map(v => ({
+        ...v,
+        isActive: v.id === vehicleId
+      }));
+      const topCat = Array.isArray(target.eligibleCategories) && target.eligibleCategories.length > 0
+        ? target.eligibleCategories[target.eligibleCategories.length - 1]
+        : (driver.vehicleCategory || 'kavro_go');
+
+      const updated = await finance.saveDriverRecord({
+        ...driver,
+        vehicles: nextVehicles,
+        activeVehicleId: target.id,
+        vehicleBrand: target.brand,
+        vehicleModel: target.model,
+        vehicleVersion: target.version || '',
+        vehicleColor: target.color,
+        vehicleYear: target.year,
+        vehiclePlate: target.plate,
+        vehiclePhoto: target.vehiclePhoto || '',
+        crlvNumber: target.crlvNumber || '',
+        crlvRegular: target.crlvRegular !== false,
+        hasFourDoors: target.hasFourDoors !== false,
+        hasAirConditioning: target.hasAirConditioning !== false,
+        hasLargeTrunk: Boolean(target.hasLargeTrunk),
+        hasLeatherSeats: Boolean(target.hasLeatherSeats),
+        vehicleCategory: topCat,
+        enabledCategories: target.enabledCategories || target.eligibleCategories
+      });
+
+      return sendJson(res, 200, { ok: true, driver: updated, activeVehicle: target });
+    }
+
+    const driverVehicleDeleteMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/vehicles\/([^/]+)$/);
+    if (driverVehicleDeleteMatch && method === 'DELETE') {
+      const driverId = decodeURIComponent(driverVehicleDeleteMatch[1]);
+      const vehicleId = decodeURIComponent(driverVehicleDeleteMatch[2]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
+      const driver = await finance.getDriverById(driverId);
+      if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+
+      const currentVehicles = Array.isArray(driver.vehicles) ? [...driver.vehicles] : [];
+      const target = currentVehicles.find(v => v.id === vehicleId);
+      if (!target) return sendJson(res, 404, { ok: false, error: 'Veículo não encontrado.' });
+      if (target.isActive) {
+        return sendJson(res, 400, { ok: false, error: 'Selecione outro veículo aprovado antes de remover o veículo em uso hoje.' });
+      }
+      if (currentVehicles.length <= 1) {
+        return sendJson(res, 400, { ok: false, error: 'O motorista precisa manter pelo menos 1 veículo cadastrado.' });
+      }
+
+      const nextVehicles = currentVehicles.filter(v => v.id !== vehicleId);
+      const updated = await finance.saveDriverRecord({
+        ...driver,
+        vehicles: nextVehicles
+      });
+      return sendJson(res, 200, { ok: true, driver: updated });
+    }
+
     // ===== DEEPGUARD KYC — PROCESSAMENTO BIOMÉTRICO & GESTÃO DOCUMENTAL =====
 
     // 1. Resolução de URL Temporária Assinada para Visualização de Documentos (15 min)
@@ -4283,6 +4477,72 @@ async function handleApiRequest(req, res) {
         client: sanitizeClientRow(savedRow, isAdmin),
         profileChangeRequest
       });
+    }
+
+    const adminVehicleReviewMatch = pathname.match(/^\/api\/admin\/drivers\/([^/]+)\/vehicles\/([^/]+)\/review$/);
+    if (adminVehicleReviewMatch && (method === 'POST' || method === 'PATCH')) {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const driverId = decodeURIComponent(adminVehicleReviewMatch[1]);
+      const vehicleId = decodeURIComponent(adminVehicleReviewMatch[2]);
+      const driver = await finance.getDriverById(driverId);
+      if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+
+      const body = await parseBody(req);
+      const decision = String(body.decision || '').trim().toLowerCase();
+      if (decision !== 'aprovar' && decision !== 'recusar') {
+        return sendJson(res, 400, { ok: false, error: 'Decisão inválida. Envie "aprovar" ou "recusar".' });
+      }
+      const rejectionReason = String(body.rejectionReason || '').trim();
+      const now = new Date().toISOString();
+
+      const currentVehicles = Array.isArray(driver.vehicles) ? [...driver.vehicles] : [];
+      const targetIdx = currentVehicles.findIndex(v => v.id === vehicleId);
+      if (targetIdx < 0) return sendJson(res, 404, { ok: false, error: 'Veículo não encontrado.' });
+
+      const targetVeh = currentVehicles[targetIdx];
+      currentVehicles[targetIdx] = {
+        ...targetVeh,
+        approvalStatus: decision === 'aprovar' ? 'aprovado' : 'rejeitado',
+        rejectionReason: decision === 'recusar'
+          ? (rejectionReason || 'CRLV ou dados do veículo não aprovados pela Central Master.')
+          : undefined,
+        reviewedAt: now,
+        reviewedBy: 'Administrador Master'
+      };
+
+      const hasActiveApproved = currentVehicles.some(v => v.isActive && v.approvalStatus === 'aprovado');
+      let nextActiveId = driver.activeVehicleId;
+      let extraRootFields = {};
+      if (decision === 'aprovar' && !hasActiveApproved) {
+        currentVehicles[targetIdx].isActive = true;
+        nextActiveId = currentVehicles[targetIdx].id;
+        const topCat = Array.isArray(currentVehicles[targetIdx].eligibleCategories) && currentVehicles[targetIdx].eligibleCategories.length > 0
+          ? currentVehicles[targetIdx].eligibleCategories[currentVehicles[targetIdx].eligibleCategories.length - 1]
+          : (driver.vehicleCategory || 'kavro_go');
+        extraRootFields = {
+          vehicleBrand: currentVehicles[targetIdx].brand,
+          vehicleModel: currentVehicles[targetIdx].model,
+          vehicleVersion: currentVehicles[targetIdx].version || '',
+          vehicleColor: currentVehicles[targetIdx].color,
+          vehicleYear: currentVehicles[targetIdx].year,
+          vehiclePlate: currentVehicles[targetIdx].plate,
+          vehiclePhoto: currentVehicles[targetIdx].vehiclePhoto || '',
+          crlvNumber: currentVehicles[targetIdx].crlvNumber || '',
+          crlvRegular: true,
+          vehicleCategory: topCat
+        };
+      }
+
+      const updated = await finance.saveDriverRecord({
+        ...driver,
+        ...extraRootFields,
+        activeVehicleId: nextActiveId,
+        vehicles: currentVehicles
+      });
+
+      return sendJson(res, 200, { ok: true, driver: updated, vehicle: currentVehicles[targetIdx] });
     }
 
     const adminPcrMatch = pathname.match(/^\/api\/admin\/profile-change-requests\/(driver|client)\/([^/]+)$/);

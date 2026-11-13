@@ -3,6 +3,7 @@ import {
   AlertCircle,
   ArrowLeft,
   Camera,
+  Car,
   Check,
   CheckCircle2,
   Clock,
@@ -19,15 +20,27 @@ import {
   ShieldCheck,
   Star,
   Trash2,
+  Upload,
   User,
   Wallet,
-  XCircle
+  X,
+  XCircle,
+  Zap
 } from 'lucide-react';
-import { DriverPixKey, DriverProfile, DriverWalletSummary, Ride } from '../types';
+import { DriverPixKey, DriverProfile, DriverVehicle, DriverWalletSummary, Ride } from '../types';
 import { StorageService } from '../services/storage';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
-import { formatCPF, formatPhone, formatRideCode } from '../utils/format';
+import { formatCPF, formatMercosulPlate, formatPhone, formatRideCode } from '../utils/format';
 import { DRIVER_TERMS_CONTRACT_ID, DRIVER_TERMS_CONTRACT_VERSION } from '../utils/driverTermsContract';
+import {
+  detectVehicleFromDescription,
+  findVehicleTemplate,
+  POPULAR_CAR_COLORS,
+  POPULAR_VEHICLE_BRANDS,
+  POPULAR_VEHICLES_CATALOG,
+  resolveVehiclePhotoExact
+} from '../services/vehicleService';
+import { VehiclePhotoPreview } from './VehiclePhotoPreview';
 
 interface DriverSecondaryTabsProps {
   activeTab: 'ganhos' | 'carteira' | 'perfil';
@@ -247,6 +260,210 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
       remaining[0] = { ...remaining[0], isDefault: true };
     }
     await persistPixKeysList(remaining, 'Chave PIX removida da carteira.');
+  };
+
+  // ═══ MULTI-VEÍCULOS & DOCUMENTO CRLV (NO PERFIL DO MOTORISTA) ═══
+  const crlvFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [showAddVehicleForm, setShowAddVehicleForm] = useState(false);
+  const [vehQuickText, setVehQuickText] = useState('');
+  const [vehBrand, setVehBrand] = useState('');
+  const [vehModel, setVehModel] = useState('');
+  const [vehYear, setVehYear] = useState('2024');
+  const [vehColor, setVehColor] = useState('Prata');
+  const [vehPlate, setVehPlate] = useState('');
+  const [vehCrlvNumber, setVehCrlvNumber] = useState('');
+  const [vehCrlvDocPhoto, setVehCrlvDocPhoto] = useState('');
+  const [vehCrlvFileName, setVehCrlvFileName] = useState('');
+  const [vehPhotoUrl, setVehPhotoUrl] = useState('');
+  const [vehPhotoCandidates, setVehPhotoCandidates] = useState<{ title: string; url: string; score: number }[]>([]);
+  const [vehHasFourDoors, setVehHasFourDoors] = useState(true);
+  const [vehHasAc, setVehHasAc] = useState(true);
+  const [vehHasLargeTrunk, setVehHasLargeTrunk] = useState(false);
+  const [vehHasLeatherSeats, setVehHasLeatherSeats] = useState(false);
+  const [isSavingVehicle, setIsSavingVehicle] = useState(false);
+  const [isSwitchingVehicleId, setIsSwitchingVehicleId] = useState<string | null>(null);
+  const [vehicleFeedback, setVehicleFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [previewCrlvModal, setPreviewCrlvModal] = useState<{ title: string; crlvNumber: string; url: string } | null>(null);
+
+  const driverVehicles: DriverVehicle[] = (() => {
+    if (Array.isArray(currentDriver.vehicles) && currentDriver.vehicles.length > 0) {
+      return currentDriver.vehicles;
+    }
+    if (currentDriver.vehicleBrand || currentDriver.vehicleModel || currentDriver.vehiclePlate) {
+      return [{
+        id: 'veh-primary',
+        brand: currentDriver.vehicleBrand || '',
+        model: currentDriver.vehicleModel || '',
+        version: currentDriver.vehicleVersion || '',
+        color: currentDriver.vehicleColor || 'Prata',
+        year: currentDriver.vehicleYear || '2024',
+        plate: currentDriver.vehiclePlate || '',
+        vehiclePhoto: currentDriver.vehiclePhoto || '',
+        crlvNumber: currentDriver.crlvNumber || '',
+        crlvDocumentPhoto: '',
+        crlvRegular: currentDriver.crlvRegular !== false,
+        hasFourDoors: currentDriver.hasFourDoors !== false,
+        hasAirConditioning: currentDriver.hasAirConditioning !== false,
+        hasLargeTrunk: Boolean(currentDriver.hasLargeTrunk),
+        hasLeatherSeats: Boolean(currentDriver.hasLeatherSeats),
+        eligibleCategories: currentDriver.eligibleCategories || ['kavro_go'],
+        approvalStatus: currentDriver.approvalStatus === 'aprovado' ? 'aprovado' : 'pendente_aprovacao',
+        isActive: true,
+        submittedAt: currentDriver.createdAt
+      }];
+    }
+    return [];
+  })();
+
+  const handleVehQuickIdentify = (text: string) => {
+    setVehQuickText(text);
+    const detected = detectVehicleFromDescription(text);
+    if (!detected) return;
+    if (detected.brand) setVehBrand(detected.brand);
+    if (detected.model) setVehModel(detected.model);
+    if (detected.year) setVehYear(detected.year);
+    if (detected.color) {
+      const c = POPULAR_CAR_COLORS.find(
+        x => x.label.toLowerCase() === detected.color.toLowerCase() || x.name.toLowerCase() === detected.color.toLowerCase()
+      );
+      setVehColor(c ? c.name : detected.color);
+    }
+    setVehHasFourDoors(true);
+    setVehHasAc(true);
+    setVehHasLargeTrunk(detected.hasLargeTrunk);
+    setVehHasLeatherSeats(detected.hasLeatherSeats);
+    setVehPhotoUrl('');
+  };
+
+  useEffect(() => {
+    if (!showAddVehicleForm || (!vehBrand.trim() && !vehModel.trim())) return;
+    let active = true;
+    resolveVehiclePhotoExact({
+      brand: vehBrand,
+      model: vehModel,
+      year: vehYear,
+      color: vehColor
+    }).then((res) => {
+      if (!active) return;
+      setVehPhotoCandidates(res.candidates || []);
+      if (res.source === 'exact_lookup' && res.photoUrl) {
+        setVehPhotoUrl(res.photoUrl);
+      } else {
+        setVehPhotoUrl('');
+      }
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [showAddVehicleForm, vehBrand, vehModel, vehYear, vehColor]);
+
+  const handleCrlvFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setVehicleFeedback(null);
+    if (file.type === 'application/pdf') {
+      if (file.size > 4 * 1024 * 1024) {
+        setVehicleFeedback({ type: 'err', text: 'PDF do CRLV deve ter no máximo 4 MB.' });
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setVehCrlvDocPhoto(reader.result);
+          setVehCrlvFileName(file.name);
+        }
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Falha ao ler imagem do CRLV.'));
+        reader.readAsDataURL(file);
+      });
+      const compressed = await compressDataUrlForUpload(dataUrl, 1200, 0.82);
+      setVehCrlvDocPhoto(compressed);
+      setVehCrlvFileName(file.name);
+    } catch {
+      setVehicleFeedback({ type: 'err', text: 'Não foi possível ler o arquivo do CRLV.' });
+    }
+  };
+
+  const handleRegisterNewVehicle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVehicleFeedback(null);
+    const cleanPlate = vehPlate.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!vehBrand.trim() || !vehModel.trim() || cleanPlate.length < 7) {
+      setVehicleFeedback({ type: 'err', text: 'Preencha Marca, Modelo e Placa Mercosul válida (7 dígitos).' });
+      return;
+    }
+    if (!vehCrlvNumber.trim() || !vehCrlvDocPhoto) {
+      setVehicleFeedback({ type: 'err', text: 'Informe o número do CRLV e anexe a foto ou PDF do CRLV.' });
+      return;
+    }
+    setIsSavingVehicle(true);
+    const res = await StorageService.registerDriverVehicle(currentDriver.id, {
+      brand: vehBrand.trim(),
+      model: vehModel.trim(),
+      color: vehColor,
+      year: vehYear || '2024',
+      plate: cleanPlate,
+      vehiclePhoto: vehPhotoUrl || undefined,
+      crlvNumber: vehCrlvNumber.trim(),
+      crlvDocumentPhoto: vehCrlvDocPhoto,
+      hasFourDoors: vehHasFourDoors,
+      hasAirConditioning: vehHasAc,
+      hasLargeTrunk: vehHasLargeTrunk,
+      hasLeatherSeats: vehHasLeatherSeats
+    });
+    setIsSavingVehicle(false);
+    if (!res.ok || !res.driver) {
+      setVehicleFeedback({ type: 'err', text: res.error || 'Erro ao enviar veículo para análise.' });
+      return;
+    }
+    onDriverUpdated(res.driver);
+    setShowAddVehicleForm(false);
+    setVehQuickText('');
+    setVehBrand('');
+    setVehModel('');
+    setVehPlate('');
+    setVehCrlvNumber('');
+    setVehCrlvDocPhoto('');
+    setVehCrlvFileName('');
+    setVehPhotoUrl('');
+    setVehPhotoCandidates([]);
+    setVehicleFeedback({
+      type: 'ok',
+      text: 'Veículo e CRLV enviados para análise do Painel Master! Assim que aprovado você poderá selecioná-lo.'
+    });
+  };
+
+  const handleSelectActiveVehicle = async (vehicleId: string) => {
+    setVehicleFeedback(null);
+    setIsSwitchingVehicleId(vehicleId);
+    const res = await StorageService.selectDriverActiveVehicle(currentDriver.id, vehicleId);
+    setIsSwitchingVehicleId(null);
+    if (!res.ok || !res.driver) {
+      setVehicleFeedback({ type: 'err', text: res.error || 'Não foi possível selecionar este veículo.' });
+      return;
+    }
+    onDriverUpdated(res.driver);
+    setVehicleFeedback({ type: 'ok', text: 'Veículo ativo para trabalhar hoje atualizado!' });
+    setTimeout(() => setVehicleFeedback(null), 3500);
+  };
+
+  const handleDeleteVehicle = async (vehicleId: string) => {
+    setVehicleFeedback(null);
+    setIsSwitchingVehicleId(vehicleId);
+    const res = await StorageService.deleteDriverVehicle(currentDriver.id, vehicleId);
+    setIsSwitchingVehicleId(null);
+    if (!res.ok || !res.driver) {
+      setVehicleFeedback({ type: 'err', text: res.error || 'Não foi possível remover este veículo.' });
+      return;
+    }
+    onDriverUpdated(res.driver);
+    setVehicleFeedback({ type: 'ok', text: 'Veículo removido da sua frota.' });
   };
 
   useEffect(() => {
@@ -1269,6 +1486,510 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
               </div>
             </div>
 
+            {/* Card 1.5: Meus Veículos & CRLV (Multi-Veículos + Análise Master) */}
+            <div style={CARD_STYLE}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: '0.96rem', fontWeight: 900, color: '#111111', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Car size={17} />
+                    <span>Meus Veículos &amp; CRLV ({driverVehicles.length}/6)</span>
+                  </div>
+                  <div style={{ fontSize: '0.74rem', color: '#6B7280', marginTop: 2 }}>
+                    Cadastre mais de 1 carro com CRLV para aprovação no Painel Master e escolha qual vai dirigir hoje.
+                  </div>
+                </div>
+                {driverVehicles.length < 6 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAddVehicleForm(prev => !prev);
+                      setVehicleFeedback(null);
+                    }}
+                    style={{
+                      padding: '7px 11px',
+                      borderRadius: 9,
+                      border: '1px solid #111111',
+                      backgroundColor: showAddVehicleForm ? '#F3F4F6' : '#111111',
+                      color: showAddVehicleForm ? '#111111' : '#FFFFFF',
+                      fontSize: '0.74rem',
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      cursor: 'pointer',
+                      flexShrink: 0
+                    }}
+                  >
+                    {showAddVehicleForm ? <span>Fechar</span> : <><Plus size={14} /><span>Novo Veículo</span></>}
+                  </button>
+                )}
+              </div>
+
+              {vehicleFeedback && (
+                <div style={{
+                  marginBottom: 10,
+                  padding: '9px 11px',
+                  borderRadius: 10,
+                  backgroundColor: vehicleFeedback.type === 'ok' ? '#F0FDF4' : '#FEF2F2',
+                  border: vehicleFeedback.type === 'ok' ? '1px solid #BBF7D0' : '1px solid #FECACA',
+                  color: vehicleFeedback.type === 'ok' ? '#15803D' : '#DC2626',
+                  fontSize: '0.77rem',
+                  fontWeight: 700
+                }}>
+                  {vehicleFeedback.text}
+                </div>
+              )}
+
+              {/* Lista dos veículos cadastrados */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {driverVehicles.map((veh) => {
+                  const isApproved = veh.approvalStatus === 'aprovado';
+                  const isRejected = veh.approvalStatus === 'rejeitado';
+                  const isPending = veh.approvalStatus === 'pendente_aprovacao';
+                  const statusCfg = isApproved
+                    ? { label: 'Aprovado', bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0' }
+                    : isRejected
+                    ? { label: 'Recusado', bg: '#FEE2E2', color: '#B91C1C', border: '#FECACA' }
+                    : { label: 'Em análise Master', bg: '#FEF3C7', color: '#B45309', border: '#FDE68A' };
+
+                  return (
+                    <div
+                      key={veh.id}
+                      style={{
+                        borderRadius: 13,
+                        border: veh.isActive ? '2px solid #111111' : '1px solid #E5E7EB',
+                        backgroundColor: veh.isActive ? '#FAFAFA' : '#FFFFFF',
+                        padding: 12,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 9
+                      }}
+                    >
+                      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                        <div style={{
+                          width: 78,
+                          height: 52,
+                          borderRadius: 9,
+                          overflow: 'hidden',
+                          backgroundColor: '#0F172A',
+                          flexShrink: 0
+                        }}>
+                          <img
+                            src={veh.vehiclePhoto || '/vehicles/kavro-sedan-ev.jpg'}
+                            alt={`${veh.brand} ${veh.model}`}
+                            onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/vehicles/kavro-sedan-ev.jpg'; }}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                          />
+                        </div>
+
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 3 }}>
+                            <span style={{
+                              fontSize: '0.67rem',
+                              fontWeight: 800,
+                              padding: '2px 7px',
+                              borderRadius: 999,
+                              backgroundColor: statusCfg.bg,
+                              color: statusCfg.color,
+                              border: `1px solid ${statusCfg.border}`
+                            }}>
+                              {statusCfg.label}
+                            </span>
+                            {veh.isActive && isApproved && (
+                              <span style={{
+                                fontSize: '0.67rem',
+                                fontWeight: 800,
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                backgroundColor: '#111111',
+                                color: '#A3E635'
+                              }}>
+                                Em uso hoje
+                              </span>
+                            )}
+                          </div>
+
+                          <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#111111', lineHeight: 1.25 }}>
+                            {veh.brand} {veh.model} {veh.year}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: '#4B5563', marginTop: 2 }}>
+                            Placa <strong style={{ fontFamily: 'monospace' }}>{veh.plate}</strong> • Cor {veh.color}
+                            {veh.crlvNumber ? ` • CRLV ${veh.crlvNumber}` : ''}
+                          </div>
+                        </div>
+                      </div>
+
+                      {isRejected && veh.rejectionReason && (
+                        <div style={{
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          backgroundColor: '#FEF2F2',
+                          color: '#B91C1C',
+                          fontSize: '0.73rem',
+                          fontWeight: 600
+                        }}>
+                          Motivo da recusa: {veh.rejectionReason}
+                        </div>
+                      )}
+
+                      {isPending && (
+                        <div style={{
+                          padding: '7px 10px',
+                          borderRadius: 8,
+                          backgroundColor: '#FFFBEB',
+                          color: '#92400E',
+                          fontSize: '0.73rem',
+                          fontWeight: 600
+                        }}>
+                          CRLV enviado para análise do Painel Master. Assim que aprovado você poderá selecioná-lo para rodar.
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, alignItems: 'center' }}>
+                        {isApproved && !veh.isActive && (
+                          <button
+                            type="button"
+                            disabled={isSwitchingVehicleId === veh.id}
+                            onClick={() => handleSelectActiveVehicle(veh.id)}
+                            style={{
+                              flex: 1,
+                              minWidth: 160,
+                              height: 36,
+                              borderRadius: 9,
+                              border: 'none',
+                              backgroundColor: '#111111',
+                              color: '#FFFFFF',
+                              fontSize: '0.76rem',
+                              fontWeight: 800,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {isSwitchingVehicleId === veh.id ? 'Ativando...' : 'Selecionar p/ trabalhar hoje'}
+                          </button>
+                        )}
+
+                        {veh.crlvDocumentPhoto && (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewCrlvModal({
+                              title: `${veh.brand} ${veh.model} (${veh.plate})`,
+                              crlvNumber: veh.crlvNumber || 'CRLV',
+                              url: veh.crlvDocumentPhoto
+                            })}
+                            style={{
+                              height: 36,
+                              padding: '0 11px',
+                              borderRadius: 9,
+                              border: '1px solid #D1D5DB',
+                              backgroundColor: '#F9FAFB',
+                              color: '#111111',
+                              fontSize: '0.74rem',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Eye size={13} />
+                            <span>Ver CRLV</span>
+                          </button>
+                        )}
+
+                        {!veh.isActive && driverVehicles.length > 1 && (
+                          <button
+                            type="button"
+                            disabled={isSwitchingVehicleId === veh.id}
+                            onClick={() => handleDeleteVehicle(veh.id)}
+                            title="Remover veículo"
+                            style={{
+                              width: 36,
+                              height: 36,
+                              borderRadius: 9,
+                              border: '1px solid #FECACA',
+                              backgroundColor: '#FEF2F2',
+                              color: '#DC2626',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Formulário de Novo Veículo + CRLV */}
+              {showAddVehicleForm && (
+                <form
+                  onSubmit={handleRegisterNewVehicle}
+                  style={{
+                    marginTop: 14,
+                    paddingTop: 14,
+                    borderTop: '1px dashed #E5E7EB',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10
+                  }}
+                >
+                  <datalist id="kavro-prof-brands">
+                    {POPULAR_VEHICLE_BRANDS.map(b => <option key={b} value={b} />)}
+                  </datalist>
+                  <datalist id="kavro-prof-models">
+                    {POPULAR_VEHICLES_CATALOG
+                      .filter(v => !vehBrand || v.brand.toLowerCase() === vehBrand.toLowerCase())
+                      .map(v => <option key={`${v.brand}-${v.model}`} value={v.model} label={v.brand} />)}
+                  </datalist>
+
+                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.73rem', fontWeight: 800, color: '#0F172A', marginBottom: 4 }}>
+                      <Zap size={13} color="#16A34A" />
+                      <span>Identificação rápida (ex: Onix Plus 2024 Preto)</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Digite modelo, ano e cor para preencher automático..."
+                      value={vehQuickText}
+                      onChange={(e) => handleVehQuickIdentify(e.target.value)}
+                      style={{ ...INPUT_STYLE, paddingLeft: 12, backgroundColor: '#FFFFFF' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 3 }}>Marca</label>
+                      <input
+                        type="text"
+                        list="kavro-prof-brands"
+                        placeholder="Ex: Toyota"
+                        value={vehBrand}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setVehBrand(val);
+                          const t = findVehicleTemplate(val, vehModel);
+                          if (t) {
+                            setVehHasLargeTrunk(t.hasLargeTrunk);
+                            setVehHasLeatherSeats(t.hasLeatherSeats);
+                          }
+                        }}
+                        style={{ ...INPUT_STYLE, paddingLeft: 12 }}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 3 }}>Modelo</label>
+                      <input
+                        type="text"
+                        list="kavro-prof-models"
+                        placeholder="Ex: Corolla"
+                        value={vehModel}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setVehModel(val);
+                          const t = findVehicleTemplate(vehBrand, val);
+                          if (t) {
+                            setVehHasLargeTrunk(t.hasLargeTrunk);
+                            setVehHasLeatherSeats(t.hasLeatherSeats);
+                          }
+                        }}
+                        style={{ ...INPUT_STYLE, paddingLeft: 12 }}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 3 }}>Ano</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={4}
+                        placeholder="2024"
+                        value={vehYear}
+                        onChange={(e) => setVehYear(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                        style={{ ...INPUT_STYLE, paddingLeft: 12 }}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 3 }}>Placa Mercosul</label>
+                      <input
+                        type="text"
+                        maxLength={8}
+                        placeholder="ABC1D23"
+                        value={vehPlate}
+                        onChange={(e) => setVehPlate(formatMercosulPlate(e.target.value))}
+                        style={{ ...INPUT_STYLE, paddingLeft: 12, textTransform: 'uppercase', fontFamily: 'monospace' }}
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>Cor do Veículo</label>
+                    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {POPULAR_CAR_COLORS.slice(0, 8).map(c => {
+                        const sel = vehColor === c.name;
+                        return (
+                          <button
+                            key={c.name}
+                            type="button"
+                            onClick={() => setVehColor(c.name)}
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: 999,
+                              border: sel ? '1.5px solid #111111' : '1px solid #E5E7EB',
+                              backgroundColor: sel ? '#111111' : '#FFFFFF',
+                              color: sel ? '#FFFFFF' : '#374151',
+                              fontSize: '0.72rem',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {c.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {(vehBrand || vehModel) && (
+                    <div>
+                      <VehiclePhotoPreview
+                        photoUrl={vehPhotoUrl || undefined}
+                        brand={vehBrand}
+                        model={vehModel}
+                        year={vehYear}
+                        colorName={vehColor}
+                        plate={vehPlate}
+                        size="compact"
+                        showPlate={false}
+                      />
+                      {vehPhotoCandidates.length > 1 && (
+                        <div style={{ display: 'flex', gap: 6, marginTop: 6, overflowX: 'auto' }}>
+                          {vehPhotoCandidates.map((cand, idx) => (
+                            <button
+                              key={cand.url + idx}
+                              type="button"
+                              onClick={() => setVehPhotoUrl(cand.url)}
+                              style={{
+                                flexShrink: 0,
+                                width: 64,
+                                height: 42,
+                                padding: 0,
+                                borderRadius: 7,
+                                overflow: 'hidden',
+                                border: vehPhotoUrl === cand.url ? '2px solid #84CC16' : '1px solid #CBD5E1',
+                                background: '#0F172A',
+                                cursor: 'pointer'
+                              }}
+                            >
+                              <img src={cand.url} alt={cand.title} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div>
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 3 }}>
+                      Número / Código de Segurança do CRLV
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: 01234567890"
+                      value={vehCrlvNumber}
+                      onChange={(e) => setVehCrlvNumber(e.target.value)}
+                      style={{ ...INPUT_STYLE, paddingLeft: 12 }}
+                      required
+                    />
+                  </div>
+
+                  <div>
+                    <input
+                      ref={crlvFileInputRef}
+                      type="file"
+                      accept="image/*,application/pdf"
+                      style={{ display: 'none' }}
+                      onChange={handleCrlvFileUpload}
+                    />
+                    <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>
+                      Documento CRLV / CRLV-e (Foto nítida ou PDF)
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => crlvFileInputRef.current?.click()}
+                      style={{
+                        width: '100%',
+                        padding: '12px',
+                        borderRadius: 10,
+                        border: vehCrlvDocPhoto ? '1.5px solid #16A34A' : '1.5px dashed #9CA3AF',
+                        backgroundColor: vehCrlvDocPhoto ? '#F0FDF4' : '#F9FAFB',
+                        color: vehCrlvDocPhoto ? '#15803D' : '#111111',
+                        fontSize: '0.8rem',
+                        fontWeight: 700,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Upload size={15} />
+                      <span>
+                        {vehCrlvDocPhoto
+                          ? `CRLV anexado: ${vehCrlvFileName || 'Documento pronto'}`
+                          : 'Enviar Foto ou PDF do CRLV em dia'}
+                      </span>
+                    </button>
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: '0.75rem', color: '#374151' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={vehHasFourDoors} onChange={e => setVehHasFourDoors(e.target.checked)} />
+                      <span>4 Portas</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={vehHasAc} onChange={e => setVehHasAc(e.target.checked)} />
+                      <span>Ar-Condicionado</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={vehHasLargeTrunk} onChange={e => setVehHasLargeTrunk(e.target.checked)} />
+                      <span>Porta-malas grande</span>
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input type="checkbox" checked={vehHasLeatherSeats} onChange={e => setVehHasLeatherSeats(e.target.checked)} />
+                      <span>Bancos em couro</span>
+                    </label>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isSavingVehicle}
+                    style={{
+                      height: 44,
+                      borderRadius: 10,
+                      border: 'none',
+                      backgroundColor: '#111111',
+                      color: '#FFFFFF',
+                      fontWeight: 800,
+                      fontSize: '0.86rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {isSavingVehicle ? 'Enviando veículo & CRLV...' : 'Enviar Veículo & CRLV p/ Análise Master'}
+                  </button>
+                </form>
+              )}
+            </div>
+
             {/* Card 2: Editar Dados Pessoais (Sujeito à aprovação do Admin Master) */}
             <div style={CARD_STYLE}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
@@ -1579,6 +2300,63 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
           </div>
         )}
       </div>
+
+      {/* Modal Visualizador de CRLV do Motorista */}
+      {previewCrlvModal && (
+        <div
+          onClick={() => setPreviewCrlvModal(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.75)',
+            zIndex: 100020,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 16
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: 16,
+              padding: 16,
+              width: '100%',
+              maxWidth: 520,
+              maxHeight: '88vh',
+              overflowY: 'auto'
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 900, color: '#111111' }}>{previewCrlvModal.title}</div>
+                <div style={{ fontSize: '0.75rem', color: '#6B7280' }}>CRLV nº {previewCrlvModal.crlvNumber}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewCrlvModal(null)}
+                style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid #E5E7EB', backgroundColor: '#F3F4F6', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {previewCrlvModal.url.startsWith('data:application/pdf') || previewCrlvModal.url.toLowerCase().endsWith('.pdf') ? (
+              <iframe
+                src={previewCrlvModal.url}
+                title="Documento CRLV"
+                style={{ width: '100%', height: 420, border: '1px solid #E5E7EB', borderRadius: 10 }}
+              />
+            ) : (
+              <img
+                src={previewCrlvModal.url}
+                alt="CRLV enviado"
+                style={{ width: '100%', maxHeight: 460, objectFit: 'contain', borderRadius: 10, border: '1px solid #E5E7EB' }}
+              />
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
