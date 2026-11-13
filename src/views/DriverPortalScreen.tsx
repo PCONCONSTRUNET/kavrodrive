@@ -2660,25 +2660,30 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 maxWidth: 520,
                 backgroundColor: '#FFFFFF',
                 color: '#111111',
-                borderRadius: '26px 26px 0 0',
-                padding: '10px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
+                borderRadius: '28px 28px 0 0',
+                padding: '12px 20px calc(34px + env(safe-area-inset-bottom, 0px)) 20px',
                 boxShadow: '0 -12px 36px rgba(0,0,0,0.24)',
                 borderTop: '1px solid #E5E7EB',
-                maxHeight: '82vh',
+                minHeight: '38vh',
+                maxHeight: '84vh',
                 overflowY: 'auto',
-                boxSizing: 'border-box'
+                boxSizing: 'border-box',
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between'
               }}
             >
-              {/* Barra puxadora do Bottom Sheet */}
-              <div style={{
-                width: 40,
-                height: 4,
-                borderRadius: 999,
-                backgroundColor: '#CBD5E1',
-                margin: '0 auto 12px auto'
-              }} />
+              <div>
+                {/* Barra puxadora do Bottom Sheet */}
+                <div style={{
+                  width: 42,
+                  height: 4,
+                  borderRadius: 999,
+                  backgroundColor: '#CBD5E1',
+                  margin: '0 auto 14px auto'
+                }} />
 
-              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 14 }}>
                 <div>
                   <div style={{ fontSize: '1.02rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
                     Com qual veículo vai rodar?
@@ -2845,46 +2850,26 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </div>
               )}
 
+              </div>
+
               <button
                 type="button"
                 disabled={!canStartWithSelected || isStartingOnline}
                 onClick={handleConfirmStartOnline}
                 style={{
                   width: '100%',
-                  height: 44,
-                  borderRadius: 12,
+                  height: 48,
+                  borderRadius: 13,
                   border: 'none',
                   backgroundColor: canStartWithSelected ? '#276EF1' : '#E5E7EB',
                   color: canStartWithSelected ? '#FFFFFF' : '#6B7280',
-                  fontSize: '0.88rem',
+                  fontSize: '0.92rem',
                   fontWeight: 900,
                   cursor: canStartWithSelected ? 'pointer' : 'not-allowed',
-                  marginBottom: 8
+                  marginTop: 12
                 }}
               >
                 {isStartingOnline ? 'Iniciando...' : 'Confirmar e Ficar Online'}
-              </button>
-
-              <button
-                type="button"
-                disabled={isStartingOnline}
-                onClick={() => {
-                  setIsStartVehicleModalOpen(false);
-                  setActiveTab('veiculos');
-                }}
-                style={{
-                  width: '100%',
-                  height: 36,
-                  borderRadius: 10,
-                  border: '1px solid #E5E7EB',
-                  backgroundColor: '#F9FAFB',
-                  color: '#111111',
-                  fontSize: '0.76rem',
-                  fontWeight: 800,
-                  cursor: 'pointer'
-                }}
-              >
-                Gerenciar / Cadastrar Veículo →
               </button>
             </div>
           </div>
