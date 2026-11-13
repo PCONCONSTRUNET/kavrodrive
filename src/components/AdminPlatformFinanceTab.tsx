@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   RefreshCw, Lock, Unlock, Search, Check, X, Eye, Star, Phone, Car, User, Wallet,
-  ShieldCheck, ShieldAlert, Sparkles, AlertTriangle, FileText
+  ShieldCheck, ShieldAlert, Sparkles, AlertTriangle, FileText, Download
 } from 'lucide-react';
 import {
   DriverProfile,
   DriverVehicle,
   DriverWalletSummary,
+  Expense,
   FinancialLedgerEntry,
   PaymentTransaction,
   Ride,
@@ -16,6 +17,7 @@ import {
 import { StorageService } from '../services/storage';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
 import { AdminCrlvReviewModal } from './AdminCrlvReviewModal';
+import { AdminFinanceTreasurySection, TreasuryMetrics } from './AdminFinanceTreasurySection';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
 import {
   formatDocument,
@@ -58,7 +60,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   onConfigUpdated
 }) => {
   const isFleetStandaloneView = initialSection === 'motoristas';
-  const [subTab, setSubTab] = useState<'visao_geral' | 'regras' | 'motoristas' | 'saques' | 'livro_razao'>(initialSection);
+  const [subTab, setSubTab] = useState<'visao_geral' | 'corridas_split' | 'regras' | 'motoristas' | 'saques' | 'livro_razao'>(initialSection);
+  const [expenses, setExpenses] = useState<Expense[]>(() => StorageService.getExpenses());
   const [periodFilter, setPeriodFilter] = useState<'diario' | 'semanal' | 'mensal' | 'todos'>('todos');
   const [methodFilter, setMethodFilter] = useState<string>('todos');
   const [statusFilter, setStatusFilter] = useState<string>('todos');
@@ -132,6 +135,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
 
   useEffect(() => {
     const handleDbSync = () => {
+      setExpenses(StorageService.getExpenses());
       const synced = StorageService.getDrivers();
       setDrivers(synced);
       const digest = synced
@@ -319,7 +323,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     return true;
   });
 
-  const periodMetrics = React.useMemo(() => {
+  const periodExpenses = filterByPeriod(expenses);
+  const filteredLedger = filterByPeriod(overview?.ledger || []);
+
+  const periodMetrics: TreasuryMetrics = React.useMemo(() => {
     const valid = periodTransactions.filter(t => t.status !== 'reembolsado' && t.status !== 'falhou');
     const refunded = periodTransactions.filter(t => t.status === 'reembolsado');
 
@@ -341,6 +348,31 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const cashGross = cashTxs.reduce((acc, t) => acc + t.finalAmount, 0);
     const cashFee = cashTxs.reduce((acc, t) => acc + t.commissionAmount, 0);
 
+    const digitalInflow = valid
+      .filter(t => t.method !== 'dinheiro' && (t.status === 'confirmado' || t.status === 'pago' || t.status === 'parcialmente_pago'))
+      .reduce((acc, t) => acc + Number(t.paidAmount || t.finalAmount || 0), 0);
+
+    const periodWithdrawals = filterByPeriod(overview?.withdrawals || []);
+    const paidWdList = periodWithdrawals.filter(w => w.status === 'pago');
+    const pendingWdList = (overview?.withdrawals || []).filter(w => w.status === 'solicitado');
+    const paidWithdrawals = paidWdList.reduce((acc, w) => acc + Number(w.amount || 0), 0);
+    const pendingWithdrawals = pendingWdList.reduce((acc, w) => acc + Number(w.amount || 0), 0);
+
+    const debtSettlementsReceived = filteredLedger
+      .filter(e => e.entryType === 'debt_pix_settlement')
+      .reduce((acc, e) => acc + Number(e.grossAmount || 0), 0);
+
+    const directRevenues = periodExpenses
+      .filter(e => e.type === 'entrada')
+      .reduce((acc, e) => acc + Number(e.amount || 0), 0);
+    const operationalExpenses = periodExpenses
+      .filter(e => e.type !== 'entrada')
+      .reduce((acc, e) => acc + Number(e.amount || 0), 0);
+
+    const grossProfit = platformFee + directRevenues;
+    const netProfit = grossProfit - operationalExpenses - refundedTotal;
+    const cashBalance = digitalInflow + debtSettlementsReceived + directRevenues - paidWithdrawals - operationalExpenses - refundedTotal;
+
     const avgTicket = valid.length > 0 ? gross / valid.length : 0;
 
     return {
@@ -358,11 +390,60 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       cardFee,
       cashCount: cashTxs.length,
       cashGross,
-      cashFee
+      cashFee,
+      digitalInflow,
+      paidWithdrawals,
+      paidWithdrawalsCount: paidWdList.length,
+      pendingWithdrawals,
+      pendingWithdrawalsCount: pendingWdList.length,
+      debtSettlementsReceived,
+      totalAvailableForDrivers: Number(overview?.totalAvailableForDrivers || 0),
+      totalPendingDriverDebt: Number(overview?.totalPendingDriverDebt || 0),
+      delinquentDriversCount: Number(overview?.delinquentDriversCount || 0),
+      directRevenues,
+      operationalExpenses,
+      grossProfit,
+      netProfit,
+      cashBalance
     };
-  }, [periodTransactions]);
+  }, [periodTransactions, overview, filteredLedger, periodExpenses]);
 
-  const filteredLedger = filterByPeriod(overview?.ledger || []);
+  const handleSaveExpenseEntry = (exp: Expense) => {
+    StorageService.saveExpense(exp);
+    setExpenses(StorageService.getExpenses());
+  };
+
+  const handleDeleteExpenseEntry = (id: string) => {
+    if (!window.confirm('Deseja excluir este lançamento do caixa da empresa?')) return;
+    StorageService.deleteExpense(id);
+    setExpenses(StorageService.getExpenses());
+  };
+
+  const handleExportFinanceCsv = () => {
+    const lines = [
+      ['Resumo Tesouraria', periodFilter, 'Saldo Caixa', periodMetrics.cashBalance.toFixed(2), 'Lucro Bruto', periodMetrics.grossProfit.toFixed(2), 'Lucro Liquido', periodMetrics.netProfit.toFixed(2), 'Repassado PIX', periodMetrics.paidWithdrawals.toFixed(2)].join(';'),
+      ['Corrida', 'Data', 'Passageiro', 'Motorista', 'Metodo', 'Bruto', 'Taxa %', 'Comissao Plataforma', 'Liquido Motorista', 'Status'].join(';'),
+      ...filteredTransactions.map(tx => [
+        tx.rideCode || tx.rideId,
+        new Date(tx.createdAt).toLocaleString('pt-BR'),
+        (tx.clientName || 'Passageiro').replace(/;/g, ','),
+        (tx.driverName || 'Motorista').replace(/;/g, ','),
+        renderMethodLabel(tx.method),
+        Number(tx.finalAmount || 0).toFixed(2),
+        Number(tx.commissionPercent || currentCommPct).toFixed(1),
+        Number(tx.commissionAmount || 0).toFixed(2),
+        Number(tx.driverNetAmount || 0).toFixed(2),
+        tx.status
+      ].join(';'))
+    ];
+    const blob = new Blob(['\uFEFF' + lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `financeiro-kavro-${periodFilter}-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const filteredDrivers = drivers.filter(drv => {
     const wallet = overview?.driverWallets?.find(w => w.driverId === drv.id);
@@ -2373,7 +2454,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       {renderAdminKycReviewModal()}
       {renderDriverTermsModal()}
 
-      {/* Cabeçalho Limpo + Seletor de Período */}
+      {/* Cabeçalho Executivo + Seletor de Período + Exportação */}
       <div style={{
         display: 'flex',
         flexWrap: 'wrap',
@@ -2382,11 +2463,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         gap: 12
       }}>
         <div>
-          <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0F172A', margin: 0, letterSpacing: '-0.01em' }}>
-            Console Financeiro & Conciliação
+          <h2 style={{ fontSize: '1.18rem', fontWeight: 800, color: '#0F172A', margin: 0, letterSpacing: '-0.01em' }}>
+            Tesouraria, Caixa &amp; Split Financeiro
           </h2>
           <p style={{ fontSize: '0.78rem', color: '#64748B', margin: '2px 0 0 0' }}>
-            Entradas de corridas, retenção de taxas ({currentCommPct}%), saldos dos motoristas e livro-razão
+            Controle do caixa da empresa, lucro bruto/líquido, repasses aos motoristas e split automático ({currentCommPct}%)
           </p>
         </div>
 
@@ -2416,7 +2497,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     border: 'none',
                     backgroundColor: active ? '#FFFFFF' : 'transparent',
                     color: active ? '#0F172A' : '#64748B',
-                    fontWeight: active ? 600 : 500,
+                    fontWeight: active ? 700 : 500,
                     fontSize: '0.74rem',
                     boxShadow: active ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
                     cursor: 'pointer'
@@ -2427,6 +2508,28 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
               );
             })}
           </div>
+
+          <button
+            type="button"
+            onClick={handleExportFinanceCsv}
+            style={{
+              height: 32,
+              padding: '0 12px',
+              borderRadius: 6,
+              border: '1px solid #CBD5E1',
+              backgroundColor: '#FFFFFF',
+              color: '#0F172A',
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <Download size={13} />
+            <span>Exportar CSV</span>
+          </button>
 
           <button
             type="button"
@@ -2452,18 +2555,39 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         </div>
       </div>
 
-      {/* 4 Cards Executivos Uniformes */}
+      {/* 4 Cards Executivos Claros: Nosso Caixa, Lucro Bruto, Volume Bruto e Repasses em Geral */}
       <div style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
         gap: 14
       }}>
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* 1. Nosso Caixa Real */}
+        <div style={{ backgroundColor: '#0F172A', borderRadius: 12, padding: '16px 18px', border: '1px solid #1E293B', display: 'flex', flexDirection: 'column', gap: 8, color: '#FFFFFF' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748B' }}>Receita da Plataforma ({currentCommPct}%)</span>
+            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase' }}>Nosso Caixa Real (Conta)</span>
+            <span style={{ fontSize: '0.68rem', padding: '2px 7px', borderRadius: 999, backgroundColor: 'rgba(163,230,53,0.16)', color: '#A3E635', fontWeight: 700 }}>
+              Tesouraria
+            </span>
           </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#0F172A', letterSpacing: '-0.02em' }}>
-            {formatBRL(periodMetrics.platformFee)}
+          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: periodMetrics.cashBalance >= 0 ? '#A3E635' : '#F87171', letterSpacing: '-0.02em' }}>
+            {formatBRL(periodMetrics.cashBalance)}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.71rem', color: '#CBD5E1', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 8 }}>
+            <span>Entrou Digital: <strong>{formatBRL(periodMetrics.digitalInflow + periodMetrics.debtSettlementsReceived)}</strong></span>
+            <span>Despesas: <strong>{formatBRL(periodMetrics.operationalExpenses)}</strong></span>
+          </div>
+        </div>
+
+        {/* 2. Lucro Bruto & Líquido */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Lucro Bruto ({currentCommPct}%)</span>
+            <span style={{ fontSize: '0.7rem', color: '#15803D', fontWeight: 700 }}>
+              Líquido: {formatBRL(periodMetrics.netProfit)}
+            </span>
+          </div>
+          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#15803D', letterSpacing: '-0.02em' }}>
+            {formatBRL(periodMetrics.grossProfit)}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
             <span>Digital: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.pixFee + periodMetrics.cardFee)}</strong></span>
@@ -2471,59 +2595,53 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
           </div>
         </div>
 
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* 3. Volume Bruto (GMV) */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748B' }}>Volume Bruto (GMV)</span>
-            <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>{periodMetrics.ridesCount} corrida(s)</span>
+            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Volume Bruto (GMV)</span>
+            <span style={{ fontSize: '0.7rem', color: '#0F172A', fontWeight: 700 }}>{periodMetrics.ridesCount} corrida(s)</span>
           </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#0F172A', letterSpacing: '-0.02em' }}>
+          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
             {formatBRL(periodMetrics.gross)}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
             <span>Ticket Médio: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.avgTicket)}</strong></span>
-            <span>Estornos: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.refundedTotal)}</strong></span>
+            <span>Estornos: <strong style={{ color: periodMetrics.refundedTotal > 0 ? '#DC2626' : '#0F172A' }}>{formatBRL(periodMetrics.refundedTotal)}</strong></span>
           </div>
         </div>
 
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* 4. Repasses em Geral (Motoristas) */}
+        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748B' }}>Líquido Motoristas ({100 - currentCommPct}%)</span>
+            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Repasses em Geral</span>
+            <span style={{ fontSize: '0.7rem', color: periodMetrics.pendingWithdrawalsCount > 0 ? '#D97706' : '#64748B', fontWeight: 700 }}>
+              A pagar: {formatBRL(periodMetrics.pendingWithdrawals)}
+            </span>
           </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: '#15803D', letterSpacing: '-0.02em' }}>
-            {formatBRL(periodMetrics.driverNet)}
+          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+            {formatBRL(periodMetrics.paidWithdrawals)}
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
-            <span>Disponível p/ saque: <strong style={{ color: '#0F172A' }}>{formatBRL(overview?.totalAvailableForDrivers || 0)}</strong></span>
-          </div>
-        </div>
-
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#64748B' }}>Dívidas Pendentes (Dinheiro)</span>
-            <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>Teto: {formatBRL(currentDebtLimit)}</span>
-          </div>
-          <div style={{ fontSize: '1.6rem', fontWeight: 700, color: (overview?.totalPendingDriverDebt || 0) > 0 ? '#DC2626' : '#0F172A', letterSpacing: '-0.02em' }}>
-            {formatBRL(overview?.totalPendingDriverDebt || 0)}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
-            <span>Motoristas bloqueados: <strong style={{ color: '#0F172A' }}>{overview?.delinquentDriversCount || 0}</strong></span>
+            <span>Carteiras: <strong style={{ color: '#15803D' }}>{formatBRL(periodMetrics.totalAvailableForDrivers)}</strong></span>
+            <span>A receber: <strong style={{ color: periodMetrics.totalPendingDriverDebt > 0 ? '#DC2626' : '#0F172A' }}>{formatBRL(periodMetrics.totalPendingDriverDebt)}</strong></span>
           </div>
         </div>
       </div>
 
-      {/* Navegação de Sub-Abas Limpa (Estilo Underline Corporativo) */}
+      {/* Navegação de Sub-Abas Organizada por Fluxo Contábil */}
       <div style={{
         display: 'flex',
-        gap: 20,
+        gap: 18,
         borderBottom: '1px solid #E2E8F0',
         overflowX: 'auto'
       }}>
         {[
-          { id: 'visao_geral', label: 'Entradas de Corridas & Taxas' },
-          { id: 'regras', label: `Regras de Comissão & Split (${currentCommPct}%)` },
-          { id: 'motoristas', label: `Carteiras dos Motoristas (${drivers.length})` },
-          { id: 'saques', label: `Saques & Repasses PIX (${(overview?.withdrawals || []).length})` },
-          { id: 'livro_razao', label: `Livro-Razão Contábil (${filteredLedger.length})` }
+          { id: 'visao_geral', label: 'Caixa, Lucro & Movimentações' },
+          { id: 'corridas_split', label: `Corridas & Split (${filteredTransactions.length})` },
+          { id: 'saques', label: `Repasses & Saques PIX (${(overview?.withdrawals || []).length})` },
+          { id: 'motoristas', label: `Carteiras (${drivers.length})` },
+          { id: 'livro_razao', label: `Livro-Razão (${filteredLedger.length})` },
+          { id: 'regras', label: `Regras de Split (${currentCommPct}%)` }
         ].map(tab => {
           const active = subTab === tab.id;
           return (
@@ -2537,7 +2655,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                 border: 'none',
                 borderBottom: active ? '2px solid #0F172A' : '2px solid transparent',
                 color: active ? '#0F172A' : '#64748B',
-                fontWeight: active ? 700 : 500,
+                fontWeight: active ? 800 : 500,
                 fontSize: '0.8rem',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -2550,48 +2668,30 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         })}
       </div>
 
-      {/* ═══ SUB-ABA 1: ENTRADAS DE CORRIDAS & TAXAS ═══ */}
+      {/* ═══ SUB-ABA 1: CAIXA, DRE GERENCIAL & LANÇAMENTOS ═══ */}
       {subTab === 'visao_geral' && (
+        <AdminFinanceTreasurySection
+          currentCommPct={currentCommPct}
+          periodLabel={
+            periodFilter === 'diario'
+              ? 'Hoje'
+              : periodFilter === 'semanal'
+              ? 'Últimos 7 dias'
+              : periodFilter === 'mensal'
+              ? 'Últimos 30 dias'
+              : 'Todo o período'
+          }
+          metrics={periodMetrics}
+          expenses={periodExpenses}
+          onSaveExpense={handleSaveExpenseEntry}
+          onDeleteExpense={handleDeleteExpenseEntry}
+          onNavigateSubTab={(tab) => setSubTab(tab)}
+        />
+      )}
+
+      {/* ═══ SUB-ABA 2: CORRIDAS & DEMONSTRATIVO DE SPLIT ═══ */}
+      {subTab === 'corridas_split' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-            gap: 14
-          }}>
-            {[
-              { title: 'PIX Dinâmico (Gateway)', count: periodMetrics.pixCount, gross: periodMetrics.pixGross, fee: periodMetrics.pixFee, desc: 'Liquidação via webhook com split automático' },
-              { title: 'Cartão (Crédito / Débito)', count: periodMetrics.cardCount, gross: periodMetrics.cardGross, fee: periodMetrics.cardFee, desc: 'Pré-autorizado na solicitação e capturado no fim' },
-              { title: 'Dinheiro (Recebido pelo Motorista)', count: periodMetrics.cashCount, gross: periodMetrics.cashGross, fee: periodMetrics.cashFee, desc: 'Taxa lançada como débito na carteira do motorista' }
-            ].map((ch, idx) => (
-              <div key={idx} style={{
-                backgroundColor: '#FFFFFF',
-                borderRadius: 10,
-                padding: '16px 18px',
-                border: '1px solid #E2E8F0',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontSize: '0.8rem', fontWeight: 600, color: '#0F172A' }}>{ch.title}</span>
-                  <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 500 }}>{ch.count} viagem(ns)</span>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                  <div>
-                    <div style={{ fontSize: '0.66rem', color: '#64748B', textTransform: 'uppercase' }}>Volume Bruto</div>
-                    <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0F172A' }}>{formatBRL(ch.gross)}</div>
-                  </div>
-                  <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: '0.66rem', color: '#64748B', textTransform: 'uppercase' }}>Taxa ({currentCommPct}%)</div>
-                    <div style={{ fontSize: '1rem', fontWeight: 700, color: '#15803D' }}>{formatBRL(ch.fee)}</div>
-                  </div>
-                </div>
-                <div style={{ fontSize: '0.7rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
-                  {ch.desc}
-                </div>
-              </div>
-            ))}
-          </div>
 
           <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
             <div style={{
@@ -3022,7 +3122,27 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
 
       {/* ═══ SUB-ABA 4: SAQUES & REPASSES PIX ═══ */}
       {subTab === 'saques' && (
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+            <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 16px' }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase' }}>Já Repassado (Pagos)</div>
+              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#15803D', marginTop: 3 }}>{formatBRL(periodMetrics.paidWithdrawals)}</div>
+            </div>
+            <div style={{ backgroundColor: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '12px 16px' }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#92400E', textTransform: 'uppercase' }}>Saques Aguardando PIX</div>
+              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#B45309', marginTop: 3 }}>{formatBRL(periodMetrics.pendingWithdrawals)}</div>
+            </div>
+            <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 10, padding: '12px 16px' }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Disponível em Carteiras</div>
+              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#0F172A', marginTop: 3 }}>{formatBRL(periodMetrics.totalAvailableForDrivers)}</div>
+            </div>
+            <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px' }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#991B1B', textTransform: 'uppercase' }}>Dívidas a Receber</div>
+              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#DC2626', marginTop: 3 }}>{formatBRL(periodMetrics.totalPendingDriverDebt)}</div>
+            </div>
+          </div>
+
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid #E2E8F0' }}>
             <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Solicitações de Saque e Repasses PIX</div>
             <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Aprove transferências ou estorne solicitações para a carteira do motorista</div>
@@ -3128,10 +3248,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
               </table>
             </div>
           )}
+          </div>
         </div>
       )}
-
-      {/* ═══ SUB-ABA 5: LIVRO-RAZÃO CONTÁBIL ═══ */}
       {subTab === 'livro_razao' && (
         <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid #E2E8F0' }}>
