@@ -85,8 +85,14 @@ function calculateSplit(grossAmount, commissionPercent = 20) {
   };
 }
 
-// Resolve a taxa/comissão oficial considerando meio de pagamento (PIX, Cartão, Dinheiro) e regra global/categoria
+// Resolve a taxa/comissão oficial considerando hierarquia: Categoria (se override ativo) > Meio de Pagamento (PIX, Cartão, Dinheiro) > Global
 function resolveCommissionPercentForRide(cfg = {}, categoryObj = null, paymentMethod = 'pix') {
+  if (cfg?.useCategoryCommissionOverride && categoryObj && categoryObj.commissionPercent !== undefined && categoryObj.commissionPercent !== null && categoryObj.commissionPercent !== '') {
+    const catPct = Number(categoryObj.commissionPercent);
+    if (!Number.isNaN(catPct)) {
+      return Math.min(100, Math.max(0, round2(catPct)));
+    }
+  }
   const methodKey = paymentMethod === 'online' ? 'cartao_credito' : String(paymentMethod || 'pix');
   const perMethodMap = cfg?.paymentMethodCommissionPercents || {};
   const rawMethodPct = perMethodMap[methodKey];
@@ -94,12 +100,6 @@ function resolveCommissionPercentForRide(cfg = {}, categoryObj = null, paymentMe
     const parsed = Number(rawMethodPct);
     if (!Number.isNaN(parsed)) {
       return Math.min(100, Math.max(0, round2(parsed)));
-    }
-  }
-  if (cfg?.useCategoryCommissionOverride && categoryObj && categoryObj.commissionPercent !== undefined) {
-    const catPct = Number(categoryObj.commissionPercent);
-    if (!Number.isNaN(catPct)) {
-      return Math.min(100, Math.max(0, round2(catPct)));
     }
   }
   const basePct = Number(cfg?.platformCommissionPercent ?? 20);
@@ -260,6 +260,8 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_provider_tx_id TEXT;
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_status TEXT;
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_provider TEXT;
+      ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS fee_amount NUMERIC DEFAULT 0;
+      ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS net_payout_amount NUMERIC DEFAULT 0;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS rating NUMERIC;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS client_rated_stars NUMERIC;
       CREATE TABLE IF NOT EXISTS public.ride_chat_messages (
@@ -1470,42 +1472,56 @@ async function listWithdrawals(driverId = null) {
   if (!db.pool) {
     const list = db.localStore.withdrawal_requests || [];
     const filtered = driverId ? list.filter(w => w.driver_id === driverId || w.driverId === driverId) : list;
-    return filtered.map(w => ({
-      id: w.id,
-      driverId: w.driver_id || w.driverId,
-      driverName: w.driver_name || w.driverName,
-      amount: round2(w.amount),
-      pixKey: w.pix_key || w.pixKey,
-      pixType: w.pix_type || w.pixType || 'cpf',
-      status: w.status || 'solicitado',
-      ledgerEntryId: w.ledger_entry_id || w.ledgerEntryId,
-      notes: w.notes || '',
-      payoutProviderTxId: w.payout_provider_tx_id || w.payoutProviderTxId || null,
-      payoutStatus: w.payout_status || w.payoutStatus || null,
-      payoutProvider: w.payout_provider || w.payoutProvider || null,
-      createdAt: w.created_at || w.createdAt,
-      processedAt: w.processed_at || w.processedAt
-    }));
+    return filtered.map(w => {
+      const amount = round2(w.amount);
+      const feeAmount = round2(w.fee_amount ?? w.feeAmount ?? 0);
+      const netPayoutAmount = round2(w.net_payout_amount ?? w.netPayoutAmount ?? Math.max(0, amount - feeAmount));
+      return {
+        id: w.id,
+        driverId: w.driver_id || w.driverId,
+        driverName: w.driver_name || w.driverName,
+        amount,
+        feeAmount,
+        netPayoutAmount,
+        pixKey: w.pix_key || w.pixKey,
+        pixType: w.pix_type || w.pixType || 'cpf',
+        status: w.status || 'solicitado',
+        ledgerEntryId: w.ledger_entry_id || w.ledgerEntryId,
+        notes: w.notes || '',
+        payoutProviderTxId: w.payout_provider_tx_id || w.payoutProviderTxId || null,
+        payoutStatus: w.payout_status || w.payoutStatus || null,
+        payoutProvider: w.payout_provider || w.payoutProvider || null,
+        createdAt: w.created_at || w.createdAt,
+        processedAt: w.processed_at || w.processedAt
+      };
+    });
   }
   const r = driverId
     ? await db.query('SELECT * FROM public.withdrawal_requests WHERE driver_id = $1 ORDER BY created_at DESC', [driverId])
     : await db.query('SELECT * FROM public.withdrawal_requests ORDER BY created_at DESC');
-  return r.rows.map(w => ({
-    id: w.id,
-    driverId: w.driver_id,
-    driverName: w.driver_name,
-    amount: round2(w.amount),
-    pixKey: w.pix_key,
-    pixType: w.pix_type || 'cpf',
-    status: w.status || 'solicitado',
-    ledgerEntryId: w.ledger_entry_id,
-    notes: w.notes || '',
-    payoutProviderTxId: w.payout_provider_tx_id || null,
-    payoutStatus: w.payout_status || null,
-    payoutProvider: w.payout_provider || null,
-    createdAt: w.created_at,
-    processedAt: w.processed_at
-  }));
+  return r.rows.map(w => {
+    const amount = round2(w.amount);
+    const feeAmount = round2(w.fee_amount ?? 0);
+    const netPayoutAmount = round2(w.net_payout_amount ?? Math.max(0, amount - feeAmount));
+    return {
+      id: w.id,
+      driverId: w.driver_id,
+      driverName: w.driver_name,
+      amount,
+      feeAmount,
+      netPayoutAmount,
+      pixKey: w.pix_key,
+      pixType: w.pix_type || 'cpf',
+      status: w.status || 'solicitado',
+      ledgerEntryId: w.ledger_entry_id,
+      notes: w.notes || '',
+      payoutProviderTxId: w.payout_provider_tx_id || null,
+      payoutStatus: w.payout_status || null,
+      payoutProvider: w.payout_provider || null,
+      createdAt: w.created_at,
+      processedAt: w.processed_at
+    };
+  });
 }
 
 async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
@@ -1519,14 +1535,21 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
   const wallet = await getDriverWallet(driverId);
   const reqAmount = round2(amount);
   const minAmount = round2(cfg.minWithdrawalAmount ?? 10);
+  const feePct = Math.max(0, Math.min(100, Number(cfg.withdrawalFeePercent ?? 0) || 0));
+  const feeFixed = Math.max(0, round2(cfg.withdrawalFeeFixed ?? 0));
+  const feeAmount = round2(Math.min(reqAmount, (reqAmount * (feePct / 100)) + feeFixed));
+  const netPayoutAmount = round2(Math.max(0, reqAmount - feeAmount));
 
   if (reqAmount <= 0) throw new Error('Informe um valor válido para saque.');
   if (reqAmount < minAmount) throw new Error(`O valor mínimo para saque é R$ ${minAmount.toFixed(2)}.`);
   if (reqAmount > wallet.availableBalance) {
     throw new Error(`Saldo disponível insuficiente (Disponível: R$ ${wallet.availableBalance.toFixed(2)}).`);
   }
+  if (netPayoutAmount <= 0) {
+    throw new Error(`O valor do saque precisa ser maior que a taxa de transferência (R$ ${feeAmount.toFixed(2)}).`);
+  }
 
-  // Impede saques duplicados simultâneos (idempotência por janela de 30s ou saque pendente idêntico)
+  // Impede saques duplicados simultâneos (idempotência por janela de 60s)
   const existingPending = wallet.withdrawals.find(
     w => (w.status === 'solicitado' || w.status === 'processando') &&
       Math.abs(w.amount - reqAmount) < 0.01 &&
@@ -1563,14 +1586,16 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
     entryType: 'payout_withdrawal',
     paymentMethod: 'pix',
     grossAmount: reqAmount,
-    commissionPercent: 0,
-    commissionAmount: 0,
-    driverNetAmount: reqAmount,
+    commissionPercent: feePct,
+    commissionAmount: feeAmount,
+    driverNetAmount: netPayoutAmount,
     balanceDelta: -reqAmount,
     balanceBucket: 'available',
     status: 'confirmado',
-    description: `Solicitação de saque via PIX (${targetPixKey})`,
-    metadata: { withdrawalId: wdId, pixKey: targetPixKey, pixType: targetPixType }
+    description: feeAmount > 0
+      ? `Solicitação de saque via PIX (${targetPixKey}) — Líquido R$ ${netPayoutAmount.toFixed(2)} | Taxa saque R$ ${feeAmount.toFixed(2)}`
+      : `Solicitação de saque via PIX (${targetPixKey})`,
+    metadata: { withdrawalId: wdId, pixKey: targetPixKey, pixType: targetPixType, feeAmount, netPayoutAmount }
   });
 
   const now = new Date().toISOString();
@@ -1580,6 +1605,8 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
       driver_id: driver.id,
       driver_name: driver.name,
       amount: reqAmount,
+      fee_amount: feeAmount,
+      net_payout_amount: netPayoutAmount,
       pix_key: targetPixKey,
       pix_type: targetPixType,
       status: 'solicitado',
@@ -1590,16 +1617,16 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
     };
     db.localStore.withdrawal_requests.unshift(row);
     db.saveLocalStore();
-    return row;
+    return { ...row, feeAmount, netPayoutAmount };
   }
 
   const r = await db.query(
     `INSERT INTO public.withdrawal_requests (
-      id, driver_id, driver_name, amount, pix_key, pix_type, status, ledger_entry_id, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,'solicitado',$7,NOW()) RETURNING *`,
-    [wdId, driver.id, driver.name, reqAmount, targetPixKey, targetPixType, entry.id]
+      id, driver_id, driver_name, amount, fee_amount, net_payout_amount, pix_key, pix_type, status, ledger_entry_id, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'solicitado',$9,NOW()) RETURNING *`,
+    [wdId, driver.id, driver.name, reqAmount, feeAmount, netPayoutAmount, targetPixKey, targetPixType, entry.id]
   );
-  return r.rows[0];
+  return { ...r.rows[0], feeAmount, netPayoutAmount };
 }
 
 function mapAsaasPixType(pixType) {
@@ -1611,7 +1638,7 @@ function mapAsaasPixType(pixType) {
 }
 
 async function dispatchAutomatedPixPayout(wd) {
-  const amount = round2(wd.amount);
+  const amount = round2(wd.netPayoutAmount !== undefined && wd.netPayoutAmount > 0 ? wd.netPayoutAmount : wd.amount);
   const webhookUrl = String(process.env.PIX_PAYOUT_WEBHOOK_URL || '').trim();
   const payoutApiKey = String(process.env.PIX_PAYOUT_API_KEY || '').trim();
   const asaasApiKey = String(process.env.ASAAS_API_KEY || '').trim();
@@ -1943,7 +1970,8 @@ async function tokenizeAndSaveCard({ clientId, clientPhone, cardNumber, holderNa
 // ============================================================
 async function createPixChargeForRide(ride) {
   const cfg = await getSystemConfig();
-  const split = calculateSplit(ride.totalPrice, cfg.platformCommissionPercent ?? 20);
+  const effectivePixPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'pix');
+  const split = calculateSplit(ride.totalPrice, effectivePixPct);
   const txid = `UP${String(ride.id || '').replace(/[^a-zA-Z0-9]/g, '')}${Date.now().toString().slice(-4)}`.slice(0, 25);
 
   let pixCopyPaste = generateDynamicPixPayload({
@@ -2525,6 +2553,24 @@ async function getPlatformFinancialOverview() {
 
   return {
     commissionPercent: commPctDefault,
+    paymentMethodCommissionPercents: cfg.paymentMethodCommissionPercents || {
+      pix: commPctDefault,
+      cartao_credito: commPctDefault,
+      cartao_debito: commPctDefault,
+      dinheiro: commPctDefault
+    },
+    gatewayFeePercents: cfg.gatewayFeePercents || {
+      pix: 0,
+      cartao_credito: 0,
+      cartao_debito: 0
+    },
+    withdrawalFeePercent: Number(cfg.withdrawalFeePercent ?? 0),
+    withdrawalFeeFixed: Number(cfg.withdrawalFeeFixed ?? 0),
+    cancellationFeeAmount: Number(cfg.cancellationFeeAmount ?? 0),
+    cardSettlementDays: Number(cfg.cardSettlementDays ?? 0),
+    autoSplitPixEnabled: cfg.autoSplitPixEnabled !== false,
+    useCategoryCommissionOverride: Boolean(cfg.useCategoryCommissionOverride),
+    cashDeductFromBalanceFirst: cfg.cashDeductFromBalanceFirst !== false,
     maxDriverDebtLimit: Number(cfg.maxDriverDebtLimit ?? 100),
     autoBlockDelinquentDrivers: cfg.autoBlockDelinquentDrivers !== false,
     minWithdrawalAmount: Number(cfg.minWithdrawalAmount ?? 20),

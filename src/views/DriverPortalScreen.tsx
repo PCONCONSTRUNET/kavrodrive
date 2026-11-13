@@ -2329,6 +2329,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         <DriverSecondaryTabs
           activeTab={activeTab}
           currentDriver={currentDriver}
+          config={config}
           wallet={wallet}
           completedRides={completedRides}
           todayEarnings={todayEarnings}
@@ -2513,6 +2514,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             </h3>
             <div style={{ fontSize: '0.84rem', color: '#6B7280', marginBottom: 14 }}>
               Saldo Disponível: <strong style={{ color: '#16A34A' }}>R$ {wallet.availableBalance.toFixed(2).replace('.', ',')}</strong>
+              <span style={{ marginLeft: 8, fontSize: '0.74rem' }}>
+                (Mínimo: R$ {Number(config.minWithdrawalAmount ?? 20).toFixed(2).replace('.', ',')})
+              </span>
             </div>
             <form onSubmit={handleRequestWithdrawal} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <input
@@ -2523,6 +2527,41 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 required
                 style={{ padding: '12px', borderRadius: 10, border: '1.5px solid #E5E7EB', backgroundColor: '#F9FAFB', color: '#111111', fontWeight: 700 }}
               />
+              {(() => {
+                const rawAmt = parseFloat(String(withdrawAmountStr || '0').replace(',', '.')) || 0;
+                const feePct = Number(config.withdrawalFeePercent ?? 0);
+                const feeFixed = Number(config.withdrawalFeeFixed ?? 0);
+                const calcFee = rawAmt > 0 ? Math.min(rawAmt, Math.round(((rawAmt * (feePct / 100)) + feeFixed) * 100) / 100) : 0;
+                const calcNet = Math.max(0, Math.round((rawAmt - calcFee) * 100) / 100);
+                return (
+                  <div style={{
+                    padding: '9px 11px',
+                    borderRadius: 10,
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    fontSize: '0.75rem',
+                    color: '#475569',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 3
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span>Taxa de transferência PIX:</span>
+                      <strong style={{ color: calcFee > 0 ? '#B45309' : '#15803D' }}>
+                        {feePct === 0 && feeFixed === 0
+                          ? 'Grátis (R$ 0,00)'
+                          : `R$ ${calcFee.toFixed(2).replace('.', ',')}`}
+                      </strong>
+                    </div>
+                    {rawAmt > 0 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Valor líquido a cair na conta:</span>
+                        <strong style={{ color: '#0F172A' }}>R$ {calcNet.toFixed(2).replace('.', ',')}</strong>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {modalPixKeys.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

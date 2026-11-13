@@ -7,7 +7,7 @@ import {
   Calculator, HelpCircle, Zap, Moon, Sun, Check, X, Sparkles, User, Luggage,
   Menu, LayoutDashboard, Car, LogOut, Search, UserPlus, Award, Edit2, Trash2,
   Fuel, Wrench, Wallet, ArrowUpRight, ArrowDownRight, Share2, Coins, CreditCard, Lock, RefreshCw, Bell,
-  Route, ShieldAlert, FileCheck2
+  Route, ShieldAlert, FileCheck2, Percent
 } from 'lucide-react';
 import { playNewRideSound } from '../utils/soundAndVoice';
 import { Ride, SystemConfig, Expense, ClientProfile, RideStatus, PaymentStatus, PaymentMethod } from '../types';
@@ -27,6 +27,7 @@ import { NotificationsModal } from '../components/NotificationsModal';
 import { RideRoutePlaybackModal } from '../components/RideRoutePlaybackModal';
 import { AdminRecordedRoutesTab } from '../components/AdminRecordedRoutesTab';
 import { AdminPlatformFinanceTab } from '../components/AdminPlatformFinanceTab';
+import { AdminFinancialFeesTab } from '../components/AdminFinancialFeesTab';
 import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
 import { AdminSosCenterTab } from '../components/AdminSosCenterTab';
@@ -53,7 +54,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'taxas' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
 
@@ -262,30 +263,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   const [minimumFareStr, setMinimumFareStr] = useState<string>(formatCurrencyValue(config.minimumFare));
   const [nightSurchargeStr, setSetNightSurchargeStr] = useState<string>(String(config.nightSurchargePercent ?? 20));
   const [whatsappStr, setWhatsappStr] = useState<string>(formatPhone(config.companyWhatsapp));
-  const [platformCommissionStr, setPlatformCommissionStr] = useState<string>(
-    String(config.platformCommissionPercent ?? 20)
-  );
-  const [pixCommissionStr, setPixCommissionStr] = useState<string>(
-    String(config.paymentMethodCommissionPercents?.pix ?? config.platformCommissionPercent ?? 20)
-  );
-  const [creditCommissionStr, setCreditCommissionStr] = useState<string>(
-    String(config.paymentMethodCommissionPercents?.cartao_credito ?? config.platformCommissionPercent ?? 20)
-  );
-  const [debitCommissionStr, setDebitCommissionStr] = useState<string>(
-    String(config.paymentMethodCommissionPercents?.cartao_debito ?? config.platformCommissionPercent ?? 20)
-  );
-  const [cashCommissionStr, setCashCommissionStr] = useState<string>(
-    String(config.paymentMethodCommissionPercents?.dinheiro ?? config.platformCommissionPercent ?? 20)
-  );
-  const [maxDebtLimitStr, setMaxDebtLimitStr] = useState<string>(
-    formatCurrencyValue(config.maxDriverDebtLimit ?? 100)
-  );
-  const [minWithdrawalStr, setMinWithdrawalStr] = useState<string>(
-    formatCurrencyValue(config.minWithdrawalAmount ?? 20)
-  );
-  const [cardSettlementDaysStr, setCardSettlementDaysStr] = useState<string>(
-    String(config.cardSettlementDays ?? 0)
-  );
 
   // Sincroniza estados formatados apenas se o usuário não estiver editando na aba de configuração
   React.useEffect(() => {
@@ -297,15 +274,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     setMinimumFareStr(formatCurrencyValue(config.minimumFare));
     setSetNightSurchargeStr(String(config.nightSurchargePercent ?? 20));
     setWhatsappStr(formatPhone(config.companyWhatsapp));
-    const baseComm = config.platformCommissionPercent ?? 20;
-    setPlatformCommissionStr(String(baseComm));
-    setPixCommissionStr(String(config.paymentMethodCommissionPercents?.pix ?? baseComm));
-    setCreditCommissionStr(String(config.paymentMethodCommissionPercents?.cartao_credito ?? baseComm));
-    setDebitCommissionStr(String(config.paymentMethodCommissionPercents?.cartao_debito ?? baseComm));
-    setCashCommissionStr(String(config.paymentMethodCommissionPercents?.dinheiro ?? baseComm));
-    setMaxDebtLimitStr(formatCurrencyValue(config.maxDriverDebtLimit ?? 100));
-    setMinWithdrawalStr(formatCurrencyValue(config.minWithdrawalAmount ?? 20));
-    setCardSettlementDaysStr(String(config.cardSettlementDays ?? 0));
   }, [config, isConfigDirty, activeTab]);
 
   // Estados de Simulação ao Vivo (Estilo Uber)
@@ -956,7 +924,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
   };
 
-  // Salvar Configurações
+  // Salvar Configurações de Tarifas (preserva taxas financeiras gerenciadas na aba Taxas Financeiras)
   const handleSaveConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanWhatsapp = getCleanWhatsappNumber(whatsappStr);
@@ -965,44 +933,16 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     const parsedMin = parseCurrencyToFloat(pricePerMinuteStr);
     const parsedFloor = parseCurrencyToFloat(minimumFareStr);
     const parsedNight = Math.min(100, Math.max(0, parseInt(nightSurchargeStr, 10) || 0));
-    const clampPct = (raw: string, fallback: number) => {
-      const cleaned = String(raw || '').replace(',', '.').replace(/[^\d.]/g, '');
-      const val = parseFloat(cleaned);
-      if (Number.isNaN(val)) return fallback;
-      return Math.min(100, Math.max(0, Math.round(val * 100) / 100));
-    };
-    const parsedPlatformComm = clampPct(platformCommissionStr, currentConfig.platformCommissionPercent ?? 20);
-    const parsedPixComm = clampPct(pixCommissionStr, parsedPlatformComm);
-    const parsedCreditComm = clampPct(creditCommissionStr, parsedPlatformComm);
-    const parsedDebitComm = clampPct(debitCommissionStr, parsedPlatformComm);
-    const parsedCashComm = clampPct(cashCommissionStr, parsedPlatformComm);
-    const parsedMaxDebt = Math.max(0, parseCurrencyToFloat(maxDebtLimitStr));
-    const parsedMinWithdraw = Math.max(0, parseCurrencyToFloat(minWithdrawalStr));
-    const parsedSettlementDays = Math.min(60, Math.max(0, parseInt(cardSettlementDaysStr, 10) || 0));
-    const ensuredMethods: PaymentMethod[] =
-      Array.isArray(currentConfig.activePaymentMethods) && currentConfig.activePaymentMethods.length > 0
-        ? currentConfig.activePaymentMethods
-        : ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'];
+    const latest = StorageService.getConfig();
 
     const toSave: SystemConfig = {
+      ...latest,
       ...currentConfig,
       baseFare: parsedBase,
       pricePerKm: parsedKm,
       pricePerMinute: parsedMin,
       minimumFare: parsedFloor,
       nightSurchargePercent: parsedNight,
-      platformCommissionPercent: parsedPlatformComm,
-      paymentMethodCommissionPercents: {
-        pix: parsedPixComm,
-        cartao_credito: parsedCreditComm,
-        cartao_debito: parsedDebitComm,
-        dinheiro: parsedCashComm
-      },
-      cashDeductFromBalanceFirst: true,
-      maxDriverDebtLimit: parsedMaxDebt,
-      minWithdrawalAmount: parsedMinWithdraw,
-      cardSettlementDays: parsedSettlementDays,
-      activePaymentMethods: ensuredMethods,
       companyWhatsapp: cleanWhatsapp,
       companyPhone: formatPhone(whatsappStr)
     };
@@ -1011,14 +951,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     setPricePerMinuteStr(formatCurrencyValue(parsedMin));
     setMinimumFareStr(formatCurrencyValue(parsedFloor));
     setSetNightSurchargeStr(String(parsedNight));
-    setPlatformCommissionStr(String(parsedPlatformComm));
-    setPixCommissionStr(String(parsedPixComm));
-    setCreditCommissionStr(String(parsedCreditComm));
-    setDebitCommissionStr(String(parsedDebitComm));
-    setCashCommissionStr(String(parsedCashComm));
-    setMaxDebtLimitStr(formatCurrencyValue(parsedMaxDebt));
-    setMinWithdrawalStr(formatCurrencyValue(parsedMinWithdraw));
-    setCardSettlementDaysStr(String(parsedSettlementDays));
     setCurrentConfig(toSave);
     setIsConfigDirty(false);
     await StorageService.saveConfig(toSave);
@@ -1808,6 +1740,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'documentacoes', label: 'Documentações', icon: FileCheck2, badge: pendingDocsCount > 0 ? String(pendingDocsCount) : null },
               { id: 'categorias', label: 'Categorias de Corridas', icon: Sliders, badge: null },
               { id: 'financeiro', label: 'Financeiro & Split', icon: DollarSign, badge: null },
+              { id: 'taxas', label: 'Taxas Financeiras', icon: Percent, badge: null },
               { id: 'sos', label: 'Central SOS', icon: ShieldAlert, badge: activeSosAlertsCount > 0 ? String(activeSosAlertsCount) : null, isDanger: activeSosAlertsCount > 0 },
             ]
           },
@@ -2078,6 +2011,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'documentacoes' && 'Análise Documental (KYC & CRLV)'}
                 {activeTab === 'categorias' && 'Categorias de Corridas'}
                 {activeTab === 'financeiro' && 'Financeiro & Split'}
+                {activeTab === 'taxas' && 'Taxas Financeiras'}
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
                 {activeTab === 'clientes' && 'Passageiros'}
@@ -4811,6 +4745,17 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           />
         )}
 
+        {/* ================= ABA DEDICADA: SOMENTE TAXAS FINANCEIRAS ================= */}
+        {activeTab === 'taxas' && (
+          <AdminFinancialFeesTab
+            config={currentConfig}
+            onConfigUpdated={(next) => {
+              setCurrentConfig(next);
+              onRefreshData();
+            }}
+          />
+        )}
+
         {/* LEGADO DESATIVADO NO MASTER */}
         {false && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -6467,16 +6412,12 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             currentConfig
           );
 
-          const parsePctSafe = (raw: string, fallback: number) => {
-            const n = parseFloat(String(raw || '').replace(',', '.'));
-            return Number.isNaN(n) ? fallback : Math.min(100, Math.max(0, n));
-          };
-          const basePlatformPct = parsePctSafe(platformCommissionStr, currentConfig.platformCommissionPercent ?? 20);
+          const basePlatformPct = Number(currentConfig.platformCommissionPercent ?? 20);
           const simCommByMethod: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro', number> = {
-            pix: parsePctSafe(pixCommissionStr, basePlatformPct),
-            cartao_credito: parsePctSafe(creditCommissionStr, basePlatformPct),
-            cartao_debito: parsePctSafe(debitCommissionStr, basePlatformPct),
-            dinheiro: parsePctSafe(cashCommissionStr, basePlatformPct)
+            pix: Number(currentConfig.paymentMethodCommissionPercents?.pix ?? basePlatformPct),
+            cartao_credito: Number(currentConfig.paymentMethodCommissionPercents?.cartao_credito ?? basePlatformPct),
+            cartao_debito: Number(currentConfig.paymentMethodCommissionPercents?.cartao_debito ?? basePlatformPct),
+            dinheiro: Number(currentConfig.paymentMethodCommissionPercents?.dinheiro ?? basePlatformPct)
           };
           const commissionPct = simCommByMethod[simPaymentMethod] ?? basePlatformPct;
           const driverNetPct = Math.round((100 - commissionPct) * 100) / 100;
@@ -7027,350 +6968,49 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 </div>
               </div>
 
-              {/* ═══ COMISSÃO DA PLATAFORMA, MEIOS DE COBRANÇA & SISTEMA UBER EM DINHEIRO ═══ */}
-              <div style={{ backgroundColor: '#FFFFFF', padding: 20, borderRadius: 10, border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 18 }}>
-                <div style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  paddingBottom: 12,
-                  borderBottom: '1px solid #F1F5F9'
-                }}>
-                  <div>
-                    <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0F172A' }}>
-                      Comissão da Plataforma, Meios de Pagamento &amp; Caixa Dinheiro (Modelo Uber)
-                    </div>
-                    <div style={{ fontSize: '0.74rem', color: '#64748B', marginTop: 2 }}>
-                      Ative ou desative PIX, Cartão e Dinheiro, defina a % cobrada pela Kavro Drive e o desconto automático nos saldos
-                    </div>
+              {/* ═══ RESUMO DAS TAXAS FINANCEIRAS ATIVAS (LINK PARA A ABA DEDICADA) ═══ */}
+              <div style={{
+                backgroundColor: '#FFFFFF',
+                padding: '16px 20px',
+                borderRadius: 10,
+                border: '1px solid #E2E8F0',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12
+              }}>
+                <div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>
+                    Taxas Financeiras Aplicadas no Sistema
                   </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: '0.74rem', fontWeight: 600, color: '#334155' }}>
-                      Taxa Padrão Global:
-                    </span>
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={platformCommissionStr}
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/[^\d.,]/g, '');
-                          setIsConfigDirty(true);
-                          setPlatformCommissionStr(raw);
-                          const num = parseFloat(raw.replace(',', '.'));
-                          if (!Number.isNaN(num)) {
-                            const clamped = Math.min(100, Math.max(0, num));
-                            setCurrentConfig(prev => ({ ...prev, platformCommissionPercent: clamped }));
-                          }
-                        }}
-                        style={{
-                          width: 66,
-                          height: 34,
-                          padding: '0 8px',
-                          borderRadius: 6,
-                          border: '1px solid #CBD5E1',
-                          fontSize: '0.84rem',
-                          fontWeight: 700,
-                          textAlign: 'center',
-                          color: '#0F172A'
-                        }}
-                      />
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#475569' }}>%</span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsConfigDirty(true);
-                        setPixCommissionStr(platformCommissionStr);
-                        setCreditCommissionStr(platformCommissionStr);
-                        setDebitCommissionStr(platformCommissionStr);
-                        setCashCommissionStr(platformCommissionStr);
-                      }}
-                      style={{
-                        height: 34,
-                        padding: '0 12px',
-                        borderRadius: 6,
-                        border: '1px solid #CBD5E1',
-                        backgroundColor: '#F8FAFC',
-                        color: '#0F172A',
-                        fontSize: '0.72rem',
-                        fontWeight: 600,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Aplicar {platformCommissionStr || '0'}% a todos
-                    </button>
+                  <div style={{ fontSize: '0.73rem', color: '#64748B', marginTop: 2 }}>
+                    PIX: <strong style={{ color: '#0F172A' }}>{simCommByMethod.pix}%</strong> •{' '}
+                    Crédito: <strong style={{ color: '#0F172A' }}>{simCommByMethod.cartao_credito}%</strong> •{' '}
+                    Débito: <strong style={{ color: '#0F172A' }}>{simCommByMethod.cartao_debito}%</strong> •{' '}
+                    Dinheiro: <strong style={{ color: '#0F172A' }}>{simCommByMethod.dinheiro}%</strong> •{' '}
+                    Saque mín.: <strong style={{ color: '#0F172A' }}>{formatCurrency(currentConfig.minWithdrawalAmount ?? 20)}</strong> •{' '}
+                    Teto Dívida: <strong style={{ color: '#0F172A' }}>{formatCurrency(currentConfig.maxDriverDebtLimit ?? 100)}</strong>
                   </div>
                 </div>
 
-                {/* Grade dos 4 Meios de Pagamento: Ativo/Inativo + % Comissão */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
-                  {[
-                    {
-                      id: 'pix' as PaymentMethod,
-                      title: 'PIX (QR Dinâmico)',
-                      subtitle: 'Split automático no gateway',
-                      val: pixCommissionStr,
-                      setter: setPixCommissionStr
-                    },
-                    {
-                      id: 'cartao_credito' as PaymentMethod,
-                      title: 'Cartão de Crédito',
-                      subtitle: 'Pré-autorização + captura no fim',
-                      val: creditCommissionStr,
-                      setter: setCreditCommissionStr
-                    },
-                    {
-                      id: 'cartao_debito' as PaymentMethod,
-                      title: 'Cartão de Débito',
-                      subtitle: 'Cobrança online segura no app',
-                      val: debitCommissionStr,
-                      setter: setDebitCommissionStr
-                    },
-                    {
-                      id: 'dinheiro' as PaymentMethod,
-                      title: 'Dinheiro (Em Mãos)',
-                      subtitle: 'Desconta comissão do saldo livre',
-                      val: cashCommissionStr,
-                      setter: setCashCommissionStr
-                    }
-                  ].map((item) => {
-                    const activeList =
-                      Array.isArray(currentConfig.activePaymentMethods) && currentConfig.activePaymentMethods.length > 0
-                        ? currentConfig.activePaymentMethods
-                        : (['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'] as PaymentMethod[]);
-                    const isEnabled = activeList.includes(item.id);
-                    const toggleMethod = () => {
-                      setIsConfigDirty(true);
-                      const nextList = isEnabled
-                        ? activeList.filter((m) => m !== item.id)
-                        : [...activeList, item.id];
-                      if (nextList.length === 0) return;
-                      setCurrentConfig(prev => ({ ...prev, activePaymentMethods: nextList }));
-                    };
-
-                    return (
-                      <div
-                        key={item.id}
-                        style={{
-                          padding: 14,
-                          borderRadius: 8,
-                          border: isEnabled ? '1px solid #CBD5E1' : '1px solid #E2E8F0',
-                          backgroundColor: isEnabled ? '#FFFFFF' : '#F8FAFC',
-                          opacity: isEnabled ? 1 : 0.72,
-                          display: 'flex',
-                          flexDirection: 'column',
-                          gap: 10
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                          <div>
-                            <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0F172A' }}>{item.title}</div>
-                            <div style={{ fontSize: '0.68rem', color: '#64748B' }}>{item.subtitle}</div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={toggleMethod}
-                            style={{
-                              padding: '4px 10px',
-                              borderRadius: 999,
-                              border: 'none',
-                              backgroundColor: isEnabled ? '#DCFCE7' : '#E2E8F0',
-                              color: isEnabled ? '#15803D' : '#475569',
-                              fontSize: '0.68rem',
-                              fontWeight: 700,
-                              cursor: 'pointer'
-                            }}
-                          >
-                            {isEnabled ? 'Ativo' : 'Desativado'}
-                          </button>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                          <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#475569' }}>
-                            Comissão Kavro:
-                          </span>
-                          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={item.val}
-                              onChange={(e) => {
-                                setIsConfigDirty(true);
-                                item.setter(e.target.value.replace(/[^\d.,]/g, ''));
-                              }}
-                              style={{
-                                width: 64,
-                                height: 32,
-                                padding: '0 8px',
-                                borderRadius: 6,
-                                border: '1px solid #CBD5E1',
-                                fontSize: '0.82rem',
-                                fontWeight: 700,
-                                textAlign: 'center',
-                                color: '#0F172A',
-                                backgroundColor: '#FFFFFF'
-                              }}
-                            />
-                            <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#475569' }}>%</span>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Regras do Sistema Uber: Dinheiro, Teto de Saldo Devedor, Bloqueio e Repasse */}
-                <div style={{
-                  padding: 16,
-                  borderRadius: 8,
-                  backgroundColor: '#F8FAFC',
-                  border: '1px solid #E2E8F0',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 14
-                }}>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <div>
-                      <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0F172A' }}>
-                        Regras de Carteira &amp; Compensação em Dinheiro (Sistema Uber)
-                      </div>
-                      <div style={{ fontSize: '0.71rem', color: '#475569', marginTop: 2 }}>
-                        Corridas pagas em dinheiro debitam a taxa primeiro do <strong>Saldo Livre</strong> do motorista; o que faltar acumula no <strong>Saldo Devedor</strong> e é abatido automaticamente nas próximas corridas em PIX/Cartão.
-                      </div>
-                    </div>
-                  </div>
-
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
-                    <div>
-                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                        Limite Máximo de Dívida (Dinheiro)
-                      </label>
-                      <div style={{ position: 'relative' }}>
-                        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.74rem', fontWeight: 600, color: '#64748B' }}>
-                          R$
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={maxDebtLimitStr}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(/[^\d.,]/g, '');
-                            setIsConfigDirty(true);
-                            setMaxDebtLimitStr(raw);
-                            setCurrentConfig(prev => ({ ...prev, maxDriverDebtLimit: parseCurrencyToFloat(raw) }));
-                          }}
-                          onBlur={() => setMaxDebtLimitStr(formatCurrencyValue(parseCurrencyToFloat(maxDebtLimitStr)))}
-                          style={{
-                            width: '100%',
-                            height: 36,
-                            padding: '0 10px 0 32px',
-                            borderRadius: 6,
-                            border: '1px solid #CBD5E1',
-                            fontSize: '0.82rem',
-                            fontWeight: 700,
-                            color: '#0F172A',
-                            backgroundColor: '#FFFFFF'
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                        Liberação de Cartão (Dias)
-                      </label>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={cardSettlementDaysStr}
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/\D/g, '').slice(0, 2);
-                          setIsConfigDirty(true);
-                          setCardSettlementDaysStr(raw);
-                          setCurrentConfig(prev => ({ ...prev, cardSettlementDays: parseInt(raw, 10) || 0 }));
-                        }}
-                        placeholder="0 = Imediato"
-                        style={{
-                          width: '100%',
-                          height: 36,
-                          padding: '0 12px',
-                          borderRadius: 6,
-                          border: '1px solid #CBD5E1',
-                          fontSize: '0.82rem',
-                          fontWeight: 700,
-                          color: '#0F172A',
-                          backgroundColor: '#FFFFFF'
-                        }}
-                      />
-                    </div>
-
-                    <div>
-                      <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                        Valor Mínimo para Saque PIX
-                      </label>
-                      <div style={{ position: 'relative' }}>
-                        <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.74rem', fontWeight: 600, color: '#64748B' }}>
-                          R$
-                        </span>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={minWithdrawalStr}
-                          onChange={(e) => {
-                            const raw = e.target.value.replace(/[^\d.,]/g, '');
-                            setIsConfigDirty(true);
-                            setMinWithdrawalStr(raw);
-                            setCurrentConfig(prev => ({ ...prev, minWithdrawalAmount: parseCurrencyToFloat(raw) }));
-                          }}
-                          onBlur={() => setMinWithdrawalStr(formatCurrencyValue(parseCurrencyToFloat(minWithdrawalStr)))}
-                          style={{
-                            width: '100%',
-                            height: 36,
-                            padding: '0 10px 0 32px',
-                            borderRadius: 6,
-                            border: '1px solid #CBD5E1',
-                            fontSize: '0.82rem',
-                            fontWeight: 700,
-                            color: '#0F172A',
-                            backgroundColor: '#FFFFFF'
-                          }}
-                        />
-                      </div>
-                    </div>
-
-                    <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 6 }}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsConfigDirty(true);
-                          setCurrentConfig(prev => ({
-                            ...prev,
-                            autoBlockDelinquentDrivers: prev.autoBlockDelinquentDrivers === false
-                          }));
-                        }}
-                        style={{
-                          height: 36,
-                          padding: '0 12px',
-                          borderRadius: 6,
-                          border: '1px solid #CBD5E1',
-                          backgroundColor: currentConfig.autoBlockDelinquentDrivers !== false ? '#0F172A' : '#FFFFFF',
-                          color: currentConfig.autoBlockDelinquentDrivers !== false ? '#FFFFFF' : '#475569',
-                          fontSize: '0.73rem',
-                          fontWeight: 700,
-                          cursor: 'pointer'
-                        }}
-                      >
-                        {currentConfig.autoBlockDelinquentDrivers !== false
-                          ? '✓ Bloquear ao Atingir Limite de Dívida'
-                          : 'Bloqueio Automático Desligado'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('taxas')}
+                  style={{
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 6,
+                    border: 'none',
+                    backgroundColor: '#0F172A',
+                    color: '#76D800',
+                    fontSize: '0.75rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Editar na aba Taxas Financeiras ➔
+                </button>
               </div>
 
               {/* Tabela Corporativa de Categorias da Frota & Multiplicadores */}

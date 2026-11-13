@@ -94,6 +94,11 @@ class RealtimeClient {
         window.dispatchEvent(new CustomEvent('up_realtime_driver', { detail }));
       });
 
+      es.addEventListener('config:updated', (evt: MessageEvent) => {
+        const detail = parseDetail(evt);
+        window.dispatchEvent(new CustomEvent('up_realtime_config', { detail }));
+      });
+
       es.onerror = () => {
         this.cleanupSource();
         if (this.refCount > 0) {
@@ -143,3 +148,4 @@ class RealtimeClient {
 }
 
 export const RealtimeService = new RealtimeClient();
+

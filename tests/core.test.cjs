@@ -355,3 +355,128 @@ test('Fluxo Auth + Recuperação de Senha via OTP + Chat Persistido + Avaliaçã
   assert.ok(updatedRide);
   assert.equal(updatedRide.clientRating, 4);
 });
+
+test('Taxas financeiras por meio de pagamento e saque são aplicadas em corridas e repasses', async () => {
+  const prevConfig = db.localStore.system_config?.default?.config || {};
+
+  // Configura taxas específicas persistidas no system_config: PIX 12%, Crédito 18%, Débito 14%, Dinheiro 25%, Saque: R$ 2,00 + 1%
+  const newConfig = {
+    ...prevConfig,
+    platformCommissionPercent: 20,
+    paymentMethodCommissionPercents: {
+      pix: 12,
+      cartao_credito: 18,
+      cartao_debito: 14,
+      dinheiro: 25
+    },
+    withdrawalFeeFixed: 2,
+    withdrawalFeePercent: 1,
+    minWithdrawalAmount: 10,
+    activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro']
+  };
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify(newConfig)]
+  );
+
+  // Registra passageiro real e solicita corrida PIX tentando enviar 20% legado -> backend deve impor 12%
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Passageiro Taxas',
+      phone: '(48) 99333-4455',
+      email: 'taxas.passageiro@kavro.test',
+      password: 'senhaSegura123',
+      termsAcceptance: { accepted: true, version: '2026.1' }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const clientToken = cliReg.json.clientToken;
+
+  const pixRideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': clientToken },
+    body: {
+      clientId: cliReg.json.client.id,
+      clientName: 'Passageiro Taxas',
+      clientPhone: '(48) 99333-4455',
+      originAddress: 'Centro',
+      destinationAddress: 'Aeroporto',
+      distanceKm: 10,
+      durationMin: 20,
+      totalPrice: 100,
+      commissionPercent: 20,
+      category: 'kavro_go',
+      paymentMethod: 'pix',
+      isManualBooking: false
+    }
+  });
+  assert.equal(pixRideRes.status, 200);
+  assert.equal(pixRideRes.json.ride.commissionPercent, 12);
+  assert.equal(pixRideRes.json.ride.commissionAmount, 12);
+  assert.equal(pixRideRes.json.ride.driverNetAmount, 88);
+
+  const txPix = await finance.getPaymentTxByRide(pixRideRes.json.ride.id);
+  assert.equal(txPix.commissionPercent, 12);
+  assert.equal(txPix.commissionAmount, 12);
+  assert.equal(txPix.driverNetAmount, 88);
+
+  // Autentica motorista real (drv-test-999 criado no teste anterior) e solicita saque PIX de R$ 50,00
+  const drvLogin = await apiJson('/api/drivers/login', {
+    method: 'POST',
+    body: { identifier: 'motorista.teste@kavro.test', password: '1234' }
+  });
+  assert.equal(drvLogin.status, 200);
+  const drvToken = drvLogin.json.driverToken;
+  const drvId = drvLogin.json.driver.id;
+
+  const drvRecord = await finance.getDriverById(drvId);
+  await finance.saveDriverRecord({
+    ...drvRecord,
+    pixKey: '12345678909',
+    pixType: 'cpf',
+    pixKeys: [{
+      id: 'pk-test-1',
+      pixType: 'cpf',
+      pixKey: '12345678909',
+      bankName: 'Nubank',
+      holderName: drvRecord.name,
+      holderDocument: drvRecord.document,
+      sameOwnershipConfirmed: true,
+      isDefault: true,
+      createdAt: new Date().toISOString()
+    }]
+  });
+
+  await finance.recordLedgerEntry({
+    idempotencyKey: `seed_credit_${Date.now()}`,
+    driverId: drvId,
+    driverName: drvRecord.name,
+    entryType: 'ride_earning_credit',
+    paymentMethod: 'pix',
+    grossAmount: 100,
+    commissionPercent: 12,
+    commissionAmount: 12,
+    driverNetAmount: 88,
+    balanceDelta: 88,
+    balanceBucket: 'available',
+    status: 'confirmado',
+    description: 'Crédito teste taxas saque'
+  });
+
+  const wdRes = await apiJson(`/api/drivers/${encodeURIComponent(drvId)}/withdrawals`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: {
+      amount: 50,
+      pixKey: '12345678909',
+      pixType: 'cpf'
+    }
+  });
+  assert.equal(wdRes.status, 200);
+  assert.equal(wdRes.json.ok, true);
+  // Taxa = 1% de 50 (0.50) + fixo 2.00 = 2.50 -> Líquido = 47.50
+  assert.equal(wdRes.json.withdrawal.feeAmount, 2.5);
+  assert.equal(wdRes.json.withdrawal.netPayoutAmount, 47.5);
+});

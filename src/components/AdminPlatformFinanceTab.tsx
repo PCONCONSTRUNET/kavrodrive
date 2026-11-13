@@ -18,6 +18,7 @@ import { StorageService } from '../services/storage';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
 import { AdminCrlvReviewModal } from './AdminCrlvReviewModal';
 import { AdminFinanceTreasurySection, TreasuryMetrics } from './AdminFinanceTreasurySection';
+import { AdminFinancialFeesTab } from './AdminFinancialFeesTab';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
 import {
   formatDocument,
@@ -105,12 +106,6 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
-  const [commPercentStr, setCommPercentStr] = useState(String(config.platformCommissionPercent ?? 20));
-  const [debtLimitStr, setDebtLimitStr] = useState(String(config.maxDriverDebtLimit ?? 100));
-  const [minWithdrawStr, setMinWithdrawStr] = useState(String(config.minWithdrawalAmount ?? 20));
-  const [autoBlockDelinquent, setAutoBlockDelinquent] = useState(config.autoBlockDelinquentDrivers !== false);
-  const [rulesSavedMsg, setRulesSavedMsg] = useState('');
-
   const loadAll = async () => {
     setIsLoading(true);
     const [drvList, fin] = await Promise.all([
@@ -120,9 +115,6 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     setDrivers(drvList);
     if (fin) {
       setOverview(fin);
-      setCommPercentStr(String(fin.commissionPercent ?? config.platformCommissionPercent ?? 20));
-      setDebtLimitStr(String(fin.maxDriverDebtLimit ?? config.maxDriverDebtLimit ?? 100));
-      setMinWithdrawStr(String(fin.minWithdrawalAmount ?? config.minWithdrawalAmount ?? 20));
     }
     setIsLoading(false);
   };
@@ -151,22 +143,6 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     window.addEventListener('up_database_synced', handleDbSync);
     return () => window.removeEventListener('up_database_synced', handleDbSync);
   }, []);
-
-  const handleSaveRules = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const nextConfig: SystemConfig = {
-      ...config,
-      platformCommissionPercent: Math.max(0, Math.min(100, parseFloat(commPercentStr.replace(',', '.')) || 20)),
-      maxDriverDebtLimit: Math.max(0, parseFloat(debtLimitStr.replace(',', '.')) || 100),
-      minWithdrawalAmount: Math.max(1, parseFloat(minWithdrawStr.replace(',', '.')) || 20),
-      autoBlockDelinquentDrivers: autoBlockDelinquent
-    };
-    await StorageService.saveConfig(nextConfig);
-    onConfigUpdated(nextConfig);
-    setRulesSavedMsg('Configurações financeiras atualizadas com sucesso.');
-    setTimeout(() => setRulesSavedMsg(''), 3500);
-    await loadAll();
-  };
 
   const handleDriverApproval = async (driverId: string, approvalStatus: DriverProfile['approvalStatus']) => {
     await StorageService.adminUpdateDriverStatus(driverId, { approvalStatus });
@@ -337,6 +313,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
 
     const pixTxs = valid.filter(t => t.method === 'pix');
     const cardTxs = valid.filter(t => t.method === 'cartao_credito' || t.method === 'cartao_debito');
+    const creditTxs = valid.filter(t => t.method === 'cartao_credito');
+    const debitTxs = valid.filter(t => t.method === 'cartao_debito');
     const cashTxs = valid.filter(t => t.method === 'dinheiro');
 
     const pixGross = pixTxs.reduce((acc, t) => acc + t.finalAmount, 0);
@@ -348,6 +326,14 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const cashGross = cashTxs.reduce((acc, t) => acc + t.finalAmount, 0);
     const cashFee = cashTxs.reduce((acc, t) => acc + t.commissionAmount, 0);
 
+    const creditGross = creditTxs.reduce((acc, t) => acc + t.finalAmount, 0);
+    const debitGross = debitTxs.reduce((acc, t) => acc + t.finalAmount, 0);
+    const gwRates = config.gatewayFeePercents || {};
+    const gatewayCost =
+      (pixGross * Number(gwRates.pix || 0)) / 100 +
+      (creditGross * Number(gwRates.cartao_credito || 0)) / 100 +
+      (debitGross * Number(gwRates.cartao_debito || 0)) / 100;
+
     const digitalInflow = valid
       .filter(t => t.method !== 'dinheiro' && (t.status === 'confirmado' || t.status === 'pago' || t.status === 'parcialmente_pago'))
       .reduce((acc, t) => acc + Number(t.paidAmount || t.finalAmount || 0), 0);
@@ -355,8 +341,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const periodWithdrawals = filterByPeriod(overview?.withdrawals || []);
     const paidWdList = periodWithdrawals.filter(w => w.status === 'pago');
     const pendingWdList = (overview?.withdrawals || []).filter(w => w.status === 'solicitado');
-    const paidWithdrawals = paidWdList.reduce((acc, w) => acc + Number(w.amount || 0), 0);
-    const pendingWithdrawals = pendingWdList.reduce((acc, w) => acc + Number(w.amount || 0), 0);
+    const paidWithdrawals = paidWdList.reduce((acc, w) => acc + Number(w.netPayoutAmount ?? w.amount ?? 0), 0);
+    const pendingWithdrawals = pendingWdList.reduce((acc, w) => acc + Number(w.netPayoutAmount ?? w.amount ?? 0), 0);
+    const withdrawalFeeRevenue = paidWdList.reduce((acc, w) => acc + Number(w.feeAmount || 0), 0);
 
     const debtSettlementsReceived = filteredLedger
       .filter(e => e.entryType === 'debt_pix_settlement')
@@ -369,9 +356,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       .filter(e => e.type !== 'entrada')
       .reduce((acc, e) => acc + Number(e.amount || 0), 0);
 
-    const grossProfit = platformFee + directRevenues;
-    const netProfit = grossProfit - operationalExpenses - refundedTotal;
-    const cashBalance = digitalInflow + debtSettlementsReceived + directRevenues - paidWithdrawals - operationalExpenses - refundedTotal;
+    const grossProfit = platformFee + directRevenues + withdrawalFeeRevenue;
+    const netProfit = grossProfit - operationalExpenses - gatewayCost - refundedTotal;
+    const cashBalance = digitalInflow + debtSettlementsReceived + directRevenues - paidWithdrawals - operationalExpenses - gatewayCost - refundedTotal;
 
     const avgTicket = valid.length > 0 ? gross / valid.length : 0;
 
@@ -402,11 +389,13 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       delinquentDriversCount: Number(overview?.delinquentDriversCount || 0),
       directRevenues,
       operationalExpenses,
+      gatewayCost,
+      withdrawalFeeRevenue,
       grossProfit,
       netProfit,
       cashBalance
     };
-  }, [periodTransactions, overview, filteredLedger, periodExpenses]);
+  }, [periodTransactions, overview, filteredLedger, periodExpenses, config.gatewayFeePercents]);
 
   const handleSaveExpenseEntry = (exp: Expense) => {
     StorageService.saveExpense(exp);
@@ -2641,7 +2630,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
           { id: 'saques', label: `Repasses & Saques PIX (${(overview?.withdrawals || []).length})` },
           { id: 'motoristas', label: `Carteiras (${drivers.length})` },
           { id: 'livro_razao', label: `Livro-Razão (${filteredLedger.length})` },
-          { id: 'regras', label: `Regras de Split (${currentCommPct}%)` }
+          { id: 'regras', label: 'Taxas Financeiras' }
         ].map(tab => {
           const active = subTab === tab.id;
           return (
@@ -2855,165 +2844,16 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         </div>
       )}
 
-      {/* ═══ SUB-ABA 2: REGRAS DE COMISSÃO & SPLIT ═══ */}
+      {/* ═══ SUB-ABA 2: TAXAS FINANCEIRAS (UNIFICADA COM A ABA MASTER) ═══ */}
       {subTab === 'regras' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
-          <form
-            onSubmit={handleSaveRules}
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: 10,
-              padding: 20,
-              border: '1px solid #E2E8F0',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 16
-            }}
-          >
-            <div>
-              <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0F172A', margin: 0 }}>
-                Parâmetros de Comissão e Limite de Inadimplência
-              </h3>
-              <p style={{ fontSize: '0.74rem', color: '#64748B', margin: '2px 0 0 0' }}>
-                Alterações aplicam-se imediatamente ao cálculo de novas corridas
-              </p>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                  Taxa de Comissão da Plataforma (%)
-                </label>
-                <input
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  max="100"
-                  value={commPercentStr}
-                  onChange={(e) => setCommPercentStr(e.target.value)}
-                  style={{ width: '100%', height: 38, padding: '0 12px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.85rem', fontWeight: 600, color: '#0F172A' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                  Limite Máximo de Dívida em Dinheiro (R$)
-                </label>
-                <input
-                  type="number"
-                  step="5"
-                  min="0"
-                  value={debtLimitStr}
-                  onChange={(e) => setDebtLimitStr(e.target.value)}
-                  style={{ width: '100%', height: 38, padding: '0 12px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.85rem', fontWeight: 600, color: '#0F172A' }}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                  Valor Mínimo para Solicitação de Saque PIX (R$)
-                </label>
-                <input
-                  type="number"
-                  step="5"
-                  min="1"
-                  value={minWithdrawStr}
-                  onChange={(e) => setMinWithdrawStr(e.target.value)}
-                  style={{ width: '100%', height: 38, padding: '0 12px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.85rem', fontWeight: 600, color: '#0F172A' }}
-                />
-              </div>
-
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.76rem', color: '#334155', cursor: 'pointer', paddingTop: 4 }}>
-                <input
-                  type="checkbox"
-                  checked={autoBlockDelinquent}
-                  onChange={(e) => setAutoBlockDelinquent(e.target.checked)}
-                  style={{ width: 15, height: 15, accentColor: '#0F172A' }}
-                />
-                <span>Bloquear automaticamente novas chamadas ao atingir o limite de dívida</span>
-              </label>
-            </div>
-
-            {rulesSavedMsg && (
-              <div style={{ padding: '8px 12px', borderRadius: 6, backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', color: '#15803D', fontSize: '0.75rem', fontWeight: 600 }}>
-                {rulesSavedMsg}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              style={{
-                height: 38,
-                borderRadius: 6,
-                border: 'none',
-                backgroundColor: '#0F172A',
-                color: '#FFFFFF',
-                fontWeight: 600,
-                fontSize: '0.8rem',
-                cursor: 'pointer'
-              }}
-            >
-              Salvar Configurações Financeiras
-            </button>
-          </form>
-
-          <div style={{
-            backgroundColor: '#FFFFFF',
-            borderRadius: 10,
-            padding: 20,
-            border: '1px solid #E2E8F0',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            gap: 14
-          }}>
-            <div>
-              <h3 style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0F172A', margin: 0 }}>
-                Simulação de Split (Corrida de R$ 50,00)
-              </h3>
-              <p style={{ fontSize: '0.74rem', color: '#64748B', margin: '2px 0 0 0' }}>
-                Demonstrativo contábil aplicado pelo backend a cada corrida
-              </p>
-            </div>
-
-            {(() => {
-              const pct = Math.max(0, Math.min(100, parseFloat(commPercentStr.replace(',', '.')) || 20));
-              const sampleFee = (50 * pct) / 100;
-              const sampleNet = 50 - sampleFee;
-              return (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: '0.78rem' }}>
-                  <div style={{ padding: 12, borderRadius: 8, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontWeight: 600, color: '#0F172A', marginBottom: 6 }}>Pagamentos Digitais (PIX / Cartão)</div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#475569', marginBottom: 3 }}>
-                      <span>Valor pago pelo passageiro:</span>
-                      <strong>R$ 50,00</strong>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#475569', marginBottom: 3 }}>
-                      <span>Taxa retida pela plataforma ({pct}%):</span>
-                      <strong>{formatBRL(sampleFee)}</strong>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#15803D', borderTop: '1px solid #E2E8F0', paddingTop: 6, marginTop: 4 }}>
-                      <span>Crédito líquido na carteira do motorista:</span>
-                      <strong>{formatBRL(sampleNet)}</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ padding: 12, borderRadius: 8, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                    <div style={{ fontWeight: 600, color: '#0F172A', marginBottom: 6 }}>Pagamentos em Dinheiro</div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#475569', marginBottom: 3 }}>
-                      <span>Valor recebido em mãos pelo motorista:</span>
-                      <strong>R$ 50,00</strong>
-                    </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', color: '#DC2626', borderTop: '1px solid #E2E8F0', paddingTop: 6, marginTop: 4 }}>
-                      <span>Débito lançado na carteira do motorista ({pct}%):</span>
-                      <strong>- {formatBRL(sampleFee)}</strong>
-                    </div>
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
-        </div>
+        <AdminFinancialFeesTab
+          config={config}
+          embedded
+          onConfigUpdated={(next) => {
+            onConfigUpdated(next);
+            loadAll();
+          }}
+        />
       )}
 
       {/* ═══ SUB-ABA 3: CARTEIRAS DOS MOTORISTAS ═══ */}

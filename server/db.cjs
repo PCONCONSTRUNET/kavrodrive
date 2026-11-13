@@ -54,6 +54,22 @@ function getInitialStore() {
           advanceNoticeHours: 0,
           bufferBetweenRidesMin: 0,
           platformCommissionPercent: 20,
+          paymentMethodCommissionPercents: {
+            pix: 20,
+            cartao_credito: 20,
+            cartao_debito: 20,
+            dinheiro: 20
+          },
+          gatewayFeePercents: {
+            pix: 0,
+            cartao_credito: 0,
+            cartao_debito: 0
+          },
+          withdrawalFeePercent: 0,
+          withdrawalFeeFixed: 0,
+          cancellationFeeAmount: 0,
+          useCategoryCommissionOverride: false,
+          cashDeductFromBalanceFirst: true,
           maxDriverDebtLimit: 100.0,
           autoBlockDelinquentDrivers: true,
           minWithdrawalAmount: 20.0,

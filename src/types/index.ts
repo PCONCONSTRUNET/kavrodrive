@@ -451,6 +451,8 @@ export interface WithdrawalRequest {
   driverId: string;
   driverName: string;
   amount: number;
+  feeAmount?: number;
+  netPayoutAmount?: number;
   pixKey: string;
   pixType: string;
   status: 'solicitado' | 'processando' | 'pago' | 'rejeitado';
@@ -624,7 +626,7 @@ export interface SystemConfig {
   nightEndHour: number; // 6
   advanceNoticeHours: number;
   bufferBetweenRidesMin: number;
-  // Configurações financeiras da plataforma (Comissão, Limite de Dívida e Repasses)
+  // Configurações financeiras da plataforma (Comissão, Gateway, Saques, Limite de Dívida e Repasses)
   platformCommissionPercent?: number;   // Ex: 20%
   paymentMethodCommissionPercents?: {
     pix?: number;
@@ -632,6 +634,14 @@ export interface SystemConfig {
     cartao_debito?: number;
     dinheiro?: number;
   };
+  gatewayFeePercents?: {
+    pix?: number;
+    cartao_credito?: number;
+    cartao_debito?: number;
+  };
+  withdrawalFeePercent?: number;        // Taxa % cobrada por saque PIX do motorista (ex: 0%)
+  withdrawalFeeFixed?: number;          // Taxa fixa em R$ por saque PIX do motorista (ex: R$ 0,00)
+  cancellationFeeAmount?: number;       // Taxa padrão de cancelamento em R$ quando aplicável (ex: R$ 0,00)
   useCategoryCommissionOverride?: boolean; // Prioriza comissão individual da categoria quando ativo
   cashDeductFromBalanceFirst?: boolean;    // Padrão Uber: desconta comissão em dinheiro do saldo disponível antes de gerar dívida
   maxDriverDebtLimit?: number;          // Ex: R$ 100,00 (limite de dívida em dinheiro)

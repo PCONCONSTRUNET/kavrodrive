@@ -31,7 +31,7 @@ import {
   XCircle,
   Zap
 } from 'lucide-react';
-import { DriverPixKey, DriverProfile, DriverVehicle, DriverWalletSummary, Ride } from '../types';
+import { DriverPixKey, DriverProfile, DriverVehicle, DriverWalletSummary, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { formatCPF, formatMercosulPlate, formatPhone, formatRideCode } from '../utils/format';
@@ -50,6 +50,7 @@ import { readCrlvDocumentFile } from '../utils/crlvReader';
 interface DriverSecondaryTabsProps {
   activeTab: 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
   currentDriver: DriverProfile;
+  config?: SystemConfig;
   wallet: DriverWalletSummary | null;
   completedRides: Ride[];
   todayEarnings: number;
@@ -132,6 +133,7 @@ const ResolvedVehicleThumb: React.FC<{
 export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   activeTab,
   currentDriver,
+  config: propConfig,
   wallet,
   completedRides,
   todayEarnings,
@@ -1249,6 +1251,46 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                   </button>
                 )}
               </div>
+
+              {(() => {
+                const liveCfg = propConfig || StorageService.getConfig();
+                const basePct = Number(liveCfg.platformCommissionPercent ?? 20);
+                const pixPct = Number(liveCfg.paymentMethodCommissionPercents?.pix ?? basePct);
+                const credPct = Number(liveCfg.paymentMethodCommissionPercents?.cartao_credito ?? basePct);
+                const debPct = Number(liveCfg.paymentMethodCommissionPercents?.cartao_debito ?? basePct);
+                const cashPct = Number(liveCfg.paymentMethodCommissionPercents?.dinheiro ?? basePct);
+                const wdFixed = Number(liveCfg.withdrawalFeeFixed ?? 0);
+                const wdPct = Number(liveCfg.withdrawalFeePercent ?? 0);
+                const wdMin = Number(liveCfg.minWithdrawalAmount ?? 20);
+                const wdFeeLabel =
+                  wdFixed === 0 && wdPct === 0
+                    ? 'Grátis'
+                    : [wdFixed > 0 ? `R$ ${wdFixed.toFixed(2).replace('.', ',')}` : '', wdPct > 0 ? `${wdPct}%` : '']
+                        .filter(Boolean)
+                        .join(' + ');
+
+                return (
+                  <div style={{
+                    marginTop: 12,
+                    padding: '9px 11px',
+                    borderRadius: 10,
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    fontSize: '0.71rem',
+                    color: '#475569',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '4px 12px'
+                  }}>
+                    <span>
+                      <strong style={{ color: '#0F172A' }}>Taxas vigentes:</strong> PIX {pixPct}% • Crédito {credPct}% • Débito {debPct}% • Dinheiro {cashPct}%
+                    </span>
+                    <span>
+                      Saque mín. <strong style={{ color: '#0F172A' }}>R$ {wdMin.toFixed(2).replace('.', ',')}</strong> • Taxa saque: <strong style={{ color: '#0F172A' }}>{wdFeeLabel}</strong>
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Múltiplas Chaves PIX com Mesma Titularidade */}

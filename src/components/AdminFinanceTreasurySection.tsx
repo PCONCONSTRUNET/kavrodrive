@@ -32,6 +32,8 @@ export interface TreasuryMetrics {
   delinquentDriversCount: number;
   directRevenues: number;
   operationalExpenses: number;
+  gatewayCost?: number;
+  withdrawalFeeRevenue?: number;
   grossProfit: number;
   netProfit: number;
   cashBalance: number;
@@ -194,10 +196,24 @@ export const AdminFinanceTreasurySection: React.FC<AdminFinanceTreasurySectionPr
               <strong>+ {formatBRL(metrics.directRevenues)}</strong>
             </div>
 
+            {Number(metrics.withdrawalFeeRevenue || 0) > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#15803D' }}>
+                <span>(+) Receita com Taxas de Saque PIX</span>
+                <strong>+ {formatBRL(Number(metrics.withdrawalFeeRevenue || 0))}</strong>
+              </div>
+            )}
+
             <div style={{ display: 'flex', justifyContent: 'space-between', color: '#DC2626' }}>
               <span>(-) Custos &amp; Despesas Operacionais Lançadas</span>
               <strong>- {formatBRL(metrics.operationalExpenses)}</strong>
             </div>
+
+            {Number(metrics.gatewayCost || 0) > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#B45309' }}>
+                <span>(-) Custo de Gateway (PIX / Cartão configurados)</span>
+                <strong>- {formatBRL(Number(metrics.gatewayCost || 0))}</strong>
+              </div>
+            )}
 
             <div style={{ display: 'flex', justifyContent: 'space-between', color: '#64748B' }}>
               <span>(-) Estornos e Reembolsos no Período</span>
@@ -725,3 +741,4 @@ export const AdminFinanceTreasurySection: React.FC<AdminFinanceTreasurySectionPr
     </div>
   );
 };
+

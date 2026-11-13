@@ -12,7 +12,8 @@ import {
   PaymentTransaction,
   WithdrawalRequest,
   FinancialLedgerEntry,
-  RideChatMessage
+  RideChatMessage,
+  PaymentMethod
 } from '../types';
 import { formatRideCode, getNextSequentialRideId } from '../utils/format';
 import {
@@ -63,6 +64,22 @@ export const DEFAULT_CONFIG: SystemConfig = {
   advanceNoticeHours: 0,
   bufferBetweenRidesMin: 0,
   platformCommissionPercent: 20,
+  paymentMethodCommissionPercents: {
+    pix: 20,
+    cartao_credito: 20,
+    cartao_debito: 20,
+    dinheiro: 20,
+  },
+  gatewayFeePercents: {
+    pix: 0,
+    cartao_credito: 0,
+    cartao_debito: 0,
+  },
+  withdrawalFeePercent: 0,
+  withdrawalFeeFixed: 0,
+  cancellationFeeAmount: 0,
+  useCategoryCommissionOverride: false,
+  cashDeductFromBalanceFirst: true,
   maxDriverDebtLimit: 100.0,
   autoBlockDelinquentDrivers: true,
   minWithdrawalAmount: 20.0,
@@ -851,6 +868,24 @@ export const StorageService = {
   async fetchAdminFinanceOverview(): Promise<{
     ok: boolean;
     commissionPercent: number;
+    paymentMethodCommissionPercents?: {
+      pix?: number;
+      cartao_credito?: number;
+      cartao_debito?: number;
+      dinheiro?: number;
+    };
+    gatewayFeePercents?: {
+      pix?: number;
+      cartao_credito?: number;
+      cartao_debito?: number;
+    };
+    withdrawalFeePercent?: number;
+    withdrawalFeeFixed?: number;
+    cancellationFeeAmount?: number;
+    cardSettlementDays?: number;
+    autoSplitPixEnabled?: boolean;
+    useCategoryCommissionOverride?: boolean;
+    cashDeductFromBalanceFirst?: boolean;
     maxDriverDebtLimit: number;
     autoBlockDelinquentDrivers: boolean;
     minWithdrawalAmount: number;
@@ -1904,9 +1939,10 @@ export const StorageService = {
     timeStr: string,
     config: SystemConfig,
     categoryId = 'kavro_go',
-    city?: string
+    city?: string,
+    paymentMethod?: PaymentMethod
   ) {
-    return calculateRidePrice(distanceKm, durationMin, timeStr, config, categoryId, city);
+    return calculateRidePrice(distanceKm, durationMin, timeStr, config, categoryId, city, paymentMethod);
   },
 
   async getRideMessages(rideId: string): Promise<{ ok: boolean; messages: RideChatMessage[]; error?: string }> {
@@ -2012,13 +2048,40 @@ export const StorageService = {
   }
 };
 
+export function resolveCommissionPercentForMethod(
+  config: SystemConfig,
+  categoryCommissionPercent?: number,
+  paymentMethod?: PaymentMethod
+): number {
+  if (
+    config.useCategoryCommissionOverride &&
+    categoryCommissionPercent !== undefined &&
+    categoryCommissionPercent !== null
+  ) {
+    const catPct = Number(categoryCommissionPercent);
+    if (!Number.isNaN(catPct)) {
+      return Math.min(100, Math.max(0, Math.round(catPct * 100) / 100));
+    }
+  }
+  const methodKey = paymentMethod === 'online' ? 'cartao_credito' : paymentMethod;
+  if (methodKey && config.paymentMethodCommissionPercents) {
+    const raw = (config.paymentMethodCommissionPercents as Record<string, number | undefined>)[methodKey];
+    if (raw !== undefined && raw !== null && !Number.isNaN(Number(raw))) {
+      return Math.min(100, Math.max(0, Math.round(Number(raw) * 100) / 100));
+    }
+  }
+  const basePct = Number(config.platformCommissionPercent ?? 20);
+  return Math.min(100, Math.max(0, Number.isNaN(basePct) ? 20 : Math.round(basePct * 100) / 100));
+}
+
 export function calculateRidePrice(
   distanceKm: number,
   durationMin: number,
   timeStr: string,
   config: SystemConfig,
   categoryId = 'kavro_go',
-  city?: string
+  city?: string,
+  paymentMethod?: PaymentMethod
 ): {
   totalPrice: number;
   commissionPercent: number;
@@ -2066,7 +2129,7 @@ export function calculateRidePrice(
   }
 
   const finalPrice = Math.max(pricing.minimumFare, Math.round(subtotal * 10) / 10);
-  const commPct = Number(pricing.commissionPercent ?? config.platformCommissionPercent ?? 20);
+  const commPct = resolveCommissionPercentForMethod(config, pricing.commissionPercent, paymentMethod);
   const commAmt = Math.round(finalPrice * (commPct / 100) * 100) / 100;
   const netAmt = Math.round((finalPrice - commAmt) * 100) / 100;
 

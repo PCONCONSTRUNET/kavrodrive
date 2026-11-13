@@ -235,7 +235,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   }, [activeCategories, selectedCategory]);
 
-  const pricing = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, selectedCategory);
+  const pricing = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, selectedCategory, undefined, paymentMethod);
   const onlineDrivers = StorageService.getOnlineDrivers();
   const onlineDriversCount = StorageService.getOnlineDriversCount();
   const nearbyMapDrivers: OnlineDriverMapDot[] = React.useMemo(

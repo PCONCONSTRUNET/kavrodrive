@@ -1509,6 +1509,7 @@ async function handleApiRequest(req, res) {
           VALUES ('default', $1, NOW())
           ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();
         `, [JSON.stringify(body)]);
+        realtimeHub.publish('config:updated', { updatedAt: new Date().toISOString() });
         return sendJson(res, 200, { ok: true, config: body });
       }
     }
@@ -2797,12 +2798,19 @@ async function handleApiRequest(req, res) {
         const resolvedMethodCommPct = finance.resolveCommissionPercentForRide
           ? finance.resolveCommissionPercentForRide(cfg, matchedCat, reqMethod)
           : commPct;
-        const effectiveCommPct = Number(
-          ride.commissionPercent ??
-          before?.commissionPercent ??
-          resolvedMethodCommPct ??
-          commPct
-        );
+        const effectiveCommPct = !before
+          ? Number(
+              (isAdmin && ride.commissionPercent !== undefined)
+                ? ride.commissionPercent
+                : (resolvedMethodCommPct ?? commPct)
+            )
+          : Number(
+              (isAdmin && ride.commissionPercent !== undefined)
+                ? ride.commissionPercent
+                : (before?.paymentMethod && before.paymentMethod !== reqMethod
+                    ? resolvedMethodCommPct
+                    : (before?.commissionPercent ?? resolvedMethodCommPct ?? commPct))
+            );
 
         ride.category = matchedCat ? matchedCat.id : mappedCatId;
         ride.categoryName = ride.categoryName || before?.categoryName || matchedCat?.name || 'KAVRO GO';
@@ -2825,6 +2833,12 @@ async function handleApiRequest(req, res) {
         ride.commissionPercent = split.commissionPercent;
         ride.commissionAmount = split.commissionAmount;
         ride.driverNetAmount = split.driverNetAmount;
+        if (ride.appliedFareSnapshot) {
+          ride.appliedFareSnapshot = {
+            ...ride.appliedFareSnapshot,
+            commissionPercent: split.commissionPercent
+          };
+        }
 
         // Tratamento na criação de nova corrida conforme o método de pagamento
         if (!before && !ride.isManualBooking) {
@@ -3189,7 +3203,10 @@ async function handleApiRequest(req, res) {
 
       const cfgForComplete = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
       const finalPrice = body.finalAmount !== undefined ? finance.round2(body.finalAmount) : ride.totalPrice;
-      const effectiveCompletePct = ride.commissionPercent ?? (finance.resolveCommissionPercentForRide ? finance.resolveCommissionPercentForRide(cfgForComplete, null, ride.paymentMethod) : 20);
+      const catsForComplete = finance.normalizeCategoriesServer ? finance.normalizeCategoriesServer(cfgForComplete) : [];
+      const mappedCatCompleteId = finance.mapLegacyCategoryIdServer ? finance.mapLegacyCategoryIdServer(ride.category || 'kavro_go') : (ride.category || 'kavro_go');
+      const matchedCatComplete = catsForComplete.find(c => c.id === ride.category || c.id === mappedCatCompleteId) || null;
+      const effectiveCompletePct = ride.commissionPercent ?? (finance.resolveCommissionPercentForRide ? finance.resolveCommissionPercentForRide(cfgForComplete, matchedCatComplete, ride.paymentMethod) : 20);
       const split = finance.calculateSplit(finalPrice, effectiveCompletePct);
       const driver = await finance.getDriverById(driverId);
 
