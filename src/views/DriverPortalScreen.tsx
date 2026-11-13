@@ -8,7 +8,7 @@ import {
   Sliders, Zap, ShieldCheck, Camera, CheckCircle2, XCircle, FileText, Eye,
   BarChart2, Compass, List
 } from 'lucide-react';
-import { DriverProfile, DriverWalletSummary, Ride, SystemConfig } from '../types';
+import { DriverProfile, DriverVehicle, DriverWalletSummary, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { PushService, driverExternalId } from '../services/push';
 import { PushPermissionPrompt } from '../components/PushNotifications';
@@ -74,6 +74,10 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [isGpsOpen, setIsGpsOpen] = useState(false);
   const [isKycModalOpen, setIsKycModalOpen] = useState(false);
   const [isSosOpen, setIsSosOpen] = useState(false);
+  const [isStartVehicleModalOpen, setIsStartVehicleModalOpen] = useState(false);
+  const [selectedStartVehicleId, setSelectedStartVehicleId] = useState<string>('');
+  const [isStartingOnline, setIsStartingOnline] = useState(false);
+  const [startModalError, setStartModalError] = useState('');
   const [recenterSignal, setRecenterSignal] = useState(0);
   const [activeRouteInfo, setActiveRouteInfo] = useState<{
     distanceKm: number;
@@ -495,6 +499,37 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     setIsKycModalOpen(true);
   };
 
+  // Lista normalizada de veículos do motorista (suporte a legado + multi-veículos)
+  const getDriverVehiclesList = (driver: DriverProfile): DriverVehicle[] => {
+    if (Array.isArray(driver.vehicles) && driver.vehicles.length > 0) {
+      return driver.vehicles;
+    }
+    if (driver.vehicleBrand || driver.vehicleModel || driver.vehiclePlate) {
+      return [{
+        id: 'veh-primary',
+        brand: driver.vehicleBrand || '',
+        model: driver.vehicleModel || '',
+        version: driver.vehicleVersion || '',
+        color: driver.vehicleColor || 'Prata',
+        year: driver.vehicleYear || '2024',
+        plate: driver.vehiclePlate || '',
+        vehiclePhoto: driver.vehiclePhoto || '',
+        crlvNumber: driver.crlvNumber || '',
+        crlvDocumentPhoto: '',
+        crlvRegular: driver.crlvRegular !== false,
+        hasFourDoors: driver.hasFourDoors !== false,
+        hasAirConditioning: driver.hasAirConditioning !== false,
+        hasLargeTrunk: Boolean(driver.hasLargeTrunk),
+        hasLeatherSeats: Boolean(driver.hasLeatherSeats),
+        eligibleCategories: driver.eligibleCategories || ['kavro_go'],
+        approvalStatus: driver.approvalStatus === 'aprovado' ? 'aprovado' : 'pendente_aprovacao',
+        isActive: true,
+        submittedAt: driver.createdAt
+      }];
+    }
+    return [];
+  };
+
   // Handlers Operacionais
   const handleToggleOnline = async () => {
     if (!currentDriver) return;
@@ -502,20 +537,74 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     if (currentDriver.approvalStatus !== 'aprovado') {
       setStatusError(
         currentDriver.approvalStatus === 'correcao_solicitada'
-          ? 'A Central Master solicitou correções em sua documentação. Toque para reenviar seus documentos.'
+          ? 'Solicitamos correções em sua documentação. Toque para reenviar seus documentos.'
           : currentDriver.approvalStatus === 'em_analise'
-            ? 'Sua documentação e biometria facial estão em análise pela Central Master. Aguarde a aprovação para iniciar.'
-            : 'Seu cadastro precisa estar Aprovado pelo administrador antes de poder ficar online.'
+            ? 'Sua documentação e biometria facial estão em análise. Aguarde a aprovação para iniciar.'
+            : 'Seu cadastro precisa estar Aprovado antes de poder ficar online.'
       );
       return;
     }
-    const nextOnline = !currentDriver.isOnline;
-    const res = await StorageService.toggleDriverOnline(currentDriver.id, nextOnline);
+
+    // Ao clicar em INICIAR (indo para online), abre modal compacto para confirmar/selecionar o veículo ativo
+    if (!currentDriver.isOnline) {
+      const vehicles = getDriverVehiclesList(currentDriver);
+      const preferred =
+        vehicles.find(v => v.isActive && v.approvalStatus === 'aprovado') ||
+        vehicles.find(v => v.approvalStatus === 'aprovado') ||
+        vehicles[0];
+      setSelectedStartVehicleId(preferred?.id || '');
+      setStartModalError('');
+      setIsStartVehicleModalOpen(true);
+      return;
+    }
+
+    const res = await StorageService.toggleDriverOnline(currentDriver.id, false);
     if (!res.ok || !res.driver) {
       setStatusError(res.error || 'Não foi possível alterar status.');
       return;
     }
     setCurrentDriver(res.driver);
+  };
+
+  const handleConfirmStartOnline = async () => {
+    if (!currentDriver) return;
+    setStartModalError('');
+    const vehicles = getDriverVehiclesList(currentDriver);
+    const chosen = vehicles.find(v => v.id === selectedStartVehicleId);
+
+    if (!chosen || chosen.approvalStatus !== 'aprovado') {
+      setStartModalError('Selecione um veículo com CRLV aprovado para iniciar suas corridas.');
+      return;
+    }
+
+    setIsStartingOnline(true);
+    try {
+      let updatedDriver = currentDriver;
+      if (
+        chosen.id !== 'veh-primary' &&
+        (!chosen.isActive || currentDriver.vehiclePlate !== chosen.plate)
+      ) {
+        const switchRes = await StorageService.selectDriverActiveVehicle(currentDriver.id, chosen.id);
+        if (!switchRes.ok || !switchRes.driver) {
+          setStartModalError(switchRes.error || 'Não foi possível ativar o veículo selecionado.');
+          setIsStartingOnline(false);
+          return;
+        }
+        updatedDriver = switchRes.driver;
+      }
+
+      const res = await StorageService.toggleDriverOnline(updatedDriver.id, true);
+      if (!res.ok || !res.driver) {
+        setStartModalError(res.error || 'Não foi possível ficar online.');
+        setIsStartingOnline(false);
+        return;
+      }
+      setCurrentDriver(res.driver);
+      StorageService.setCurrentDriver(res.driver);
+      setIsStartVehicleModalOpen(false);
+    } finally {
+      setIsStartingOnline(false);
+    }
   };
 
   const handleAcceptRide = async (rideId: string) => {
@@ -2508,6 +2597,258 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           driverPhone={currentDriver.phone}
         />
       )}
+
+      {/* Modalzinho compacto ao apertar INICIAR para selecionar/confirmar o veículo ativo */}
+      {currentDriver && isStartVehicleModalOpen && (() => {
+        const vehicles = getDriverVehiclesList(currentDriver);
+        const selectedVeh = vehicles.find(v => v.id === selectedStartVehicleId);
+        const canStartWithSelected = Boolean(selectedVeh && selectedVeh.approvalStatus === 'aprovado');
+
+        return (
+          <div
+            onClick={() => !isStartingOnline && setIsStartVehicleModalOpen(false)}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(15, 23, 42, 0.56)',
+              backdropFilter: 'blur(3px)',
+              zIndex: 100010,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 16
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                width: '100%',
+                maxWidth: 400,
+                backgroundColor: '#FFFFFF',
+                color: '#111111',
+                borderRadius: 20,
+                padding: 18,
+                boxShadow: '0 20px 44px rgba(0,0,0,0.28)',
+                border: '1px solid #E5E7EB',
+                maxHeight: '86vh',
+                overflowY: 'auto'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10, marginBottom: 12 }}>
+                <div>
+                  <div style={{ fontSize: '1.02rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
+                    Com qual veículo vai rodar?
+                  </div>
+                  <div style={{ fontSize: '0.76rem', color: '#6B7280', marginTop: 2 }}>
+                    Selecione o carro ativo para ficar online.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={isStartingOnline}
+                  onClick={() => setIsStartVehicleModalOpen(false)}
+                  aria-label="Fechar"
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: '50%',
+                    border: 'none',
+                    backgroundColor: '#F3F4F6',
+                    color: '#111111',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    cursor: 'pointer',
+                    flexShrink: 0
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              </div>
+
+              {vehicles.length === 0 ? (
+                <div style={{
+                  padding: 14,
+                  borderRadius: 12,
+                  backgroundColor: '#FEF2F2',
+                  border: '1px solid #FECACA',
+                  color: '#B91C1C',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  marginBottom: 12
+                }}>
+                  Nenhum veículo cadastrado ainda. Cadastre um veículo com CRLV antes de iniciar.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
+                  {vehicles.map((veh) => {
+                    const isApproved = veh.approvalStatus === 'aprovado';
+                    const isRejected = veh.approvalStatus === 'rejeitado';
+                    const isSelected = selectedStartVehicleId === veh.id;
+                    const tag = isApproved
+                      ? { label: 'Aprovado', bg: '#DCFCE7', color: '#15803D' }
+                      : isRejected
+                      ? { label: 'Recusado', bg: '#FEE2E2', color: '#B91C1C' }
+                      : { label: 'Em análise', bg: '#FEF3C7', color: '#B45309' };
+
+                    return (
+                      <button
+                        key={veh.id}
+                        type="button"
+                        disabled={!isApproved || isStartingOnline}
+                        onClick={() => {
+                          setSelectedStartVehicleId(veh.id);
+                          setStartModalError('');
+                        }}
+                        style={{
+                          width: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: 10,
+                          borderRadius: 13,
+                          border: isSelected ? '2px solid #276EF1' : '1px solid #E5E7EB',
+                          backgroundColor: !isApproved ? '#F9FAFB' : isSelected ? '#EFF6FF' : '#FFFFFF',
+                          opacity: isApproved ? 1 : 0.65,
+                          textAlign: 'left',
+                          cursor: isApproved ? 'pointer' : 'not-allowed'
+                        }}
+                      >
+                        <div style={{
+                          width: 60,
+                          height: 40,
+                          borderRadius: 8,
+                          overflow: 'hidden',
+                          backgroundColor: '#0F172A',
+                          flexShrink: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center'
+                        }}>
+                          {veh.vehiclePhoto ? (
+                            <img
+                              src={veh.vehiclePhoto}
+                              alt={`${veh.brand} ${veh.model}`}
+                              onError={(e) => { (e.currentTarget as HTMLImageElement).src = '/vehicles/kavro-sedan-ev.jpg'; }}
+                              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                            />
+                          ) : (
+                            <Car size={18} color="#94A3B8" />
+                          )}
+                        </div>
+
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap', marginBottom: 2 }}>
+                            <span style={{
+                              fontSize: '0.64rem',
+                              fontWeight: 800,
+                              padding: '1px 7px',
+                              borderRadius: 999,
+                              backgroundColor: tag.bg,
+                              color: tag.color
+                            }}>
+                              {tag.label}
+                            </span>
+                            {veh.isActive && isApproved && (
+                              <span style={{
+                                fontSize: '0.63rem',
+                                fontWeight: 800,
+                                padding: '1px 7px',
+                                borderRadius: 999,
+                                backgroundColor: '#111111',
+                                color: '#A3E635'
+                              }}>
+                                Atual
+                              </span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#111111', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {veh.brand} {veh.model} {veh.year}
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: '#4B5563' }}>
+                            <strong style={{ fontFamily: 'monospace' }}>{veh.plate}</strong> • {veh.color}
+                          </div>
+                        </div>
+
+                        <div style={{
+                          width: 22,
+                          height: 22,
+                          borderRadius: '50%',
+                          border: isSelected ? 'none' : '2px solid #CBD5E1',
+                          backgroundColor: isSelected ? '#276EF1' : 'transparent',
+                          color: '#FFFFFF',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}>
+                          {isSelected && <Check size={13} strokeWidth={3} />}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {startModalError && (
+                <div style={{
+                  marginBottom: 10,
+                  padding: '8px 10px',
+                  borderRadius: 9,
+                  backgroundColor: '#FEF2F2',
+                  color: '#DC2626',
+                  fontSize: '0.75rem',
+                  fontWeight: 700
+                }}>
+                  {startModalError}
+                </div>
+              )}
+
+              <button
+                type="button"
+                disabled={!canStartWithSelected || isStartingOnline}
+                onClick={handleConfirmStartOnline}
+                style={{
+                  width: '100%',
+                  height: 44,
+                  borderRadius: 12,
+                  border: 'none',
+                  backgroundColor: canStartWithSelected ? '#276EF1' : '#E5E7EB',
+                  color: canStartWithSelected ? '#FFFFFF' : '#6B7280',
+                  fontSize: '0.88rem',
+                  fontWeight: 900,
+                  cursor: canStartWithSelected ? 'pointer' : 'not-allowed',
+                  marginBottom: 8
+                }}
+              >
+                {isStartingOnline ? 'Iniciando...' : 'Confirmar e Ficar Online'}
+              </button>
+
+              <button
+                type="button"
+                disabled={isStartingOnline}
+                onClick={() => {
+                  setIsStartVehicleModalOpen(false);
+                  setActiveTab('veiculos');
+                }}
+                style={{
+                  width: '100%',
+                  height: 36,
+                  borderRadius: 10,
+                  border: '1px solid #E5E7EB',
+                  backgroundColor: '#F9FAFB',
+                  color: '#111111',
+                  fontSize: '0.76rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                Gerenciar / Cadastrar Veículo →
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {currentDriver && (
         <PushPermissionPrompt
