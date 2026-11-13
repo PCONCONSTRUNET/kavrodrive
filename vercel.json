@@ -13,12 +13,6 @@
     { "source": "/manifest.json", "destination": "/api?__path=manifest" },
     { "source": "/manifest-admin.json", "destination": "/api?__path=manifest&role=admin" },
     { "source": "/api/:path*", "destination": "/api?__path=:path*" },
-    { "source": "/motora", "destination": "/admin.html" },
-    { "source": "/motora/:path*", "destination": "/admin.html" },
-    { "source": "/admin", "destination": "/admin.html" },
-    { "source": "/admin/:path*", "destination": "/admin.html" },
-    { "source": "/motorista", "destination": "/admin.html" },
-    { "source": "/painel", "destination": "/admin.html" },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ],
   "headers": [

@@ -49,6 +49,93 @@ function signAdminSessionToken({ sub, id, email }) {
   };
 }
 
+const USER_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function signUserRoleToken(role, { id, phone = '', email = '' } = {}) {
+  const cleanRole = role === 'driver' ? 'driver' : 'client';
+  const prefix = cleanRole === 'driver' ? 'kavro_drv' : 'kavro_cli';
+  const payload = {
+    sub: String(id || ''),
+    role: cleanRole,
+    phone: String(phone || '').replace(/\D/g, ''),
+    email: String(email || '').trim().toLowerCase(),
+    iat: Date.now(),
+    exp: Date.now() + USER_SESSION_TTL_MS
+  };
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', getAdminSessionSecret()).update(`${prefix}.${encoded}`).digest('base64url');
+  return `${prefix}.${encoded}.${sig}`;
+}
+
+function verifyUserRoleToken(rawToken, expectedRole) {
+  const token = String(rawToken || '').trim();
+  const prefix = expectedRole === 'driver' ? 'kavro_drv' : 'kavro_cli';
+  if (!token.startsWith(`${prefix}.`)) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [, encoded, sig] = parts;
+  if (!encoded || !sig) return null;
+
+  const expectedSig = crypto.createHmac('sha256', getAdminSessionSecret()).update(`${prefix}.${encoded}`).digest('base64url');
+  const sigBuf = Buffer.from(sig, 'utf8');
+  const expBuf = Buffer.from(expectedSig, 'utf8');
+  if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+    return null;
+  }
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (!payload || !payload.sub || payload.role !== expectedRole || Number(payload.exp || 0) <= Date.now()) {
+      return null;
+    }
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function verifyDriverToken(req) {
+  const authHeader = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const raw = String(req.headers['x-driver-token'] || (authHeader.startsWith('kavro_drv.') ? authHeader : '')).trim();
+  return verifyUserRoleToken(raw, 'driver');
+}
+
+function verifyClientToken(req) {
+  const authHeader = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+  const raw = String(req.headers['x-client-token'] || (authHeader.startsWith('kavro_cli.') ? authHeader : '')).trim();
+  return verifyUserRoleToken(raw, 'client');
+}
+
+function verifyWebhookSecret(req) {
+  const expected = String(process.env.PAYMENT_WEBHOOK_SECRET || '').trim();
+  if (!expected) return false;
+  const provided = String(req.headers['x-webhook-secret'] || '').trim();
+  if (!provided) return false;
+  const a = Buffer.from(provided, 'utf8');
+  const b = Buffer.from(expected, 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function verifyMercadoPagoWebhookSignature(req, dataId) {
+  const secret = String(process.env.MERCADOPAGO_WEBHOOK_SECRET || '').trim();
+  if (!secret) return true; // Quando secret não configurado, valida obrigatoriamente consultando a API MP
+  const sigHeader = String(req.headers['x-signature'] || '').trim();
+  const reqId = String(req.headers['x-request-id'] || '').trim();
+  if (!sigHeader) return false;
+
+  const kv = {};
+  sigHeader.split(',').forEach(part => {
+    const [k, v] = part.split('=').map(s => String(s || '').trim());
+    if (k && v) kv[k] = v;
+  });
+  if (!kv.ts || !kv.v1) return false;
+
+  const manifest = `id:${dataId || ''};request-id:${reqId};ts:${kv.ts};`;
+  const expectedHex = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
+  const a = Buffer.from(String(kv.v1).toLowerCase(), 'utf8');
+  const b = Buffer.from(expectedHex.toLowerCase(), 'utf8');
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
 function verifyAdminSessionToken(rawToken) {
   const token = String(rawToken || '').trim();
   if (!token.startsWith('kavro_adm.')) return null;
@@ -596,7 +683,7 @@ function sendJson(res, statusCode, data) {
     'Cache-Control': 'no-store, no-cache, must-revalidate',
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-client-id, x-client-phone, x-driver-id'
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-driver-token, x-client-token, x-webhook-secret, x-client-id, x-client-phone, x-driver-id'
   });
   res.end(JSON.stringify(data));
 }
@@ -696,7 +783,7 @@ async function handleApiRequest(req, res) {
     res.writeHead(204, {
       'Access-Control-Allow-Origin': '*',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-client-id, x-client-phone, x-driver-id'
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-driver-token, x-client-token, x-webhook-secret, x-client-id, x-client-phone, x-driver-id'
     });
     return res.end();
   }
@@ -800,9 +887,24 @@ async function handleApiRequest(req, res) {
     if (pathname === '/api/sync' && method === 'GET') {
       await ensureClientsSchema();
       const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+
       const reqDriverId = String(url.searchParams.get('driverId') || req.headers['x-driver-id'] || '').trim();
+      const isAuthedDriver = Boolean(
+        driverSession &&
+        driverSession.sub &&
+        (!reqDriverId || reqDriverId === driverSession.sub)
+      );
+      const verifiedDriverId = isAuthedDriver ? driverSession.sub : '';
+
       const reqClientId = String(url.searchParams.get('clientId') || req.headers['x-client-id'] || '').trim();
-      const reqClientPhoneDigits = String(url.searchParams.get('clientPhone') || req.headers['x-client-phone'] || '').replace(/\D/g, '');
+      const verifiedClientId = isAdmin
+        ? reqClientId
+        : (clientSession?.sub || '');
+      const verifiedClientPhoneDigits = clientSession
+        ? String(clientSession.phone || '').replace(/\D/g, '')
+        : '';
 
       const allDrivers = await finance.listDrivers();
       const onlineDriversPublic = allDrivers
@@ -827,7 +929,7 @@ async function handleApiRequest(req, res) {
           location: d.location
         }));
 
-      if (isAdmin || reqDriverId) {
+      if (isAdmin) {
         const [cfgRes, ridesRes, expRes, cliRes, notifRes, slotsRes] = await Promise.all([
           db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
           db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC'),
@@ -845,7 +947,7 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 200, {
           config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, true),
           rides: ridesRes.rows.map(formatRideFromDb),
-          drivers: isAdmin ? allDrivers : onlineDriversPublic,
+          drivers: allDrivers,
           onlineDriversCount: onlineDriversPublic.length,
           expenses: expRes.rows.map(r => ({
             id: r.id,
@@ -858,7 +960,7 @@ async function handleApiRequest(req, res) {
             paymentMethod: r.payment_method || 'dinheiro',
             createdAt: r.created_at
           })),
-          clients: isAdmin ? cliRes.rows.map(r => sanitizeClientRow(r, true)) : [],
+          clients: cliRes.rows.map(r => sanitizeClientRow(r, true)),
           notifications: notifRes.rows.map(r => ({
             id: r.id,
             title: r.title,
@@ -872,13 +974,46 @@ async function handleApiRequest(req, res) {
         });
       }
 
-      const selfClientPromise = (reqClientId || reqClientPhoneDigits.length >= 8)
+      if (isAuthedDriver) {
+        const [cfgRes, ridesRes, slotsRes] = await Promise.all([
+          db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
+          db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC'),
+          db.query('SELECT date, slots FROM public.blocked_slots')
+        ]);
+
+        const blockedSlotsMap = {};
+        slotsRes.rows.forEach(r => {
+          blockedSlotsMap[r.date] = r.slots || [];
+        });
+
+        const formattedRides = ridesRes.rows.map(formatRideFromDb);
+        const driverScopedRides = formattedRides.filter(
+          r => r.driverId === verifiedDriverId || (r.status === 'aguardando_confirmacao' && !r.driverId)
+        );
+        const selfDriver = allDrivers.find(d => d.id === verifiedDriverId);
+        const driversPayload = selfDriver
+          ? [selfDriver, ...onlineDriversPublic.filter(d => d.id !== verifiedDriverId)]
+          : onlineDriversPublic;
+
+        return sendJson(res, 200, {
+          config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, false),
+          rides: driverScopedRides,
+          drivers: driversPayload,
+          onlineDriversCount: onlineDriversPublic.length,
+          expenses: [],
+          clients: [],
+          notifications: [],
+          blockedSlots: blockedSlotsMap
+        });
+      }
+
+      const selfClientPromise = (verifiedClientId || verifiedClientPhoneDigits.length >= 8)
         ? db.query(
             `SELECT * FROM public.clients
              WHERE ($1 <> '' AND id = $1)
                 OR ($2 <> '' AND regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $2)
              LIMIT 1`,
-            [reqClientId, reqClientPhoneDigits]
+            [verifiedClientId, verifiedClientPhoneDigits]
           )
         : Promise.resolve({ rows: [] });
 
@@ -896,7 +1031,7 @@ async function handleApiRequest(req, res) {
 
       return sendJson(res, 200, {
         config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, false),
-        rides: ridesRes.rows.map(r => sanitizeRideForPublic(formatRideFromDb(r), reqClientId, reqClientPhoneDigits)),
+        rides: ridesRes.rows.map(r => sanitizeRideForPublic(formatRideFromDb(r), verifiedClientId, verifiedClientPhoneDigits)),
         onlineDrivers: onlineDriversPublic,
         onlineDriversCount: onlineDriversPublic.length,
         expenses: [],
@@ -1054,7 +1189,11 @@ async function handleApiRequest(req, res) {
         ]
       ).catch(() => {});
 
-      return sendJson(res, 200, { ok: true, driver: saved });
+      return sendJson(res, 200, {
+        ok: true,
+        driver: saved,
+        driverToken: signUserRoleToken('driver', saved)
+      });
     }
 
     if (pathname === '/api/drivers/check' && method === 'POST') {
@@ -1151,10 +1290,18 @@ async function handleApiRequest(req, res) {
 
       const formatted = await finance.getDriverById(row.id);
       const wallet = await finance.getDriverWallet(row.id);
-      return sendJson(res, 200, { ok: true, driver: formatted, wallet });
+      return sendJson(res, 200, {
+        ok: true,
+        driver: formatted,
+        wallet,
+        driverToken: signUserRoleToken('driver', formatted || row)
+      });
     }
 
     if (pathname === '/api/drivers' && method === 'GET') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
       const list = await finance.listDrivers();
       return sendJson(res, 200, { ok: true, drivers: list });
     }
@@ -1162,6 +1309,11 @@ async function handleApiRequest(req, res) {
     const driverWalletMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/wallet$/);
     if (driverWalletMatch && method === 'GET') {
       const driverId = decodeURIComponent(driverWalletMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
       const wallet = await finance.getDriverWallet(driverId);
       return sendJson(res, 200, { ok: true, wallet });
     }
@@ -1169,6 +1321,11 @@ async function handleApiRequest(req, res) {
     const driverWithdrawMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/withdrawals$/);
     if (driverWithdrawMatch && method === 'POST') {
       const driverId = decodeURIComponent(driverWithdrawMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
       const body = await parseBody(req);
       try {
         const wd = await finance.requestWithdrawal({
@@ -1187,6 +1344,11 @@ async function handleApiRequest(req, res) {
     const driverDebtPixMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/debt\/pix$/);
     if (driverDebtPixMatch && method === 'POST') {
       const driverId = decodeURIComponent(driverDebtPixMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
       const body = await parseBody(req);
       try {
         const pixData = await finance.createDriverDebtSettlementPix(driverId, body.amount);
@@ -1199,6 +1361,11 @@ async function handleApiRequest(req, res) {
     const driverOnlineMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/online$/);
     if (driverOnlineMatch && (method === 'PATCH' || method === 'POST')) {
       const driverId = decodeURIComponent(driverOnlineMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
       const body = await parseBody(req);
       const driver = await finance.getDriverById(driverId);
       if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
@@ -1253,6 +1420,11 @@ async function handleApiRequest(req, res) {
     const driverLocMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/location$/);
     if (driverLocMatch && (method === 'PATCH' || method === 'POST')) {
       const driverId = decodeURIComponent(driverLocMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
       const body = await parseBody(req);
       const driver = await finance.getDriverById(driverId);
       if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
@@ -1270,6 +1442,11 @@ async function handleApiRequest(req, res) {
     const driverSingleMatch = pathname.match(/^\/api\/drivers\/([^/]+)$/);
     if (driverSingleMatch) {
       const driverId = decodeURIComponent(driverSingleMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
       if (method === 'GET') {
         const driver = await finance.getDriverById(driverId);
         if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
@@ -1354,6 +1531,11 @@ async function handleApiRequest(req, res) {
       }
 
       const resolvedDriverId = driver.id;
+      const isAdminKyc = await isAuthorizedAdmin(req);
+      const drvSessKyc = verifyDriverToken(req);
+      if (!isAdminKyc && (!drvSessKyc || drvSessKyc.sub !== resolvedDriverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada. Faça login antes de enviar documentos.' });
+      }
       const cnhPhoto = body.cnhDocumentPhoto;
       const selfiePhoto = body.selfiePhoto;
       const rawBiometric = body.biometricResult;
@@ -1614,14 +1796,31 @@ async function handleApiRequest(req, res) {
     if (pathname === '/api/rides') {
       if (method === 'GET') {
         const isAdmin = await isAuthorizedAdmin(req);
-        const reqClientId = String(url.searchParams.get('clientId') || req.headers['x-client-id'] || '').trim();
-        const reqClientPhoneDigits = String(url.searchParams.get('clientPhone') || req.headers['x-client-phone'] || '').replace(/\D/g, '');
+        const driverSession = verifyDriverToken(req);
+        const clientSession = verifyClientToken(req);
+        const verifiedClientId = isAdmin
+          ? String(url.searchParams.get('clientId') || req.headers['x-client-id'] || '').trim()
+          : (clientSession?.sub || '');
+        const verifiedClientPhoneDigits = clientSession
+          ? String(clientSession.phone || '').replace(/\D/g, '')
+          : '';
         const r = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC');
         const formatted = r.rows.map(formatRideFromDb);
-        return sendJson(res, 200, isAdmin ? formatted : formatted.map(ride => sanitizeRideForPublic(ride, reqClientId, reqClientPhoneDigits)));
+        if (isAdmin) return sendJson(res, 200, formatted);
+        if (driverSession?.sub) {
+          return sendJson(
+            res,
+            200,
+            formatted.filter(ride => ride.driverId === driverSession.sub || (ride.status === 'aguardando_confirmacao' && !ride.driverId))
+          );
+        }
+        return sendJson(res, 200, formatted.map(ride => sanitizeRideForPublic(ride, verifiedClientId, verifiedClientPhoneDigits)));
       }
       if (method === 'POST') {
         const ride = await parseBody(req);
+        const isAdmin = await isAuthorizedAdmin(req);
+        const driverSession = verifyDriverToken(req);
+        const clientSession = verifyClientToken(req);
         const cfg = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
         const commPct = Number(cfg.platformCommissionPercent ?? 20);
 
@@ -1633,6 +1832,14 @@ async function handleApiRequest(req, res) {
           ? await db.query('SELECT * FROM public.rides WHERE id = $1', [ride.id])
           : { rows: [] };
         const before = prevRes.rows[0] ? formatRideFromDb(prevRes.rows[0]) : null;
+
+        if (before) {
+          const isOwnerClient = Boolean(clientSession && clientSession.sub && (clientSession.sub === before.clientId || !before.clientId));
+          const isAssignedDriver = Boolean(driverSession && driverSession.sub && driverSession.sub === before.driverId);
+          if (!isAdmin && !isOwnerClient && !isAssignedDriver) {
+            return sendJson(res, 401, { ok: false, error: 'Sem permissão para alterar esta corrida.' });
+          }
+        }
 
         if (!before) {
           const seqRes = await db.query('SELECT COALESCE(MAX(ride_number), 0) + 1 AS next_num FROM public.rides');
@@ -1715,7 +1922,8 @@ async function handleApiRequest(req, res) {
             const authResult = await finance.authorizeCardForRide(ride, {
               cardId: ride.cardId,
               cardLast4: ride.cardLast4,
-              cardBrand: ride.cardBrand
+              cardBrand: ride.cardBrand,
+              mpCardToken: ride.mpCardToken
             });
             if (!authResult.authorized) {
               return sendJson(res, 402, {
@@ -1790,7 +1998,12 @@ async function handleApiRequest(req, res) {
     if (rideAcceptMatch && method === 'POST') {
       const id = normalizeRideId(decodeURIComponent(rideAcceptMatch[1]));
       const body = await parseBody(req);
-      const driverId = body.driverId || 'drv-1001';
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const driverId = String(body.driverId || driverSession?.sub || '').trim();
+      if (!driverId || (!isAdmin && (!driverSession || driverSession.sub !== driverId))) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida para aceitar corrida.' });
+      }
 
       const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
@@ -1929,7 +2142,12 @@ async function handleApiRequest(req, res) {
     if (rideDeclineMatch && method === 'POST') {
       const id = normalizeRideId(decodeURIComponent(rideDeclineMatch[1]));
       const body = await parseBody(req);
-      const driverId = body.driverId || 'drv-1001';
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const driverId = String(body.driverId || driverSession?.sub || '').trim();
+      if (!driverId || (!isAdmin && (!driverSession || driverSession.sub !== driverId))) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida para recusar corrida.' });
+      }
 
       const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
@@ -1949,16 +2167,25 @@ async function handleApiRequest(req, res) {
     if (rideCompleteMatch && method === 'POST') {
       const id = normalizeRideId(decodeURIComponent(rideCompleteMatch[1]));
       const body = await parseBody(req);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && !driverSession) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida para finalizar corrida.' });
+      }
 
       const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
       const ride = formatRideFromDb(prevRes.rows[0]);
 
+      const driverId = String(body.driverId || ride.driverId || driverSession?.sub || '').trim();
+      if (!driverId || (!isAdmin && (!driverSession || (driverSession.sub !== driverId && driverSession.sub !== ride.driverId)))) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida para finalizar corrida.' });
+      }
+
       const cfgForComplete = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
       const finalPrice = body.finalAmount !== undefined ? finance.round2(body.finalAmount) : ride.totalPrice;
       const effectiveCompletePct = ride.commissionPercent ?? (finance.resolveCommissionPercentForRide ? finance.resolveCommissionPercentForRide(cfgForComplete, null, ride.paymentMethod) : 20);
       const split = finance.calculateSplit(finalPrice, effectiveCompletePct);
-      const driverId = body.driverId || ride.driverId || 'drv-1001';
       const driver = await finance.getDriverById(driverId);
 
       let newPaymentStatus = ride.paymentStatus;
@@ -1973,7 +2200,14 @@ async function handleApiRequest(req, res) {
         newPaymentStatus = cashRes.paymentStatus;
         paidAmount = cashRes.paidAmount;
       } else if (ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') {
-        // Captura o pagamento autorizado no cartão e lança no Livro-Razão
+        // Captura o pagamento autorizado no cartão (Mercado Pago ou Sandbox) e lança no Livro-Razão
+        const capRes = await finance.captureCardForRide(ride, finalPrice);
+        if (!capRes.captured) {
+          return sendJson(res, 402, {
+            ok: false,
+            error: capRes.error || 'Falha ao capturar cobrança no cartão.'
+          });
+        }
         newPaymentStatus = 'confirmado';
         paidAmount = finalPrice;
         const tx = await finance.getPaymentTxByRide(ride.id);
@@ -1990,6 +2224,7 @@ async function handleApiRequest(req, res) {
           estimatedAmount: ride.estimatedPrice || ride.totalPrice,
           finalAmount: finalPrice,
           paidAmount: finalPrice,
+          gatewayTxId: capRes.gatewayTxId || tx?.gatewayTxId,
           commissionPercent: split.commissionPercent,
           commissionAmount: split.commissionAmount,
           driverNetAmount: split.driverNetAmount
@@ -2081,9 +2316,22 @@ async function handleApiRequest(req, res) {
     if (rideStatusMatch && method === 'PATCH') {
       const id = normalizeRideId(decodeURIComponent(rideStatusMatch[1]));
       const body = await parseBody(req);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !driverSession && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para alterar status da corrida.' });
+      }
+
       const prev = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!prev.rows[0]) return sendJson(res, 404, { error: 'Corrida não encontrada' });
       const before = formatRideFromDb(prev.rows[0]);
+
+      const isDriver = Boolean(driverSession && before.driverId && driverSession.sub === before.driverId);
+      const isOwnerClient = Boolean(clientSession && before.clientId && clientSession.sub === before.clientId);
+      if (!isAdmin && !isDriver && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para alterar status da corrida.' });
+      }
 
       // Se a corrida for cancelada e já tinha Pix confirmado, processa reembolso automático no gateway/livro-razão
       let nextPaymentStatus = before.paymentStatus;
@@ -2491,6 +2739,16 @@ async function handleApiRequest(req, res) {
     // ============================================================
     // 3.5 GATEWAY DE PAGAMENTOS: PIX DINÂMICO, CARTÕES E WEBHOOK IDEMPOTENTE
     // ============================================================
+    if (pathname === '/api/payments/config' && method === 'GET') {
+      const mpPublicKey = String(process.env.MERCADOPAGO_PUBLIC_KEY || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim();
+      return sendJson(res, 200, {
+        ok: true,
+        mercadopagoEnabled: Boolean(env.MERCADOPAGO_ACCESS_TOKEN),
+        mercadopagoPublicKey: mpPublicKey,
+        autoPixPayoutEnabled: Boolean(process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
+      });
+    }
+
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
       const body = await parseBody(req);
       const rideId = normalizeRideId(body.rideId);
@@ -2511,16 +2769,32 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/payments/cards') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
       if (method === 'GET') {
-        const clientId = url.searchParams.get('clientId') || req.headers['x-client-id'] || '';
-        const clientPhone = url.searchParams.get('clientPhone') || req.headers['x-client-phone'] || '';
+        if (!isAdmin && !clientSession) {
+          return sendJson(res, 401, { ok: false, error: 'Sessão de passageiro necessária para listar cartões.' });
+        }
+        const clientId = isAdmin
+          ? (url.searchParams.get('clientId') || req.headers['x-client-id'] || '')
+          : clientSession.sub;
+        const clientPhone = isAdmin
+          ? (url.searchParams.get('clientPhone') || req.headers['x-client-phone'] || '')
+          : (clientSession.phone || '');
         const cards = await finance.listSavedCards(clientId, clientPhone);
         return sendJson(res, 200, { ok: true, cards });
       }
       if (method === 'POST') {
+        if (!isAdmin && !clientSession) {
+          return sendJson(res, 401, { ok: false, error: 'Faça login antes de salvar um cartão.' });
+        }
         const body = await parseBody(req);
         try {
-          const card = await finance.tokenizeAndSaveCard(body);
+          const card = await finance.tokenizeAndSaveCard({
+            ...body,
+            clientId: isAdmin ? body.clientId : clientSession.sub,
+            clientPhone: isAdmin ? body.clientPhone : (body.clientPhone || clientSession.phone)
+          });
           return sendJson(res, 200, { ok: true, card });
         } catch (err) {
           return sendJson(res, 400, { ok: false, error: err.message });
@@ -2528,29 +2802,22 @@ async function handleApiRequest(req, res) {
       }
     }
 
-    // WEBHOOK UNIFICADO DO GATEWAY (PIX, CARTÃO, QUITAÇÃO DE DÍVIDA) — COM IDEMPOTÊNCIA
+    // WEBHOOK UNIFICADO DO GATEWAY (PIX, CARTÃO, QUITAÇÃO DE DÍVIDA) — COM IDEMPOTÊNCIA E AUTENTICAÇÃO
     if ((pathname === '/api/payments/webhook' || pathname === '/api/webhooks/mercadopago') && (method === 'POST' || method === 'GET')) {
       const body = method === 'POST' ? await parseBody(req) : {};
       const eventType = body.event || 'payment.confirmed';
+      const isAdmin = await isAuthorizedAdmin(req);
+      const hasValidWebhookSecret = verifyWebhookSecret(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
 
-      // 1) Quitação de dívida de motorista via PIX
-      if (eventType === 'debt.confirmed' && body.driverId) {
-        const result = await finance.confirmDriverDebtSettlementWebhook({
-          driverId: body.driverId,
-          amount: body.amount,
-          gatewayTxId: body.gatewayTxId || `gw_debt_${Date.now()}`
-        });
-        return sendJson(res, 200, { ok: true, ...result });
-      }
-
-      // 2) Webhook nativo do Mercado Pago (quando enviado pelo servidor do MP)
-      let rideId = body.rideId ? normalizeRideId(body.rideId) : null;
-      let paidAmount = body.amount;
-
-      if (!rideId && pathname === '/api/webhooks/mercadopago') {
+      if (pathname === '/api/webhooks/mercadopago') {
         const paymentId = body?.data?.id || url.searchParams.get('data.id') || url.searchParams.get('id');
         const topic = body?.type || body?.topic || url.searchParams.get('type') || url.searchParams.get('topic');
         if (!paymentId || (topic && topic !== 'payment')) return sendJson(res, 200, { ok: true, ignored: true });
+        if (!verifyMercadoPagoWebhookSignature(req, paymentId)) {
+          return sendJson(res, 401, { ok: false, error: 'Assinatura de webhook Mercado Pago inválida.' });
+        }
         const token = env.MERCADOPAGO_ACCESS_TOKEN;
         if (!token) return sendJson(res, 200, { ok: false, reason: 'token_missing' });
         const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
@@ -2561,9 +2828,78 @@ async function handleApiRequest(req, res) {
         if (payment.status !== 'approved' || !payment.external_reference) {
           return sendJson(res, 200, { ok: true, status: payment.status });
         }
-        rideId = normalizeRideId(payment.external_reference);
-        paidAmount = payment.transaction_amount;
+        const mpRideId = normalizeRideId(payment.external_reference);
+        const mpPaidAmount = payment.transaction_amount;
+        const mpPrev = await db.query('SELECT * FROM public.rides WHERE id = $1', [mpRideId]);
+        if (!mpPrev.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+        const beforeMp = formatRideFromDb(mpPrev.rows[0]);
+        if (beforeMp.paymentStatus === 'confirmado' || beforeMp.paymentStatus === 'pago') {
+          return sendJson(res, 200, { ok: true, idempotent: true, ride: beforeMp });
+        }
+        const finalValMp = mpPaidAmount ? finance.round2(mpPaidAmount) : beforeMp.totalPrice;
+        const splitMp = finance.calculateSplit(finalValMp, beforeMp.commissionPercent ?? 20);
+        const nextStatusMp = beforeMp.status === 'aguardando_pagamento' ? 'aguardando_confirmacao' : beforeMp.status;
+        const updatedMp = await upsertFullRide({
+          ...beforeMp,
+          totalPrice: finalValMp,
+          paidAmount: finalValMp,
+          commissionPercent: splitMp.commissionPercent,
+          commissionAmount: splitMp.commissionAmount,
+          driverNetAmount: splitMp.driverNetAmount,
+          paymentStatus: 'confirmado',
+          status: nextStatusMp
+        });
+        const txMp = await finance.getPaymentTxByRide(mpRideId);
+        await finance.savePaymentTransaction({
+          ...(txMp || {}),
+          rideId: mpRideId,
+          rideCode: updatedMp.rideCode,
+          driverId: updatedMp.driverId || null,
+          driverName: updatedMp.driverName || null,
+          clientId: updatedMp.clientId || null,
+          clientName: updatedMp.clientName,
+          method: updatedMp.paymentMethod || 'pix',
+          status: 'confirmado',
+          estimatedAmount: updatedMp.estimatedPrice || updatedMp.totalPrice,
+          finalAmount: finalValMp,
+          paidAmount: finalValMp,
+          commissionPercent: splitMp.commissionPercent,
+          commissionAmount: splitMp.commissionAmount,
+          driverNetAmount: splitMp.driverNetAmount,
+          gatewayTxId: String(paymentId)
+        });
+        if (updatedMp.driverId) {
+          await finance.settleDigitalRideToLedger(updatedMp, finalValMp);
+        }
+        await push.handleRideChange(beforeMp, updatedMp, { source: 'webhook' });
+        return sendJson(res, 200, { ok: true, ride: updatedMp, split: splitMp });
       }
+
+      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem MP Live) pelo dono autenticado
+      const isSandboxMode = !env.MERCADOPAGO_ACCESS_TOKEN;
+
+      // 1) Quitação de dívida de motorista via PIX
+      if (eventType === 'debt.confirmed' && body.driverId) {
+        const isAllowedDriverDebt = isAdmin || hasValidWebhookSecret || (
+          isSandboxMode && driverSession && driverSession.sub === String(body.driverId)
+        );
+        if (!isAllowedDriverDebt) {
+          return sendJson(res, 401, { ok: false, error: 'Webhook não autorizado para quitação de dívida.' });
+        }
+        const result = await finance.confirmDriverDebtSettlementWebhook({
+          driverId: body.driverId,
+          amount: body.amount,
+          gatewayTxId: body.gatewayTxId || `gw_debt_${Date.now()}`
+        });
+        return sendJson(res, 200, { ok: true, ...result });
+      }
+
+      // 2) Confirmação de pagamento de corrida
+      if (!isAdmin && !hasValidWebhookSecret && !(isSandboxMode && (clientSession || driverSession))) {
+        return sendJson(res, 401, { ok: false, error: 'Webhook não autorizado. Utilize o endpoint oficial com assinatura válida.' });
+      }
+      const rideId = body.rideId ? normalizeRideId(body.rideId) : null;
+      const paidAmount = body.amount;
 
       if (!rideId) {
         return sendJson(res, 400, { ok: false, error: 'rideId ausente no payload do webhook.' });
@@ -2572,6 +2908,16 @@ async function handleApiRequest(req, res) {
       const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [rideId]);
       if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
       const before = formatRideFromDb(prevRes.rows[0]);
+
+      const isAllowedRideWebhook = isAdmin || hasValidWebhookSecret || (
+        isSandboxMode && (
+          (clientSession && before.clientId && clientSession.sub === before.clientId) ||
+          (driverSession && before.driverId && driverSession.sub === before.driverId)
+        )
+      );
+      if (!isAllowedRideWebhook) {
+        return sendJson(res, 401, { ok: false, error: 'Webhook não autorizado. Utilize o endpoint oficial com assinatura válida.' });
+      }
 
       // Idempotência: se o PIX já foi confirmado anteriormente, não duplica lançamento
       if (eventType === 'payment.confirmed' && (before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago')) {
@@ -2639,9 +2985,21 @@ async function handleApiRequest(req, res) {
     if (ridePaymentMatch && method === 'PATCH') {
       const id = normalizeRideId(decodeURIComponent(ridePaymentMatch[1]));
       const body = await parseBody(req);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !driverSession && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para atualizar pagamento desta corrida.' });
+      }
       const prev = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!prev.rows[0]) return sendJson(res, 404, { error: 'Corrida não encontrada.' });
       const before = formatRideFromDb(prev.rows[0]);
+
+      const isDriver = Boolean(driverSession && before.driverId && driverSession.sub === before.driverId);
+      const isOwnerClient = Boolean(clientSession && before.clientId && clientSession.sub === before.clientId);
+      if (!isAdmin && !isDriver && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para atualizar pagamento desta corrida.' });
+      }
 
       // Regra obrigatória: PIX nunca é marcado como pago manualmente sem webhook do gateway!
       if ((body.paymentMethod || before.paymentMethod) === 'pix' && (body.paymentStatus === 'pago' || body.paymentStatus === 'confirmado')) {
@@ -2729,6 +3087,12 @@ async function handleApiRequest(req, res) {
       if (!tx) return sendJson(res, 404, { ok: false, error: 'Transação não encontrada.' });
 
       const action = body.action; // 'refund' | 'dispute' | 'adjust_Debt'
+      if (action === 'refund' && finance.refundGatewayPayment) {
+        const refundGw = await finance.refundGatewayPayment(tx, body.amount);
+        if (!refundGw.ok) {
+          return sendJson(res, 400, { ok: false, error: refundGw.error || 'Falha ao estornar pagamento no gateway.' });
+        }
+      }
       let nextStatus = tx.status;
       if (action === 'refund') nextStatus = 'reembolsado';
       else if (action === 'dispute') nextStatus = 'contestado';
@@ -2971,7 +3335,11 @@ async function handleApiRequest(req, res) {
         ]
       ).catch(() => {});
 
-      return sendJson(res, 200, { ok: true, client: sanitizedClient });
+      return sendJson(res, 200, {
+        ok: true,
+        client: sanitizedClient,
+        clientToken: signUserRoleToken('client', sanitizedClient)
+      });
     }
 
     if (pathname === '/api/clients/check' && (method === 'POST' || method === 'GET')) {
@@ -3074,7 +3442,12 @@ async function handleApiRequest(req, res) {
         await db.query('UPDATE public.clients SET password_hash = $1 WHERE id = $2', [firstHash, clientRow.id]).catch(() => {});
       }
 
-      return sendJson(res, 200, { ok: true, client: sanitizeClientRow(clientRow, false) });
+      const sanitizedLoginClient = sanitizeClientRow(clientRow, false);
+      return sendJson(res, 200, {
+        ok: true,
+        client: sanitizedLoginClient,
+        clientToken: signUserRoleToken('client', sanitizedLoginClient)
+      });
     }
 
     if (pathname === '/api/clients/google-auth' && method === 'POST') {
@@ -3111,10 +3484,12 @@ async function handleApiRequest(req, res) {
           (existingByEmail.terms_signature && existingByEmail.terms_signature.signed)
         );
         if (existingPhoneDigits.length >= 10 && hasTerms) {
+          const existingSanitized = sanitizeClientRow(existingByEmail, false);
           return sendJson(res, 200, {
             ok: true,
             needsRegistration: false,
-            client: sanitizeClientRow(existingByEmail, false)
+            client: existingSanitized,
+            clientToken: signUserRoleToken('client', existingSanitized)
           });
         }
       }
@@ -3257,7 +3632,8 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, {
         ok: true,
         needsRegistration: false,
-        client: sanitizedClient
+        client: sanitizedClient,
+        clientToken: signUserRoleToken('client', sanitizedClient)
       });
     }
 
@@ -3323,7 +3699,12 @@ async function handleApiRequest(req, res) {
         [nextName, rawPhone, email, currentRow.id]
       );
       const savedRow = updated.rows[0] || { ...currentRow, name: nextName, phone: rawPhone, email };
-      return sendJson(res, 200, { ok: true, client: sanitizeClientRow(savedRow, false) });
+      const sanitizedContactClient = sanitizeClientRow(savedRow, false);
+      return sendJson(res, 200, {
+        ok: true,
+        client: sanitizedContactClient,
+        clientToken: signUserRoleToken('client', sanitizedContactClient)
+      });
     }
 
     if (pathname === '/api/clients') {
@@ -3443,12 +3824,18 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/notifications/read' && method === 'PATCH') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { error: 'Acesso não autorizado.' });
+      }
       await db.query('UPDATE public.notifications SET read = true WHERE read = false');
       return sendJson(res, 200, { ok: true });
     }
 
     const notifMatch = pathname.match(/^\/api\/notifications\/([^/]+)$/);
     if (notifMatch && method === 'DELETE') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { error: 'Acesso não autorizado.' });
+      }
       const id = decodeURIComponent(notifMatch[1]);
       await db.query('DELETE FROM public.notifications WHERE id = $1', [id]);
       return sendJson(res, 200, { ok: true, deleted: id });
@@ -3456,6 +3843,9 @@ async function handleApiRequest(req, res) {
 
     const notifReadMatch = pathname.match(/^\/api\/notifications\/([^/]+)\/read$/);
     if (notifReadMatch && method === 'PATCH') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { error: 'Acesso não autorizado.' });
+      }
       const id = decodeURIComponent(notifReadMatch[1]);
       const body = await parseBody(req);
       const isRead = body.read !== undefined ? Boolean(body.read) : true;

@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /administracion
+
+Sitemap: https://kavrodrive.vercel.app/sitemap.xml

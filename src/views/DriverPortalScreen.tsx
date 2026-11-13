@@ -173,13 +173,11 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         const res = await StorageService.checkDriverByIdentifier(lookupKey);
         if (res.ok && res.found && res.driver) {
           if (!isLookupOnlySession && res.driver.approvalStatus === 'aprovado') {
-            const w = await StorageService.fetchDriverWallet(drvId);
-            if (w) setWallet(w);
-            const list = await StorageService.fetchDriversList();
-            const fresh = list.find(d => d.id === drvId);
-            if (fresh) {
-              setCurrentDriver(fresh);
-              StorageService.setCurrentDriver(fresh);
+            const selfRes = await StorageService.fetchDriverSelf(drvId);
+            if (selfRes?.wallet) setWallet(selfRes.wallet);
+            if (selfRes?.driver) {
+              setCurrentDriver(selfRes.driver);
+              StorageService.setCurrentDriver(selfRes.driver);
               return;
             }
           }
@@ -201,13 +199,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       }
     }
     if (isLookupOnlySession) return;
-    const w = await StorageService.fetchDriverWallet(drvId);
-    if (w) setWallet(w);
-    const list = await StorageService.fetchDriversList();
-    const fresh = list.find(d => d.id === drvId);
-    if (fresh) {
-      setCurrentDriver(fresh);
-      StorageService.setCurrentDriver(fresh);
+    const selfRes = await StorageService.fetchDriverSelf(drvId);
+    if (selfRes?.wallet) {
+      setWallet(selfRes.wallet);
+    } else {
+      const w = await StorageService.fetchDriverWallet(drvId);
+      if (w) setWallet(w);
+    }
+    if (selfRes?.driver) {
+      setCurrentDriver(selfRes.driver);
+      StorageService.setCurrentDriver(selfRes.driver);
     }
   };
 
@@ -470,7 +471,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const handleStartTrip = async (ride: Ride) => {
     await fetch(`/api/rides/${encodeURIComponent(ride.id)}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
       body: JSON.stringify({ status: 'em_andamento' })
     });
     await StorageService.syncFromDatabase();
@@ -2386,7 +2387,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             }
             fetch(`/api/rides/${encodeURIComponent(activeRide.id)}/status`, {
               method: 'PATCH',
-              headers: { 'Content-Type': 'application/json' },
+              headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
               body: JSON.stringify({ status: newStatus })
             }).then(() => {
               StorageService.syncFromDatabase().then(refreshData);

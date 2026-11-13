@@ -961,10 +961,33 @@ export const App: React.FC = () => {
         element={<Navigate to="/administracion" replace />}
       />
 
-      {/* Qualquer rota desconhecida permanece na área do Cliente */}
+      {/* Rota 404 dedicada no tema Kavro Drive */}
       <Route
         path="*"
-        element={<Navigate to="/" replace />}
+        element={(
+          <div style={{ minHeight: '100vh', background: '#0B1117', color: '#FFFFFF', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '24px', fontFamily: 'Plus Jakarta Sans, Inter, sans-serif' }}>
+            <div style={{ maxWidth: '460px', width: '100%', background: '#111820', border: '1px solid #1E293B', borderRadius: '16px', padding: '32px', textAlign: 'center', boxShadow: '0 24px 60px rgba(0,0,0,0.45)' }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: 'rgba(116,193,101,0.12)', border: '1px solid rgba(116,193,101,0.3)', color: '#74C165', borderRadius: '999px', padding: '4px 12px', fontSize: '12px', fontWeight: 700, letterSpacing: '0.06em', marginBottom: '16px' }}>
+                ERRO 404
+              </div>
+              <h1 style={{ fontSize: '26px', fontWeight: 800, margin: '0 0 10px 0', letterSpacing: '-0.02em' }}>Rota não encontrada</h1>
+              <p style={{ fontSize: '14px', color: '#94A3B8', lineHeight: 1.6, margin: '0 0 24px 0' }}>
+                O endereço acessado não existe ou foi movido na plataforma Kavro Drive. Escolha um dos destinos abaixo para continuar.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                <a href="/" style={{ display: 'block', padding: '12px 16px', borderRadius: '10px', background: '#74C165', color: '#0B1117', fontWeight: 700, fontSize: '14px', textDecoration: 'none' }}>
+                  Ir para Página Inicial
+                </a>
+                <a href="/cliente" style={{ display: 'block', padding: '12px 16px', borderRadius: '10px', background: '#1E293B', color: '#F8FAFC', fontWeight: 600, fontSize: '14px', textDecoration: 'none', border: '1px solid #334155' }}>
+                  Solicitar Corrida (App Passageiro)
+                </a>
+                <a href="/kavro-drive" style={{ display: 'block', padding: '12px 16px', borderRadius: '10px', background: 'transparent', color: '#CBD5E1', fontWeight: 600, fontSize: '14px', textDecoration: 'none', border: '1px solid #334155' }}>
+                  Portal do Motorista Parceiro
+                </a>
+              </div>
+            </div>
+          </div>
+        )}
       />
     </Routes>
   );

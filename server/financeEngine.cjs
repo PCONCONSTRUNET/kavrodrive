@@ -257,6 +257,9 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS category_name TEXT;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS applied_fare_snapshot JSONB;
       ALTER TABLE public.drivers ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_provider_tx_id TEXT;
+      ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_status TEXT;
+      ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS payout_provider TEXT;
     `);
     extendedSchemaReady = true;
   } catch (err) {
@@ -1165,6 +1168,9 @@ async function listWithdrawals(driverId = null) {
       status: w.status || 'solicitado',
       ledgerEntryId: w.ledger_entry_id || w.ledgerEntryId,
       notes: w.notes || '',
+      payoutProviderTxId: w.payout_provider_tx_id || w.payoutProviderTxId || null,
+      payoutStatus: w.payout_status || w.payoutStatus || null,
+      payoutProvider: w.payout_provider || w.payoutProvider || null,
       createdAt: w.created_at || w.createdAt,
       processedAt: w.processed_at || w.processedAt
     }));
@@ -1182,6 +1188,9 @@ async function listWithdrawals(driverId = null) {
     status: w.status || 'solicitado',
     ledgerEntryId: w.ledger_entry_id,
     notes: w.notes || '',
+    payoutProviderTxId: w.payout_provider_tx_id || null,
+    payoutStatus: w.payout_status || null,
+    payoutProvider: w.payout_provider || null,
     createdAt: w.created_at,
     processedAt: w.processed_at
   }));
@@ -1268,6 +1277,98 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
   return r.rows[0];
 }
 
+function mapAsaasPixType(pixType) {
+  const t = String(pixType || '').toLowerCase().trim();
+  if (t === 'cpf' || t === 'cnpj') return t.toUpperCase();
+  if (t === 'email') return 'EMAIL';
+  if (t === 'telefone' || t === 'phone' || t === 'celular') return 'PHONE';
+  return 'EVP';
+}
+
+async function dispatchAutomatedPixPayout(wd) {
+  const amount = round2(wd.amount);
+  const webhookUrl = String(process.env.PIX_PAYOUT_WEBHOOK_URL || '').trim();
+  const payoutApiKey = String(process.env.PIX_PAYOUT_API_KEY || '').trim();
+  const asaasApiKey = String(process.env.ASAAS_API_KEY || '').trim();
+
+  if (webhookUrl) {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (payoutApiKey) headers['Authorization'] = `Bearer ${payoutApiKey}`;
+      const resp = await fetch(webhookUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          withdrawalId: wd.id,
+          driverId: wd.driverId,
+          driverName: wd.driverName,
+          amount,
+          pixKey: wd.pixKey,
+          pixType: wd.pixType || 'cpf',
+          description: `Repasse Kavro Drive ${wd.id}`
+        })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        return {
+          ok: false,
+          payoutProvider: 'webhook_psp',
+          payoutStatus: 'falha_psp',
+          error: data.error || data.message || `Falha HTTP ${resp.status} ao enviar repasse PIX.`
+        };
+      }
+      return {
+        ok: true,
+        payoutProvider: 'webhook_psp',
+        payoutStatus: 'processado_automaticamente',
+        payoutProviderTxId: String(data.txId || data.transferId || data.id || `PSP-${Date.now()}`)
+      };
+    } catch (err) {
+      return { ok: false, payoutProvider: 'webhook_psp', payoutStatus: 'falha_conexao', error: err.message };
+    }
+  }
+
+  if (asaasApiKey) {
+    try {
+      const baseUrl = String(process.env.ASAAS_BASE_URL || 'https://api.asaas.com/v3').replace(/\/+$/, '');
+      const resp = await fetch(`${baseUrl}/transfers`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'access_token': asaasApiKey
+        },
+        body: JSON.stringify({
+          value: amount,
+          operationType: 'PIX',
+          pixAddressKey: String(wd.pixKey || '').trim(),
+          pixAddressKeyType: mapAsaasPixType(wd.pixType),
+          description: `Repasse Motorista Kavro Drive (${wd.driverName || wd.driverId}) - ${wd.id}`
+        })
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok || !data.id) {
+        const msg = data?.errors?.[0]?.description || data?.message || `Asaas HTTP ${resp.status}`;
+        return { ok: false, payoutProvider: 'asaas_pix', payoutStatus: 'falha_psp', error: msg };
+      }
+      return {
+        ok: true,
+        payoutProvider: 'asaas_pix',
+        payoutStatus: 'processado_automaticamente',
+        payoutProviderTxId: String(data.id)
+      };
+    } catch (err) {
+      return { ok: false, payoutProvider: 'asaas_pix', payoutStatus: 'falha_conexao', error: err.message };
+    }
+  }
+
+  return {
+    ok: true,
+    payoutProvider: 'manual_admin',
+    payoutStatus: 'repasse_manual_confirmado',
+    payoutProviderTxId: `MANUAL-${wd.id}`
+  };
+}
+
 async function processWithdrawalAdmin({ withdrawalId, action, notes }) {
   await ensureExtendedSchema();
   const list = await listWithdrawals();
@@ -1279,6 +1380,23 @@ async function processWithdrawalAdmin({ withdrawalId, action, notes }) {
 
   const newStatus = action === 'reject' ? 'rejeitado' : 'pago';
   const now = new Date().toISOString();
+  let payoutMeta = {
+    payoutProvider: newStatus === 'rejeitado' ? null : 'manual_admin',
+    payoutStatus: newStatus === 'rejeitado' ? 'estornado' : 'repasse_manual_confirmado',
+    payoutProviderTxId: null
+  };
+
+  if (newStatus === 'pago') {
+    const payoutRes = await dispatchAutomatedPixPayout(wd);
+    if (!payoutRes.ok) {
+      throw new Error(`Falha no payout PIX automático (${payoutRes.payoutProvider}): ${payoutRes.error}`);
+    }
+    payoutMeta = {
+      payoutProvider: payoutRes.payoutProvider,
+      payoutStatus: payoutRes.payoutStatus,
+      payoutProviderTxId: payoutRes.payoutProviderTxId || null
+    };
+  }
 
   if (newStatus === 'rejeitado') {
     // Devolve o saldo para a carteira do motorista no livro-razão
@@ -1299,22 +1417,34 @@ async function processWithdrawalAdmin({ withdrawalId, action, notes }) {
     });
   }
 
+  const finalNotes = [
+    String(notes || '').trim(),
+    payoutMeta.payoutProviderTxId && payoutMeta.payoutStatus === 'processado_automaticamente'
+      ? `PIX automático (${payoutMeta.payoutProvider}): ${payoutMeta.payoutProviderTxId}`
+      : ''
+  ].filter(Boolean).join(' • ');
+
   if (!db.pool) {
     const idx = db.localStore.withdrawal_requests.findIndex(w => w.id === withdrawalId);
     if (idx >= 0) {
       db.localStore.withdrawal_requests[idx].status = newStatus;
-      db.localStore.withdrawal_requests[idx].notes = notes || '';
+      db.localStore.withdrawal_requests[idx].notes = finalNotes;
+      db.localStore.withdrawal_requests[idx].payout_provider = payoutMeta.payoutProvider;
+      db.localStore.withdrawal_requests[idx].payout_status = payoutMeta.payoutStatus;
+      db.localStore.withdrawal_requests[idx].payout_provider_tx_id = payoutMeta.payoutProviderTxId;
       db.localStore.withdrawal_requests[idx].processed_at = now;
       db.saveLocalStore();
     }
-    return { ok: true, id: withdrawalId, status: newStatus };
+    return { ok: true, id: withdrawalId, status: newStatus, ...payoutMeta };
   }
 
   await db.query(
-    'UPDATE public.withdrawal_requests SET status = $1, notes = $2, processed_at = NOW() WHERE id = $3',
-    [newStatus, notes || '', withdrawalId]
+    `UPDATE public.withdrawal_requests
+     SET status = $1, notes = $2, payout_provider = $3, payout_status = $4, payout_provider_tx_id = $5, processed_at = NOW()
+     WHERE id = $6`,
+    [newStatus, finalNotes, payoutMeta.payoutProvider, payoutMeta.payoutStatus, payoutMeta.payoutProviderTxId, withdrawalId]
   );
-  return { ok: true, id: withdrawalId, status: newStatus };
+  return { ok: true, id: withdrawalId, status: newStatus, ...payoutMeta };
 }
 
 // ============================================================
@@ -1363,7 +1493,52 @@ async function listSavedCards(clientId, clientPhone) {
   }));
 }
 
-async function tokenizeAndSaveCard({ clientId, clientPhone, cardNumber, holderName, expMonth, expYear, cvv, cardType }) {
+function mapMpPaymentMethodId(brand, cardType) {
+  const b = String(brand || '').toLowerCase();
+  const isDebit = cardType === 'cartao_debito';
+  if (b.includes('visa')) return isDebit ? 'debvisa' : 'visa';
+  if (b.includes('elo')) return isDebit ? 'debelo' : 'elo';
+  if (b.includes('amex')) return 'amex';
+  if (b.includes('hiper')) return 'hipercard';
+  return isDebit ? 'debmaster' : 'master';
+}
+
+async function createMpCardTokenServer({ cardNumber, holderName, expMonth, expYear, cvv, holderDoc }) {
+  const publicKey = String(process.env.MERCADOPAGO_PUBLIC_KEY || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim();
+  if (!publicKey) return null;
+  try {
+    const cleanDoc = String(holderDoc || '').replace(/\D/g, '');
+    const body = {
+      card_number: String(cardNumber || '').replace(/\D/g, ''),
+      expiration_month: parseInt(String(expMonth || '12'), 10),
+      expiration_year: parseInt(String(expYear || '2030').length === 2 ? `20${expYear}` : String(expYear || '2030'), 10),
+      security_code: String(cvv || '').replace(/\D/g, ''),
+      cardholder: {
+        name: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim()
+      }
+    };
+    if (cleanDoc.length === 11 || cleanDoc.length === 14) {
+      body.cardholder.identification = {
+        type: cleanDoc.length === 14 ? 'CNPJ' : 'CPF',
+        number: cleanDoc
+      };
+    }
+    const resp = await fetch(`https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(publicKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (resp.ok && data?.id) {
+      return String(data.id);
+    }
+  } catch (err) {
+    console.warn('[MP Card Token fallback]:', err.message);
+  }
+  return null;
+}
+
+async function tokenizeAndSaveCard({ clientId, clientPhone, cardNumber, holderName, expMonth, expYear, cvv, cardType, mpCardToken, holderDocument }) {
   await ensureExtendedSchema();
   const digits = String(cardNumber || '').replace(/\D/g, '');
   if (digits.length < 13 || digits.length > 19) {
@@ -1374,8 +1549,21 @@ async function tokenizeAndSaveCard({ clientId, clientPhone, cardNumber, holderNa
   }
   const last4 = digits.slice(-4);
   const brand = detectCardBrand(digits);
+
+  // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
+  const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
+    cardNumber: digits,
+    holderName,
+    expMonth,
+    expYear,
+    cvv,
+    holderDoc: holderDocument
+  });
+
   // Token opaco do gateway — nunca armazena número completo nem CVV
-  const gatewayToken = `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
+  const gatewayToken = realMpToken
+    ? `mp_tok_${realMpToken}`
+    : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
   const cardId = `card-${Date.now()}`;
   const now = new Date().toISOString();
 
@@ -1506,7 +1694,8 @@ async function createPixChargeForRide(ride) {
 
 async function authorizeCardForRide(ride, cardInfo = {}) {
   const cfg = await getSystemConfig();
-  const split = calculateSplit(ride.totalPrice, cfg.platformCommissionPercent ?? 20);
+  const effectiveCommPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod || 'cartao_credito');
+  const split = calculateSplit(ride.totalPrice, effectiveCommPct);
   const last4 = String(cardInfo.cardLast4 || ride.cardLast4 || '4242');
   const brand = String(cardInfo.cardBrand || ride.cardBrand || 'Mastercard');
 
@@ -1534,6 +1723,94 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
     return { authorized: false, tx: failedTx, split, error: 'Cartão recusado pelo banco emissor. Escolha outro cartão ou PIX.' };
   }
 
+  // Busca token real salvo ou enviado no checkout para pré-autorização no Mercado Pago
+  let savedCard = null;
+  if (cardInfo.cardId || ride.cardId) {
+    const cards = await listSavedCards(ride.clientId, ride.clientPhone);
+    savedCard = cards.find(c => c.id === (cardInfo.cardId || ride.cardId)) || null;
+  }
+  const rawTokenCandidate = String(cardInfo.mpCardToken || savedCard?.gatewayToken || '').trim();
+  const realMpToken = rawTokenCandidate.startsWith('mp_tok_')
+    ? rawTokenCandidate.slice('mp_tok_'.length)
+    : (!rawTokenCandidate.startsWith('tok_') && rawTokenCandidate.length >= 16 ? rawTokenCandidate : '');
+
+  if (env.MERCADOPAGO_ACCESS_TOKEN && realMpToken) {
+    try {
+      const mpResp = await fetch('https://api.mercadopago.com/v1/payments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`,
+          'X-Idempotency-Key': `mp_card_auth_${ride.id}_${split.grossAmount}`
+        },
+        body: JSON.stringify({
+          transaction_amount: split.grossAmount,
+          token: realMpToken,
+          description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
+          installments: 1,
+          capture: false,
+          payment_method_id: mapMpPaymentMethodId(savedCard?.brand || brand, ride.paymentMethod),
+          external_reference: ride.id,
+          payer: {
+            email: ride.clientEmail || 'passageiro@upmobilidade.com.br',
+            first_name: String(ride.clientName || 'Passageiro').split(' ')[0]
+          }
+        })
+      });
+      const mpData = await mpResp.json().catch(() => ({}));
+      const mpStatus = String(mpData?.status || '').toLowerCase();
+      if (!mpResp.ok || mpStatus === 'rejected' || mpStatus === 'cancelled') {
+        const reason = mpData?.status_detail || mpData?.message || 'Transação recusada pelo emissor no Mercado Pago.';
+        const failedTx = await savePaymentTransaction({
+          rideId: ride.id,
+          rideCode: ride.rideCode,
+          clientId: ride.clientId,
+          clientName: ride.clientName,
+          method: ride.paymentMethod || 'cartao_credito',
+          status: 'falhou',
+          estimatedAmount: split.grossAmount,
+          finalAmount: split.grossAmount,
+          paidAmount: 0,
+          commissionPercent: split.commissionPercent,
+          commissionAmount: split.commissionAmount,
+          driverNetAmount: split.driverNetAmount,
+          cardId: cardInfo.cardId || ride.cardId || '',
+          cardLast4: savedCard?.last4 || last4,
+          cardBrand: savedCard?.brand || brand,
+          failureReason: String(reason),
+          gatewayTxId: mpData?.id ? String(mpData.id) : `card_mp_fail_${ride.id}_${Date.now()}`
+        });
+        return { authorized: false, tx: failedTx, split, error: `Cartão recusado (${reason}). Tente outro cartão ou PIX.` };
+      }
+
+      const authCode = String(mpData?.authorization_code || `MP-${mpData.id || Date.now()}`);
+      const tx = await savePaymentTransaction({
+        rideId: ride.id,
+        rideCode: ride.rideCode,
+        driverId: ride.driverId || null,
+        driverName: ride.driverName || null,
+        clientId: ride.clientId || null,
+        clientName: ride.clientName,
+        method: ride.paymentMethod || 'cartao_credito',
+        status: 'autorizado',
+        estimatedAmount: split.grossAmount,
+        finalAmount: split.grossAmount,
+        paidAmount: 0,
+        commissionPercent: split.commissionPercent,
+        commissionAmount: split.commissionAmount,
+        driverNetAmount: split.driverNetAmount,
+        cardId: cardInfo.cardId || ride.cardId || '',
+        cardLast4: savedCard?.last4 || last4,
+        cardBrand: savedCard?.brand || brand,
+        gatewayAuthCode: authCode,
+        gatewayTxId: String(mpData.id)
+      });
+      return { authorized: true, tx, split, provider: 'mercadopago' };
+    } catch (err) {
+      console.warn('[MP Card PreAuth error]:', err.message);
+    }
+  }
+
   const authCode = `AUTH-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
   const tx = await savePaymentTransaction({
     rideId: ride.id,
@@ -1551,13 +1828,69 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
     commissionAmount: split.commissionAmount,
     driverNetAmount: split.driverNetAmount,
     cardId: cardInfo.cardId || ride.cardId || '',
-    cardLast4: last4,
-    cardBrand: brand,
+    cardLast4: savedCard?.last4 || last4,
+    cardBrand: savedCard?.brand || brand,
     gatewayAuthCode: authCode,
     gatewayTxId: `card_auth_${ride.id}_${Date.now()}`
   });
 
-  return { authorized: true, tx, split };
+  return { authorized: true, tx, split, provider: 'sandbox' };
+}
+
+async function captureCardForRide(ride, finalAmount) {
+  const tx = await getPaymentTxByRide(ride.id);
+  const amount = round2(finalAmount ?? ride.totalPrice);
+  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && tx?.gatewayTxId && /^\d+$/.test(String(tx.gatewayTxId)));
+  if (isRealMpId) {
+    try {
+      const capResp = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`
+        },
+        body: JSON.stringify({
+          capture: true,
+          transaction_amount: amount
+        })
+      });
+      const capData = await capResp.json().catch(() => ({}));
+      if (!capResp.ok || (capData.status && capData.status !== 'approved')) {
+        return {
+          captured: false,
+          error: capData?.message || capData?.status_detail || 'Falha ao capturar pré-autorização do cartão no Mercado Pago.'
+        };
+      }
+      return { captured: true, gatewayTxId: String(capData.id || tx.gatewayTxId), provider: 'mercadopago' };
+    } catch (err) {
+      console.warn('[MP Card Capture fallback/error]:', err.message);
+    }
+  }
+  return { captured: true, gatewayTxId: tx?.gatewayTxId || `card_cap_${ride.id}`, provider: 'sandbox' };
+}
+
+async function refundGatewayPayment(tx, refundAmount = null) {
+  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && tx?.gatewayTxId && /^\d+$/.test(String(tx.gatewayTxId)));
+  if (!isRealMpId) return { ok: true, provider: 'sandbox' };
+  try {
+    const body = refundAmount ? { amount: round2(refundAmount) } : {};
+    const resp = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}/refunds`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`,
+        'X-Idempotency-Key': `mp_refund_${tx.id}_${refundAmount || 'full'}`
+      },
+      body: JSON.stringify(body)
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      return { ok: false, error: data?.message || `Falha no estorno Mercado Pago (HTTP ${resp.status})` };
+    }
+    return { ok: true, provider: 'mercadopago', refundId: data.id };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
 }
 
 // Registra no Livro-Razão o crédito digital (Pix ou Cartão capturado) para o motorista + comissão da plataforma
@@ -1912,6 +2245,8 @@ module.exports = {
   tokenizeAndSaveCard,
   createPixChargeForRide,
   authorizeCardForRide,
+  captureCardForRide,
+  refundGatewayPayment,
   settleDigitalRideToLedger,
   settleCashRideToLedger,
   createDriverDebtSettlementPix,

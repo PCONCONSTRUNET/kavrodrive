@@ -99,10 +99,7 @@ export const StorageService = {
       if (currentUser?.phone) params.set('clientPhone', currentUser.phone);
       if (currentDriver?.id) params.set('driverId', currentDriver.id);
 
-      const headers: Record<string, string> = {};
-      if (isAdmin) {
-        headers['x-admin-pin'] = this.getAdminPin();
-      }
+      const headers: Record<string, string> = this.getAuthHeaders();
       if (currentUser?.id) headers['x-client-id'] = currentUser.id;
       if (currentUser?.phone) headers['x-client-phone'] = currentUser.phone;
       if (currentDriver?.id) headers['x-driver-id'] = currentDriver.id;
@@ -195,7 +192,7 @@ export const StorageService = {
     try {
       const res = await fetch('/api/rides', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(ridePayload)
       });
       const data = await res.json();
@@ -240,7 +237,7 @@ export const StorageService = {
 
     fetch('/api/rides', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-admin-pin': this.getAdminPin() },
+      headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
       body: JSON.stringify(toSave)
     })
       .then(r => (r.ok ? r.json() : null))
@@ -269,7 +266,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/accept`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ driverId })
       });
       const data = await res.json();
@@ -292,7 +289,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/decline`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ driverId })
       });
       await this.syncFromDatabase();
@@ -320,7 +317,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/complete`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-admin-pin': this.getAdminPin() },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -345,7 +342,7 @@ export const StorageService = {
     try {
       const res = await fetch('/api/payments/webhook', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -362,13 +359,39 @@ export const StorageService = {
       const params = new URLSearchParams();
       if (clientId) params.set('clientId', clientId);
       if (clientPhone) params.set('clientPhone', clientPhone);
-      const res = await fetch(`/api/payments/cards?${params.toString()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/payments/cards?${params.toString()}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
       if (!res.ok) return [];
       const data = await res.json();
       return data.cards || [];
     } catch {
       return [];
     }
+  },
+
+  async fetchPaymentsConfig(): Promise<{
+    mercadopagoEnabled: boolean;
+    mercadopagoPublicKey: string;
+    autoPixPayoutEnabled: boolean;
+  }> {
+    try {
+      const res = await fetch('/api/payments/config', { cache: 'no-store' });
+      if (res.ok) {
+        const d = await res.json();
+        return {
+          mercadopagoEnabled: Boolean(d.mercadopagoEnabled),
+          mercadopagoPublicKey: String(d.mercadopagoPublicKey || '').trim(),
+          autoPixPayoutEnabled: Boolean(d.autoPixPayoutEnabled)
+        };
+      }
+    } catch {}
+    return {
+      mercadopagoEnabled: false,
+      mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
+      autoPixPayoutEnabled: false
+    };
   },
 
   async saveTokenizedCard(payload: {
@@ -380,11 +403,13 @@ export const StorageService = {
     expYear: string;
     cvv: string;
     cardType: 'cartao_credito' | 'cartao_debito';
+    mpCardToken?: string;
+    holderDocument?: string;
   }): Promise<{ ok: boolean; card?: SavedCard; error?: string }> {
     try {
       const res = await fetch('/api/payments/cards', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       return await res.json();
@@ -396,6 +421,41 @@ export const StorageService = {
   // ============================================================
   // MOTORISTAS (CADASTRO, LOGIN, ONLINE/OFFLINE, CARTEIRA)
   // ============================================================
+  getDriverToken(): string {
+    return localStorage.getItem('up_driver_token') || '';
+  },
+
+  setDriverToken(token: string | null): void {
+    if (token && token.startsWith('kavro_drv.')) {
+      localStorage.setItem('up_driver_token', token);
+    } else {
+      localStorage.removeItem('up_driver_token');
+    }
+  },
+
+  getClientToken(): string {
+    return localStorage.getItem('up_client_token') || '';
+  },
+
+  setClientToken(token: string | null): void {
+    if (token && token.startsWith('kavro_cli.')) {
+      localStorage.setItem('up_client_token', token);
+    } else {
+      localStorage.removeItem('up_client_token');
+    }
+  },
+
+  getAuthHeaders(): Record<string, string> {
+    const h: Record<string, string> = {};
+    const adminPin = this.getAdminPin();
+    const drvTok = this.getDriverToken();
+    const cliTok = this.getClientToken();
+    if (adminPin) h['x-admin-pin'] = adminPin;
+    if (drvTok) h['x-driver-token'] = drvTok;
+    if (cliTok) h['x-client-token'] = cliTok;
+    return h;
+  },
+
   getCurrentDriver(): DriverProfile | null {
     const raw = localStorage.getItem(STORAGE_KEYS.CURRENT_DRIVER);
     if (!raw) return null;
@@ -409,8 +469,23 @@ export const StorageService = {
   setCurrentDriver(driver: DriverProfile | null): void {
     if (!driver) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_DRIVER);
+      this.setDriverToken(null);
     } else {
       localStorage.setItem(STORAGE_KEYS.CURRENT_DRIVER, JSON.stringify(driver));
+    }
+  },
+
+  async fetchDriverSelf(driverId: string): Promise<{ driver?: DriverProfile; wallet?: DriverWalletSummary } | null> {
+    try {
+      const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data?.ok ? { driver: data.driver, wallet: data.wallet } : null;
+    } catch {
+      return null;
     }
   },
 
@@ -444,7 +519,10 @@ export const StorageService = {
 
   async fetchDriversList(): Promise<DriverProfile[]> {
     try {
-      const res = await fetch('/api/drivers', { cache: 'no-store' });
+      const res = await fetch('/api/drivers', {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
       if (!res.ok) return this.getDrivers();
       const data = await res.json();
       if (Array.isArray(data.drivers)) {
@@ -483,6 +561,9 @@ export const StorageService = {
       const data = await res.json();
       if (!res.ok || !data.ok) {
         return { ok: false, error: data.error || 'Erro ao cadastrar motorista.' };
+      }
+      if (data.driverToken) {
+        this.setDriverToken(data.driverToken);
       }
       this.setCurrentDriver(data.driver);
       return { ok: true, driver: data.driver };
@@ -525,6 +606,9 @@ export const StorageService = {
       if (!res.ok || !data.ok) {
         return { ok: false, error: data.error || 'Credenciais inválidas.' };
       }
+      if (data.driverToken) {
+        this.setDriverToken(data.driverToken);
+      }
       this.setCurrentDriver(data.driver);
       return data;
     } catch {
@@ -540,7 +624,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/online`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ isOnline, location })
       });
       const data = await res.json();
@@ -557,7 +641,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(updates)
       });
       const data = await res.json();
@@ -573,7 +657,8 @@ export const StorageService = {
   async fetchDriverWallet(driverId: string): Promise<DriverWalletSummary | null> {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/wallet?_t=${Date.now()}`, {
-        cache: 'no-store'
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
       });
       if (!res.ok) return null;
       const data = await res.json();
@@ -590,7 +675,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/withdrawals`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       return await res.json();
@@ -610,7 +695,7 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/debt/pix`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify({ amount })
       });
       return await res.json();
@@ -689,7 +774,7 @@ export const StorageService = {
     try {
       const res = await fetch('/api/kyc/submit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(payload)
       });
       const data = await res.json();
@@ -856,7 +941,7 @@ export const StorageService = {
 
     fetch(`/api/rides/${encodeURIComponent(rideId)}/location`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
       body: JSON.stringify({ role: 'client', location: updatedLoc })
     })
       .then(r => (r.ok ? r.json() : null))
@@ -1028,6 +1113,9 @@ export const StorageService = {
       if (!res.ok || !data.ok) {
         return { ok: false, error: data.error || 'Erro ao realizar cadastro.' };
       }
+      if (data.clientToken) {
+        this.setClientToken(data.clientToken);
+      }
       this.setCurrentUser(data.client);
       return { ok: true, client: data.client };
     } catch {
@@ -1045,6 +1133,9 @@ export const StorageService = {
       const data = await res.json();
       if (!res.ok || !data.ok) {
         return { ok: false, error: data.error || 'Credenciais inválidas.' };
+      }
+      if (data.clientToken) {
+        this.setClientToken(data.clientToken);
       }
       this.setCurrentUser(data.client);
       return { ok: true, client: data.client };
@@ -1122,6 +1213,9 @@ export const StorageService = {
       if (!res.ok || !data.ok) {
         return { ok: false, error: data.error || 'Erro ao autenticar com o Google.' };
       }
+      if (data.clientToken) {
+        this.setClientToken(data.clientToken);
+      }
       if (data.client) {
         this.setCurrentUser(data.client);
       }
@@ -1152,6 +1246,9 @@ export const StorageService = {
       const data = await res.json();
       if (!res.ok || !data.ok || !data.client) {
         return { ok: false, error: data.error || 'Erro ao atualizar dados de contato.' };
+      }
+      if (data.clientToken) {
+        this.setClientToken(data.clientToken);
       }
       this.setCurrentUser(data.client);
       return { ok: true, client: data.client };
@@ -1316,7 +1413,10 @@ export const StorageService = {
   markNotificationsRead(): void {
     const list = this.getNotifications().map(n => ({ ...n, read: true }));
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
-    fetch('/api/notifications/read', { method: 'PATCH' }).catch(() => {});
+    fetch('/api/notifications/read', {
+      method: 'PATCH',
+      headers: { 'x-admin-pin': this.getAdminPin() }
+    }).catch(() => {});
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
   },
 
@@ -1325,7 +1425,7 @@ export const StorageService = {
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
     fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-admin-pin': this.getAdminPin() },
       body: JSON.stringify({ read: true })
     }).catch(() => {});
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
@@ -1334,13 +1434,19 @@ export const StorageService = {
   deleteNotification(id: string): void {
     const list = this.getNotifications().filter(n => n.id !== id);
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
-    fetch(`/api/notifications/${encodeURIComponent(id)}`, { method: 'DELETE' }).catch(() => {});
+    fetch(`/api/notifications/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { 'x-admin-pin': this.getAdminPin() }
+    }).catch(() => {});
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
   },
 
   clearAllNotifications(): void {
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify([]));
-    fetch('/api/notifications', { method: 'DELETE' }).catch(() => {});
+    fetch('/api/notifications', {
+      method: 'DELETE',
+      headers: { 'x-admin-pin': this.getAdminPin() }
+    }).catch(() => {});
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
   },
 
@@ -1400,6 +1506,7 @@ export const StorageService = {
   setCurrentUser(user: ClientProfile | null): void {
     if (!user) {
       localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+      this.setClientToken(null);
     } else {
       const sanitized = { ...user };
       delete sanitized.password;

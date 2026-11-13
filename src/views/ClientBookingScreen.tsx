@@ -211,6 +211,40 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     e.preventDefault();
     setCardError('');
     setIsSavingCard(true);
+    let mpCardToken: string | undefined;
+    try {
+      const payCfg = await StorageService.fetchPaymentsConfig();
+      if (payCfg.mercadopagoPublicKey) {
+        const cleanDoc = String(currentUser?.document || '').replace(/\D/g, '');
+        const tokenBody: Record<string, unknown> = {
+          card_number: cardNumber.replace(/\D/g, ''),
+          expiration_month: parseInt(cardExpMonth, 10),
+          expiration_year: parseInt(cardExpYear.length === 2 ? `20${cardExpYear}` : cardExpYear, 10),
+          security_code: cardCvv.replace(/\D/g, ''),
+          cardholder: {
+            name: cardHolder.toUpperCase().trim(),
+            ...(cleanDoc.length === 11 || cleanDoc.length === 14
+              ? { identification: { type: cleanDoc.length === 14 ? 'CNPJ' : 'CPF', number: cleanDoc } }
+              : {})
+          }
+        };
+        const mpResp = await fetch(
+          `https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(payCfg.mercadopagoPublicKey)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(tokenBody)
+          }
+        );
+        const mpData = await mpResp.json().catch(() => ({}));
+        if (mpResp.ok && mpData?.id) {
+          mpCardToken = String(mpData.id);
+        }
+      }
+    } catch {
+      // Fallback para tokenização no backend
+    }
+
     const res = await StorageService.saveTokenizedCard({
       clientId: currentUser?.id,
       clientPhone: currentUser?.phone,
@@ -219,7 +253,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       expMonth: cardExpMonth,
       expYear: cardExpYear,
       cvv: cardCvv,
-      cardType
+      cardType,
+      mpCardToken,
+      holderDocument: currentUser?.document
     });
     setIsSavingCard(false);
     if (!res.ok || !res.card) {

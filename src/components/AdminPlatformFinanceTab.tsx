@@ -1276,6 +1276,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                 }}>
                                   {w.status.toUpperCase()}
                                 </span>
+                                {w.payoutStatus === 'processado_automaticamente' && (
+                                  <div style={{ fontSize: '0.64rem', color: '#15803D', marginTop: 3, fontWeight: 600 }}>
+                                    PIX Automático {w.payoutProviderTxId ? `(${w.payoutProviderTxId})` : ''}
+                                  </div>
+                                )}
                               </td>
                               <td style={{ padding: '10px 12px', color: '#64748B' }}>
                                 {w.notes || '—'}
@@ -2686,6 +2691,15 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         }}>
                           {w.status.toUpperCase()}
                         </span>
+                        {w.payoutStatus === 'processado_automaticamente' ? (
+                          <div style={{ fontSize: '0.66rem', color: '#15803D', marginTop: 4, fontWeight: 600 }}>
+                            PIX Automático ({w.payoutProvider || 'PSP'}) {w.payoutProviderTxId ? `• ${w.payoutProviderTxId}` : ''}
+                          </div>
+                        ) : w.status === 'pago' && w.payoutProviderTxId ? (
+                          <div style={{ fontSize: '0.65rem', color: '#64748B', marginTop: 4 }}>
+                            {w.payoutProviderTxId}
+                          </div>
+                        ) : null}
                       </td>
                       <td style={{ padding: '12px 16px', textAlign: 'right' }}>
                         {w.status === 'solicitado' && (

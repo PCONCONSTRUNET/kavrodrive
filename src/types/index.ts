@@ -377,6 +377,9 @@ export interface WithdrawalRequest {
   status: 'solicitado' | 'processando' | 'pago' | 'rejeitado';
   ledgerEntryId?: string;
   notes?: string;
+  payoutProviderTxId?: string | null;
+  payoutStatus?: string | null;
+  payoutProvider?: string | null;
   createdAt: string;
   processedAt?: string;
 }
