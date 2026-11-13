@@ -19,6 +19,7 @@ import {
   getCategoryById
 } from '../utils/categoryEngine';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
+import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
 import confetti from 'canvas-confetti';
 
 interface ClientBookingScreenProps {
@@ -96,6 +97,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [requestError, setRequestError] = useState('');
   const [activeRide, setActiveRide] = useState<Ride | null>(null);
+  const [isRatingSheetOpen, setIsRatingSheetOpen] = useState(false);
+  const [ratedRideSheetShownId, setRatedRideSheetShownId] = useState<string>('');
   const [copiedPix, setCopiedPix] = useState(false);
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
   const [locatingOriginGps, setLocatingOriginGps] = useState(false);
@@ -178,6 +181,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       window.removeEventListener('up_database_synced', syncActive);
     };
   }, [activeRide?.id]);
+
+  // Abre automaticamente o bottom sheet estilo Uber assim que a corrida finaliza
+  useEffect(() => {
+    if (
+      activeRide &&
+      activeRide.status === 'finalizada' &&
+      !activeRide.passengerRating &&
+      ratedRideSheetShownId !== activeRide.id
+    ) {
+      setIsRatingSheetOpen(true);
+      setRatedRideSheetShownId(activeRide.id);
+    }
+  }, [activeRide?.id, activeRide?.status, activeRide?.passengerRating, ratedRideSheetShownId]);
 
   const nowTimeStr = React.useMemo(() => {
     const d = new Date();
@@ -576,6 +592,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const isAtPickup = activeRide.status === 'no_local';
     const isOnWay = activeRide.status === 'a_caminho' || isAtPickup;
     const isInProgress = activeRide.status === 'em_andamento';
+    const isCompleted = activeRide.status === 'finalizada';
+    const isCancelled = activeRide.status === 'cancelada';
     const cleanDriverPhone = getCleanWhatsappNumber(activeRide.driverPhone || '');
 
     return (
@@ -651,13 +669,17 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 backgroundColor: isSearching ? '#F59E0B' : '#22C55E'
               }} />
               <span>
-                {isSearching
-                  ? 'Conectando motorista...'
-                  : isInProgress
-                    ? `~${activeRide.durationMin || 8} min ao destino`
-                    : isAtPickup
-                      ? 'Motorista chegou!'
-                      : `Chegada em ~${activeRide.durationMin ? Math.min(8, activeRide.durationMin) : 4} min`}
+                {isCompleted
+                  ? 'Viagem concluída'
+                  : isCancelled
+                    ? 'Corrida cancelada'
+                    : isSearching
+                      ? 'Conectando motorista...'
+                      : isInProgress
+                        ? `~${activeRide.durationMin || 8} min ao destino`
+                        : isAtPickup
+                          ? 'Motorista chegou!'
+                          : `Chegada em ~${activeRide.durationMin ? Math.min(8, activeRide.durationMin) : 4} min`}
               </span>
             </div>
           </div>
@@ -686,26 +708,34 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
               <h2 style={{ margin: 0, fontSize: '1.22rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
-                {isSearching
-                  ? 'Procurando motorista...'
-                  : isQueued
-                    ? 'Motorista confirmado na fila'
-                    : isAtPickup
-                      ? 'Seu motorista chegou!'
-                      : isInProgress
-                        ? 'Em viagem rumo ao destino'
-                        : 'Motorista a caminho'}
+                {isCompleted
+                  ? 'Você chegou ao seu destino!'
+                  : isCancelled
+                    ? 'Corrida cancelada'
+                    : isSearching
+                      ? 'Procurando motorista...'
+                      : isQueued
+                        ? 'Motorista confirmado na fila'
+                        : isAtPickup
+                          ? 'Seu motorista chegou!'
+                          : isInProgress
+                            ? 'Em viagem rumo ao destino'
+                            : 'Motorista a caminho'}
               </h2>
               {isSearching && <RefreshCw size={18} color="#276EF1" className="animate-spin" />}
             </div>
             <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#6B7280', fontWeight: 500 }}>
-              {isSearching
-                ? `${onlineDriversCount} motorista(s) online na região recebendo seu chamado`
-                : isQueued
-                  ? `${activeRide.driverName || 'Seu motorista'} está concluindo um desembarque próximo.`
-                  : isInProgress
-                    ? 'Acompanhe o trajeto em tempo real pelo mapa acima.'
-                    : 'Confira a placa e o veículo ao embarcar.'}
+              {isCompleted
+                ? `Viagem finalizada • Total R$ ${(activeRide.totalPrice || 0).toFixed(2).replace('.', ',')}`
+                : isCancelled
+                  ? 'Você pode solicitar uma nova viagem quando quiser.'
+                  : isSearching
+                    ? `${onlineDriversCount} motorista(s) online na região recebendo seu chamado`
+                    : isQueued
+                      ? `${activeRide.driverName || 'Seu motorista'} está concluindo um desembarque próximo.`
+                      : isInProgress
+                        ? 'Acompanhe o trajeto em tempo real pelo mapa acima.'
+                        : 'Confira a placa e o veículo ao embarcar.'}
             </p>
           </div>
 
@@ -860,29 +890,103 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => navigate(`/viagem/${encodeURIComponent(activeRide.id)}`)}
-            style={{
-              width: '100%',
-              height: 50,
-              borderRadius: 12,
-              backgroundColor: '#111111',
-              color: '#FFFFFF',
-              border: 'none',
-              fontSize: '0.94rem',
-              fontWeight: 800,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-              cursor: 'pointer'
-            }}
-          >
-            <Navigation size={17} />
-            <span>Acompanhar GPS em Tela Cheia</span>
-          </button>
+          {isCompleted ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {!activeRide.passengerRating && (
+                <button
+                  type="button"
+                  onClick={() => setIsRatingSheetOpen(true)}
+                  style={{
+                    width: '100%',
+                    height: 50,
+                    borderRadius: 12,
+                    backgroundColor: '#111111',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontSize: '0.94rem',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 8,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <span>Avaliar Motorista &amp; Gorjeta ★</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setActiveRide(null)}
+                style={{
+                  width: '100%',
+                  height: 44,
+                  borderRadius: 12,
+                  backgroundColor: '#F3F4F6',
+                  color: '#111111',
+                  border: '1px solid #E5E7EB',
+                  fontSize: '0.88rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                Pedir outra corrida
+              </button>
+            </div>
+          ) : isCancelled ? (
+            <button
+              type="button"
+              onClick={() => setActiveRide(null)}
+              style={{
+                width: '100%',
+                height: 50,
+                borderRadius: 12,
+                backgroundColor: '#111111',
+                color: '#FFFFFF',
+                border: 'none',
+                fontSize: '0.94rem',
+                fontWeight: 800,
+                cursor: 'pointer'
+              }}
+            >
+              Voltar e pedir nova corrida
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => navigate(`/viagem/${encodeURIComponent(activeRide.id)}`)}
+              style={{
+                width: '100%',
+                height: 50,
+                borderRadius: 12,
+                backgroundColor: '#111111',
+                color: '#FFFFFF',
+                border: 'none',
+                fontSize: '0.94rem',
+                fontWeight: 800,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                cursor: 'pointer'
+              }}
+            >
+              <Navigation size={17} />
+              <span>Acompanhar GPS em Tela Cheia</span>
+            </button>
+          )}
         </div>
+
+        <RideRatingBottomSheet
+          isOpen={isRatingSheetOpen}
+          ride={activeRide}
+          raterRole="cliente"
+          onClose={() => setIsRatingSheetOpen(false)}
+          onSubmitted={() => {
+            setIsRatingSheetOpen(false);
+            setActiveRide(null);
+          }}
+        />
       </div>
     );
   }

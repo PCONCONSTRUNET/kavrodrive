@@ -2708,24 +2708,63 @@ async function handleApiRequest(req, res) {
       });
     }
 
-    // AVALIAÇÃO DE CORRIDA + RECÁLCULO AUTOMÁTICO DA NOTA MÉDIA DO MOTORISTA
+    // AVALIAÇÃO DE CORRIDA + TAGS RÁPIDAS + GORJETA 100% MOTORISTA + RECÁLCULO DA NOTA MÉDIA
     const rideRateMatch = pathname.match(/^\/api\/rides\/([^/]+)\/rate$/);
     if (rideRateMatch && method === 'POST') {
       const id = normalizeRideId(decodeURIComponent(rideRateMatch[1]));
       const body = await parseBody(req);
       const stars = Math.min(5, Math.max(1, Number(body.stars || 5)));
       const raterRole = body.raterRole === 'motorista' ? 'motorista' : 'cliente';
-      const comment = body.comment ? String(body.comment).trim() : null;
+      const rawComment = body.comment ? String(body.comment).trim() : '';
+      const rawTags = Array.isArray(body.tags)
+        ? body.tags.map(t => String(t || '').trim()).filter(Boolean).slice(0, 6)
+        : [];
+      const tipVal = raterRole === 'cliente'
+        ? finance.round2(Math.min(100, Math.max(0, Number(body.tipAmount || 0))))
+        : 0;
+
+      const combinedNotes = [
+        rawTags.length > 0 ? rawTags.join(' • ') : '',
+        rawComment,
+        tipVal > 0 ? `Gorjeta: R$ ${tipVal.toFixed(2).replace('.', ',')}` : ''
+      ].filter(Boolean).join(' — ') || null;
 
       const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
       const ride = formatRideFromDb(prevRes.rows[0]);
 
       const patch = raterRole === 'cliente'
-        ? { passengerRating: stars, passengerNotes: comment || ride.passengerNotes }
-        : { driverRating: stars, driverNotes: comment || ride.driverNotes };
+        ? { passengerRating: stars, passengerNotes: combinedNotes || ride.passengerNotes }
+        : { driverRating: stars, driverNotes: combinedNotes || ride.driverNotes };
 
       const updatedRide = await upsertFullRide({ ...ride, ...patch });
+
+      let tipCredited = 0;
+      if (raterRole === 'cliente' && tipVal > 0 && ride.driverId) {
+        const ledgerRes = await finance.recordLedgerEntry({
+          idempotencyKey: `ride_tip_${ride.id}`,
+          driverId: ride.driverId,
+          driverName: ride.driverName || '',
+          rideId: ride.id,
+          rideCode: ride.rideCode || ride.id,
+          clientId: ride.clientId || null,
+          clientName: ride.clientName || 'Passageiro',
+          entryType: 'ride_earning_credit',
+          paymentMethod: ride.paymentMethod || 'pix',
+          grossAmount: tipVal,
+          commissionPercent: 0,
+          commissionAmount: 0,
+          driverNetAmount: tipVal,
+          balanceDelta: tipVal,
+          balanceBucket: 'available',
+          status: 'confirmado',
+          description: `Gorjeta pós-corrida ${ride.rideCode || ride.id} (100% motorista)`,
+          metadata: { type: 'passenger_tip', stars, tags: rawTags }
+        });
+        if (!ledgerRes?.idempotent) {
+          tipCredited = tipVal;
+        }
+      }
 
       let updatedDriverRating = null;
       if (raterRole === 'cliente' && ride.driverId) {
@@ -2748,7 +2787,7 @@ async function handleApiRequest(req, res) {
         }
       }
 
-      return sendJson(res, 200, { ok: true, ride: updatedRide, updatedDriverRating });
+      return sendJson(res, 200, { ok: true, ride: updatedRide, updatedDriverRating, tipCredited });
     }
 
     const rideDeclineMatch = pathname.match(/^\/api\/rides\/([^/]+)\/decline$/);

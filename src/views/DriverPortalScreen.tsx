@@ -43,6 +43,7 @@ import { DriverHomeMap, RouteStepSummary } from '../components/DriverHomeMap';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { DriverKycVerificationModal } from '../components/DriverKycVerificationModal';
 import { DriverTermsContractModal } from '../components/DriverTermsContractModal';
+import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
 import {
   DRIVER_TERMS_AFFIRMATIVE_TEXT,
   DRIVER_TERMS_CONTRACT_ID,
@@ -112,6 +113,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [selectedStartVehicleId, setSelectedStartVehicleId] = useState<string>('');
   const [isStartingOnline, setIsStartingOnline] = useState(false);
   const [startModalError, setStartModalError] = useState('');
+  const [ratingRideTarget, setRatingRideTarget] = useState<Ride | null>(null);
   const [recenterSignal, setRecenterSignal] = useState(0);
   const [activeRouteInfo, setActiveRouteInfo] = useState<{
     distanceKm: number;
@@ -695,6 +697,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     setIsCompletingRide(false);
     if (res.ok) {
       if (res.wallet) setWallet(res.wallet);
+      setRatingRideTarget(ride);
       refreshData();
       try {
         confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
@@ -707,6 +710,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const handleConfirmCashCompletion = async () => {
     if (!cashCompleteRide || !currentDriver) return;
     setIsCompletingRide(true);
+    const completedRideSnapshot = cashCompleteRide;
     const receivedVal =
       cashResolution === 'confirmado'
         ? cashCompleteRide.totalPrice
@@ -724,6 +728,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     setCashCompleteRide(null);
     if (res.ok) {
       if (res.wallet) setWallet(res.wallet);
+      setRatingRideTarget(completedRideSnapshot);
       refreshData();
       await loadDriverAndWallet(currentDriver.id);
     } else {
@@ -2875,6 +2880,19 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           </div>
         );
       })()}
+
+      {currentDriver && (
+        <RideRatingBottomSheet
+          isOpen={Boolean(ratingRideTarget)}
+          ride={ratingRideTarget}
+          raterRole="motorista"
+          onClose={() => setRatingRideTarget(null)}
+          onSubmitted={() => {
+            setRatingRideTarget(null);
+            refreshData();
+          }}
+        />
+      )}
 
       {currentDriver && (
         <PushPermissionPrompt
