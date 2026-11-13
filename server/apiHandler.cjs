@@ -2576,6 +2576,7 @@ async function handleApiRequest(req, res) {
       const action = String(body.action || '').trim(); // 'aprovado' | 'rejeitado' | 'correcao_solicitada'
       const notes = String(body.notes || '').trim();
       const adminName = String(body.adminName || 'Administrador Master').trim();
+      const checklist = body.checklist && typeof body.checklist === 'object' ? body.checklist : null;
 
       if (!['aprovado', 'rejeitado', 'correcao_solicitada'].includes(action)) {
         return sendJson(res, 400, { ok: false, error: 'Ação inválida. Use aprovado, rejeitado ou correcao_solicitada.' });
@@ -2590,7 +2591,9 @@ async function handleApiRequest(req, res) {
       const prevKyc = driver.kyc || { status: driver.approvalStatus };
       const prevAudit = Array.isArray(prevKyc.auditLogs) ? prevKyc.auditLogs : [];
 
-      let actionDesc = 'Aprovação final de cadastro e liberação para corridas';
+      let actionDesc = notes
+        ? `Aprovação final de cadastro: ${notes}`
+        : 'Aprovação final de cadastro e liberação para corridas';
       if (action === 'correcao_solicitada') actionDesc = `Correção solicitada: ${notes || 'Reenvio de documentos ou selfie'}`;
       if (action === 'rejeitado') actionDesc = `Cadastro recusado: ${notes || 'Critérios de segurança não atendidos'}`;
 
@@ -2609,6 +2612,7 @@ async function handleApiRequest(req, res) {
         status: action,
         reviewedAt: now,
         reviewedBy: adminName,
+        ...(checklist ? { checklist } : {}),
         rejectionReason: action === 'rejeitado' ? (notes || 'Não atende aos critérios de segurança da plataforma') : null,
         correctionInstructions: action === 'correcao_solicitada' ? (notes || 'Por favor, envie nova fotografia nítida dos documentos ou refaça a selfie.') : null,
         auditLogs: [newAudit, ...prevAudit]
@@ -2629,6 +2633,7 @@ async function handleApiRequest(req, res) {
         ...purgedFields
       });
 
+      realtimeHub.publish('driver:updated', { driverId: updated.id, driver: updated });
       return sendJson(res, 200, { ok: true, driver: updated, autoPurged: true });
     }
 
@@ -5034,6 +5039,9 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 400, { ok: false, error: 'Decisão inválida. Envie "aprovar" ou "recusar".' });
       }
       const rejectionReason = String(body.rejectionReason || '').trim();
+      const reviewedBy = String(body.reviewedBy || body.adminName || 'Equipe Compliance Master').trim();
+      const checklist = body.checklist && typeof body.checklist === 'object' ? body.checklist : null;
+      const cf = body.correctedFields && typeof body.correctedFields === 'object' ? body.correctedFields : null;
       const now = new Date().toISOString();
 
       const currentVehicles = Array.isArray(driver.vehicles) ? [...driver.vehicles] : [];
@@ -5041,20 +5049,51 @@ async function handleApiRequest(req, res) {
       if (targetIdx < 0) return sendJson(res, 404, { ok: false, error: 'Veículo não encontrado.' });
 
       const targetVeh = currentVehicles[targetIdx];
+      const nextPlate = cf?.plate ? String(cf.plate).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7) : targetVeh.plate;
+      const nextBrand = cf?.brand ? String(cf.brand).trim() : targetVeh.brand;
+      const nextModel = cf?.model ? String(cf.model).trim() : targetVeh.model;
+      const nextVersion = cf?.version !== undefined ? String(cf.version).trim() : (targetVeh.version || '');
+      const nextColor = cf?.color ? String(cf.color).trim() : targetVeh.color;
+      const nextYear = cf?.year ? String(cf.year).replace(/\D/g, '').slice(0, 4) : targetVeh.year;
+      const nextCrlvNumber = cf?.crlvNumber !== undefined ? String(cf.crlvNumber).trim() : (targetVeh.crlvNumber || '');
+
+      const prevVehAudit = Array.isArray(targetVeh.auditLogs) ? targetVeh.auditLogs : [];
+      const vehAuditEntry = {
+        id: `vaud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: now,
+        action: decision === 'aprovar' ? 'approved' : 'rejected',
+        performedBy: reviewedBy,
+        notes: decision === 'aprovar'
+          ? `CRLV e veículo aprovados (${nextBrand} ${nextModel} • ${nextPlate})`
+          : `CRLV recusado: ${rejectionReason || 'CRLV ou dados do veículo não aprovados pela Central Master.'}`,
+        ip: req.socket?.remoteAddress || '127.0.0.1',
+        userAgent: String(req.headers['user-agent'] || 'Admin Console')
+      };
+
       currentVehicles[targetIdx] = {
         ...targetVeh,
+        brand: nextBrand,
+        model: nextModel,
+        version: nextVersion,
+        color: nextColor,
+        year: nextYear,
+        plate: nextPlate,
+        crlvNumber: nextCrlvNumber,
+        crlvRegular: decision === 'aprovar',
         approvalStatus: decision === 'aprovar' ? 'aprovado' : 'rejeitado',
         rejectionReason: decision === 'recusar'
           ? (rejectionReason || 'CRLV ou dados do veículo não aprovados pela Central Master.')
           : undefined,
         reviewedAt: now,
-        reviewedBy: 'Administrador Master'
+        reviewedBy,
+        ...(checklist ? { checklist } : {}),
+        auditLogs: [vehAuditEntry, ...prevVehAudit]
       };
 
       const hasActiveApproved = currentVehicles.some(v => v.isActive && v.approvalStatus === 'aprovado');
       let nextActiveId = driver.activeVehicleId;
       let extraRootFields = {};
-      if (decision === 'aprovar' && !hasActiveApproved) {
+      if (decision === 'aprovar' && (!hasActiveApproved || currentVehicles[targetIdx].isActive)) {
         currentVehicles[targetIdx].isActive = true;
         nextActiveId = currentVehicles[targetIdx].id;
         const topCat = Array.isArray(currentVehicles[targetIdx].eligibleCategories) && currentVehicles[targetIdx].eligibleCategories.length > 0
@@ -5081,6 +5120,7 @@ async function handleApiRequest(req, res) {
         vehicles: currentVehicles
       });
 
+      realtimeHub.publish('driver:updated', { driverId: updated.id, driver: updated });
       return sendJson(res, 200, { ok: true, driver: updated, vehicle: currentVehicles[targetIdx] });
     }
 

@@ -15,6 +15,7 @@ import {
 } from '../types';
 import { StorageService } from '../services/storage';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
+import { AdminCrlvReviewModal } from './AdminCrlvReviewModal';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
 import {
   formatDocument,
@@ -66,11 +67,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   const [driverStatusFilter, setDriverStatusFilter] = useState<'todos' | 'em_analise' | 'correcao_solicitada' | 'pendente_aprovacao' | 'aprovado' | 'rejeitado' | 'inadimplentes'>('todos');
   const [reviewingKycDriver, setReviewingKycDriver] = useState<DriverProfile | null>(null);
   const [termsViewerDriver, setTermsViewerDriver] = useState<DriverProfile | null>(null);
-  const [crlvPreviewModal, setCrlvPreviewModal] = useState<{
-    driverName: string;
-    vehicleLabel: string;
-    crlvNumber: string;
-    url: string;
+  const [reviewingCrlvTarget, setReviewingCrlvTarget] = useState<{
+    driver: DriverProfile;
+    vehicle: DriverVehicle;
   } | null>(null);
 
   // Estado do Modal de Histórico Completo (Avaliação, Corridas, Saques, Extrato e Cadastro)
@@ -193,16 +192,14 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     vehicle: DriverVehicle,
     decision: 'aprovar' | 'recusar'
   ) => {
-    let rejectionReason: string | undefined;
     if (decision === 'recusar') {
-      const reason = window.prompt(
-        `Motivo da recusa do veículo ${vehicle.brand} ${vehicle.model} (${vehicle.plate}) de ${driver.name}:`,
-        'CRLV ilegível, vencido ou placa divergente'
-      );
-      if (reason === null) return;
-      rejectionReason = reason.trim() || undefined;
+      setReviewingCrlvTarget({ driver, vehicle });
+      return;
     }
-    const res = await StorageService.reviewDriverVehicleAdmin(driver.id, vehicle.id, decision, rejectionReason);
+    const analystName = localStorage.getItem('kavro_compliance_analyst_name') || 'Equipe Compliance Master';
+    const res = await StorageService.reviewDriverVehicleAdmin(driver.id, vehicle.id, 'aprovar', {
+      reviewedBy: analystName
+    });
     if (!res.ok) {
       window.alert(res.error || 'Erro ao analisar veículo.');
       return;
@@ -869,21 +866,14 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                               </div>
                             </div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                              {veh.crlvDocumentPhoto && (
-                                <button
-                                  type="button"
-                                  onClick={() => setCrlvPreviewModal({
-                                    driverName: selectedDriver.name,
-                                    vehicleLabel: `${veh.brand} ${veh.model} (${veh.plate})`,
-                                    crlvNumber: veh.crlvNumber || 'CRLV',
-                                    url: veh.crlvDocumentPhoto
-                                  })}
-                                  style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                                >
-                                  <Eye size={13} />
-                                  <span>Ver CRLV</span>
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                onClick={() => setReviewingCrlvTarget({ driver: selectedDriver, vehicle: veh })}
+                                style={{ padding: '5px 10px', borderRadius: 6, border: '1px solid #0F172A', backgroundColor: '#0F172A', color: '#FFFFFF', fontSize: '0.72rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                              >
+                                <Eye size={13} />
+                                <span>{veh.crlvDocumentPhoto ? 'Analisar CRLV' : 'Inspecionar Veículo'}</span>
+                              </button>
                               {isPendingVeh && (
                                 <>
                                   <button
@@ -1793,33 +1783,26 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      {veh.crlvDocumentPhoto && (
-                        <button
-                          type="button"
-                          onClick={() => setCrlvPreviewModal({
-                            driverName: drv.name,
-                            vehicleLabel: `${veh.brand} ${veh.model} (${veh.plate})`,
-                            crlvNumber: veh.crlvNumber || 'CRLV',
-                            url: veh.crlvDocumentPhoto
-                          })}
-                          style={{
-                            padding: '6px 11px',
-                            borderRadius: 7,
-                            border: '1px solid #CBD5E1',
-                            backgroundColor: '#F8FAFC',
-                            color: '#0F172A',
-                            fontSize: '0.74rem',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4
-                          }}
-                        >
-                          <Eye size={14} />
-                          <span>Ver CRLV</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => setReviewingCrlvTarget({ driver: drv, vehicle: veh })}
+                        style={{
+                          padding: '6px 12px',
+                          borderRadius: 7,
+                          border: 'none',
+                          backgroundColor: '#0F172A',
+                          color: '#FFFFFF',
+                          fontSize: '0.74rem',
+                          fontWeight: 800,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4
+                        }}
+                      >
+                        <Eye size={14} />
+                        <span>Analisar CRLV</span>
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleReviewDriverVehicle(drv, veh, 'aprovar')}
@@ -3214,65 +3197,18 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
           )}
         </div>
       )}
-      {/* Modal de Inspeção do Documento CRLV (Painel Master) */}
-      {crlvPreviewModal && (
-        <div
-          onClick={() => setCrlvPreviewModal(null)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.78)',
-            zIndex: 100200,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 16
+      {/* Mesa Profissional de Inspeção de CRLV & Veículo (Painel Master) */}
+      {reviewingCrlvTarget && (
+        <AdminCrlvReviewModal
+          driver={reviewingCrlvTarget.driver}
+          vehicle={reviewingCrlvTarget.vehicle}
+          isOpen={!!reviewingCrlvTarget}
+          onClose={() => setReviewingCrlvTarget(null)}
+          onUpdated={async () => {
+            setReviewingCrlvTarget(null);
+            await loadAll();
           }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: 14,
-              padding: 18,
-              width: '100%',
-              maxWidth: 620,
-              maxHeight: '90vh',
-              overflowY: 'auto'
-            }}
-          >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <div>
-                <div style={{ fontSize: '1rem', fontWeight: 800, color: '#0F172A' }}>
-                  Inspeção de CRLV — {crlvPreviewModal.vehicleLabel}
-                </div>
-                <div style={{ fontSize: '0.78rem', color: '#64748B' }}>
-                  Motorista: {crlvPreviewModal.driverName} • CRLV nº {crlvPreviewModal.crlvNumber}
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setCrlvPreviewModal(null)}
-                style={{ width: 32, height: 32, borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#F8FAFC', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-            {crlvPreviewModal.url.startsWith('data:application/pdf') || crlvPreviewModal.url.toLowerCase().endsWith('.pdf') ? (
-              <iframe
-                src={crlvPreviewModal.url}
-                title="CRLV PDF"
-                style={{ width: '100%', height: 480, border: '1px solid #CBD5E1', borderRadius: 10 }}
-              />
-            ) : (
-              <img
-                src={crlvPreviewModal.url}
-                alt="Documento CRLV"
-                style={{ width: '100%', maxHeight: 520, objectFit: 'contain', borderRadius: 10, border: '1px solid #CBD5E1' }}
-              />
-            )}
-          </div>
-        </div>
+        />
       )}
     </div>
   );

@@ -195,6 +195,7 @@ export interface DriverKycData {
   submittedAt?: string;
   reviewedAt?: string;
   reviewedBy?: string;
+  checklist?: Record<string, boolean>;
   auditLogs?: KycAuditLog[];
   retentionExpiresAt?: string;   // Política de retenção LGPD (ex: 90 dias após encerramento)
 }
@@ -371,6 +372,8 @@ export interface DriverVehicle {
   submittedAt: string;
   reviewedAt?: string;
   reviewedBy?: string;
+  checklist?: Record<string, boolean>;
+  auditLogs?: KycAuditLog[];
 }
 
 export type LedgerEntryType =

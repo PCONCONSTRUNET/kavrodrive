@@ -759,15 +759,34 @@ export const StorageService = {
     driverId: string,
     vehicleId: string,
     decision: 'aprovar' | 'recusar',
-    rejectionReason?: string
+    reasonOrOptions?:
+      | string
+      | {
+          rejectionReason?: string;
+          reviewedBy?: string;
+          checklist?: Record<string, boolean>;
+          correctedFields?: {
+            brand?: string;
+            model?: string;
+            version?: string;
+            color?: string;
+            year?: string;
+            plate?: string;
+            crlvNumber?: string;
+          };
+        }
   ): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
     try {
+      const payload =
+        typeof reasonOrOptions === 'string'
+          ? { decision, rejectionReason: reasonOrOptions }
+          : { decision, ...(reasonOrOptions || {}) };
       const res = await fetch(
         `/api/admin/drivers/${encodeURIComponent(driverId)}/vehicles/${encodeURIComponent(vehicleId)}/review`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-          body: JSON.stringify({ decision, rejectionReason })
+          body: JSON.stringify(payload)
         }
       );
       return await res.json();
@@ -929,6 +948,7 @@ export const StorageService = {
     action: 'aprovado' | 'rejeitado' | 'correcao_solicitada';
     notes?: string;
     adminName?: string;
+    checklist?: Record<string, boolean>;
   }): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
     try {
       const res = await fetch('/api/kyc/review', {

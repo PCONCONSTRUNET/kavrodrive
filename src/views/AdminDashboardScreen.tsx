@@ -7,7 +7,7 @@ import {
   Calculator, HelpCircle, Zap, Moon, Sun, Check, X, Sparkles, User, Luggage,
   Menu, LayoutDashboard, Car, LogOut, Search, UserPlus, Award, Edit2, Trash2,
   Fuel, Wrench, Wallet, ArrowUpRight, ArrowDownRight, Share2, Coins, CreditCard, Lock, RefreshCw, Bell,
-  Route, ShieldAlert
+  Route, ShieldAlert, FileCheck2
 } from 'lucide-react';
 import { playNewRideSound } from '../utils/soundAndVoice';
 import { Ride, SystemConfig, Expense, ClientProfile, RideStatus, PaymentStatus, PaymentMethod } from '../types';
@@ -27,6 +27,7 @@ import { NotificationsModal } from '../components/NotificationsModal';
 import { RideRoutePlaybackModal } from '../components/RideRoutePlaybackModal';
 import { AdminRecordedRoutesTab } from '../components/AdminRecordedRoutesTab';
 import { AdminPlatformFinanceTab } from '../components/AdminPlatformFinanceTab';
+import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
 import { AdminSosCenterTab } from '../components/AdminSosCenterTab';
 import { AdminRideCategoriesTab } from '../components/AdminRideCategoriesTab';
@@ -52,8 +53,34 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
+  const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
+
+  useEffect(() => {
+    const computeDocsCount = (list: any[]) => {
+      let count = 0;
+      list.forEach((d) => {
+        if (d.approvalStatus === 'em_analise' || d.approvalStatus === 'pendente_aprovacao' || d.approvalStatus === 'correcao_solicitada') {
+          count += 1;
+        }
+        if (Array.isArray(d.vehicles)) {
+          count += d.vehicles.filter((v: any) => v.approvalStatus === 'pendente_aprovacao').length;
+        }
+      });
+      setPendingDocsCount(count);
+    };
+    computeDocsCount(StorageService.getDrivers());
+    StorageService.fetchDriversList().then(computeDocsCount).catch(() => {});
+    const onSyncDocs = () => computeDocsCount(StorageService.getDrivers());
+    const onRtDocs = () => { StorageService.fetchDriversList().then(computeDocsCount).catch(() => {}); };
+    window.addEventListener('up_database_synced', onSyncDocs);
+    window.addEventListener('up_realtime_driver', onRtDocs);
+    return () => {
+      window.removeEventListener('up_database_synced', onSyncDocs);
+      window.removeEventListener('up_realtime_driver', onRtDocs);
+    };
+  }, []);
 
   useEffect(() => {
     const checkSosCount = async () => {
@@ -1778,6 +1805,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             items: [
               { id: 'corridas', label: 'Visão Geral', icon: LayoutDashboard, badge: pendingRides.length > 0 ? String(pendingRides.length) : null },
               { id: 'plataforma', label: 'Motoristas', icon: Car, badge: null },
+              { id: 'documentacoes', label: 'Documentações', icon: FileCheck2, badge: pendingDocsCount > 0 ? String(pendingDocsCount) : null },
               { id: 'categorias', label: 'Categorias de Corridas', icon: Sliders, badge: null },
               { id: 'financeiro', label: 'Financeiro & Split', icon: DollarSign, badge: null },
               { id: 'sos', label: 'Central SOS', icon: ShieldAlert, badge: activeSosAlertsCount > 0 ? String(activeSosAlertsCount) : null, isDanger: activeSosAlertsCount > 0 },
@@ -2047,6 +2075,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               <span style={{ fontSize: '0.84rem', fontWeight: 600, color: '#0F172A' }}>
                 {activeTab === 'corridas' && 'Visão Geral'}
                 {activeTab === 'plataforma' && 'Frota de Motoristas'}
+                {activeTab === 'documentacoes' && 'Análise Documental (KYC & CRLV)'}
                 {activeTab === 'categorias' && 'Categorias de Corridas'}
                 {activeTab === 'financeiro' && 'Financeiro & Split'}
                 {activeTab === 'sos' && 'Central SOS'}
@@ -4738,6 +4767,13 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               setCurrentConfig(next);
               onRefreshData();
             }}
+          />
+        )}
+
+        {/* ================= ABA DEDICADA: CENTRAL DE ANÁLISE DOCUMENTAL (KYC & CRLV) ================= */}
+        {activeTab === 'documentacoes' && (
+          <AdminDocumentsCenterTab
+            onRefreshDrivers={onRefreshData}
           />
         )}
 
