@@ -9,6 +9,7 @@ import { Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
+import { PassengerLiveMap } from '../components/PassengerLiveMap';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { RideReceiptModal } from '../components/RideReceiptModal';
 import { VehiclePhotoPreview } from '../components/VehiclePhotoPreview';
@@ -337,8 +338,19 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
         </div>
       </header>
 
+      {/* Mapa Ao Vivo Superior Estilo Uber Viagem */}
+      {ride.status !== 'cancelada' && (
+        <div style={{ maxWidth: 600, margin: '0 auto', height: 220, position: 'relative' }}>
+          <PassengerLiveMap
+            origin={ride.origin}
+            destination={ride.destination}
+            driverPos={ride.driverLocation || null}
+          />
+        </div>
+      )}
+
       {/* Conteúdo Principal */}
-      <main style={{ maxWidth: 600, margin: '0 auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <main style={{ maxWidth: 600, margin: '-16px auto 0 auto', position: 'relative', zIndex: 10, padding: '16px 14px', backgroundColor: '#FFFFFF', borderRadius: '22px 22px 0 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
         
         {/* CARD 1: Status Atual com Stepper Visual */}
         <div className="card-glass" style={{ padding: '16px', borderRadius: 16 }}>

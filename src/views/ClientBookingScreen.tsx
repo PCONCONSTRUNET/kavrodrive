@@ -3,13 +3,14 @@ import { useNavigate } from 'react-router-dom';
 import {
   MapPin, Users, Luggage, CreditCard,
   ArrowLeft, ShieldCheck, Check, Car, Navigation,
-  Copy, QrCode, Plus, RefreshCw, AlertCircle, Lock, Sparkles, Banknote, Clock
+  Copy, QrCode, Plus, RefreshCw, AlertCircle, Lock, Sparkles, Banknote, Clock,
+  Phone, MessageSquare, ChevronDown, Sliders
 } from 'lucide-react';
 import { LocationPoint, PaymentMethod, Ride, SystemConfig, SavedCard } from '../types';
 import { calculateHaversineDistance, estimateDurationMinutes, reverseGeocode } from '../utils/geo';
 import { calculateRidePrice, StorageService } from '../services/storage';
 import { AddressPickerModal } from '../components/AddressPickerModal';
-import { RouteMapPreview } from '../components/RouteMapPreview';
+import { PassengerLiveMap, OnlineDriverMapDot } from '../components/PassengerLiveMap';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { formatRideCode, getCleanWhatsappNumber } from '../utils/format';
 import {
@@ -63,6 +64,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     allowPix ? 'pix' : allowCreditCard ? 'cartao_credito' : allowDebitCard ? 'cartao_debito' : 'dinheiro'
   );
   const [notes, setNotes] = useState<string>('');
+  const [showExtraOptions, setShowExtraOptions] = useState<boolean>(false);
 
   useEffect(() => {
     if (!allowedMethods.includes(paymentMethod)) {
@@ -203,6 +205,13 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const pricing = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, selectedCategory);
   const onlineDrivers = StorageService.getOnlineDrivers();
   const onlineDriversCount = StorageService.getOnlineDriversCount();
+  const nearbyMapDrivers: OnlineDriverMapDot[] = React.useMemo(
+    () =>
+      onlineDrivers
+        .filter((d) => d.location && typeof d.location.lat === 'number' && typeof d.location.lng === 'number')
+        .map((d) => ({ id: d.id, lat: d.location!.lat, lng: d.location!.lng })),
+    [onlineDrivers]
+  );
 
   // Calcula disponibilidade de motoristas habilitados e tempo estimado de chegada (ETA) por categoria
   const categoryStats = React.useMemo(() => {
@@ -564,138 +573,173 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   if (activeRide) {
     const isSearching = activeRide.status === 'aguardando_confirmacao';
     const isQueued = activeRide.status === 'na_fila' || Boolean(activeRide.isQueuedRide);
-    const isOnWay = activeRide.status === 'a_caminho' || activeRide.status === 'no_local';
+    const isAtPickup = activeRide.status === 'no_local';
+    const isOnWay = activeRide.status === 'a_caminho' || isAtPickup;
     const isInProgress = activeRide.status === 'em_andamento';
+    const cleanDriverPhone = getCleanWhatsappNumber(activeRide.driverPhone || '');
 
     return (
-      <div className="animate-fade-in" style={{ padding: '14px 16px 100px 16px', maxWidth: 480, margin: '0 auto' }}>
-        <div style={{
-          backgroundColor: '#FFFFFF',
-          borderRadius: 22,
-          overflow: 'hidden',
-          border: '1.5px solid #E2E8F0',
-          boxShadow: '0 12px 32px rgba(15, 23, 42, 0.08)'
-        }}>
-          {/* Mapa da Rota no Topo */}
-          <RouteMapPreview
+      <div className="animate-fade-in" style={{
+        minHeight: 'calc(100dvh - 58px)',
+        backgroundColor: '#E8EDF3',
+        display: 'flex',
+        flexDirection: 'column',
+        maxWidth: 480,
+        margin: '0 auto',
+        position: 'relative'
+      }}>
+        {/* Mapa Ao Vivo Superior em Tela Cheia estilo Uber Passageiro */}
+        <div style={{ position: 'relative', height: '46dvh', minHeight: 260, width: '100%' }}>
+          <PassengerLiveMap
             origin={activeRide.origin}
             destination={activeRide.destination}
-            distanceKm={activeRide.distanceKm}
-            durationMin={activeRide.durationMin}
+            driverPos={activeRide.driverLocation || null}
+            nearbyDrivers={isSearching ? nearbyMapDrivers : []}
           />
 
-          <div style={{ padding: '18px' }}>
-            {/* Status Badge Dinâmico */}
-            {isSearching && (
-              <div style={{
-                backgroundColor: '#EFF6FF',
-                border: '1.5px solid #BFDBFE',
-                borderRadius: 16,
-                padding: '14px',
-                marginBottom: 14,
+          {/* Controles Flutuantes no Mapa */}
+          <div style={{
+            position: 'absolute',
+            top: 'calc(12px + env(safe-area-inset-top, 0px))',
+            left: 14,
+            right: 14,
+            zIndex: 400,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            pointerEvents: 'none'
+          }}>
+            <button
+              type="button"
+              onClick={onBackToHome}
+              aria-label="Voltar"
+              style={{
+                width: 42,
+                height: 42,
+                borderRadius: '50%',
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #E5E7EB',
+                color: '#111111',
                 display: 'flex',
                 alignItems: 'center',
-                gap: 12
-              }}>
-                <div style={{
-                  width: 42,
-                  height: 42,
-                  borderRadius: '50%',
-                  backgroundColor: '#2563EB',
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <RefreshCw size={20} className="animate-spin" />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.95rem', fontWeight: 900, color: '#1E3A8A' }}>
-                    Procurando motorista próximo...
-                  </div>
-                  <div style={{ fontSize: '0.78rem', color: '#3B82F6', fontWeight: 600 }}>
-                    {onlineDriversCount} motorista(s) online na região recebendo seu chamado
-                  </div>
-                </div>
-              </div>
-            )}
+                justifyContent: 'center',
+                boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+                cursor: 'pointer',
+                pointerEvents: 'auto'
+              }}
+            >
+              <ArrowLeft size={20} />
+            </button>
 
-            {/* AVISO DE CORRIDA NA FILA (MOTORISTA FINALIZANDO CORRIDA PRÓXIMA) */}
-            {isQueued && (
-              <div style={{
-                backgroundColor: '#FEF3C7',
-                border: '1.5px solid #F59E0B',
-                borderRadius: 16,
-                padding: '14px',
-                marginBottom: 14
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{
-                    backgroundColor: '#D97706',
-                    color: '#FFFFFF',
-                    fontSize: '0.66rem',
-                    fontWeight: 900,
-                    padding: '2px 8px',
-                    borderRadius: 999,
-                    textTransform: 'uppercase'
-                  }}>
-                    Próxima da Fila
-                  </span>
-                  <span style={{ fontSize: '0.88rem', fontWeight: 900, color: '#92400E' }}>
-                    Motorista Confirmado!
-                  </span>
-                </div>
-                <p style={{ fontSize: '0.8rem', color: '#78350F', margin: 0, lineHeight: 1.4, fontWeight: 600 }}>
-                  🚗 <strong>{activeRide.driverName || 'Seu motorista'}</strong> aceitou sua corrida! Ele está finalizando um desembarque próximo e já seguirá direto para o seu local.
-                </p>
-              </div>
-            )}
+            <div style={{
+              backgroundColor: '#111111',
+              color: '#FFFFFF',
+              padding: '7px 14px',
+              borderRadius: 999,
+              fontSize: '0.78rem',
+              fontWeight: 800,
+              boxShadow: '0 4px 14px rgba(0,0,0,0.22)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              pointerEvents: 'auto'
+            }}>
+              <span style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                backgroundColor: isSearching ? '#F59E0B' : '#22C55E'
+              }} />
+              <span>
+                {isSearching
+                  ? 'Conectando motorista...'
+                  : isInProgress
+                    ? `~${activeRide.durationMin || 8} min ao destino`
+                    : isAtPickup
+                      ? 'Motorista chegou!'
+                      : `Chegada em ~${activeRide.durationMin ? Math.min(8, activeRide.durationMin) : 4} min`}
+              </span>
+            </div>
+          </div>
+        </div>
 
-            {(isOnWay || isInProgress) && (
-              <div style={{
-                backgroundColor: '#F0FDF4',
-                border: '1.5px solid #86EFAC',
-                borderRadius: 16,
-                padding: '14px',
-                marginBottom: 14
-              }}>
-                <div style={{ fontSize: '0.95rem', fontWeight: 900, color: '#14532D' }}>
-                  {isInProgress ? '🚀 Viagem em andamento rumo ao destino!' : '✅ Motorista a caminho do seu embarque!'}
-                </div>
-                <div style={{ fontSize: '0.78rem', color: '#15803D', fontWeight: 600, marginTop: 2 }}>
-                  Acompanhe o deslocamento do veículo no mapa em tempo real.
-                </div>
-              </div>
-            )}
+        {/* Bottom Sheet Branca Estilo Uber Passageiro */}
+        <div style={{
+          flex: 1,
+          backgroundColor: '#FFFFFF',
+          borderRadius: '24px 24px 0 0',
+          marginTop: -22,
+          zIndex: 10,
+          position: 'relative',
+          padding: '12px 18px 96px 18px',
+          boxShadow: '0 -8px 28px rgba(0,0,0,0.12)'
+        }}>
+          <div style={{
+            width: 38,
+            height: 4,
+            borderRadius: 999,
+            backgroundColor: '#D1D5DB',
+            margin: '0 auto 14px auto'
+          }} />
 
-            {/* Card do Motorista que Aceitou */}
-            {activeRide.driverName && (
+          {/* Status Principal */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <h2 style={{ margin: 0, fontSize: '1.22rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
+                {isSearching
+                  ? 'Procurando motorista...'
+                  : isQueued
+                    ? 'Motorista confirmado na fila'
+                    : isAtPickup
+                      ? 'Seu motorista chegou!'
+                      : isInProgress
+                        ? 'Em viagem rumo ao destino'
+                        : 'Motorista a caminho'}
+              </h2>
+              {isSearching && <RefreshCw size={18} color="#276EF1" className="animate-spin" />}
+            </div>
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#6B7280', fontWeight: 500 }}>
+              {isSearching
+                ? `${onlineDriversCount} motorista(s) online na região recebendo seu chamado`
+                : isQueued
+                  ? `${activeRide.driverName || 'Seu motorista'} está concluindo um desembarque próximo.`
+                  : isInProgress
+                    ? 'Acompanhe o trajeto em tempo real pelo mapa acima.'
+                    : 'Confira a placa e o veículo ao embarcar.'}
+            </p>
+          </div>
+
+          {/* Card do Motorista estilo Uber Passageiro */}
+          {activeRide.driverName && (
+            <div style={{
+              backgroundColor: '#F9FAFB',
+              borderRadius: 16,
+              padding: '14px',
+              border: '1px solid #E5E7EB',
+              marginBottom: 14
+            }}>
               <div style={{
-                backgroundColor: '#F8FAFC',
-                borderRadius: 16,
-                padding: '12px 14px',
-                border: '1px solid #E2E8F0',
-                marginBottom: 14,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                gap: 10
+                gap: 12
               }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                   <div style={{
-                    width: 46,
-                    height: 46,
+                    width: 50,
+                    height: 50,
                     borderRadius: '50%',
-                    backgroundColor: '#121A21',
-                    color: '#76D800',
+                    backgroundColor: '#111111',
+                    color: '#FFFFFF',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     fontWeight: 900,
-                    fontSize: '1.1rem',
+                    fontSize: '1.15rem',
                     overflow: 'hidden',
-                    flexShrink: 0
+                    flexShrink: 0,
+                    border: '2px solid #FFFFFF',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.12)'
                   }}>
                     {activeRide.driverPhoto ? (
                       <img src={activeRide.driverPhoto} alt={activeRide.driverName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
@@ -703,12 +747,12 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                       activeRide.driverName.charAt(0).toUpperCase()
                     )}
                   </div>
-                  <div>
-                    <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0F172A' }}>
-                      {activeRide.driverName} ⭐ {Number(activeRide.driverRating || 4.98).toFixed(2)}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#111111' }}>
+                      {activeRide.driverName} • ★ {Number(activeRide.driverRating || 4.98).toFixed(2)}
                     </div>
-                    <div style={{ fontSize: '0.76rem', color: '#475569', fontWeight: 700 }}>
-                      {activeRide.driverVehicle || 'Veículo Parceiro'} {activeRide.driverCarColor ? `• ${activeRide.driverCarColor}` : ''}
+                    <div style={{ fontSize: '0.78rem', color: '#4B5563', fontWeight: 600, marginTop: 2 }}>
+                      {activeRide.driverVehicle || 'Veículo Parceiro'} {activeRide.driverCarColor ? `(${activeRide.driverCarColor})` : ''}
                     </div>
                   </div>
                 </div>
@@ -716,79 +760,114 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   <MercosulPlateBadge plate={activeRide.driverPlate} size="sm" />
                 )}
               </div>
-            )}
 
-            {/* Resumo de Valor e Pagamento */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '10px 12px',
-              backgroundColor: '#F8FAFC',
-              borderRadius: 12,
-              marginBottom: 14,
-              border: '1px solid #E2E8F0'
-            }}>
-              <div>
-                <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700 }}>
-                  FORMA DE PAGAMENTO
-                </div>
-                <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
-                  {activeRide.paymentMethod === 'pix'
-                    ? 'PIX (Confirmado via Gateway)'
-                    : activeRide.paymentMethod === 'dinheiro'
-                      ? 'Dinheiro (Pagar ao motorista)'
-                      : `Cartão •••• ${activeRide.cardLast4 || 'Autorizado'}`}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700 }}>VALOR</div>
-                <div style={{ fontSize: '1.15rem', fontWeight: 900, color: '#15803D' }}>
-                  R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
-                </div>
-              </div>
-            </div>
-
-            {/* Botões de Ação */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button
-                type="button"
-                onClick={() => navigate(`/viagem/${encodeURIComponent(activeRide.id)}`)}
-                className="btn-ios-primary"
-                style={{ width: '100%', padding: '14px', fontSize: '0.92rem', fontWeight: 800 }}
-              >
-                <Navigation size={18} />
-                <span>Abrir Mapa e GPS em Tempo Real</span>
-              </button>
-
+              {/* Ações rápidas com o motorista (Enviar mensagem + Ligar) */}
               {activeRide.driverPhone && (
-                <a
-                  href={`https://wa.me/${getCleanWhatsappNumber(activeRide.driverPhone)}?text=${encodeURIComponent(`Olá ${activeRide.driverName || ''}, sou o passageiro da corrida ${formatRideCode(activeRide)}!`)}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    width: '100%',
-                    padding: '12px',
-                    borderRadius: 14,
-                    backgroundColor: '#F0FDF4',
-                    border: '1.5px solid #86EFAC',
-                    color: '#15803D',
-                    fontWeight: 800,
-                    fontSize: '0.85rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 8,
-                    textDecoration: 'none',
-                    boxSizing: 'border-box'
-                  }}
-                >
-                  <WhatsAppIcon size={17} />
-                  <span>Falar com o Motorista</span>
-                </a>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                  <a
+                    href={`https://wa.me/${cleanDriverPhone}?text=${encodeURIComponent(`Olá ${activeRide.driverName || ''}, sou o passageiro da corrida ${formatRideCode(activeRide)}!`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      flex: 1,
+                      height: 40,
+                      borderRadius: 999,
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #D1D5DB',
+                      color: '#111111',
+                      fontSize: '0.82rem',
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '0 14px',
+                      textDecoration: 'none'
+                    }}
+                  >
+                    <MessageSquare size={15} color="#4B5563" />
+                    <span>Enviar mensagem...</span>
+                  </a>
+
+                  <a
+                    href={`tel:${cleanDriverPhone}`}
+                    aria-label="Ligar para motorista"
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: '50%',
+                      backgroundColor: '#FFFFFF',
+                      border: '1px solid #D1D5DB',
+                      color: '#111111',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textDecoration: 'none',
+                      flexShrink: 0
+                    }}
+                  >
+                    <Phone size={16} />
+                  </a>
+                </div>
               )}
             </div>
+          )}
+
+          {/* Resumo Compacto Origem/Destino & Pagamento */}
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            border: '1px solid #E5E7EB',
+            borderRadius: 16,
+            padding: '12px 14px',
+            marginBottom: 14
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              <span style={{ width: 9, height: 9, borderRadius: '50%', border: '2.5px solid #111111', flexShrink: 0 }} />
+              <span style={{ fontSize: '0.8rem', color: '#111111', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {activeRide.origin.address}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10, borderBottom: '1px solid #F3F4F6' }}>
+              <span style={{ width: 9, height: 9, borderRadius: 2, backgroundColor: '#111111', flexShrink: 0 }} />
+              <span style={{ fontSize: '0.8rem', color: '#111111', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {activeRide.destination.address}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 10 }}>
+              <span style={{ fontSize: '0.78rem', color: '#6B7280', fontWeight: 700 }}>
+                {activeRide.paymentMethod === 'pix'
+                  ? 'PIX Confirmado'
+                  : activeRide.paymentMethod === 'dinheiro'
+                    ? 'Dinheiro ao motorista'
+                    : `Cartão •••• ${activeRide.cardLast4 || 'App'}`}
+              </span>
+              <span style={{ fontSize: '1.08rem', fontWeight: 900, color: '#111111' }}>
+                R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
+              </span>
+            </div>
           </div>
+
+          <button
+            type="button"
+            onClick={() => navigate(`/viagem/${encodeURIComponent(activeRide.id)}`)}
+            style={{
+              width: '100%',
+              height: 50,
+              borderRadius: 12,
+              backgroundColor: '#111111',
+              color: '#FFFFFF',
+              border: 'none',
+              fontSize: '0.94rem',
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 8,
+              cursor: 'pointer'
+            }}
+          >
+            <Navigation size={17} />
+            <span>Acompanhar GPS em Tela Cheia</span>
+          </button>
         </div>
       </div>
     );
@@ -798,7 +877,16 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   // TELA PRINCIPAL: PEDIR CORRIDA AGORA (100% IMEDIATO ESTILO UBER)
   // ============================================================================
   return (
-    <div className="animate-fade-in" style={{ padding: '12px 16px calc(150px + env(safe-area-inset-bottom, 0px)) 16px' }}>
+    <div className="animate-fade-in" style={{
+      minHeight: 'calc(100dvh - 58px)',
+      backgroundColor: '#E8EDF3',
+      display: 'flex',
+      flexDirection: 'column',
+      maxWidth: 480,
+      margin: '0 auto',
+      position: 'relative',
+      paddingBottom: 'calc(132px + env(safe-area-inset-bottom, 0px))'
+    }}>
       <AddressPickerModal
         isOpen={isPickingOrigin}
         onClose={() => setIsPickingOrigin(false)}
@@ -956,89 +1044,143 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         </div>
       )}
 
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <button
-          onClick={onBackToHome}
-          style={{
-            background: '#ffffff',
-            border: '1px solid #E2E8F0',
-            borderRadius: 12,
-            padding: '8px 12px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            fontSize: '0.84rem',
-            fontWeight: 700,
-            color: '#1E293B',
-            cursor: 'pointer'
-          }}
-        >
-          <ArrowLeft size={16} />
-          <span>Voltar</span>
-        </button>
+      {/* =====================================================================
+          MAPA EM TELA CHEIA ESTILO UBER PASSAGEIRO + CONTROLES FLUTUANTES
+         ===================================================================== */}
+      <div style={{ position: 'relative', height: origin && destination ? '38dvh' : '42dvh', minHeight: 225, width: '100%' }}>
+        <PassengerLiveMap
+          origin={origin}
+          destination={destination}
+          nearbyDrivers={nearbyMapDrivers}
+        />
 
+        {/* Botão Voltar & Badge de Motoristas Flutuantes */}
         <div style={{
-          display: 'inline-flex',
+          position: 'absolute',
+          top: 'calc(12px + env(safe-area-inset-top, 0px))',
+          left: 14,
+          right: 14,
+          zIndex: 400,
+          display: 'flex',
           alignItems: 'center',
-          gap: 6,
-          backgroundColor: '#F0FDF4',
-          border: '1px solid #86EFAC',
-          padding: '5px 11px',
-          borderRadius: 999,
-          fontSize: '0.73rem',
-          fontWeight: 800,
-          color: '#15803D'
+          justifyContent: 'space-between',
+          pointerEvents: 'none'
         }}>
-          <span style={{ width: 7, height: 7, borderRadius: '50%', backgroundColor: '#16A34A' }} />
-          <span>{onlineDriversCount} motorista(s) online agora</span>
+          <button
+            type="button"
+            onClick={onBackToHome}
+            aria-label="Voltar"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: '50%',
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #E5E7EB',
+              color: '#111111',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+              cursor: 'pointer',
+              pointerEvents: 'auto'
+            }}
+          >
+            <ArrowLeft size={20} />
+          </button>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
+            {origin && destination && (
+              <div style={{
+                backgroundColor: '#111111',
+                color: '#FFFFFF',
+                padding: '7px 12px',
+                borderRadius: 999,
+                fontSize: '0.74rem',
+                fontWeight: 800,
+                boxShadow: '0 4px 14px rgba(0,0,0,0.22)'
+              }}>
+                {distanceKm.toFixed(1)} km • ~{durationMin} min
+              </div>
+            )}
+
+            <div style={{
+              backgroundColor: '#FFFFFF',
+              color: '#111111',
+              border: '1px solid #E5E7EB',
+              padding: '7px 12px',
+              borderRadius: 999,
+              fontSize: '0.74rem',
+              fontWeight: 800,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              boxShadow: '0 4px 14px rgba(0,0,0,0.14)'
+            }}>
+              <span style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                backgroundColor: onlineDriversCount > 0 ? '#16A34A' : '#9CA3AF'
+              }} />
+              <span>{onlineDriversCount} disp.</span>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* Mapa ao Vivo + Seleção de Origem e Destino (Estilo Clean Uber/Kavro) */}
+      {/* =====================================================================
+          BOTTOM SHEET BRANCA ESTILO UBER PASSAGEIRO
+         ===================================================================== */}
       <div style={{
-        backgroundColor: '#000000',
-        borderRadius: 20,
-        overflow: 'hidden',
-        border: '1px solid #1E293B',
-        marginBottom: 12,
-        boxShadow: '0 8px 26px rgba(0, 0, 0, 0.16)'
+        flex: 1,
+        backgroundColor: '#FFFFFF',
+        borderRadius: '24px 24px 0 0',
+        marginTop: -22,
+        zIndex: 10,
+        position: 'relative',
+        padding: '10px 16px 18px 16px',
+        boxShadow: '0 -8px 28px rgba(0,0,0,0.12)'
       }}>
-        {origin && destination && (
-          <RouteMapPreview
-            origin={origin}
-            destination={destination}
-            distanceKm={distanceKm}
-            durationMin={durationMin}
-          />
-        )}
+        {/* Handle cinza */}
+        <div style={{
+          width: 38,
+          height: 4,
+          borderRadius: 999,
+          backgroundColor: '#D1D5DB',
+          margin: '0 auto 12px auto'
+        }} />
 
-        <div style={{ padding: '16px 16px 18px 16px' }}>
-          <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            backgroundColor: '#FFFFFF',
-            color: '#000000',
-            borderRadius: 999,
-            padding: '6px 12px',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            marginBottom: 14
-          }}>
-            <Clock size={14} strokeWidth={2.3} />
-            <span>Agora</span>
+        {/* Bloco Conectado Partida / Chegada estilo Uber Clean */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
+              {origin && destination ? 'Escolha uma viagem' : 'Para onde vamos?'}
+            </h2>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              backgroundColor: '#F3F4F6',
+              color: '#111111',
+              borderRadius: 999,
+              padding: '5px 11px',
+              fontSize: '0.74rem',
+              fontWeight: 700
+            }}>
+              <Clock size={13} strokeWidth={2.3} />
+              <span>Agora</span>
+            </div>
           </div>
 
           <div style={{ position: 'relative' }}>
-            {/* Linha conectora preta entre o círculo (partida) e o quadrado (chegada) */}
+            {/* Linha conectora */}
             <div style={{
               position: 'absolute',
-              left: 22,
-              top: 32,
-              bottom: 32,
+              left: 20,
+              top: 28,
+              bottom: 28,
               width: 1.5,
-              backgroundColor: '#000000',
+              backgroundColor: '#111111',
               zIndex: 3,
               pointerEvents: 'none'
             }} />
@@ -1056,24 +1198,24 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               }}
               style={{
                 position: 'relative',
-                backgroundColor: '#FFFFFF',
-                borderRadius: 10,
-                height: 52,
+                backgroundColor: '#F3F4F6',
+                borderRadius: 12,
+                height: 46,
                 display: 'flex',
                 alignItems: 'center',
-                paddingLeft: 42,
-                paddingRight: 48,
-                marginBottom: 12,
+                paddingLeft: 38,
+                paddingRight: 44,
+                marginBottom: 8,
                 cursor: 'pointer'
               }}
             >
               <span style={{
                 position: 'absolute',
-                left: 17,
-                width: 11,
-                height: 11,
+                left: 15,
+                width: 10,
+                height: 10,
                 borderRadius: '50%',
-                border: '3px solid #000000',
+                border: '3px solid #111111',
                 backgroundColor: '#FFFFFF',
                 zIndex: 4,
                 boxSizing: 'border-box'
@@ -1081,9 +1223,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               <span style={{
                 flex: 1,
                 minWidth: 0,
-                fontSize: '0.94rem',
-                fontWeight: origin ? 500 : 400,
-                color: origin ? '#000000' : '#545454',
+                fontSize: '0.88rem',
+                fontWeight: origin ? 600 : 500,
+                color: origin ? '#111111' : '#6B7280',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis'
@@ -1096,21 +1238,22 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 onClick={handleUseCurrentGpsForOrigin}
                 style={{
                   position: 'absolute',
-                  right: 10,
-                  width: 32,
-                  height: 32,
+                  right: 8,
+                  width: 30,
+                  height: 30,
                   borderRadius: '50%',
                   border: 'none',
-                  backgroundColor: 'transparent',
-                  color: '#000000',
+                  backgroundColor: '#FFFFFF',
+                  color: '#111111',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
                   opacity: locatingOriginGps ? 0.45 : 1
                 }}
               >
-                <Navigation size={17} fill="#000000" color="#000000" />
+                <Navigation size={14} fill="#111111" color="#111111" />
               </button>
             </div>
 
@@ -1121,25 +1264,25 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               style={{
                 width: '100%',
                 position: 'relative',
-                backgroundColor: '#FFFFFF',
-                border: 'none',
-                borderRadius: 10,
-                height: 52,
+                backgroundColor: '#F3F4F6',
+                border: destination ? '1.5px solid #111111' : '1.5px solid transparent',
+                borderRadius: 12,
+                height: 46,
                 display: 'flex',
                 alignItems: 'center',
-                paddingLeft: 42,
-                paddingRight: 16,
+                paddingLeft: 38,
+                paddingRight: 14,
                 textAlign: 'left',
                 cursor: 'pointer'
               }}
             >
               <span style={{
                 position: 'absolute',
-                left: 17,
-                width: 11,
-                height: 11,
+                left: 15,
+                width: 10,
+                height: 10,
                 borderRadius: 2,
-                border: '3px solid #000000',
+                border: '3px solid #111111',
                 backgroundColor: '#FFFFFF',
                 zIndex: 4,
                 boxSizing: 'border-box'
@@ -1147,38 +1290,21 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               <span style={{
                 flex: 1,
                 minWidth: 0,
-                fontSize: '0.94rem',
-                fontWeight: destination ? 500 : 400,
-                color: destination ? '#000000' : '#545454',
+                fontSize: '0.88rem',
+                fontWeight: destination ? 700 : 500,
+                color: destination ? '#111111' : '#6B7280',
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis'
               }}>
-                {destination ? destination.address : 'Local de chegada'}
+                {destination ? destination.address : 'Para onde você vai?'}
               </span>
             </button>
           </div>
         </div>
-      </div>
 
-      {/* Seleção de Modalidade KAVRO DRIVE (KAVRO GO, KAVRO PLUS, KAVRO EXEC) */}
-      <div style={{
-        backgroundColor: '#FFFFFF',
-        borderRadius: 18,
-        padding: '14px',
-        border: '1.5px solid #E2E8F0',
-        marginBottom: 12
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-          <span style={{ fontSize: '0.8rem', fontWeight: 900, color: '#0F172A', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-            Escolha sua categoria KAVRO DRIVE
-          </span>
-          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B' }}>
-            {distanceKm.toFixed(1)} km • ~{durationMin} min de viagem
-          </span>
-        </div>
-
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* Categorias estilo Uber Passageiro */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
           {activeCategories.map((cat) => {
             const catPrice = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, cat.id);
             const isSelected = selectedCategory === cat.id;
@@ -1197,69 +1323,59 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   width: '100%',
                   padding: '12px 14px',
                   borderRadius: 14,
-                  border: isSelected ? '2px solid #121A21' : '1.5px solid #E2E8F0',
-                  backgroundColor: isSelected ? '#F8FAFC' : '#FFFFFF',
-                  opacity: hasNoDriverInCat && !isSelected ? 0.78 : 1,
+                  border: isSelected ? '2px solid #111111' : '1px solid #E5E7EB',
+                  backgroundColor: isSelected ? '#F9FAFB' : '#FFFFFF',
+                  opacity: hasNoDriverInCat && !isSelected ? 0.65 : 1,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  gap: 10,
+                  gap: 12,
                   cursor: 'pointer',
-                  textAlign: 'left'
+                  textAlign: 'left',
+                  transition: 'all 0.15s ease'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
                   <div style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 12,
-                    backgroundColor: isSelected ? '#121A21' : '#F1F5F9',
-                    color: isSelected ? '#76D800' : '#475569',
+                    width: 46,
+                    height: 36,
+                    borderRadius: 10,
+                    backgroundColor: isSelected ? '#111111' : '#F3F4F6',
+                    color: isSelected ? '#FFFFFF' : '#111111',
                     display: 'flex',
-                    flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    flexShrink: 0,
-                    fontWeight: 900,
-                    fontSize: '0.62rem'
+                    flexShrink: 0
                   }}>
-                    <Car size={19} />
-                    <span style={{ marginTop: 1 }}>{cat.code || cat.name.replace('KAVRO ', '')}</span>
+                    <Car size={20} />
                   </div>
-                  <div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0F172A' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#111111' }}>
                         {cat.name}
                       </span>
-                      {cat.subtitle && (
-                        <span style={{
-                          fontSize: '0.66rem',
-                          fontWeight: 800,
-                          padding: '2px 7px',
-                          borderRadius: 999,
-                          backgroundColor: isSelected ? '#DCFCE7' : '#F1F5F9',
-                          color: isSelected ? '#15803D' : '#475569'
-                        }}>
-                          {cat.subtitle}
-                        </span>
-                      )}
+                      <span style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 2,
+                        fontSize: '0.72rem',
+                        color: '#4B5563',
+                        fontWeight: 700
+                      }}>
+                        <Users size={11} />4
+                      </span>
                     </div>
-                    <div style={{ fontSize: '0.73rem', color: hasNoDriverInCat ? '#DC2626' : '#15803D', fontWeight: 800, marginTop: 2 }}>
+                    <div style={{ fontSize: '0.74rem', color: hasNoDriverInCat ? '#DC2626' : '#4B5563', fontWeight: 600, marginTop: 1 }}>
                       {hasNoDriverInCat
-                        ? 'Sem motoristas disponíveis nesta categoria agora'
-                        : `Chegada estimada: ~${stats.etaMin} min • ${stats.availableDriversCount > 0 ? `${stats.availableDriversCount} disp.` : 'Disponível'}`}
-                    </div>
-                    <div style={{ fontSize: '0.71rem', color: '#64748B', fontWeight: 600, marginTop: 1 }}>
-                      {cat.description}
+                        ? 'Sem motoristas nessa categoria agora'
+                        : `Chega em ~${stats.etaMin} min • ${cat.description}`}
                     </div>
                   </div>
                 </div>
+
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 900, color: '#0F172A' }}>
+                  <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#111111' }}>
                     R$ {catPrice.totalPrice.toFixed(2).replace('.', ',')}
-                  </div>
-                  <div style={{ fontSize: '0.65rem', color: '#64748B', fontWeight: 700 }}>
-                    Valor estimado
                   </div>
                 </div>
               </button>
@@ -1267,22 +1383,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           })}
         </div>
 
-        {/* Alerta caso não haja motoristas disponíveis para a categoria escolhida, permitindo trocar com 1 toque */}
+        {/* Alerta caso não haja motoristas disponíveis para a categoria escolhida */}
         {onlineDrivers.length > 0 && selectedCatStats.availableDriversCount === 0 && (
           <div style={{
-            marginTop: 10,
-            padding: '11px 12px',
+            marginBottom: 12,
+            padding: '10px 12px',
             borderRadius: 12,
             backgroundColor: '#FFFBEB',
-            border: '1.5px solid #FDE68A',
+            border: '1px solid #FDE68A',
             color: '#92400E',
-            fontSize: '0.77rem'
+            fontSize: '0.76rem'
           }}>
-            <div style={{ fontWeight: 900, marginBottom: 4 }}>
-              ⚠️ Nenhum motorista habilitado disponível em {selectedCatObj.name} neste momento.
-            </div>
-            <div style={{ marginBottom: alternativeAvailableCategories.length > 0 ? 8 : 0 }}>
-              Selecione outra categoria com motoristas online para ser atendido imediatamente:
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>
+              Sem motoristas disponíveis em {selectedCatObj.name} agora.
             </div>
             {alternativeAvailableCategories.length > 0 && (
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -1297,17 +1410,17 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                         setRequestError('');
                       }}
                       style={{
-                        padding: '6px 11px',
+                        padding: '6px 10px',
                         borderRadius: 8,
                         border: 'none',
-                        backgroundColor: '#121A21',
-                        color: '#76D800',
-                        fontSize: '0.73rem',
-                        fontWeight: 900,
+                        backgroundColor: '#111111',
+                        color: '#FFFFFF',
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
                         cursor: 'pointer'
                       }}
                     >
-                      Mudar para {alt.name} (R$ {altPrice.totalPrice.toFixed(2).replace('.', ',')})
+                      Mudar p/ {alt.name} (R$ {altPrice.totalPrice.toFixed(2).replace('.', ',')})
                     </button>
                   );
                 })}
@@ -1315,252 +1428,273 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             )}
           </div>
         )}
-      </div>
 
-      {/* Seleção de Método de Pagamento (Pix, Cartão de Crédito/Débito, Dinheiro) */}
-      <div style={{
-        backgroundColor: '#FFFFFF',
-        borderRadius: 18,
-        padding: '14px',
-        border: '1.5px solid #E2E8F0',
-        marginBottom: 12
-      }}>
-        <div style={{ fontSize: '0.8rem', fontWeight: 900, color: '#0F172A', textTransform: 'uppercase', marginBottom: 10 }}>
-          Forma de Pagamento
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: `repeat(${Math.max(1, (allowPix ? 1 : 0) + (allowAnyCard ? 1 : 0) + (allowCash ? 1 : 0))}, 1fr)`, gap: 8, marginBottom: 10 }}>
-          {allowPix && (
-            <button
-              type="button"
-              onClick={() => setPaymentMethod('pix')}
-              style={{
-                padding: '11px 8px',
-                borderRadius: 12,
-                border: paymentMethod === 'pix' ? '2px solid #16A34A' : '1.5px solid #E2E8F0',
-                backgroundColor: paymentMethod === 'pix' ? '#F0FDF4' : '#FFFFFF',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 4,
-                cursor: 'pointer'
-              }}
-            >
-              <QrCode size={18} color={paymentMethod === 'pix' ? '#16A34A' : '#64748B'} />
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>PIX</span>
-              <span style={{ fontSize: '0.64rem', color: '#16A34A', fontWeight: 700 }}>QR Dinâmico</span>
-            </button>
-          )}
-
-          {allowAnyCard && (
-            <button
-              type="button"
-              onClick={() => setPaymentMethod(allowCreditCard ? 'cartao_credito' : 'cartao_debito')}
-              style={{
-                padding: '11px 8px',
-                borderRadius: 12,
-                border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '2px solid #2563EB' : '1.5px solid #E2E8F0',
-                backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#EFF6FF' : '#FFFFFF',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 4,
-                cursor: 'pointer'
-              }}
-            >
-              <CreditCard size={18} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#2563EB' : '#64748B'} />
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>Cartão</span>
-              <span style={{ fontSize: '0.64rem', color: '#2563EB', fontWeight: 700 }}>No App</span>
-            </button>
-          )}
-
-          {allowCash && (
-            <button
-              type="button"
-              onClick={() => setPaymentMethod('dinheiro')}
-              style={{
-                padding: '11px 8px',
-                borderRadius: 12,
-                border: paymentMethod === 'dinheiro' ? '2px solid #D97706' : '1.5px solid #E2E8F0',
-                backgroundColor: paymentMethod === 'dinheiro' ? '#FFFBEB' : '#FFFFFF',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 4,
-                cursor: 'pointer'
-              }}
-            >
-              <Banknote size={18} color={paymentMethod === 'dinheiro' ? '#D97706' : '#64748B'} />
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>Dinheiro</span>
-              <span style={{ fontSize: '0.64rem', color: '#B45309', fontWeight: 700 }}>Ao motorista</span>
-            </button>
-          )}
-        </div>
-
-        {/* Lista de Cartões Tokenizados se escolheu Cartão */}
-        {(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') && (
+        {/* Pagamento & Opções em Linha Limpa */}
+        <div style={{
+          borderTop: '1px solid #F3F4F6',
+          paddingTop: 12,
+          marginBottom: 8
+        }}>
           <div style={{
-            backgroundColor: '#F8FAFC',
-            borderRadius: 12,
-            padding: 10,
-            border: '1px solid #E2E8F0'
+            display: 'grid',
+            gridTemplateColumns: `repeat(${Math.max(1, (allowPix ? 1 : 0) + (allowAnyCard ? 1 : 0) + (allowCash ? 1 : 0))}, 1fr)`,
+            gap: 8,
+            marginBottom: 8
           }}>
-            {savedCards.map(c => (
-              <div
-                key={c.id}
-                onClick={() => {
-                  setSelectedCardId(c.id);
-                  setPaymentMethod(c.cardType);
-                }}
+            {allowPix && (
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('pix')}
                 style={{
+                  padding: '9px 8px',
+                  borderRadius: 10,
+                  border: paymentMethod === 'pix' ? '2px solid #111111' : '1px solid #E5E7EB',
+                  backgroundColor: paymentMethod === 'pix' ? '#F3F4F6' : '#FFFFFF',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'space-between',
-                  padding: '8px 10px',
-                  borderRadius: 10,
-                  backgroundColor: selectedCardId === c.id ? '#EFF6FF' : '#FFFFFF',
-                  border: selectedCardId === c.id ? '1.5px solid #3B82F6' : '1px solid #E2E8F0',
-                  marginBottom: 6,
+                  justifyContent: 'center',
+                  gap: 6,
                   cursor: 'pointer'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <CreditCard size={16} color="#2563EB" />
-                  <div>
-                    <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0F172A' }}>
-                      {c.brand} •••• {c.last4}
-                    </div>
-                    <div style={{ fontSize: '0.68rem', color: '#64748B' }}>
-                      {c.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val {c.expMonth}/{c.expYear}
+                <QrCode size={16} color={paymentMethod === 'pix' ? '#15803D' : '#6B7280'} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>PIX</span>
+              </button>
+            )}
+
+            {allowAnyCard && (
+              <button
+                type="button"
+                onClick={() => setPaymentMethod(allowCreditCard ? 'cartao_credito' : 'cartao_debito')}
+                style={{
+                  padding: '9px 8px',
+                  borderRadius: 10,
+                  border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '2px solid #111111' : '1px solid #E5E7EB',
+                  backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#F3F4F6' : '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  cursor: 'pointer'
+                }}
+              >
+                <CreditCard size={16} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#276EF1' : '#6B7280'} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>Cartão</span>
+              </button>
+            )}
+
+            {allowCash && (
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('dinheiro')}
+                style={{
+                  padding: '9px 8px',
+                  borderRadius: 10,
+                  border: paymentMethod === 'dinheiro' ? '2px solid #111111' : '1px solid #E5E7EB',
+                  backgroundColor: paymentMethod === 'dinheiro' ? '#F3F4F6' : '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  cursor: 'pointer'
+                }}
+              >
+                <Banknote size={16} color={paymentMethod === 'dinheiro' ? '#B45309' : '#6B7280'} />
+                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>Dinheiro</span>
+              </button>
+            )}
+          </div>
+
+          {/* Cartões tokenizados quando selecionou Cartão */}
+          {(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') && (
+            <div style={{
+              backgroundColor: '#F9FAFB',
+              borderRadius: 12,
+              padding: 10,
+              border: '1px solid #E5E7EB',
+              marginBottom: 8
+            }}>
+              {savedCards.map(c => (
+                <div
+                  key={c.id}
+                  onClick={() => {
+                    setSelectedCardId(c.id);
+                    setPaymentMethod(c.cardType);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    backgroundColor: selectedCardId === c.id ? '#EFF6FF' : '#FFFFFF',
+                    border: selectedCardId === c.id ? '1.5px solid #276EF1' : '1px solid #E5E7EB',
+                    marginBottom: 6,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <CreditCard size={15} color="#276EF1" />
+                    <div>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>
+                        {c.brand} •••• {c.last4}
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: '#6B7280' }}>
+                        {c.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val {c.expMonth}/{c.expYear}
+                      </div>
                     </div>
                   </div>
+                  {selectedCardId === c.id && <Check size={15} color="#276EF1" />}
                 </div>
-                {selectedCardId === c.id && <Check size={16} color="#2563EB" />}
-              </div>
-            ))}
+              ))}
 
-            <button
-              type="button"
-              onClick={() => setIsAddingCardModal(true)}
-              style={{
-                width: '100%',
-                padding: '9px',
-                borderRadius: 10,
-                border: '1.5px dashed #94A3B8',
-                backgroundColor: '#FFFFFF',
-                color: '#1E293B',
-                fontWeight: 800,
-                fontSize: '0.78rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                cursor: 'pointer'
-              }}
-            >
-              <Plus size={15} />
-              <span>Adicionar Cartão de Crédito ou Débito</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => setIsAddingCardModal(true)}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  borderRadius: 10,
+                  border: '1px dashed #9CA3AF',
+                  backgroundColor: '#FFFFFF',
+                  color: '#111111',
+                  fontWeight: 700,
+                  fontSize: '0.76rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  cursor: 'pointer'
+                }}
+              >
+                <Plus size={14} />
+                <span>Adicionar cartão</span>
+              </button>
+            </div>
+          )}
+
+          {/* Toggle compacto para Passageiros, Malas e Observação */}
+          <button
+            type="button"
+            onClick={() => setShowExtraOptions(v => !v)}
+            style={{
+              width: '100%',
+              background: 'none',
+              border: 'none',
+              padding: '6px 2px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              color: '#4B5563',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              cursor: 'pointer'
+            }}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Sliders size={13} />
+              <span>{passengers} passageiro(s){hasLuggage ? ' • Com malas' : ''}{notes ? ' • Obs. adicionada' : ''}</span>
+            </span>
+            <ChevronDown size={15} style={{ transform: showExtraOptions ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+          </button>
+
+          {showExtraOptions && (
+            <div style={{
+              backgroundColor: '#F9FAFB',
+              borderRadius: 12,
+              padding: 10,
+              border: '1px solid #E5E7EB',
+              marginTop: 6,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Users size={15} color="#4B5563" />
+                  {[1, 2, 3, 4].map(n => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setPassengers(n)}
+                      style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 8,
+                        border: passengers === n ? '2px solid #111111' : '1px solid #D1D5DB',
+                        backgroundColor: passengers === n ? '#111111' : '#FFFFFF',
+                        color: passengers === n ? '#FFFFFF' : '#4B5563',
+                        fontWeight: 800,
+                        fontSize: '0.78rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setHasLuggage(!hasLuggage)}
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: 8,
+                    border: hasLuggage ? '1.5px solid #111111' : '1px solid #D1D5DB',
+                    backgroundColor: hasLuggage ? '#111111' : '#FFFFFF',
+                    color: hasLuggage ? '#FFFFFF' : '#4B5563',
+                    fontSize: '0.74rem',
+                    fontWeight: 700,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Luggage size={14} />
+                  <span>Malas</span>
+                </button>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Observação para o motorista (ex: portão branco, com pet...)"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '9px 11px',
+                  borderRadius: 10,
+                  border: '1px solid #D1D5DB',
+                  backgroundColor: '#FFFFFF',
+                  fontSize: '0.8rem',
+                  boxSizing: 'border-box'
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {requestError && (
+          <div style={{
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FECACA',
+            borderRadius: 12,
+            padding: '10px 12px',
+            color: '#DC2626',
+            fontSize: '0.78rem',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8
+          }}>
+            <AlertCircle size={16} />
+            <span>{requestError}</span>
           </div>
         )}
       </div>
 
-      {/* Opções rápidas (Passageiros, Mala, Observação) */}
-      <div style={{
-        backgroundColor: '#FFFFFF',
-        borderRadius: 18,
-        padding: '12px 14px',
-        border: '1.5px solid #E2E8F0',
-        marginBottom: 14,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 10
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Users size={16} color="#475569" />
-            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#1E293B' }}>Passageiros:</span>
-            {[1, 2, 3, 4].map(n => (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setPassengers(n)}
-                style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 8,
-                  border: passengers === n ? '2px solid #121A21' : '1px solid #CBD5E1',
-                  backgroundColor: passengers === n ? '#121A21' : '#FFFFFF',
-                  color: passengers === n ? '#76D800' : '#475569',
-                  fontWeight: 800,
-                  fontSize: '0.8rem',
-                  cursor: 'pointer'
-                }}
-              >
-                {n}
-              </button>
-            ))}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setHasLuggage(!hasLuggage)}
-            style={{
-              padding: '6px 10px',
-              borderRadius: 10,
-              border: hasLuggage ? '1.5px solid #16A34A' : '1px solid #CBD5E1',
-              backgroundColor: hasLuggage ? '#F0FDF4' : '#FFFFFF',
-              color: hasLuggage ? '#15803D' : '#64748B',
-              fontSize: '0.76rem',
-              fontWeight: 800,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              cursor: 'pointer'
-            }}
-          >
-            <Luggage size={15} />
-            <span>Malas</span>
-          </button>
-        </div>
-
-        <input
-          type="text"
-          placeholder="Observação para o motorista (ex: portão branco, com pet...)"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '10px 12px',
-            borderRadius: 10,
-            border: '1px solid #E2E8F0',
-            backgroundColor: '#F8FAFC',
-            fontSize: '0.82rem',
-            boxSizing: 'border-box'
-          }}
-        />
-      </div>
-
-      {requestError && (
-        <div style={{
-          backgroundColor: '#FEF2F2',
-          border: '1.5px solid #FECACA',
-          borderRadius: 14,
-          padding: '12px',
-          marginBottom: 12,
-          color: '#DC2626',
-          fontSize: '0.8rem',
-          fontWeight: 700,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8
-        }}>
-          <AlertCircle size={18} />
-          <span>{requestError}</span>
-        </div>
-      )}
-
-      {/* Barra Fixa de Solicitação Imediata Estilo Uber */}
+      {/* CTA Preto Sólido Estilo Uber Fixo acima da barra inferior */}
       <div style={{
         position: 'fixed',
         bottom: 58,
@@ -1569,10 +1703,10 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         width: '100%',
         maxWidth: 480,
         backgroundColor: '#FFFFFF',
-        borderTop: '1.5px solid #E2E8F0',
-        padding: '12px 16px',
+        borderTop: '1px solid #E5E7EB',
+        padding: '10px 16px 12px 16px',
         zIndex: 45,
-        boxShadow: '0 -8px 25px rgba(15, 23, 42, 0.08)',
+        boxShadow: '0 -6px 20px rgba(0, 0, 0, 0.08)',
         boxSizing: 'border-box'
       }}>
         <button
@@ -1581,32 +1715,31 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           disabled={isSubmitting}
           style={{
             width: '100%',
-            height: 52,
-            borderRadius: 14,
-            backgroundColor: '#000000', // Preto sólido estilo Uber
+            height: 50,
+            borderRadius: 12,
+            backgroundColor: '#000000',
             color: '#FFFFFF',
             border: 'none',
-            fontSize: '1.05rem',
-            fontWeight: 900,
+            fontSize: '1rem',
+            fontWeight: 800,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '0 20px',
+            padding: '0 18px',
             cursor: 'pointer',
-            boxShadow: '0 4px 18px rgba(0,0,0,0.3)',
             letterSpacing: '-0.01em'
           }}
         >
           <span>
             {isSubmitting
-              ? 'Solicitando Motorista...'
-              : `Pedir ${selectedCatObj.name || 'KAVRO GO'}`}
+              ? 'Solicitando...'
+              : `Escolher ${selectedCatObj.name || 'KAVRO GO'}`}
           </span>
           <span style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.18)',
-            padding: '5px 12px',
-            borderRadius: 10,
-            fontSize: '1.02rem',
+            backgroundColor: 'rgba(255, 255, 255, 0.16)',
+            padding: '4px 10px',
+            borderRadius: 8,
+            fontSize: '0.96rem',
             fontWeight: 900
           }}>
             R$ {pricing.totalPrice.toFixed(2).replace('.', ',')}

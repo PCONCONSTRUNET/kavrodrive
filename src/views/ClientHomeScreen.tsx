@@ -11,6 +11,7 @@ import { formatPhone, formatRideCode, getCleanWhatsappNumber } from '../utils/fo
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { DriverPublicAuditModal } from '../components/DriverPublicAuditModal';
+import { PassengerLiveMap } from '../components/PassengerLiveMap';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { NotificationsModal } from '../components/NotificationsModal';
 import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
@@ -451,72 +452,138 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         </div>
       )}
 
-      {/* ── LOCALIZAÇÃO DE PARTIDA ────── */}
-      <div style={{ backgroundColor: '#ffffff', padding: '10px 16px 12px 16px', borderBottom: '1px solid #F0F2F5' }}>
+      {/* ── BUSCA RÁPIDA ESTILO UBER ("PARA ONDE?" + "AGORA") + MAPA PERTO DE VOCÊ ── */}
+      <div style={{ backgroundColor: '#FFFFFF', padding: '14px 16px 16px 16px', borderBottom: '1px solid #F0F2F5' }}>
         {currentUser && (
-          <p style={{ fontSize: '0.80rem', color: '#64748B', fontWeight: 500, marginBottom: 8 }}>
-            {getGreeting()}, <strong style={{ color: '#121A21' }}>{firstName}</strong> 👋
-          </p>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+            <span style={{ fontSize: '0.84rem', color: '#4B5563', fontWeight: 600 }}>
+              {getGreeting()}, <strong style={{ color: '#111111' }}>{firstName}</strong>
+            </span>
+            <button
+              type="button"
+              onClick={() => setPickingType('origin')}
+              style={{
+                background: '#F3F4F6',
+                border: 'none',
+                borderRadius: 999,
+                padding: '4px 10px',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                color: '#111111',
+                maxWidth: '58%',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                cursor: 'pointer'
+              }}
+            >
+              📍 {origin ? origin.address.split(',')[0] : 'Definir partida'}
+            </button>
+          </div>
         )}
-        <div
-          onClick={() => setPickingType('origin')}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 10,
-            padding: '10px 12px',
-            backgroundColor: '#F7F8FA', borderRadius: 12,
-            cursor: 'pointer', border: '1.5px solid #E8EAED',
-          }}
-        >
-          <div style={{
-            width: 10, height: 10, borderRadius: '50%',
-            backgroundColor: '#76D800', boxShadow: '0 0 0 3px rgba(118,216,0,0.2)',
-            flexShrink: 0,
-          }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 500, marginBottom: 1 }}>
-              Sua localização de partida
-            </div>
-            <div style={{
-              fontSize: '0.85rem', fontWeight: 600,
-              color: origin ? '#121A21' : '#94A3B8',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}>
-              {origin ? origin.address : 'Definir local de partida...'}
-            </div>
-          </div>
-          <Navigation size={16} color="#76D800" />
-        </div>
-      </div>
 
-      {/* ── CAMPO PARA ONDE? ────────────────────────── */}
-      <div style={{ padding: '12px 16px 0 16px' }}>
-        <button
+        {/* Campo "Para onde?" Estilo Uber Passageiro */}
+        <div
           onClick={() => setPickingType('destination')}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setPickingType('destination'); }}
           style={{
-            width: '100%',
-            display: 'flex', alignItems: 'center', gap: 12,
-            backgroundColor: '#ffffff', border: 'none',
-            borderRadius: 16, padding: '14px 16px',
-            boxShadow: '0 4px 16px rgba(0,0,0,0.07)',
-            cursor: 'pointer', textAlign: 'left',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            backgroundColor: '#EFEFF4',
+            borderRadius: 999,
+            padding: '8px 8px 8px 16px',
+            cursor: 'pointer',
+            gap: 10,
+            marginBottom: 14
           }}
         >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+            <Search size={19} color="#111111" strokeWidth={2.5} style={{ flexShrink: 0 }} />
+            <span style={{
+              fontSize: '1.05rem',
+              fontWeight: 800,
+              color: '#111111',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}>
+              {destination ? destination.address : 'Para onde?'}
+            </span>
+          </div>
           <div style={{
-            width: 38, height: 38, borderRadius: 11,
-            backgroundColor: '#121A21',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            backgroundColor: '#FFFFFF',
+            color: '#111111',
+            borderRadius: 999,
+            padding: '7px 13px',
+            fontSize: '0.78rem',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
+            flexShrink: 0
           }}>
-            <Search size={18} color="#76D800" />
+            <Clock size={14} strokeWidth={2.4} />
+            <span>Agora</span>
           </div>
-          <div>
-            <div style={{ fontSize: '1rem', fontWeight: 800, color: '#121A21', lineHeight: 1.15 }}>
-              {destination ? destination.address : 'Para onde você vai?'}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: '#94A3B8', marginTop: 2 }}>
-              {destination ? 'Toque para alterar o destino' : 'Busque um endereço ou escolha abaixo'}
-            </div>
+        </div>
+
+        {/* Mini Mapa Ao Vivo com Motoristas na Região (Estilo Uber Home Map Card) */}
+        <div
+          onClick={() => onStartBooking(origin || undefined, destination || undefined)}
+          style={{
+            position: 'relative',
+            height: 158,
+            borderRadius: 16,
+            overflow: 'hidden',
+            border: '1px solid #E5E7EB',
+            cursor: 'pointer'
+          }}
+        >
+          <PassengerLiveMap
+            origin={origin}
+            destination={destination}
+            nearbyDrivers={StorageService.getOnlineDrivers()
+              .filter(d => d.location && typeof d.location.lat === 'number' && typeof d.location.lng === 'number')
+              .map(d => ({ id: d.id, lat: d.location!.lat, lng: d.location!.lng }))}
+          />
+          <div style={{
+            position: 'absolute',
+            bottom: 10,
+            left: 10,
+            right: 10,
+            zIndex: 400,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            pointerEvents: 'none'
+          }}>
+            <span style={{
+              backgroundColor: 'rgba(17,17,17,0.88)',
+              color: '#FFFFFF',
+              padding: '5px 11px',
+              borderRadius: 999,
+              fontSize: '0.72rem',
+              fontWeight: 700
+            }}>
+              ● {StorageService.getOnlineDriversCount()} carro(s) na região
+            </span>
+            <span style={{
+              backgroundColor: '#FFFFFF',
+              color: '#111111',
+              padding: '5px 12px',
+              borderRadius: 999,
+              fontSize: '0.74rem',
+              fontWeight: 800,
+              boxShadow: '0 2px 8px rgba(0,0,0,0.18)'
+            }}>
+              Chamar agora →
+            </span>
           </div>
-        </button>
+        </div>
       </div>
 
       {/* ── ATALHOS / ENDEREÇOS FIXOS SALVOS ──────── */}

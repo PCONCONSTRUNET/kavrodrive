@@ -5,7 +5,8 @@ import {
   Shield, DollarSign, Wallet, Star, Clock, Car, ChevronRight,
   TrendingUp, ArrowUpRight, Check, X, AlertTriangle, User,
   Calendar, Award, Banknote, QrCode, Copy, RefreshCw, LogOut,
-  Sliders, Zap, ShieldCheck, Camera, CheckCircle2, XCircle, FileText, Eye
+  Sliders, Zap, ShieldCheck, Camera, CheckCircle2, XCircle, FileText, Eye,
+  BarChart2, Compass, List
 } from 'lucide-react';
 import { DriverProfile, DriverWalletSummary, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
@@ -34,6 +35,8 @@ import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { DriverIncomingRideModal } from '../components/DriverIncomingRideModal';
 import { DriverActiveRideCard } from '../components/DriverActiveRideCard';
 import { DriverDrawerMenu } from '../components/DriverDrawerMenu';
+import { DriverHomeMap, RouteStepSummary } from '../components/DriverHomeMap';
+import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { DriverKycVerificationModal } from '../components/DriverKycVerificationModal';
 import { DriverTermsContractModal } from '../components/DriverTermsContractModal';
 import {
@@ -66,6 +69,13 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [isGpsOpen, setIsGpsOpen] = useState(false);
   const [isKycModalOpen, setIsKycModalOpen] = useState(false);
+  const [isSosOpen, setIsSosOpen] = useState(false);
+  const [recenterSignal, setRecenterSignal] = useState(0);
+  const [activeRouteInfo, setActiveRouteInfo] = useState<{
+    distanceKm: number;
+    durationMin: number;
+    step: RouteStepSummary;
+  } | null>(null);
 
   // Login states
   const [loginIdentifier, setLoginIdentifier] = useState('');
@@ -465,6 +475,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const handleDeclineRide = async (rideId: string) => {
     if (!currentDriver) return;
     await StorageService.declineRide(rideId, currentDriver.id);
+    refreshData();
+  };
+
+  const handleArrivePickup = async (ride: Ride) => {
+    await fetch(`/api/rides/${encodeURIComponent(ride.id)}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
+      body: JSON.stringify({ status: 'no_local' })
+    });
+    await StorageService.syncFromDatabase();
     refreshData();
   };
 
@@ -1537,298 +1557,183 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     r => r.driverId === currentDriver.id && (r.status === 'finalizada' || r.status === 'cancelada')
   );
 
+  const todayDatePrefix = new Date().toISOString().slice(0, 10);
+  const todayEarnings = completedRides
+    .filter(r => r.status === 'finalizada' && String(r.createdAt || '').startsWith(todayDatePrefix))
+    .reduce((acc, r) => acc + (r.driverNetAmount || r.totalPrice * (1 - (r.commissionPercent || 20) / 100)), 0);
+  const headerEarningsValue = todayEarnings > 0 ? todayEarnings : (wallet?.availableBalance || 0);
+
   return (
     <div style={{
       minHeight: '100dvh',
-      backgroundColor: '#000000',
-      color: '#FFFFFF',
+      backgroundColor: '#E8EDF3',
+      color: '#111111',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
       position: 'relative',
       overflow: 'hidden'
     }}>
       {/* =========================================================================
-          MAPA VETORIAL ESCURO ESTILIZADO UBER DRIVER COM PONTOS DE PREÇO DINÂMICO
+          MAPA REAL EM TELA CHEIA ESTILO UBER DRIVER
          ========================================================================= */}
-      <div style={{
-        position: 'fixed',
-        inset: 0,
-        backgroundColor: '#0B1118',
-        zIndex: 1,
-        backgroundImage: `
-          radial-gradient(circle at 50% 50%, rgba(30, 41, 59, 0.4) 0%, #000000 100%),
-          linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px)
-        `,
-        backgroundSize: '100% 100%, 40px 40px, 40px 40px',
-        pointerEvents: 'none'
-      }}>
-        {/* Ilhas de Calor Rosa/Roxa Preço Dinâmico estilo Uber Driver */}
-        <div style={{
-          position: 'absolute',
-          top: '25%',
-          left: '15%',
-          width: 220,
-          height: 220,
-          borderRadius: '50%',
-          backgroundColor: 'rgba(217, 70, 239, 0.14)',
-          filter: 'blur(40px)'
-        }} />
-        <div style={{
-          position: 'absolute',
-          top: '45%',
-          right: '10%',
-          width: 260,
-          height: 260,
-          borderRadius: '50%',
-          backgroundColor: 'rgba(168, 85, 247, 0.16)',
-          filter: 'blur(50px)'
-        }} />
-
-        {/* Badges de Preço Dinâmico espalhadas pelo mapa estilo Uber Driver */}
-        <div style={{
-          position: 'absolute',
-          top: '32%',
-          left: '22%',
-          backgroundColor: '#86198F',
-          color: '#FFFFFF',
-          padding: '4px 10px',
-          borderRadius: 20,
-          fontSize: '0.78rem',
-          fontWeight: 800,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 4
-        }}>
-          <span>+R$ 4,50</span>
-        </div>
-
-        <div style={{
-          position: 'absolute',
-          top: '42%',
-          right: '25%',
-          backgroundColor: '#86198F',
-          color: '#FFFFFF',
-          padding: '4px 10px',
-          borderRadius: 20,
-          fontSize: '0.78rem',
-          fontWeight: 800,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
-        }}>
-          <span>+R$ 3,25</span>
-        </div>
-
-        <div style={{
-          position: 'absolute',
-          top: '55%',
-          left: '28%',
-          backgroundColor: '#701A75',
-          color: '#FFFFFF',
-          padding: '4px 10px',
-          borderRadius: 20,
-          fontSize: '0.78rem',
-          fontWeight: 800,
-          boxShadow: '0 4px 12px rgba(0,0,0,0.5)'
-        }}>
-          <span>+R$ 2,00</span>
-        </div>
-
-        {/* Marcador do Veículo do Motorista no Centro */}
-        <div style={{
-          position: 'absolute',
-          top: '48%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 4
-        }}>
-          <div style={{
-            width: 44,
-            height: 44,
-            borderRadius: '50%',
-            backgroundColor: '#0F172A',
-            border: '3px solid #22C55E',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 0 20px rgba(34, 197, 94, 0.6)'
-          }}>
-            <Navigation size={22} fill="#22C55E" color="#22C55E" style={{ transform: 'rotate(45deg)' }} />
-          </div>
-          <div style={{
-            backgroundColor: 'rgba(15, 23, 42, 0.85)',
-            padding: '2px 8px',
-            borderRadius: 8,
-            fontSize: '0.68rem',
-            fontWeight: 800,
-            color: '#E2E8F0',
-            border: '1px solid #334155'
-          }}>
-            {(currentDriver.name || 'Motorista').split(' ')[0]}
-          </div>
-        </div>
-      </div>
+      <DriverHomeMap
+        driverLocation={activeRide?.driverLocation || currentDriver.location || null}
+        isOnline={Boolean(currentDriver.isOnline)}
+        activeRide={activeRide || null}
+        recenterSignal={recenterSignal}
+        onRouteInfoUpdate={setActiveRouteInfo}
+      />
 
       {/* =========================================================================
-          BARRA DE TOPO FLUTUANTE ESTILO UBER DRIVER
-          [ ≡ Menu ]     [ R$ 0,00 Ganhos do Dia ]     [ 🔍 Busca ]
+          BARRA DE TOPO FLUTUANTE ESTILO UBER DRIVER (OCULTA QUANDO EM CORRIDA ATIVA)
+          [ ☰ ]     [ R$ 72,37 ] / [ HOJE ]     [ 🔍 ]
          ========================================================================= */}
-      <header style={{
-        position: 'fixed',
-        top: 0,
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: '100%',
-        maxWidth: 480,
-        zIndex: 50,
-        padding: 'calc(14px + env(safe-area-inset-top, 0px)) 16px 0 16px',
-        boxSizing: 'border-box',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        pointerEvents: 'none'
-      }}>
-        {/* Botão Hamburger ≡ */}
-        <button
-          type="button"
-          onClick={() => setIsDrawerOpen(true)}
-          style={{
-            width: 46,
-            height: 46,
-            borderRadius: '50%',
-            backgroundColor: '#161F28',
-            border: '1px solid #283544',
-            color: '#FFFFFF',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
-            cursor: 'pointer',
-            pointerEvents: 'auto'
-          }}
-        >
-          <Menu size={22} />
-        </button>
-
-        {/* Pílula Central de Ganhos estilo Uber Driver */}
-        <button
-          type="button"
-          onClick={() => setActiveTab('ganhos')}
-          style={{
-            height: 46,
-            padding: '0 20px',
-            borderRadius: 24,
-            backgroundColor: '#161F28',
-            border: '1px solid #283544',
-            color: '#FFFFFF',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
-            cursor: 'pointer',
-            pointerEvents: 'auto'
-          }}
-        >
-          <span style={{ fontSize: '1.15rem', fontWeight: 900, color: '#22C55E' }}>
-            R$ {(wallet?.availableBalance || 0).toFixed(2).replace('.', ',')}
-          </span>
-        </button>
-
-        {/* Botão de Busca / Preferências 🔍 */}
-        <button
-          type="button"
-          onClick={() => setIsPreferencesOpen(true)}
-          style={{
-            width: 46,
-            height: 46,
-            borderRadius: '50%',
-            backgroundColor: '#161F28',
-            border: '1px solid #283544',
-            color: '#FFFFFF',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            boxShadow: '0 4px 14px rgba(0,0,0,0.4)',
-            cursor: 'pointer',
-            pointerEvents: 'auto'
-          }}
-        >
-          <Sliders size={20} />
-        </button>
-      </header>
-
-      {/* =========================================================================
-          BOTÃO CENTRAL INICIAR / PARAR (QUANDO OFFLINE OU ONLINE NO MAPA)
-         ========================================================================= */}
-      {!activeRide && activeTab === 'radar' && (
-        <div style={{
+      {!activeRide && (
+        <header style={{
           position: 'fixed',
-          top: '60%',
+          top: 0,
           left: '50%',
-          transform: 'translate(-50%, -50%)',
-          zIndex: 40,
+          transform: 'translateX(-50%)',
+          width: '100%',
+          maxWidth: 480,
+          zIndex: 50,
+          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 16px 0 16px',
+          boxSizing: 'border-box',
           display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: 12,
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
           pointerEvents: 'none'
         }}>
-          {!currentDriver.isOnline ? (
+          {/* Botão Menu Circular Branco ☰ */}
+          <button
+            type="button"
+            onClick={() => setIsDrawerOpen(true)}
+            aria-label="Abrir menu do motorista"
+            style={{
+              width: 46,
+              height: 46,
+              borderRadius: '50%',
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #E5E7EB',
+              color: '#111111',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+              cursor: 'pointer',
+              pointerEvents: 'auto'
+            }}
+          >
+            <Menu size={22} />
+          </button>
+
+          {/* Pílula Central Escura de Ganhos + Tag HOJE estilo Print Uber Driver */}
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', pointerEvents: 'auto' }}>
             <button
               type="button"
-              onClick={handleToggleOnline}
+              onClick={() => setActiveTab('ganhos')}
               style={{
-                width: 90,
-                height: 90,
-                borderRadius: '50%',
-                backgroundColor: '#0284C7', // Azul petróleo estilo Uber Driver
+                height: 44,
+                padding: '0 20px',
+                borderRadius: 999,
+                backgroundColor: '#141414',
+                border: '1px solid rgba(255,255,255,0.14)',
                 color: '#FFFFFF',
-                border: '4px solid rgba(255,255,255,0.2)',
-                boxShadow: '0 0 35px rgba(2, 132, 199, 0.7)',
-                fontSize: '1rem',
-                fontWeight: 900,
-                letterSpacing: '0.04em',
-                cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'center',
-                pointerEvents: 'auto',
-                transition: 'transform 0.15s ease'
+                gap: 6,
+                boxShadow: '0 6px 18px rgba(0,0,0,0.28)',
+                cursor: 'pointer'
               }}
             >
-              INICIAR
+              <span style={{ fontSize: '1rem', fontWeight: 900, color: '#22C55E' }}>R$</span>
+              <span style={{ fontSize: '1.16rem', fontWeight: 900, color: '#FFFFFF', letterSpacing: '-0.02em' }}>
+                {headerEarningsValue.toFixed(2).replace('.', ',')}
+              </span>
             </button>
-          ) : (
             <button
               type="button"
-              onClick={handleToggleOnline}
+              onClick={() => setActiveTab('ganhos')}
               style={{
-                width: 82,
-                height: 82,
-                borderRadius: '50%',
-                backgroundColor: '#DC2626',
-                color: '#FFFFFF',
-                border: '4px solid rgba(255,255,255,0.2)',
-                boxShadow: '0 0 30px rgba(220, 38, 38, 0.6)',
-                fontSize: '0.9rem',
+                marginTop: -6,
+                backgroundColor: '#FFFFFF',
+                color: '#111111',
+                border: '1px solid #E5E7EB',
+                borderRadius: 6,
+                padding: '2px 10px',
+                fontSize: '0.68rem',
                 fontWeight: 900,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                pointerEvents: 'auto'
+                letterSpacing: '0.06em',
+                boxShadow: '0 3px 10px rgba(0,0,0,0.12)',
+                cursor: 'pointer'
               }}
             >
-              PARAR
+              HOJE
             </button>
-          )}
+          </div>
+
+          {/* Botão Busca / Preferências Circular Branco 🔍 */}
+          <button
+            type="button"
+            onClick={() => setIsPreferencesOpen(true)}
+            aria-label="Buscar região e filtros"
+            style={{
+              width: 46,
+              height: 46,
+              borderRadius: '50%',
+              backgroundColor: '#FFFFFF',
+              border: '1px solid #E5E7EB',
+              color: '#111111',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+              cursor: 'pointer',
+              pointerEvents: 'auto'
+            }}
+          >
+            <Search size={20} />
+          </button>
+        </header>
+      )}
+
+      {/* Aviso discreto de status (ex: KYC ou erro operacional) */}
+      {statusError && !activeRide && (
+        <div style={{
+          position: 'fixed',
+          top: 'calc(84px + env(safe-area-inset-top, 0px))',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          width: 'calc(100% - 32px)',
+          maxWidth: 440,
+          zIndex: 55,
+          backgroundColor: '#FEF2F2',
+          color: '#991B1B',
+          border: '1px solid #FECACA',
+          borderRadius: 12,
+          padding: '10px 14px',
+          fontSize: '0.8rem',
+          fontWeight: 700,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          boxShadow: '0 6px 20px rgba(0,0,0,0.14)'
+        }}>
+          <span>{statusError}</span>
+          <button
+            type="button"
+            onClick={() => setStatusError('')}
+            style={{ background: 'none', border: 'none', color: '#991B1B', fontWeight: 900, cursor: 'pointer' }}
+          >
+            ✕
+          </button>
         </div>
       )}
 
       {/* =========================================================================
-          BOTTOM SHEET QUANDO OFFLINE OU ONLINE PROCURANDO VIAGENS
+          DOCK INFERIOR QUANDO OFFLINE OU ONLINE PROCURANDO VIAGENS
+          [ 🛡️ ]         (  INICIAR  )         [ ⌖ ] [ 📊 ]
+          [ 🎚️       Você está offline        ≡ ]
          ========================================================================= */}
       {!activeRide && activeTab === 'radar' && (
         <div style={{
@@ -1839,66 +1744,240 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           width: '100%',
           maxWidth: 480,
           zIndex: 45,
-          padding: '0 12px calc(14px + env(safe-area-inset-bottom, 0px)) 12px',
-          boxSizing: 'border-box'
+          pointerEvents: 'none',
+          display: 'flex',
+          flexDirection: 'column'
         }}>
+          {/* Controles Flutuantes acima da Sheet Branca */}
           <div style={{
-            backgroundColor: '#161F28',
-            borderRadius: 22,
-            border: '1px solid #283544',
-            padding: '16px 18px',
-            boxShadow: '0 10px 40px rgba(0,0,0,0.6)',
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-end',
             justifyContent: 'space-between',
-            gap: 12
+            padding: '0 16px 14px 16px',
+            pointerEvents: 'none'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{
-                width: 14,
-                height: 14,
-                borderRadius: '50%',
-                backgroundColor: currentDriver.isOnline ? '#22C55E' : '#64748B'
-              }} />
-              <div>
-                <div style={{ fontSize: '1rem', fontWeight: 900, color: '#FFFFFF' }}>
-                  {currentDriver.isOnline ? 'Próxima viagem: +R$ 1,50' : 'Você está offline'}
-                </div>
-                <div style={{ fontSize: '0.78rem', color: '#94A3B8' }}>
-                  {currentDriver.isOnline ? 'Preço dinâmico ativo na região' : 'Fique online para receber solicitações'}
-                </div>
-              </div>
-            </div>
-
+            {/* Escudo Azul SOS à esquerda */}
             <button
               type="button"
-              onClick={() => setIsPreferencesOpen(true)}
+              onClick={() => setIsSosOpen(true)}
+              title="Central de Segurança SOS"
               style={{
-                padding: '8px 14px',
-                borderRadius: 20,
-                backgroundColor: '#232E3B',
-                border: '1px solid #334155',
-                color: '#FFFFFF',
-                fontSize: '0.78rem',
-                fontWeight: 800,
-                cursor: 'pointer'
+                width: 46,
+                height: 46,
+                borderRadius: '50%',
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #E5E7EB',
+                boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                pointerEvents: 'auto'
               }}
             >
-              Filtros
+              <Shield size={22} color="#276EF1" fill="#DBEAFE" strokeWidth={2.2} />
             </button>
+
+            {/* Botão Central INICIAR / PARAR Azul Uber (#276EF1) */}
+            {!currentDriver.isOnline ? (
+              <button
+                type="button"
+                onClick={handleToggleOnline}
+                style={{
+                  width: 84,
+                  height: 84,
+                  borderRadius: '50%',
+                  backgroundColor: '#276EF1',
+                  color: '#FFFFFF',
+                  border: '3px solid #FFFFFF',
+                  outline: '2px solid #276EF1',
+                  boxShadow: '0 8px 26px rgba(39, 110, 241, 0.5)',
+                  fontSize: '0.95rem',
+                  fontWeight: 900,
+                  letterSpacing: '0.03em',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'auto'
+                }}
+              >
+                INICIAR
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleToggleOnline}
+                style={{
+                  width: 84,
+                  height: 84,
+                  borderRadius: '50%',
+                  backgroundColor: '#DC2626',
+                  color: '#FFFFFF',
+                  border: '3px solid #FFFFFF',
+                  outline: '2px solid #DC2626',
+                  boxShadow: '0 8px 26px rgba(220, 38, 38, 0.45)',
+                  fontSize: '0.92rem',
+                  fontWeight: 900,
+                  letterSpacing: '0.03em',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  pointerEvents: 'auto'
+                }}
+              >
+                <Power size={20} strokeWidth={2.8} />
+                <span style={{ fontSize: '0.72rem', marginTop: 2 }}>PARAR</span>
+              </button>
+            )}
+
+            {/* Botões Circulares à direita (Centralizar + Ganhos) */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, pointerEvents: 'auto' }}>
+              <button
+                type="button"
+                onClick={() => setRecenterSignal(s => s + 1)}
+                title="Centralizar minha posição"
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #E5E7EB',
+                  color: '#111111',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+                  cursor: 'pointer'
+                }}
+              >
+                <Compass size={20} />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('ganhos')}
+                title="Resumo de Ganhos"
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: '50%',
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #E5E7EB',
+                  color: '#111111',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+                  cursor: 'pointer'
+                }}
+              >
+                <BarChart2 size={20} />
+              </button>
+            </div>
+          </div>
+
+          {/* Barra Branca Inferior Docked Estilo Uber Driver */}
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: '20px 20px 0 0',
+            padding: '10px 18px calc(16px + env(safe-area-inset-bottom, 0px)) 18px',
+            boxShadow: '0 -6px 26px rgba(0,0,0,0.14)',
+            pointerEvents: 'auto',
+            color: '#111111'
+          }}>
+            {/* Handle cinza superior */}
+            <div style={{
+              width: 38,
+              height: 4,
+              borderRadius: 999,
+              backgroundColor: '#D1D5DB',
+              margin: '0 auto 12px auto'
+            }} />
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12
+            }}>
+              <button
+                type="button"
+                onClick={() => setIsPreferencesOpen(true)}
+                title="Preferências"
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: '50%',
+                  backgroundColor: '#F3F4F6',
+                  border: 'none',
+                  color: '#111111',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+              >
+                <Sliders size={19} />
+              </button>
+
+              <div style={{ textAlign: 'center', flex: 1 }}>
+                <div style={{
+                  fontSize: '1.1rem',
+                  fontWeight: 800,
+                  color: currentDriver.isOnline ? '#15803D' : '#111111',
+                  letterSpacing: '-0.02em'
+                }}>
+                  {currentDriver.isOnline ? 'Você está online' : 'Você está offline'}
+                </div>
+                <div style={{ fontSize: '0.76rem', color: '#6B7280', fontWeight: 600, marginTop: 1 }}>
+                  {currentDriver.isOnline
+                    ? `Procurando chamadas • ${driverCatEval.enabledCategoryIds.length} categoria(s) ativa(s)`
+                    : 'Toque em INICIAR para receber viagens'}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setActiveTab('ganhos')}
+                title="Histórico e Ganhos"
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: '50%',
+                  backgroundColor: '#F3F4F6',
+                  border: 'none',
+                  color: '#111111',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+              >
+                <List size={20} />
+              </button>
+            </div>
           </div>
         </div>
       )}
 
       {/* =========================================================================
-          CORRIDA ATIVA (CARD INFERIOR PRINT 2 DO USUÁRIO)
+          CORRIDA ATIVA ESTILO UBER TURN-BY-TURN
          ========================================================================= */}
       {activeRide && (
         <DriverActiveRideCard
           ride={activeRide}
           config={config}
+          routeInfo={activeRouteInfo}
           onOpenChat={() => setIsChatOpen(true)}
           onOpenGps={() => setIsGpsOpen(true)}
+          onOpenPreferences={() => setIsPreferencesOpen(true)}
+          onOpenSos={() => setIsSosOpen(true)}
+          onRecenterMap={() => setRecenterSignal(s => s + 1)}
+          onArrivePickup={() => handleArrivePickup(activeRide)}
           onStartTrip={() => handleStartTrip(activeRide)}
           onInitiateComplete={() => handleInitiateCompleteRide(activeRide)}
         />
@@ -1924,6 +2003,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           position: 'fixed',
           inset: 0,
           backgroundColor: '#0F172A',
+          color: '#FFFFFF',
           zIndex: 60,
           overflowY: 'auto',
           padding: 'calc(16px + env(safe-area-inset-top, 0px)) 16px calc(24px + env(safe-area-inset-bottom, 0px)) 16px',
@@ -2348,6 +2428,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         onClose={() => setIsDrawerOpen(false)}
         onSelectTab={(tab) => setActiveTab(tab)}
         onOpenPreferences={() => setIsPreferencesOpen(true)}
+        onOpenSos={() => setIsSosOpen(true)}
         onLogout={handleLogoutDriver}
       />
 
@@ -2593,6 +2674,15 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           mode="driver"
           config={config}
           driver={currentDriver}
+        />
+      )}
+
+      {currentDriver && (
+        <SosEmergencyModal
+          isOpen={isSosOpen}
+          onClose={() => setIsSosOpen(false)}
+          rideId={activeRide?.id}
+          driverPhone={currentDriver.phone}
         />
       )}
 

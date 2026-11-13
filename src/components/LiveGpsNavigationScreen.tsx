@@ -756,15 +756,14 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         gap: 10,
         pointerEvents: 'none'
       }}>
-        {/* Barra Superior HUD de Navegação */}
+        {/* Barra Superior HUD de Navegação Estilo Uber Turn-by-Turn */}
         <div style={{
           width: '100%',
-          backgroundColor: 'rgba(18, 26, 33, 0.96)',
-          backdropFilter: 'blur(8px)',
+          backgroundColor: '#141414',
           borderRadius: 16,
-          padding: '8px 12px',
-          boxShadow: '0 6px 20px rgba(0,0,0,0.4)',
-          border: '1px solid #2C3E50',
+          padding: '10px 14px',
+          boxShadow: '0 8px 24px rgba(0,0,0,0.42)',
+          border: '1px solid rgba(255,255,255,0.1)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -773,13 +772,13 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           boxSizing: 'border-box'
         }}>
           {/* Próxima Instrução */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
             <div style={{
-              width: 34,
-              height: 34,
+              width: 36,
+              height: 36,
               borderRadius: 10,
-              backgroundColor: '#76D800',
-              color: '#121A21',
+              backgroundColor: '#276EF1',
+              color: '#FFFFFF',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -791,23 +790,29 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
 
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: '0.64rem', color: '#76D800', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                  {rideStatus === 'a_caminho' || rideStatus === 'confirmada' ? 'A CAMINHO DO CLIENTE' : 'EM VIAGEM AO DESTINO'}
+                <span style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 2,
+                  backgroundColor: rideStatus === 'em_andamento' ? '#EF4444' : '#16A34A',
+                  flexShrink: 0
+                }} />
+                <span style={{ fontSize: '0.68rem', color: '#D1D5DB', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                  {rideStatus === 'a_caminho' || rideStatus === 'confirmada' ? 'Perto do embarque' : 'Destino final'}
                 </span>
                 <span style={{
-                  backgroundColor: 'rgba(118, 216, 0, 0.16)',
-                  color: '#76D800',
-                  border: '1px solid rgba(118, 216, 0, 0.35)',
-                  fontSize: '0.64rem',
-                  fontWeight: 900,
-                  padding: '1px 6px',
+                  backgroundColor: 'rgba(255,255,255,0.12)',
+                  color: '#FFFFFF',
+                  fontSize: '0.66rem',
+                  fontWeight: 800,
+                  padding: '2px 7px',
                   borderRadius: 999,
                   fontVariantNumeric: 'tabular-nums'
                 }}>
-                  ⏱ {formatTimerMmSs(etaSecondsLeft)}
+                  {formatTimerMmSs(etaSecondsLeft)}
                 </span>
               </div>
-              <div style={{ fontSize: '0.84rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <div style={{ fontSize: '0.88rem', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1 }}>
                 {rideStatus === 'a_caminho' || rideStatus === 'confirmada' ? ride.origin.address : ride.destination.address}
               </div>
             </div>
@@ -836,29 +841,29 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           </button>
         </div>
 
-        {/* ── BANNER TURN-BY-TURN ESTILO WAZE / GOOGLE MAPS (COM CONTROLE DE VOZ) ── */}
+        {/* ── BANNER TURN-BY-TURN ESTILO UBER DRIVER (COM CONTROLE DE VOZ) ── */}
         {isDriver && activeStep && (
           <div style={{
             width: '100%',
-            backgroundColor: '#16202A',
-            border: '1.5px solid #76D800',
+            backgroundColor: '#141414',
+            border: '1px solid rgba(255,255,255,0.12)',
             borderRadius: 14,
-            padding: '8px 12px',
+            padding: '10px 12px',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 10,
             color: '#FFFFFF',
-            boxShadow: '0 6px 18px rgba(0,0,0,0.45)',
+            boxShadow: '0 8px 22px rgba(0,0,0,0.38)',
             pointerEvents: 'auto',
             boxSizing: 'border-box'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: 1 }}>
               <div style={{
-                width: 34,
-                height: 34,
+                width: 36,
+                height: 36,
                 borderRadius: 9,
-                backgroundColor: '#76D800',
+                backgroundColor: '#1F2937',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -867,10 +872,10 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                 {renderManeuverIcon(activeStep.modifier, activeStep.type)}
               </div>
               <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ fontSize: '0.96rem', fontWeight: 900, color: '#76D800', lineHeight: 1.1 }}>
+                <div style={{ fontSize: '1.02rem', fontWeight: 900, color: '#FFFFFF', lineHeight: 1.15 }}>
                   {metersToNextManeuver > 0 ? (metersToNextManeuver < 1000 ? `${metersToNextManeuver} m` : `${(metersToNextManeuver / 1000).toFixed(1)} km`) : 'Siga em frente'}
                 </div>
-                <div style={{ fontSize: '0.78rem', color: '#F1F5F9', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <div style={{ fontSize: '0.8rem', color: '#E5E7EB', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1 }}>
                   {activeStep.instruction}
                 </div>
               </div>
@@ -1034,17 +1039,19 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             bounds={mapBounds}
           />
 
-          {/* Linha do Trajeto (Azul vibrante com contorno) */}
+          {/* Linha do Trajeto estilo Uber (Preto crisp p/ motorista | Azul vibrante p/ cliente) */}
           {routeCoordinates.length > 0 && (
             <>
               <Polyline
                 positions={routeCoordinates}
-                pathOptions={{ color: '#0F172A', weight: 8, opacity: 0.6 }}
+                pathOptions={{ color: isDriver ? '#000000' : '#0F172A', weight: isDriver ? 7.5 : 8, opacity: isDriver ? 0.92 : 0.6 }}
               />
-              <Polyline
-                positions={routeCoordinates}
-                pathOptions={{ color: '#2563EB', weight: 5, opacity: 0.95 }}
-              />
+              {!isDriver && (
+                <Polyline
+                  positions={routeCoordinates}
+                  pathOptions={{ color: '#276EF1', weight: 5, opacity: 0.96 }}
+                />
+              )}
             </>
           )}
 
@@ -1089,33 +1096,39 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           />
         </MapContainer>
 
-        {/* ── VELOCÍMETRO DIGITAL HUD (Canto inferior esquerdo do mapa) ────── */}
+        {/* ── VELOCÍMETRO / LIMITE ESTILO UBER (Canto inferior esquerdo do mapa) ────── */}
         <div style={{
           position: 'absolute',
           left: 12,
-          bottom: 10,
+          bottom: 12,
           zIndex: 10001,
-          backgroundColor: 'rgba(18, 26, 33, 0.94)',
-          padding: '5px 10px',
-          borderRadius: 12,
-          border: '1px solid #2C3E50',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.35)',
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
-          color: '#FFFFFF'
+          gap: 8
         }}>
-          <div style={{ textAlign: 'center', display: 'flex', alignItems: 'baseline', gap: 3 }}>
-            <span style={{ fontSize: '1.05rem', fontWeight: 900, color: '#76D800', lineHeight: 1 }}>
-              {speed}
-            </span>
-            <span style={{ fontSize: '0.58rem', color: '#94A3B8', fontWeight: 700 }}>
-              km/h
-            </span>
+          <div style={{
+            width: 44,
+            backgroundColor: '#FFFFFF',
+            padding: '5px 4px',
+            borderRadius: 8,
+            border: '2px solid #D1D5DB',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.22)',
+            textAlign: 'center',
+            color: '#111111'
+          }}>
+            <div style={{ fontSize: '1.02rem', fontWeight: 900, lineHeight: 1 }}>{speed > 0 ? speed : 30}</div>
+            <div style={{ fontSize: '0.52rem', fontWeight: 800, marginTop: 1 }}>{speed > 0 ? 'KM/H' : 'LIMITE'}</div>
           </div>
-          <div style={{ height: 14, width: 1, backgroundColor: '#2C3E50' }} />
-          <div style={{ fontSize: '0.64rem', color: '#E2E8F0', fontWeight: 700 }}>
-            {gpsFixed ? 'GPS Ao Vivo' : 'Conectando...'}
+          <div style={{
+            backgroundColor: 'rgba(20, 20, 20, 0.92)',
+            padding: '5px 10px',
+            borderRadius: 999,
+            color: '#FFFFFF',
+            fontSize: '0.66rem',
+            fontWeight: 700,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.22)'
+          }}>
+            {gpsFixed ? '● GPS Ao Vivo' : 'Conectando...'}
           </div>
         </div>
       </div>

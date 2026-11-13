@@ -308,7 +308,7 @@ const ClientApp: React.FC<{
         )}
       </div>
 
-      {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (Mobile First TabBar) */}
+      {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (Estilo Uber Passageiro Claro) */}
       <nav style={{
         position: 'fixed',
         bottom: 0,
@@ -316,14 +316,15 @@ const ClientApp: React.FC<{
         transform: 'translateX(-50%)',
         width: '100%',
         maxWidth: 480,
-        backgroundColor: '#121A21',
-        borderTop: '1px solid #2C3E50',
-        padding: '7px 14px 9px 14px',
+        backgroundColor: '#FFFFFF',
+        borderTop: '1px solid #E5E7EB',
+        padding: '7px 14px calc(9px + env(safe-area-inset-bottom, 0px)) 14px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
         zIndex: 50,
-        boxShadow: '0 -4px 20px rgba(0,0,0,0.25)',
+        boxShadow: '0 -4px 18px rgba(0,0,0,0.06)',
+        boxSizing: 'border-box'
       }}>
         <button
           onClick={() => setCurrentTab('inicio')}
@@ -333,12 +334,14 @@ const ClientApp: React.FC<{
             alignItems: 'center',
             gap: 2,
             background: 'none',
-            color: currentTab === 'inicio' ? '#76D800' : '#94A3B8',
+            border: 'none',
+            color: currentTab === 'inicio' ? '#111111' : '#9CA3AF',
+            cursor: 'pointer',
             transition: 'all 0.15s ease'
           }}
         >
-          <Home size={20} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'inicio' ? 700 : 500 }}>
+          <Home size={20} strokeWidth={currentTab === 'inicio' ? 2.5 : 2} />
+          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'inicio' ? 800 : 600 }}>
             Início
           </span>
         </button>
@@ -355,13 +358,15 @@ const ClientApp: React.FC<{
             alignItems: 'center',
             gap: 2,
             background: 'none',
-            color: currentTab === 'agendar' ? '#76D800' : '#94A3B8',
+            border: 'none',
+            color: currentTab === 'agendar' ? '#111111' : '#9CA3AF',
+            cursor: 'pointer',
             transition: 'all 0.15s ease'
           }}
         >
-          <MapPin size={20} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'agendar' ? 700 : 500 }}>
-            Chamar
+          <MapPin size={20} strokeWidth={currentTab === 'agendar' ? 2.5 : 2} />
+          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'agendar' ? 800 : 600 }}>
+            Viagem
           </span>
         </button>
 
@@ -373,24 +378,26 @@ const ClientApp: React.FC<{
             alignItems: 'center',
             gap: 2,
             background: 'none',
-            color: currentTab === 'minhas_corridas' ? '#76D800' : '#94A3B8',
+            border: 'none',
+            color: currentTab === 'minhas_corridas' ? '#111111' : '#9CA3AF',
             position: 'relative',
+            cursor: 'pointer',
             transition: 'all 0.15s ease'
           }}
         >
-          <Clock size={20} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'minhas_corridas' ? 700 : 500 }}>
-            Minhas Viagens
+          <Clock size={20} strokeWidth={currentTab === 'minhas_corridas' ? 2.5 : 2} />
+          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'minhas_corridas' ? 800 : 600 }}>
+            Atividade
           </span>
           {userRides.some(r => r.status === 'aguardando_pagamento' || r.status === 'aguardando_confirmacao' || r.status === 'na_fila' || r.status === 'confirmada' || r.status === 'a_caminho' || r.status === 'no_local' || r.status === 'em_andamento') && (
             <div style={{
               position: 'absolute',
               top: 0,
-              right: 18,
+              right: 8,
               width: 8,
               height: 8,
               borderRadius: '50%',
-              backgroundColor: '#76D800'
+              backgroundColor: '#16A34A'
             }} />
           )}
         </button>
@@ -403,13 +410,15 @@ const ClientApp: React.FC<{
             alignItems: 'center',
             gap: 2,
             background: 'none',
-            color: currentTab === 'perfil' ? '#76D800' : '#94A3B8',
+            border: 'none',
+            color: currentTab === 'perfil' ? '#111111' : '#9CA3AF',
+            cursor: 'pointer',
             transition: 'all 0.15s ease'
           }}
         >
-          <User size={20} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'perfil' ? 700 : 500 }}>
-            Perfil
+          <User size={20} strokeWidth={currentTab === 'perfil' ? 2.5 : 2} />
+          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'perfil' ? 800 : 600 }}>
+            Conta
           </span>
         </button>
       </nav>
