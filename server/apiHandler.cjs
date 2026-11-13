@@ -438,6 +438,8 @@ async function ensureClientsSchema() {
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS blocked BOOLEAN DEFAULT FALSE;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS terms_accepted_at TIMESTAMPTZ;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS terms_signature JSONB;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS photo TEXT;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS profile_change_request JSONB;
     `);
     await finance.ensureExtendedSchema();
     clientsSchemaReady = true;
@@ -598,6 +600,8 @@ function sanitizeClientRow(row, isAdmin = false) {
     phone: row.phone,
     email: row.email || undefined,
     document: row.document || undefined,
+    photo: row.photo || undefined,
+    profileChangeRequest: row.profile_change_request || row.profileChangeRequest || undefined,
     blocked: Boolean(row.blocked),
     savedAddresses: row.saved_addresses || [],
     termsAcceptedAt: row.terms_accepted_at || undefined,
@@ -1457,7 +1461,18 @@ async function handleApiRequest(req, res) {
         const body = await parseBody(req);
         const existing = await finance.getDriverById(driverId);
         if (!existing) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
-        const nextUpdates = { ...body };
+
+        const ALLOWED_DRIVER_SELF_FIELDS = new Set([
+          'photo', 'vehiclePhoto', 'bio', 'enabledCategories', 'pendingCategoryRequests',
+          'pixKey', 'pixType', 'bankName', 'bankAgency', 'bankAccount',
+          'autoPayoutWeekly', 'acceptsCash'
+        ]);
+        const nextUpdates = {};
+        for (const [k, v] of Object.entries(body || {})) {
+          if (isAdmin || ALLOWED_DRIVER_SELF_FIELDS.has(k)) {
+            nextUpdates[k] = v;
+          }
+        }
         if (typeof nextUpdates.photo === 'string' && nextUpdates.photo.startsWith('data:image/')) {
           nextUpdates.photo = await kycStorage.savePublicMedia(existing.id, 'avatar', nextUpdates.photo);
         }
@@ -1468,10 +1483,82 @@ async function handleApiRequest(req, res) {
           ...existing,
           ...nextUpdates,
           id: existing.id,
-          approvalStatus: existing.approvalStatus
+          approvalStatus: isAdmin ? (nextUpdates.approvalStatus || existing.approvalStatus) : existing.approvalStatus
         });
         return sendJson(res, 200, { ok: true, driver: updated });
       }
+    }
+
+    const driverPcrMatch = pathname.match(/^\/api\/drivers\/([^/]+)\/profile-change-request$/);
+    if (driverPcrMatch && method === 'POST') {
+      const driverId = decodeURIComponent(driverPcrMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
+      }
+      const driver = await finance.getDriverById(driverId);
+      if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+
+      const body = await parseBody(req);
+      const requestedFields = {};
+      const previousValues = {};
+
+      if (body.name !== undefined && String(body.name).trim() && String(body.name).trim() !== String(driver.name || '').trim()) {
+        requestedFields.name = String(body.name).trim();
+        previousValues.name = driver.name || '';
+      }
+      if (body.phone !== undefined) {
+        const cleanNew = String(body.phone).replace(/\D/g, '');
+        const cleanOld = String(driver.phone || '').replace(/\D/g, '');
+        if (cleanNew.length >= 10 && cleanNew !== cleanOld) {
+          requestedFields.phone = String(body.phone).trim();
+          previousValues.phone = driver.phone || '';
+        }
+      }
+      if (body.email !== undefined) {
+        const cleanNewEmail = String(body.email).trim().toLowerCase();
+        const cleanOldEmail = String(driver.email || '').trim().toLowerCase();
+        if (cleanNewEmail !== cleanOldEmail) {
+          requestedFields.email = cleanNewEmail;
+          previousValues.email = driver.email || '';
+        }
+      }
+      if (body.city !== undefined && String(body.city).trim() !== String(driver.city || '').trim()) {
+        requestedFields.city = String(body.city).trim();
+        previousValues.city = driver.city || '';
+      }
+
+      if (Object.keys(requestedFields).length === 0) {
+        return sendJson(res, 400, { ok: false, error: 'Nenhuma alteração de nome, telefone, e-mail ou cidade foi informada.' });
+      }
+
+      const now = new Date().toISOString();
+      const profileChangeRequest = {
+        id: `pcr-${Date.now()}`,
+        requestedFields,
+        previousValues,
+        status: 'pendente',
+        requestedAt: now
+      };
+
+      const updated = await finance.saveDriverRecord({
+        ...driver,
+        profileChangeRequest
+      });
+
+      const changedSummary = Object.keys(requestedFields).join(', ');
+      await db.query(
+        `INSERT INTO public.notifications (id, title, message, type, read, timestamp)
+         VALUES ($1, $2, $3, 'profile_change_request', false, NOW())`,
+        [
+          `notif-pcr-drv-${Date.now()}`,
+          `✏️ Alteração Cadastral (Motorista): ${driver.name}`,
+          `Campos solicitados (${changedSummary}) aguardam aprovação na aba Motoristas.`
+        ]
+      ).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, driver: updated, profileChangeRequest });
     }
 
     // ===== DEEPGUARD KYC — PROCESSAMENTO BIOMÉTRICO & GESTÃO DOCUMENTAL =====
@@ -3726,10 +3813,10 @@ async function handleApiRequest(req, res) {
           INSERT INTO public.clients (id, name, phone, email, document, password_hash, notes, blocked, saved_addresses, terms_accepted_at, terms_signature, created_at)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
           ON CONFLICT (id) DO UPDATE SET
-            name = EXCLUDED.name,
-            phone = EXCLUDED.phone,
-            email = COALESCE(EXCLUDED.email, public.clients.email),
-            document = COALESCE(EXCLUDED.document, public.clients.document),
+            name = CASE WHEN $13::boolean THEN EXCLUDED.name ELSE public.clients.name END,
+            phone = CASE WHEN $13::boolean THEN EXCLUDED.phone ELSE public.clients.phone END,
+            email = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.email, public.clients.email) ELSE public.clients.email END,
+            document = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.document, public.clients.document) ELSE public.clients.document END,
             password_hash = COALESCE(EXCLUDED.password_hash, public.clients.password_hash),
             notes = CASE WHEN $13::boolean THEN EXCLUDED.notes ELSE public.clients.notes END,
             blocked = CASE WHEN $13::boolean THEN EXCLUDED.blocked ELSE public.clients.blocked END,
@@ -3756,7 +3843,246 @@ async function handleApiRequest(req, res) {
       }
     }
 
+    const cliPhotoMatch = pathname.match(/^\/api\/clients\/([^/]+)\/photo$/);
+    if (cliPhotoMatch && method === 'POST') {
+      await ensureClientsSchema();
+      const clientId = decodeURIComponent(cliPhotoMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== clientId)) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para atualizar sua foto de perfil.' });
+      }
+      const body = await parseBody(req);
+      let nextPhoto = String(body.photo || '').trim();
+      if (!nextPhoto) {
+        return sendJson(res, 400, { ok: false, error: 'Nenhuma imagem enviada.' });
+      }
+      if (nextPhoto.startsWith('data:image/')) {
+        nextPhoto = await kycStorage.savePublicMedia(clientId, 'client-avatar', nextPhoto);
+      }
+      const updated = await db.query(
+        `UPDATE public.clients SET photo = $1 WHERE id = $2 RETURNING *`,
+        [nextPhoto, clientId]
+      );
+      if (!updated.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+      }
+      return sendJson(res, 200, { ok: true, client: sanitizeClientRow(updated.rows[0], isAdmin) });
+    }
+
+    const cliPcrMatch = pathname.match(/^\/api\/clients\/([^/]+)\/profile-change-request$/);
+    if (cliPcrMatch && method === 'POST') {
+      await ensureClientsSchema();
+      const clientId = decodeURIComponent(cliPcrMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== clientId)) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para solicitar alteração cadastral.' });
+      }
+      const currentRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [clientId]);
+      const currentRow = currentRes.rows[0];
+      if (!currentRow) {
+        return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+      }
+      const body = await parseBody(req);
+      const requestedFields = {};
+      const previousValues = {};
+
+      if (body.name !== undefined && String(body.name).trim() && String(body.name).trim() !== String(currentRow.name || '').trim()) {
+        requestedFields.name = String(body.name).trim();
+        previousValues.name = currentRow.name || '';
+      }
+      if (body.phone !== undefined) {
+        const cleanNew = String(body.phone).replace(/\D/g, '');
+        const cleanOld = String(currentRow.phone || '').replace(/\D/g, '');
+        if (cleanNew.length >= 10 && cleanNew !== cleanOld) {
+          requestedFields.phone = String(body.phone).trim();
+          previousValues.phone = currentRow.phone || '';
+        }
+      }
+      if (body.email !== undefined) {
+        const cleanNewEmail = String(body.email).trim().toLowerCase();
+        const cleanOldEmail = String(currentRow.email || '').trim().toLowerCase();
+        if (cleanNewEmail !== cleanOldEmail) {
+          requestedFields.email = cleanNewEmail;
+          previousValues.email = currentRow.email || '';
+        }
+      }
+      if (body.document !== undefined) {
+        const cleanNewDoc = String(body.document).replace(/\D/g, '');
+        const cleanOldDoc = String(currentRow.document || '').replace(/\D/g, '');
+        if (cleanNewDoc !== cleanOldDoc) {
+          requestedFields.document = cleanNewDoc;
+          previousValues.document = currentRow.document || '';
+        }
+      }
+
+      if (Object.keys(requestedFields).length === 0) {
+        return sendJson(res, 400, { ok: false, error: 'Nenhuma alteração de nome, telefone, e-mail ou CPF foi informada.' });
+      }
+
+      const profileChangeRequest = {
+        id: `pcr-${Date.now()}`,
+        requestedFields,
+        previousValues,
+        status: 'pendente',
+        requestedAt: new Date().toISOString()
+      };
+
+      const updated = await db.query(
+        `UPDATE public.clients SET profile_change_request = $1 WHERE id = $2 RETURNING *`,
+        [JSON.stringify(profileChangeRequest), clientId]
+      );
+      const savedRow = updated.rows[0] || { ...currentRow, profile_change_request: profileChangeRequest };
+
+      const changedSummary = Object.keys(requestedFields).join(', ');
+      await db.query(
+        `INSERT INTO public.notifications (id, title, message, type, read, timestamp)
+         VALUES ($1, $2, $3, 'profile_change_request', false, NOW())`,
+        [
+          `notif-pcr-cli-${Date.now()}`,
+          `✏️ Alteração Cadastral (Passageiro): ${currentRow.name}`,
+          `Campos solicitados (${changedSummary}) aguardam aprovação na aba Passageiros.`
+        ]
+      ).catch(() => {});
+
+      return sendJson(res, 200, {
+        ok: true,
+        client: sanitizeClientRow(savedRow, isAdmin),
+        profileChangeRequest
+      });
+    }
+
+    const adminPcrMatch = pathname.match(/^\/api\/admin\/profile-change-requests\/(driver|client)\/([^/]+)$/);
+    if (adminPcrMatch && (method === 'PATCH' || method === 'POST')) {
+      await ensureClientsSchema();
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const role = adminPcrMatch[1];
+      const targetId = decodeURIComponent(adminPcrMatch[2]);
+      const body = await parseBody(req);
+      const decision = String(body.decision || '').trim().toLowerCase();
+      if (decision !== 'aprovar' && decision !== 'recusar') {
+        return sendJson(res, 400, { ok: false, error: 'Decisão inválida. Envie "aprovar" ou "recusar".' });
+      }
+      const rejectionReason = String(body.rejectionReason || '').trim();
+      const now = new Date().toISOString();
+
+      if (role === 'driver') {
+        const driver = await finance.getDriverById(targetId);
+        if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+        const pendingReq = driver.profileChangeRequest;
+        if (!pendingReq || pendingReq.status !== 'pendente') {
+          return sendJson(res, 400, { ok: false, error: 'Não há solicitação pendente para este motorista.' });
+        }
+        if (decision === 'aprovar') {
+          const rf = pendingReq.requestedFields || {};
+          const updatedReq = {
+            ...pendingReq,
+            status: 'aprovado',
+            reviewedAt: now,
+            reviewedBy: 'Administrador Master',
+            rejectionReason: undefined
+          };
+          const updated = await finance.saveDriverRecord({
+            ...driver,
+            name: rf.name || driver.name,
+            phone: rf.phone || driver.phone,
+            email: rf.email !== undefined ? rf.email : driver.email,
+            city: rf.city !== undefined ? rf.city : driver.city,
+            profileChangeRequest: updatedReq
+          });
+          return sendJson(res, 200, { ok: true, driver: updated });
+        } else {
+          const updatedReq = {
+            ...pendingReq,
+            status: 'recusado',
+            reviewedAt: now,
+            reviewedBy: 'Administrador Master',
+            rejectionReason: rejectionReason || 'Alteração cadastral não autorizada pela Central Master.'
+          };
+          const updated = await finance.saveDriverRecord({
+            ...driver,
+            profileChangeRequest: updatedReq
+          });
+          return sendJson(res, 200, { ok: true, driver: updated });
+        }
+      } else {
+        const currentRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [targetId]);
+        const currentRow = currentRes.rows[0];
+        if (!currentRow) return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+        const pendingReq = currentRow.profile_change_request || currentRow.profileChangeRequest;
+        if (!pendingReq || pendingReq.status !== 'pendente') {
+          return sendJson(res, 400, { ok: false, error: 'Não há solicitação pendente para este passageiro.' });
+        }
+        if (decision === 'aprovar') {
+          const rf = pendingReq.requestedFields || {};
+          const nextName = rf.name || currentRow.name;
+          const nextPhone = rf.phone || currentRow.phone;
+          const nextEmail = rf.email !== undefined ? (rf.email || null) : currentRow.email;
+          const nextDoc = rf.document !== undefined ? (rf.document || null) : currentRow.document;
+
+          const cleanNextPhone = String(nextPhone || '').replace(/\D/g, '');
+          const cleanNextEmail = String(nextEmail || '').trim().toLowerCase();
+          if (cleanNextPhone.length >= 10 || cleanNextEmail) {
+            const dupRes = await db.query(
+              `SELECT id FROM public.clients
+               WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+                  OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+               LIMIT 1`,
+              [cleanNextPhone || '__none__', cleanNextEmail]
+            );
+            const dup = dupRes.rows[0];
+            if (dup && dup.id !== currentRow.id) {
+              return sendJson(res, 409, { ok: false, error: 'O telefone ou e-mail solicitado já pertence a outra conta.' });
+            }
+          }
+
+          const updatedReq = {
+            ...pendingReq,
+            status: 'aprovado',
+            reviewedAt: now,
+            reviewedBy: 'Administrador Master',
+            rejectionReason: undefined
+          };
+          const updated = await db.query(
+            `UPDATE public.clients SET name = $1, phone = $2, email = $3, document = $4, profile_change_request = $5 WHERE id = $6 RETURNING *`,
+            [nextName, nextPhone, nextEmail, nextDoc, JSON.stringify(updatedReq), targetId]
+          );
+          return sendJson(res, 200, { ok: true, client: sanitizeClientRow(updated.rows[0], true) });
+        } else {
+          const updatedReq = {
+            ...pendingReq,
+            status: 'recusado',
+            reviewedAt: now,
+            reviewedBy: 'Administrador Master',
+            rejectionReason: rejectionReason || 'Alteração cadastral não autorizada pela Central Master.'
+          };
+          const updated = await db.query(
+            `UPDATE public.clients SET profile_change_request = $1 WHERE id = $2 RETURNING *`,
+            [JSON.stringify(updatedReq), targetId]
+          );
+          return sendJson(res, 200, { ok: true, client: sanitizeClientRow(updated.rows[0], true) });
+        }
+      }
+    }
+
     const cliMatch = pathname.match(/^\/api\/clients\/([^/]+)$/);
+    if (cliMatch && method === 'GET') {
+      await ensureClientsSchema();
+      const id = decodeURIComponent(cliMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== id)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de passageiro inválida.' });
+      }
+      const r = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [id]);
+      if (!r.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+      }
+      return sendJson(res, 200, { ok: true, client: sanitizeClientRow(r.rows[0], isAdmin) });
+    }
     if (cliMatch && method === 'DELETE') {
       if (!await isAuthorizedAdmin(req)) {
         return sendJson(res, 401, { error: 'Acesso não autorizado: PIN de motorista inválido ou ausente.' });

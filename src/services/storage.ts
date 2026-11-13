@@ -654,6 +654,26 @@ export const StorageService = {
     }
   },
 
+  async requestDriverProfileChange(
+    driverId: string,
+    fields: { name?: string; phone?: string; email?: string; city?: string }
+  ): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
+    try {
+      const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/profile-change-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(fields)
+      });
+      const data = await res.json();
+      if (data?.driver) {
+        this.setCurrentDriver(data.driver);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao enviar solicitação de alteração.' };
+    }
+  },
+
   async fetchDriverWallet(driverId: string): Promise<DriverWalletSummary | null> {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}/wallet?_t=${Date.now()}`, {
@@ -1083,6 +1103,92 @@ export const StorageService = {
       },
       body: JSON.stringify(client)
     }).catch(err => console.warn('Client sync error:', err));
+  },
+
+  async fetchClientProfile(clientId: string): Promise<ClientProfile | null> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data?.client) {
+        this.setCurrentUser(data.client);
+        return data.client;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  },
+
+  async uploadClientPhoto(clientId: string, photo: string): Promise<{ ok: boolean; client?: ClientProfile; error?: string }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/photo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ photo })
+      });
+      const data = await res.json();
+      if (data?.client) {
+        this.setCurrentUser(data.client);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao salvar foto de perfil.' };
+    }
+  },
+
+  async requestClientProfileChange(
+    clientId: string,
+    fields: { name?: string; phone?: string; email?: string; document?: string }
+  ): Promise<{ ok: boolean; client?: ClientProfile; error?: string }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/profile-change-request`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(fields)
+      });
+      const data = await res.json();
+      if (data?.client) {
+        this.setCurrentUser(data.client);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao enviar solicitação ao Admin Master.' };
+    }
+  },
+
+  async reviewProfileChangeRequest(
+    role: 'driver' | 'client',
+    targetId: string,
+    decision: 'aprovar' | 'recusar',
+    rejectionReason?: string
+  ): Promise<{ ok: boolean; driver?: DriverProfile; client?: ClientProfile; error?: string }> {
+    try {
+      const res = await fetch(`/api/admin/profile-change-requests/${role}/${encodeURIComponent(targetId)}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-pin': this.getAdminPin(),
+          ...this.getAuthHeaders()
+        },
+        body: JSON.stringify({ decision, rejectionReason })
+      });
+      const data = await res.json();
+      if (data?.ok && data?.client) {
+        const list = this.getClients();
+        const idx = list.findIndex(c => c.id === data.client.id);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...data.client };
+          localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(list));
+        }
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao analisar solicitação cadastral.' };
+    }
   },
 
   async registerClient(payload: {

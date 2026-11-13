@@ -35,6 +35,7 @@ import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { DriverIncomingRideModal } from '../components/DriverIncomingRideModal';
 import { DriverActiveRideCard } from '../components/DriverActiveRideCard';
 import { DriverDrawerMenu } from '../components/DriverDrawerMenu';
+import { DriverSecondaryTabs } from '../components/DriverSecondaryTabs';
 import { DriverHomeMap, RouteStepSummary } from '../components/DriverHomeMap';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { DriverKycVerificationModal } from '../components/DriverKycVerificationModal';
@@ -1999,428 +2000,33 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           TELAS SECUNDÁRIAS: GANHOS, CARTEIRA, PERFIL
          ========================================================================= */}
       {activeTab !== 'radar' && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          backgroundColor: '#0F172A',
-          color: '#FFFFFF',
-          zIndex: 60,
-          overflowY: 'auto',
-          padding: 'calc(16px + env(safe-area-inset-top, 0px)) 16px calc(24px + env(safe-area-inset-bottom, 0px)) 16px',
-          boxSizing: 'border-box'
-        }}>
-          {/* Top Header com Voltar ao Mapa */}
-          <div style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            marginBottom: 20
-          }}>
-            <button
-              type="button"
-              onClick={() => setActiveTab('radar')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                background: 'none',
-                border: 'none',
-                color: '#60A5FA',
-                fontSize: '0.94rem',
-                fontWeight: 800,
-                cursor: 'pointer'
-              }}
-            >
-              ← Voltar ao Mapa
-            </button>
-
-            <span style={{ fontSize: '0.9rem', fontWeight: 800, color: '#94A3B8' }}>
-              {activeTab === 'ganhos' ? 'Ganhos Semanais' : activeTab === 'carteira' ? 'Carteira PIX' : 'Perfil do Motorista'}
-            </span>
-          </div>
-
-          {/* TAB GANHOS ESTILO UBER */}
-          {activeTab === 'ganhos' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {/* Card Semanal */}
-              <div style={{
-                backgroundColor: '#1E293B',
-                borderRadius: 20,
-                padding: '20px',
-                border: '1px solid #334155'
-              }}>
-                <div style={{ fontSize: '0.8rem', color: '#94A3B8', fontWeight: 700 }}>
-                  Ganhos desta semana
-                </div>
-                <div style={{ fontSize: '2.4rem', fontWeight: 900, color: '#22C55E', letterSpacing: '-0.03em', margin: '6px 0' }}>
-                  R$ {(wallet?.totalNetEarnings || 0).toFixed(2).replace('.', ',')}
-                </div>
-                <div style={{ fontSize: '0.82rem', color: '#CBD5E1' }}>
-                  {completedRides.length} viagens concluídas • 100% repassado
-                </div>
-
-                {/* Dias da Semana estilo Uber (S T Q Q S S D) */}
-                <div style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  marginTop: 20,
-                  paddingTop: 16,
-                  borderTop: '1px solid #334155'
-                }}>
-                  {['S', 'T', 'Q', 'Q', 'S', 'S', 'D'].map((day, idx) => (
-                    <div key={idx} style={{ textAlign: 'center' }}>
-                      <div style={{ fontSize: '0.74rem', color: '#94A3B8', fontWeight: 800 }}>{day}</div>
-                      <div style={{
-                        width: 24,
-                        height: 24,
-                        borderRadius: '50%',
-                        backgroundColor: idx === 2 ? '#2563EB' : 'transparent',
-                        color: '#FFF',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '0.74rem',
-                        fontWeight: 800,
-                        margin: '6px auto 0 auto'
-                      }}>
-                        {11 + idx}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Botão de Transferência Imediata */}
-              <button
-                type="button"
-                onClick={() => {
-                  setWithdrawPixKey(currentDriver.pixKey || '');
-                  setWithdrawError('');
-                  setIsWithdrawModalOpen(true);
-                }}
-                style={{
-                  width: '100%',
-                  height: 50,
-                  borderRadius: 14,
-                  backgroundColor: '#22C55E',
-                  color: '#121A21',
-                  border: 'none',
-                  fontSize: '1rem',
-                  fontWeight: 900,
-                  cursor: 'pointer'
-                }}
-              >
-                Transferir Saldo via PIX
-              </button>
-            </div>
-          )}
-
-          {/* TAB CARTEIRA */}
-          {activeTab === 'carteira' && wallet && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{
-                backgroundColor: '#1E293B',
-                borderRadius: 20,
-                padding: '20px',
-                border: '1px solid #334155'
-              }}>
-                <div style={{ fontSize: '0.78rem', color: '#94A3B8', fontWeight: 800 }}>SALDO DISPONÍVEL</div>
-                <div style={{ fontSize: '2.2rem', fontWeight: 900, color: '#22C55E', margin: '4px 0' }}>
-                  R$ {wallet.availableBalance.toFixed(2).replace('.', ',')}
-                </div>
-                <div style={{ fontSize: '0.82rem', color: currentDriver.pixKey ? '#94A3B8' : '#FBBF24' }}>
-                  {currentDriver.pixKey
-                    ? `Chave PIX: ${currentDriver.pixKey} (${currentDriver.pixType || 'cpf'})`
-                    : 'Chave PIX ainda não cadastrada — configure abaixo para receber seus saques.'}
-                </div>
-              </div>
-
-              {/* Cadastro / Edição de Chave PIX após aprovação */}
-              <form onSubmit={handleSavePixKey} style={{
-                backgroundColor: '#1E293B',
-                borderRadius: 20,
-                padding: '18px 20px',
-                border: '1px solid #334155',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 12
-              }}>
-                <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#FFFFFF' }}>
-                  Chave PIX para Recebimentos
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  {([
-                    { id: 'cpf', label: 'CPF' },
-                    { id: 'cnpj', label: 'CNPJ' },
-                    { id: 'telefone', label: 'Celular' },
-                    { id: 'email', label: 'E-mail' },
-                    { id: 'aleatoria', label: 'Aleatória' }
-                  ] as const).map(opt => (
-                    <button
-                      key={opt.id}
-                      type="button"
-                      onClick={() => {
-                        setPixEditType(opt.id);
-                        if (opt.id === 'cpf' && currentDriver.document) setPixEditKey(formatCPF(currentDriver.document));
-                        else if (opt.id === 'telefone' && currentDriver.phone) setPixEditKey(formatPhone(currentDriver.phone));
-                        else if (opt.id === 'email' && currentDriver.email) setPixEditKey(currentDriver.email);
-                      }}
-                      style={{
-                        padding: '7px 12px',
-                        borderRadius: 999,
-                        border: pixEditType === opt.id ? '1.5px solid #22C55E' : '1px solid #475569',
-                        backgroundColor: pixEditType === opt.id ? 'rgba(34,197,94,0.16)' : '#0F172A',
-                        color: pixEditType === opt.id ? '#4ADE80' : '#CBD5E1',
-                        fontSize: '0.78rem',
-                        fontWeight: 700,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  type="text"
-                  placeholder="Digite sua chave PIX"
-                  value={pixEditKey}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (pixEditType === 'cpf') setPixEditKey(formatCPF(val));
-                    else if (pixEditType === 'telefone') setPixEditKey(formatPhone(val));
-                    else setPixEditKey(val);
-                  }}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderRadius: 10,
-                    border: '1px solid #475569', backgroundColor: '#0F172A', color: '#FFFFFF', fontSize: '0.9rem'
-                  }}
-                />
-                <input
-                  type="text"
-                  placeholder="Banco (opcional)"
-                  value={pixEditBank}
-                  onChange={(e) => setPixEditBank(e.target.value)}
-                  style={{
-                    width: '100%', boxSizing: 'border-box', padding: '11px 12px', borderRadius: 10,
-                    border: '1px solid #475569', backgroundColor: '#0F172A', color: '#FFFFFF', fontSize: '0.9rem'
-                  }}
-                />
-                {pixSaveNotice && (
-                  <div style={{ fontSize: '0.8rem', color: pixSaveNotice.includes('sucesso') ? '#4ADE80' : '#F87171', fontWeight: 600 }}>
-                    {pixSaveNotice}
-                  </div>
-                )}
-                <button
-                  type="submit"
-                  disabled={isSavingPix}
-                  style={{
-                    width: '100%', height: 44, borderRadius: 10, border: 'none',
-                    backgroundColor: '#22C55E', color: '#0F172A', fontWeight: 800, fontSize: '0.88rem', cursor: 'pointer'
-                  }}
-                >
-                  {isSavingPix ? 'Salvando...' : 'Salvar Chave PIX'}
-                </button>
-              </form>
-
-              {wallet.debtBalance > 0 && (
-                <div style={{
-                  backgroundColor: '#FEF2F2',
-                  border: '1.5px solid #EF4444',
-                  borderRadius: 16,
-                  padding: '14px',
-                  color: '#991B1B'
-                }}>
-                  <div style={{ fontWeight: 900, fontSize: '0.9rem', marginBottom: 4 }}>
-                    Dívida de Comissões em Dinheiro: R$ {wallet.debtBalance.toFixed(2).replace('.', ',')}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleOpenDebtPixModal}
-                    style={{
-                      marginTop: 8,
-                      padding: '8px 14px',
-                      borderRadius: 10,
-                      backgroundColor: '#DC2626',
-                      color: '#FFF',
-                      border: 'none',
-                      fontWeight: 800,
-                      fontSize: '0.78rem',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Quitar via PIX
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB PERFIL */}
-          {activeTab === 'perfil' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-              <div style={{
-                backgroundColor: '#1E293B',
-                borderRadius: 20,
-                padding: '20px',
-                border: '1px solid #334155',
-                textAlign: 'center'
-              }}>
-                <div style={{
-                  width: 72,
-                  height: 72,
-                  borderRadius: '50%',
-                  backgroundColor: '#0F172A',
-                  border: '3px solid #76D800',
-                  margin: '0 auto 12px auto',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '1.5rem',
-                  fontWeight: 900,
-                  color: '#76D800'
-                }}>
-                  {(currentDriver.name || 'M').charAt(0).toUpperCase()}
-                </div>
-                <h3 style={{ margin: '0 0 4px 0', fontSize: '1.2rem', fontWeight: 900 }}>{currentDriver.name || 'Motorista'}</h3>
-                <div style={{ fontSize: '0.84rem', color: '#94A3B8' }}>
-                  {currentDriver.vehicleBrand} {currentDriver.vehicleModel} • {currentDriver.vehiclePlate}
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: 6, marginTop: 8, color: '#EAB308', fontWeight: 800 }}>
-                  <Star size={16} fill="#EAB308" />
-                  <span>{(currentDriver.rating || 4.96).toFixed(2)} Avaliação</span>
-                </div>
-              </div>
-
-              {/* Card de Verificação KYC e Biometria */}
-              <div style={{
-                backgroundColor: '#1E293B',
-                borderRadius: 20,
-                padding: '18px',
-                border: '1px solid #334155'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <ShieldCheck size={20} color="#76D800" />
-                    <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#FFFFFF' }}>Identidade & Biometria KYC</span>
-                  </div>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 6,
-                    fontSize: '0.7rem',
-                    fontWeight: 800,
-                    backgroundColor: 'rgba(118, 216, 0, 0.15)',
-                    color: '#76D800'
-                  }}>
-                    Aprovado
-                  </span>
-                </div>
-
-                <div style={{ fontSize: '0.78rem', color: '#94A3B8', lineHeight: 1.45, marginBottom: 14 }}>
-                  Sua identidade foi conferida via modelo open source Human Biometrics comparando CNH e selfie facial.
-                  {currentDriver.kyc?.biometricResult && (
-                    <strong style={{ color: '#E2E8F0', display: 'block', marginTop: 4 }}>
-                      Índice de similaridade registrado: {currentDriver.kyc.biometricResult.similarityScore ?? currentDriver.kyc.biometricResult.similarity ?? 0}%
-                    </strong>
-                  )}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setIsKycModalOpen(true)}
-                  style={{
-                    width: '100%',
-                    padding: '11px',
-                    borderRadius: 12,
-                    backgroundColor: 'rgba(255,255,255,0.06)',
-                    color: '#FFFFFF',
-                    border: '1px solid #475569',
-                    fontSize: '0.8rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6
-                  }}
-                >
-                  <Eye size={14} />
-                  <span>Visualizar CNH & Selfie KYC</span>
-                </button>
-              </div>
-
-              {/* Card Termos de Uso & Assinatura Eletrônica */}
-              <div style={{
-                backgroundColor: '#1E293B',
-                borderRadius: 20,
-                padding: '18px',
-                border: '1px solid #334155',
-                marginTop: 12
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <ShieldCheck size={20} color="#76D800" />
-                    <span style={{ fontWeight: 800, fontSize: '0.92rem', color: '#FFFFFF' }}>Termos & Contrato Digital</span>
-                  </div>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 6,
-                    fontSize: '0.7rem',
-                    fontWeight: 800,
-                    backgroundColor: currentDriver.termsSignature?.signed ? 'rgba(118, 216, 0, 0.15)' : 'rgba(234, 179, 8, 0.15)',
-                    color: currentDriver.termsSignature?.signed ? '#76D800' : '#FACC15'
-                  }}>
-                    {currentDriver.termsSignature?.signed ? 'Assinado' : `Versão ${DRIVER_TERMS_CONTRACT_VERSION}`}
-                  </span>
-                </div>
-
-                {currentDriver.termsSignature?.signed ? (
-                  <div style={{ fontSize: '0.78rem', color: '#94A3B8', lineHeight: 1.5, marginBottom: 12 }}>
-                    Assinado eletronicamente em <strong style={{ color: '#E2E8F0' }}>{currentDriver.termsSignature.signedAtBrasilia}</strong>.
-                    <div style={{ fontFamily: 'monospace', fontSize: '0.74rem', color: '#76D800', marginTop: 4 }}>
-                      Código: {currentDriver.termsSignature.validationCode}
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: '0.78rem', color: '#94A3B8', lineHeight: 1.5, marginBottom: 12 }}>
-                    Instrumento contratual de Motorista Parceiro Kavro Drive ({DRIVER_TERMS_CONTRACT_ID}).
-                  </div>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setIsDriverSignedContractOpen(true)}
-                  style={{
-                    width: '100%',
-                    padding: '11px',
-                    borderRadius: 12,
-                    backgroundColor: 'rgba(255,255,255,0.06)',
-                    color: '#FFFFFF',
-                    border: '1px solid #475569',
-                    fontSize: '0.8rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6
-                  }}
-                >
-                  <Eye size={14} />
-                  <span>
-                    {currentDriver.termsSignature?.signed
-                      ? `Ver Termo Assinado (${currentDriver.termsSignature.validationCode})`
-                      : 'Visualizar Termos e Condições'}
-                  </span>
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        <DriverSecondaryTabs
+          activeTab={activeTab}
+          currentDriver={currentDriver}
+          wallet={wallet}
+          completedRides={completedRides}
+          todayEarnings={todayEarnings}
+          pixEditType={pixEditType}
+          pixEditKey={pixEditKey}
+          pixEditBank={pixEditBank}
+          isSavingPix={isSavingPix}
+          pixSaveNotice={pixSaveNotice}
+          onChangeTab={(t) => setActiveTab(t)}
+          onDriverUpdated={(d) => {
+            setCurrentDriver(d);
+            StorageService.setCurrentDriver(d);
+          }}
+          onOpenWithdrawModal={() => setIsWithdrawModalOpen(true)}
+          onOpenDebtPixModal={handleOpenDebtPixModal}
+          onPixTypeChange={(t) => setPixEditType(t)}
+          onPixKeyChange={(v) => setPixEditKey(v)}
+          onPixBankChange={(v) => setPixEditBank(v)}
+          onSavePixKey={handleSavePixKey}
+          onOpenKycModal={() => setIsKycModalOpen(true)}
+          onOpenTermsModal={() => setIsDriverSignedContractOpen(true)}
+        />
       )}
 
-      {/* =========================================================================
-          MODAIS AUXILIARES
-         ========================================================================= */}
       {/* 1. Menu Gaveta Lateral */}
       <DriverDrawerMenu
         isOpen={isDrawerOpen}
@@ -2539,18 +2145,20 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           padding: 16
         }}>
           <div style={{
-            backgroundColor: '#1E293B',
-            borderRadius: 24,
+            backgroundColor: '#FFFFFF',
+            color: '#111111',
+            borderRadius: 20,
             padding: 22,
             width: '100%',
             maxWidth: 400,
-            border: '1px solid #334155'
+            border: '1px solid #E5E7EB',
+            boxShadow: '0 20px 45px rgba(0,0,0,0.22)'
           }}>
-            <h3 style={{ margin: '0 0 6px 0', fontSize: '1.2rem', fontWeight: 900 }}>
+            <h3 style={{ margin: '0 0 6px 0', fontSize: '1.15rem', fontWeight: 900, color: '#111111' }}>
               Solicitar Saque PIX
             </h3>
-            <div style={{ fontSize: '0.84rem', color: '#94A3B8', marginBottom: 14 }}>
-              Saldo Disponível: <strong style={{ color: '#22C55E' }}>R$ {wallet.availableBalance.toFixed(2).replace('.', ',')}</strong>
+            <div style={{ fontSize: '0.84rem', color: '#6B7280', marginBottom: 14 }}>
+              Saldo Disponível: <strong style={{ color: '#16A34A' }}>R$ {wallet.availableBalance.toFixed(2).replace('.', ',')}</strong>
             </div>
             <form onSubmit={handleRequestWithdrawal} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <input
@@ -2559,7 +2167,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 value={withdrawAmountStr}
                 onChange={(e) => setWithdrawAmountStr(e.target.value)}
                 required
-                style={{ padding: '12px', borderRadius: 12, border: '1px solid #475569', backgroundColor: '#0F172A', color: '#FFF' }}
+                style={{ padding: '12px', borderRadius: 10, border: '1.5px solid #E5E7EB', backgroundColor: '#F9FAFB', color: '#111111', fontWeight: 700 }}
               />
               <input
                 type="text"
@@ -2567,21 +2175,21 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 value={withdrawPixKey || currentDriver.pixKey}
                 onChange={(e) => setWithdrawPixKey(e.target.value)}
                 required
-                style={{ padding: '12px', borderRadius: 12, border: '1px solid #475569', backgroundColor: '#0F172A', color: '#FFF' }}
+                style={{ padding: '12px', borderRadius: 10, border: '1.5px solid #E5E7EB', backgroundColor: '#F9FAFB', color: '#111111', fontWeight: 700 }}
               />
-              {withdrawError && <div style={{ color: '#F87171', fontSize: '0.78rem' }}>{withdrawError}</div>}
+              {withdrawError && <div style={{ color: '#DC2626', fontSize: '0.78rem', fontWeight: 700 }}>{withdrawError}</div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button
                   type="button"
                   onClick={() => setIsWithdrawModalOpen(false)}
-                  style={{ padding: '12px', borderRadius: 12, border: '1px solid #475569', backgroundColor: 'transparent', color: '#FFF' }}
+                  style={{ padding: '12px 16px', borderRadius: 10, border: '1px solid #E5E7EB', backgroundColor: '#F3F4F6', color: '#111111', fontWeight: 700, cursor: 'pointer' }}
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
                   disabled={isRequestingWithdraw}
-                  style={{ flex: 1, padding: '12px', borderRadius: 12, backgroundColor: '#22C55E', color: '#121A21', border: 'none', fontWeight: 900 }}
+                  style={{ flex: 1, padding: '12px', borderRadius: 10, backgroundColor: '#111111', color: '#FFFFFF', border: 'none', fontWeight: 800, cursor: 'pointer' }}
                 >
                   Confirmar Saque
                 </button>
@@ -2596,7 +2204,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         <div style={{
           position: 'fixed',
           inset: 0,
-          backgroundColor: 'rgba(0,0,0,0.85)',
+          backgroundColor: 'rgba(0,0,0,0.65)',
           zIndex: 100000,
           display: 'flex',
           alignItems: 'center',
@@ -2604,22 +2212,24 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           padding: 16
         }}>
           <div style={{
-            backgroundColor: '#1E293B',
-            borderRadius: 24,
+            backgroundColor: '#FFFFFF',
+            color: '#111111',
+            borderRadius: 20,
             padding: 22,
             width: '100%',
             maxWidth: 380,
             textAlign: 'center',
-            border: '1px solid #334155'
+            border: '1px solid #E5E7EB',
+            boxShadow: '0 20px 45px rgba(0,0,0,0.22)'
           }}>
-            <h3 style={{ margin: '0 0 6px 0', fontSize: '1.2rem', fontWeight: 900 }}>Quitar Saldo Devedor</h3>
-            <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#EF4444', margin: '8px 0' }}>
+            <h3 style={{ margin: '0 0 6px 0', fontSize: '1.15rem', fontWeight: 900, color: '#111111' }}>Quitar Saldo Devedor</h3>
+            <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#DC2626', margin: '8px 0' }}>
               R$ {debtPixModalData.amount.toFixed(2).replace('.', ',')}
             </div>
             <img
               src={debtPixModalData.pixQrCode}
               alt="QR Code PIX"
-              style={{ width: 180, height: 180, margin: '0 auto 12px auto', borderRadius: 12, border: '2px solid #334155' }}
+              style={{ width: 180, height: 180, margin: '0 auto 12px auto', borderRadius: 12, border: '1px solid #E5E7EB' }}
             />
             <button
               type="button"
@@ -2628,7 +2238,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 setCopiedDebtPix(true);
                 setTimeout(() => setCopiedDebtPix(false), 2000);
               }}
-              style={{ width: '100%', padding: '12px', borderRadius: 12, backgroundColor: '#0F172A', color: '#FFF', border: '1px solid #334155', fontWeight: 800, marginBottom: 8 }}
+              style={{ width: '100%', padding: '12px', borderRadius: 10, backgroundColor: '#F3F4F6', color: '#111111', border: '1px solid #E5E7EB', fontWeight: 800, marginBottom: 8, cursor: 'pointer' }}
             >
               {copiedDebtPix ? 'Copiado!' : 'Copiar Código PIX'}
             </button>
@@ -2636,14 +2246,14 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               type="button"
               onClick={handleSimulateDebtPixWebhook}
               disabled={isSimulatingDebtWebhook}
-              style={{ width: '100%', padding: '12px', borderRadius: 12, backgroundColor: '#22C55E', color: '#121A21', border: 'none', fontWeight: 900, marginBottom: 8 }}
+              style={{ width: '100%', padding: '12px', borderRadius: 10, backgroundColor: '#111111', color: '#FFFFFF', border: 'none', fontWeight: 800, marginBottom: 8, cursor: 'pointer' }}
             >
-              {isSimulatingDebtWebhook ? 'Confirmando...' : '⚡ Confirmar Pagamento'}
+              {isSimulatingDebtWebhook ? 'Confirmando...' : 'Confirmar Pagamento'}
             </button>
             <button
               type="button"
               onClick={() => setDebtPixModalData(null)}
-              style={{ background: 'none', border: 'none', color: '#94A3B8', fontWeight: 700 }}
+              style={{ background: 'none', border: 'none', color: '#6B7280', fontWeight: 700, cursor: 'pointer', padding: '6px 12px' }}
             >
               Fechar
             </button>

@@ -328,6 +328,26 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     setBlockedSlots(StorageService.getBlockedSlots());
   };
 
+  const handleReviewClientProfileChange = async (client: ClientProfile, decision: 'aprovar' | 'recusar') => {
+    let rejectionReason: string | undefined;
+    if (decision === 'recusar') {
+      const reason = window.prompt(
+        `Motivo da recusa para alteração cadastral de ${client.name}:`,
+        'Dados incompatíveis ou alteração não autorizada'
+      );
+      if (reason === null) return;
+      rejectionReason = reason.trim() || undefined;
+    }
+    const res = await StorageService.reviewProfileChangeRequest('client', client.id, decision, rejectionReason);
+    if (!res.ok) {
+      window.alert(res.error || 'Erro ao analisar solicitação de alteração.');
+      return;
+    }
+    await StorageService.syncFromDatabase();
+    setClientsList(StorageService.getClients());
+    onRefreshData();
+  };
+
   const toggleBlockSlot = (slotTime: string) => {
     const isCurrentlyBlocked = (blockedSlots[selectedAgendaDate] || []).includes(slotTime);
     if (isCurrentlyBlocked) {
@@ -6055,6 +6075,98 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 </button>
               </div>
 
+              {/* Fila de Solicitações de Alteração Cadastral (Passageiros) */}
+              {(() => {
+                const pendingClientsChanges = clientsList.filter(c => c.profileChangeRequest?.status === 'pendente');
+                if (pendingClientsChanges.length === 0) return null;
+                return (
+                  <div style={{
+                    backgroundColor: '#FFFBEB',
+                    border: '1px solid #FCD34D',
+                    borderRadius: 10,
+                    padding: '14px 16px',
+                    marginBottom: 14,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10
+                  }}>
+                    <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#92400E', display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <AlertCircle size={17} color="#D97706" />
+                      <span>
+                        Solicitações de Alteração Cadastral (Passageiros): {pendingClientsChanges.length} aguardando aprovação do Admin Master
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {pendingClientsChanges.map(cli => {
+                        const req = cli.profileChangeRequest!;
+                        const rf = req.requestedFields || {};
+                        const pv = req.previousValues || {};
+                        return (
+                          <div
+                            key={cli.id}
+                            style={{
+                              backgroundColor: '#FFFFFF',
+                              border: '1px solid #FDE68A',
+                              borderRadius: 8,
+                              padding: '10px 14px',
+                              display: 'flex',
+                              flexWrap: 'wrap',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 10
+                            }}
+                          >
+                            <div style={{ fontSize: '0.78rem', color: '#0F172A', lineHeight: 1.5 }}>
+                              <div style={{ fontWeight: 800 }}>{cli.name} ({formatPhone(cli.phone) || cli.phone})</div>
+                              <div style={{ color: '#475569' }}>
+                                {rf.name && <span style={{ marginRight: 10 }}><strong>Nome:</strong> {pv.name || cli.name} → <strong style={{ color: '#0F172A' }}>{rf.name}</strong></span>}
+                                {rf.phone && <span style={{ marginRight: 10 }}><strong>Telefone:</strong> {pv.phone || cli.phone} → <strong style={{ color: '#0F172A' }}>{rf.phone}</strong></span>}
+                                {rf.email !== undefined && <span style={{ marginRight: 10 }}><strong>E-mail:</strong> {pv.email || '—'} → <strong style={{ color: '#0F172A' }}>{rf.email || '—'}</strong></span>}
+                                {rf.document !== undefined && <span><strong>CPF:</strong> {pv.document || '—'} → <strong style={{ color: '#0F172A' }}>{rf.document || '—'}</strong></span>}
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <button
+                                type="button"
+                                onClick={() => handleReviewClientProfileChange(cli, 'aprovar')}
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 6,
+                                  border: 'none',
+                                  backgroundColor: '#16A34A',
+                                  color: '#FFFFFF',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                ✓ Aprovar Alteração
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleReviewClientProfileChange(cli, 'recusar')}
+                                style={{
+                                  padding: '6px 12px',
+                                  borderRadius: 6,
+                                  border: '1px solid #FCA5A5',
+                                  backgroundColor: '#FFFFFF',
+                                  color: '#DC2626',
+                                  fontSize: '0.74rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                ✕ Recusar
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {/* Tabela Corporativa de Passageiros */}
               <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
                 <div style={{
@@ -6133,6 +6245,22 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             >
                               <td style={{ padding: '12px 16px', fontWeight: 600, color: '#0F172A' }}>
                                 <div>{c.name}</div>
+                                {c.profileChangeRequest?.status === 'pendente' && (
+                                  <div style={{
+                                    display: 'inline-block',
+                                    marginTop: 4,
+                                    marginRight: 6,
+                                    padding: '2px 7px',
+                                    borderRadius: 999,
+                                    backgroundColor: '#FEF3C7',
+                                    color: '#92400E',
+                                    border: '1px solid #FCD34D',
+                                    fontSize: '0.65rem',
+                                    fontWeight: 800
+                                  }}>
+                                    Alteração Cadastral Pendente
+                                  </div>
+                                )}
                                 {c.termsSignature?.signed ? (
                                   <div
                                     title={`Código: ${c.termsSignature.validationCode} • Assinado em ${c.termsSignature.signedAtBrasilia || c.termsSignature.signedAt}`}

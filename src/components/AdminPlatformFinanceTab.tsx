@@ -129,7 +129,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       const synced = StorageService.getDrivers();
       setDrivers(synced);
       const digest = synced
-        .map(d => `${d.id}:${d.approvalStatus}:${d.kyc?.status || ''}:${d.kyc?.submittedAt || ''}:${d.termsSignature?.signed ? '1' : '0'}`)
+        .map(d => `${d.id}:${d.approvalStatus}:${d.kyc?.status || ''}:${d.kyc?.submittedAt || ''}:${d.termsSignature?.signed ? '1' : '0'}:${d.profileChangeRequest?.id || ''}:${d.profileChangeRequest?.status || ''}`)
         .join('|');
       if (lastDriverDigestRef.current && digest !== lastDriverDigestRef.current) {
         StorageService.fetchAdminFinanceOverview().then(fin => {
@@ -160,6 +160,24 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
 
   const handleDriverApproval = async (driverId: string, approvalStatus: DriverProfile['approvalStatus']) => {
     await StorageService.adminUpdateDriverStatus(driverId, { approvalStatus });
+    await loadAll();
+  };
+
+  const handleReviewDriverProfileChange = async (driver: DriverProfile, decision: 'aprovar' | 'recusar') => {
+    let rejectionReason: string | undefined;
+    if (decision === 'recusar') {
+      const reason = window.prompt(
+        `Motivo da recusa para alteração cadastral de ${driver.name}:`,
+        'Dados divergentes da documentação cadastrada'
+      );
+      if (reason === null) return;
+      rejectionReason = reason.trim() || undefined;
+    }
+    const res = await StorageService.reviewProfileChangeRequest('driver', driver.id, decision, rejectionReason);
+    if (!res.ok) {
+      window.alert(res.error || 'Erro ao analisar solicitação de alteração cadastral.');
+      return;
+    }
     await loadAll();
   };
 
@@ -1489,6 +1507,106 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
           </div>
         </div>
 
+        {/* Banner acionável quando há solicitações de alteração de dados cadastrais */}
+        {(() => {
+          const pendingDriverProfileChanges = drivers.filter(d => d.profileChangeRequest?.status === 'pendente');
+          if (pendingDriverProfileChanges.length === 0) return null;
+          return (
+            <div style={{
+              backgroundColor: '#FFFBEB',
+              border: '1px solid #FCD34D',
+              borderRadius: 12,
+              padding: '14px 16px',
+              marginBottom: 14,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 10
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#92400E', fontSize: '0.84rem', fontWeight: 800 }}>
+                <AlertTriangle size={18} color="#D97706" />
+                <span>
+                  Solicitações de Alteração Cadastral (Motoristas): {pendingDriverProfileChanges.length} aguardando aprovação do Admin Master
+                </span>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {pendingDriverProfileChanges.map(drv => {
+                  const req = drv.profileChangeRequest!;
+                  const rf = req.requestedFields || {};
+                  const pv = req.previousValues || {};
+                  return (
+                    <div
+                      key={drv.id}
+                      style={{
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #FDE68A',
+                        borderRadius: 10,
+                        padding: '10px 14px',
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 10
+                      }}
+                    >
+                      <div style={{ fontSize: '0.78rem', color: '#111827', lineHeight: 1.5 }}>
+                        <div style={{ fontWeight: 800, color: '#0F172A' }}>{drv.name} ({formatPhone(drv.phone)})</div>
+                        <div style={{ color: '#475569' }}>
+                          {rf.name && <span style={{ marginRight: 10 }}><strong>Nome:</strong> {pv.name || drv.name} → <strong style={{ color: '#0F172A' }}>{rf.name}</strong></span>}
+                          {rf.phone && <span style={{ marginRight: 10 }}><strong>Telefone:</strong> {pv.phone || drv.phone} → <strong style={{ color: '#0F172A' }}>{rf.phone}</strong></span>}
+                          {rf.email !== undefined && <span style={{ marginRight: 10 }}><strong>E-mail:</strong> {pv.email || '—'} → <strong style={{ color: '#0F172A' }}>{rf.email || '—'}</strong></span>}
+                          {rf.city !== undefined && <span><strong>Cidade:</strong> {pv.city || '—'} → <strong style={{ color: '#0F172A' }}>{rf.city || '—'}</strong></span>}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => handleReviewDriverProfileChange(drv, 'aprovar')}
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 7,
+                            border: 'none',
+                            backgroundColor: '#16A34A',
+                            color: '#FFFFFF',
+                            fontSize: '0.74rem',
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}
+                        >
+                          <Check size={14} />
+                          <span>Aprovar Alteração</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReviewDriverProfileChange(drv, 'recusar')}
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 7,
+                            border: '1px solid #FCA5A5',
+                            backgroundColor: '#FFFFFF',
+                            color: '#DC2626',
+                            fontSize: '0.74rem',
+                            fontWeight: 800,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4
+                          }}
+                        >
+                          <X size={14} />
+                          <span>Recusar</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Banner acionável quando há cadastros ou documentos KYC aguardando aprovação */}
         {(inReviewCount > 0 || pendingCount > 0 || correctionsCount > 0) && (
           <div style={{
@@ -1656,6 +1774,21 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                           <div style={{ fontWeight: 600, color: '#0F172A' }}>{drv.name}</div>
                           <div style={{ fontSize: '0.7rem', color: '#64748B' }}>{formatPhone(drv.phone) || drv.phone}</div>
+                          {drv.profileChangeRequest?.status === 'pendente' && (
+                            <span style={{
+                              display: 'inline-block',
+                              marginTop: 3,
+                              padding: '1px 7px',
+                              borderRadius: 999,
+                              backgroundColor: '#FEF3C7',
+                              color: '#92400E',
+                              border: '1px solid #FCD34D',
+                              fontSize: '0.64rem',
+                              fontWeight: 800
+                            }}>
+                              Alteração Cadastral Pendente
+                            </span>
+                          )}
                         </td>
 
                         <td style={{ padding: '12px 14px', whiteSpace: 'nowrap' }}>

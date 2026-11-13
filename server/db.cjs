@@ -392,6 +392,10 @@ async function localQuery(text, params = []) {
 
   // 6. clients
   if (upper.startsWith('SELECT') && upper.includes('FROM PUBLIC.CLIENTS')) {
+    if (upper.includes('WHERE ID = $1')) {
+      const found = localStore.clients.find(c => c.id === params[0]);
+      return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
+    }
     if (upper.includes('WHERE PHONE = $1')) {
       const found = localStore.clients.find(c => c.phone === params[0]);
       return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
@@ -486,6 +490,34 @@ async function localQuery(text, params = []) {
         c.name = params[0];
         c.phone = params[1];
         c.email = params[2];
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET PHOTO = $1 WHERE ID = $2')) {
+      const c = localStore.clients.find(item => item.id === params[1]);
+      if (c) {
+        c.photo = params[0];
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET PROFILE_CHANGE_REQUEST = $1 WHERE ID = $2')) {
+      const c = localStore.clients.find(item => item.id === params[1]);
+      if (c) {
+        c.profile_change_request = parseJsonSafe(params[0], params[0]);
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET NAME = $1, PHONE = $2, EMAIL = $3, DOCUMENT = $4, PROFILE_CHANGE_REQUEST = $5 WHERE ID = $6')) {
+      const c = localStore.clients.find(item => item.id === params[5]);
+      if (c) {
+        c.name = params[0];
+        c.phone = params[1];
+        c.email = params[2];
+        c.document = params[3];
+        c.profile_change_request = parseJsonSafe(params[4], params[4]);
         saveLocalStore();
       }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };

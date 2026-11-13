@@ -564,6 +564,7 @@ function formatDriverRow(row, categoriesConfig) {
     location: row.location || null,
     rating: Number(row.rating || 5.0),
     totalRides: Number(row.total_rides ?? row.totalRides ?? 0),
+    profileChangeRequest: row.profileChangeRequest || meta.profileChangeRequest || null,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
     updatedAt: row.updated_at || row.updatedAt || new Date().toISOString()
   };
@@ -724,7 +725,8 @@ async function saveDriverRecord(driverRow) {
       : (Array.isArray(prevMeta.pendingCategoryRequests) ? prevMeta.pendingCategoryRequests : []),
     enabledCategories: Array.isArray(driverRow.enabledCategories)
       ? driverRow.enabledCategories
-      : (Array.isArray(prevMeta.enabledCategories) ? prevMeta.enabledCategories : undefined)
+      : (Array.isArray(prevMeta.enabledCategories) ? prevMeta.enabledCategories : undefined),
+    profileChangeRequest: driverRow.profileChangeRequest !== undefined ? driverRow.profileChangeRequest : (prevMeta.profileChangeRequest || null)
   };
 
   const normalized = {

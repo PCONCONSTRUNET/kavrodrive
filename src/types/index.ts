@@ -78,12 +78,45 @@ export interface PassengerTermsSignature {
   technicalEvidence: TermsSignatureTechnicalEvidence;
 }
 
+export interface ProfileChangeRequest {
+  id: string;
+  requestedFields: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    document?: string;
+    city?: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    vehicleColor?: string;
+    vehiclePlate?: string;
+  };
+  previousValues?: {
+    name?: string;
+    phone?: string;
+    email?: string;
+    document?: string;
+    city?: string;
+    vehicleBrand?: string;
+    vehicleModel?: string;
+    vehicleColor?: string;
+    vehiclePlate?: string;
+  };
+  status: 'pendente' | 'aprovado' | 'recusado';
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectionReason?: string;
+}
+
 export interface ClientProfile {
   id: string;
   name: string;
   phone: string;
   email?: string;
   document?: string;
+  photo?: string;
+  profileChangeRequest?: ProfileChangeRequest | null;
   password?: string;
   notes?: string;
   blocked?: boolean;
@@ -306,6 +339,7 @@ export interface DriverProfile {
   } | null;
   rating: number;
   totalRides: number;
+  profileChangeRequest?: ProfileChangeRequest | null;
   createdAt: string;
   updatedAt?: string;
 }

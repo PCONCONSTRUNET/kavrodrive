@@ -1,14 +1,16 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   User, Phone, Mail, LogOut, 
   MapPin, Trash2, Home, Briefcase, Star,
   LogIn, UserPlus, Smartphone, Download,
   CheckCircle2, ShieldCheck, Car, Clock,
   Save, Check, Plus, CreditCard, ChevronRight,
-  Headphones, Sparkles, ShieldAlert, Bell
+  Headphones, Sparkles, ShieldAlert, Bell,
+  Camera, Lock, Send, XCircle
 } from 'lucide-react';
 import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { AuthModal } from '../components/AuthModal';
 import { PushToggleButton } from '../components/PushNotifications';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
@@ -56,12 +58,54 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     };
   }, []);
 
-  // Formulário de edição
+  // Formulário de edição (enviado ao Admin Master para aprovação)
   const [name, setName] = useState(currentUser?.name || '');
   const [phone, setPhone] = useState(currentUser?.phone ? formatPhone(currentUser.phone) : '');
   const [email, setEmail] = useState(currentUser?.email || '');
   const [document, setDocument] = useState(currentUser?.document ? formatCPF(currentUser.document) : '');
   const [savedSuccess, setSavedSuccess] = useState(false);
+  const [isSubmittingProfileReq, setIsSubmittingProfileReq] = useState(false);
+  const [profileReqError, setProfileReqError] = useState('');
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const [photoFeedback, setPhotoFeedback] = useState('');
+  const clientPhotoInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let active = true;
+    const syncMe = async () => {
+      const fresh = await StorageService.fetchClientProfile(currentUser.id);
+      if (fresh && active) {
+        setCurrentUser(fresh);
+        if (onUserChange) onUserChange(fresh);
+      }
+    };
+    syncMe();
+    const t = setInterval(syncMe, 5000);
+    return () => {
+      active = false;
+      clearInterval(t);
+    };
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (!currentUser) return;
+    const pending = currentUser.profileChangeRequest?.status === 'pendente'
+      ? currentUser.profileChangeRequest.requestedFields
+      : null;
+    setName(pending?.name || currentUser.name || '');
+    setPhone(formatPhone(pending?.phone || currentUser.phone || ''));
+    setEmail(pending?.email !== undefined ? pending.email : (currentUser.email || ''));
+    setDocument(formatCPF(pending?.document !== undefined ? pending.document : (currentUser.document || '')));
+  }, [
+    currentUser?.id,
+    currentUser?.name,
+    currentUser?.phone,
+    currentUser?.email,
+    currentUser?.document,
+    currentUser?.profileChangeRequest?.id,
+    currentUser?.profileChangeRequest?.status
+  ]);
   const [isTermsOpen, setIsTermsOpen] = useState(false);
   const [isSignedContractOpen, setIsSignedContractOpen] = useState(false);
 
@@ -124,24 +168,56 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     if (onUserChange) onUserChange(client);
   };
 
-  const handleSaveProfile = (e: React.FormEvent) => {
+  const handleClientPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !currentUser) return;
+    setIsUploadingPhoto(true);
+    setPhotoFeedback('');
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('Falha ao ler imagem.'));
+        reader.readAsDataURL(file);
+      });
+      const compressed = await compressDataUrlForUpload(dataUrl, 640, 0.82);
+      const res = await StorageService.uploadClientPhoto(currentUser.id, compressed);
+      if (res.ok && res.client) {
+        setCurrentUser(res.client);
+        if (onUserChange) onUserChange(res.client);
+        setPhotoFeedback('Foto atualizada!');
+        setTimeout(() => setPhotoFeedback(''), 3000);
+      } else {
+        setPhotoFeedback(res.error || 'Erro ao salvar foto.');
+      }
+    } catch {
+      setPhotoFeedback('Imagem inválida.');
+    } finally {
+      setIsUploadingPhoto(false);
+    }
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentUser) return;
-    
-    const updated: ClientProfile = {
-      ...currentUser,
+    setProfileReqError('');
+    setIsSubmittingProfileReq(true);
+    const res = await StorageService.requestClientProfileChange(currentUser.id, {
       name: name.trim(),
       phone: phone.trim(),
-      email: email.trim() || undefined,
-      document: document.trim() || undefined,
-    };
-
-    StorageService.setCurrentUser(updated);
-    StorageService.saveClient(updated);
-    setCurrentUser(updated);
-    if (onUserChange) onUserChange(updated);
+      email: email.trim(),
+      document: document.trim()
+    });
+    setIsSubmittingProfileReq(false);
+    if (!res.ok || !res.client) {
+      setProfileReqError(res.error || 'Não foi possível enviar a solicitação.');
+      return;
+    }
+    setCurrentUser(res.client);
+    if (onUserChange) onUserChange(res.client);
     setSavedSuccess(true);
-    setTimeout(() => setSavedSuccess(false), 2600);
+    setTimeout(() => setSavedSuccess(false), 3500);
   };
 
   const handleLogout = () => {
@@ -400,40 +476,68 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
           }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
-                {/* Avatar com inicial e anel verde executivo */}
+                {/* Avatar com foto de perfil editável estilo Uber */}
+                <input
+                  ref={clientPhotoInputRef}
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  onChange={handleClientPhotoChange}
+                />
                 <div style={{ position: 'relative', flexShrink: 0 }}>
-                  <div style={{
-                    width: 54,
-                    height: 54,
-                    borderRadius: '50%',
-                    background: 'linear-gradient(135deg, #121A21 0%, #1E293B 100%)',
-                    color: '#76D800',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '1.35rem',
-                    fontWeight: 900,
-                    border: '2.5px solid #76D800',
-                    boxShadow: '0 4px 12px rgba(18, 26, 33, 0.25)'
-                  }}>
-                    {currentUser.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div style={{
-                    position: 'absolute',
-                    bottom: -2,
-                    right: -2,
-                    width: 20,
-                    height: 20,
-                    borderRadius: '50%',
-                    backgroundColor: '#10B981',
-                    border: '2px solid #FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: '#FFFFFF'
-                  }}>
-                    <CheckCircle2 size={13} strokeWidth={3} />
-                  </div>
+                  {currentUser.photo ? (
+                    <img
+                      src={currentUser.photo}
+                      alt={currentUser.name}
+                      style={{
+                        width: 60,
+                        height: 60,
+                        borderRadius: '50%',
+                        objectFit: 'cover',
+                        border: '2px solid #111111'
+                      }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: 60,
+                      height: 60,
+                      borderRadius: '50%',
+                      background: '#111111',
+                      color: '#FFFFFF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: '1.4rem',
+                      fontWeight: 900,
+                      border: '2px solid #E5E7EB'
+                    }}>
+                      {currentUser.name.charAt(0).toUpperCase()}
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    disabled={isUploadingPhoto}
+                    onClick={() => clientPhotoInputRef.current?.click()}
+                    title="Adicionar ou trocar foto de perfil"
+                    style={{
+                      position: 'absolute',
+                      bottom: -2,
+                      right: -2,
+                      width: 24,
+                      height: 24,
+                      borderRadius: '50%',
+                      backgroundColor: '#FFFFFF',
+                      border: '1.5px solid #D1D5DB',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#111111',
+                      boxShadow: '0 2px 6px rgba(0,0,0,0.16)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <Camera size={12} />
+                  </button>
                 </div>
 
                 {/* Nome, telefone e badges */}
@@ -584,11 +688,11 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                 <div style={{
-                  width: 28,
-                  height: 28,
+                  width: 30,
+                  height: 30,
                   borderRadius: 8,
-                  backgroundColor: '#121A21',
-                  color: '#76D800',
+                  backgroundColor: '#111111',
+                  color: '#FFFFFF',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center'
@@ -596,16 +700,21 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                   <User size={15} />
                 </div>
                 <div>
-                  <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#121A21' }}>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 900, color: '#111111' }}>
                     Dados do Cadastro
                   </div>
-                  <div style={{ fontSize: '0.70rem', color: '#64748B' }}>
-                    Usados na identificação e emissão de recibos
+                  <div style={{ fontSize: '0.70rem', color: '#6B7280' }}>
+                    Troca de nome, telefone ou e-mail requer aprovação do Admin Master
                   </div>
                 </div>
               </div>
 
-              {hasChanges && (
+              {photoFeedback && (
+                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#15803D' }}>
+                  {photoFeedback}
+                </span>
+              )}
+              {!photoFeedback && hasChanges && (
                 <span style={{
                   fontSize: '0.68rem',
                   fontWeight: 800,
@@ -615,10 +724,84 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                   borderRadius: 8,
                   border: '1px solid #FDE68A'
                 }}>
-                  Alterações pendentes
+                  Alterações não enviadas
                 </span>
               )}
             </div>
+
+            {currentUser.profileChangeRequest?.status === 'pendente' && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 10,
+                backgroundColor: '#FFFBEB',
+                border: '1px solid #FDE68A',
+                color: '#92400E',
+                fontSize: '0.76rem',
+                marginBottom: 12
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800 }}>
+                  <Clock size={14} />
+                  <span>Solicitação em análise pelo Admin Master</span>
+                </div>
+                <div style={{ marginTop: 3 }}>
+                  Seus dados atuais permanecem ativos até a aprovação.
+                </div>
+              </div>
+            )}
+
+            {currentUser.profileChangeRequest?.status === 'aprovado' && (
+              <div style={{
+                padding: '9px 12px',
+                borderRadius: 10,
+                backgroundColor: '#F0FDF4',
+                border: '1px solid #BBF7D0',
+                color: '#166534',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+                marginBottom: 12
+              }}>
+                <CheckCircle2 size={14} />
+                <span>Sua última solicitação de alteração cadastral foi aprovada.</span>
+              </div>
+            )}
+
+            {currentUser.profileChangeRequest?.status === 'recusado' && (
+              <div style={{
+                padding: '10px 12px',
+                borderRadius: 10,
+                backgroundColor: '#FEF2F2',
+                border: '1px solid #FECACA',
+                color: '#991B1B',
+                fontSize: '0.76rem',
+                marginBottom: 12
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800 }}>
+                  <XCircle size={14} />
+                  <span>Alteração recusada pelo Admin Master</span>
+                </div>
+                <div style={{ marginTop: 3 }}>
+                  {currentUser.profileChangeRequest.rejectionReason || 'A troca de dados não foi autorizada pela central.'}
+                </div>
+              </div>
+            )}
+
+            {profileReqError && (
+              <div style={{
+                padding: '8px 10px',
+                borderRadius: 8,
+                backgroundColor: '#FEF2F2',
+                border: '1px solid #FECACA',
+                color: '#DC2626',
+                fontSize: '0.76rem',
+                fontWeight: 700,
+                marginBottom: 10
+              }}>
+                {profileReqError}
+              </div>
+            )}
 
             <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {/* Nome */}
@@ -729,13 +912,13 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                 </div>
               </div>
 
-              {/* Botão de Atualização Otimizado */}
+              {/* Botão de Solicitação ao Admin Master */}
               <button
                 type="submit"
-                disabled={!hasChanges && !savedSuccess}
+                disabled={isSubmittingProfileReq || (!hasChanges && !savedSuccess)}
                 style={{
-                  height: 42,
-                  borderRadius: 12,
+                  height: 44,
+                  borderRadius: 10,
                   marginTop: 4,
                   fontSize: '0.85rem',
                   fontWeight: 800,
@@ -743,36 +926,37 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 7,
-                  cursor: hasChanges ? 'pointer' : 'default',
+                  cursor: hasChanges && !isSubmittingProfileReq ? 'pointer' : 'default',
                   transition: 'all 0.2s ease',
-                  border: savedSuccess ? '1px solid #86EFAC' : hasChanges ? 'none' : '1px solid #E2E8F0',
+                  border: savedSuccess ? '1px solid #86EFAC' : hasChanges ? 'none' : '1px solid #E5E7EB',
                   backgroundColor: savedSuccess
                     ? '#DCFCE7'
                     : hasChanges
-                    ? '#76D800'
-                    : '#F1F5F9',
+                    ? '#111111'
+                    : '#F3F4F6',
                   color: savedSuccess
                     ? '#15803D'
                     : hasChanges
-                    ? '#121A21'
-                    : '#64748B',
-                  boxShadow: hasChanges ? '0 4px 14px rgba(118, 216, 0, 0.35)' : 'none'
+                    ? '#FFFFFF'
+                    : '#6B7280'
                 }}
               >
                 {savedSuccess ? (
                   <>
                     <Check size={16} color="#15803D" />
-                    <span>Alterações Salvas com Sucesso!</span>
+                    <span>Solicitação Enviada ao Admin Master!</span>
                   </>
+                ) : isSubmittingProfileReq ? (
+                  <span>Enviando solicitação...</span>
                 ) : hasChanges ? (
                   <>
-                    <Save size={16} />
-                    <span>Salvar Alterações</span>
+                    <Send size={15} />
+                    <span>Solicitar Alteração ao Admin Master</span>
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 size={15} color="#94A3B8" />
-                    <span>Dados Pessoais Atualizados</span>
+                    <Lock size={14} color="#9CA3AF" />
+                    <span>Dados Protegidos (Sem Alterações)</span>
                   </>
                 )}
               </button>
@@ -1232,10 +1416,10 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                   window.location.reload();
                 }}
                 style={{
-                  backgroundColor: '#121A21',
-                  color: '#76D800',
+                  backgroundColor: '#111111',
+                  color: '#FFFFFF',
                   border: 'none',
-                  padding: '6px 11px',
+                  padding: '7px 12px',
                   borderRadius: 8,
                   fontSize: '0.74rem',
                   fontWeight: 800,

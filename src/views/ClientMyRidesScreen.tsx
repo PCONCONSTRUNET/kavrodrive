@@ -259,22 +259,24 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                 style={{
                   padding: 16,
                   cursor: 'pointer',
-                  border: isLive ? '2px solid #76D800' : selectedRide?.id === ride.id ? '2px solid #76D800' : '1px solid #E2E8F0',
-                  boxShadow: isLive ? '0 6px 20px rgba(118, 216, 0, 0.18)' : undefined,
+                  backgroundColor: '#FFFFFF',
+                  borderRadius: 16,
+                  border: isLive ? '2px solid #111111' : selectedRide?.id === ride.id ? '2px solid #111111' : '1px solid #E5E7EB',
+                  boxShadow: isLive ? '0 6px 20px rgba(0, 0, 0, 0.08)' : '0 2px 8px rgba(0, 0, 0, 0.03)',
                   transition: 'all 0.15s ease'
                 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: '0.88rem', fontWeight: 900, color: '#121A21' }}>{formatRideCode(ride)}</span>
+                    <span style={{ fontSize: '0.88rem', fontWeight: 900, color: '#111111' }}>{formatRideCode(ride)}</span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         handleCopyCode(formatRideCode(ride));
                       }}
-                      style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', padding: 2 }}
+                      style={{ background: 'none', border: 'none', color: '#9CA3AF', cursor: 'pointer', padding: 2 }}
                     >
-                      {copiedId === formatRideCode(ride) ? <Check size={14} color="#65BE00" /> : <Copy size={14} />}
+                      {copiedId === formatRideCode(ride) ? <Check size={14} color="#16A34A" /> : <Copy size={14} />}
                     </button>
                   </div>
                   <span className={`badge-status ${statusInfo.class}`}>
@@ -283,13 +285,13 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                 </div>
 
                 {/* Data e Hora */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '0.82rem', color: '#475569', marginBottom: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '0.82rem', color: '#4B5563', marginBottom: 12 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Calendar size={14} color="#76D800" />
+                    <Calendar size={14} color="#111111" />
                     <span>{ride.date.split('-').reverse().join('/')}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <Clock size={14} color="#76D800" />
+                    <Clock size={14} color="#111111" />
                     <span>{ride.time}</span>
                   </div>
                 </div>
@@ -297,13 +299,13 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                 {/* Embarque e Destino simplificado */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: '0.82rem' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#76D800', flexShrink: 0 }} />
-                    <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#16A34A', flexShrink: 0 }} />
+                    <span style={{ color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {ride.origin.address}
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#121A21', flexShrink: 0 }} />
+                    <div style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: '#111111', flexShrink: 0 }} />
                     <span style={{ color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {ride.destination.address}
                     </span>
@@ -335,7 +337,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#4D9400', fontWeight: 600 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.78rem', color: '#111111', fontWeight: 700 }}>
                     <span>Ver detalhes</span>
                     <ChevronRight size={15} />
                   </div>
@@ -343,7 +345,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
 
                 {/* BOTÃO DIRETO DE VER AO VIVO NO GPS NO PRÓPRIO CARD */}
                 {isLive && (
-                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed #CBD5E1' }}>
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed #E5E7EB' }}>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -352,31 +354,30 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       }}
                       style={{
                         width: '100%',
-                        height: 42,
-                        backgroundColor: '#76D800',
-                        color: '#121A21',
+                        height: 44,
+                        backgroundColor: '#111111',
+                        color: '#FFFFFF',
                         border: 'none',
-                        borderRadius: 12,
+                        borderRadius: 10,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: 8,
                         fontSize: '0.84rem',
                         fontWeight: 800,
-                        cursor: 'pointer',
-                        boxShadow: '0 4px 14px rgba(118, 216, 0, 0.35)'
+                        cursor: 'pointer'
                       }}
                     >
-                      <Navigation size={16} color="#121A21" fill="#121A21" />
+                      <Navigation size={16} color="#FFFFFF" fill="#FFFFFF" />
                       <span>
-                        {ride.status === 'a_caminho' ? '🚗 Motorista a Caminho — Ver ao Vivo' : '🚀 Corrida em Andamento — Acompanhar GPS'}
+                        {ride.status === 'a_caminho' ? 'Motorista a Caminho — Ver ao Vivo' : 'Corrida em Andamento — Acompanhar GPS'}
                       </span>
                     </button>
                   </div>
                 )}
 
                 {isConfirmed && (
-                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed #CBD5E1' }}>
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed #E5E7EB' }}>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -385,22 +386,21 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       }}
                       style={{
                         width: '100%',
-                        height: 38,
-                        backgroundColor: '#121A21',
-                        color: '#76D800',
-                        border: '1.5px solid #76D800',
-                        borderRadius: 12,
+                        height: 40,
+                        backgroundColor: '#F3F4F6',
+                        color: '#111111',
+                        border: '1px solid #E5E7EB',
+                        borderRadius: 10,
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: 7,
                         fontSize: '0.80rem',
                         fontWeight: 800,
-                        cursor: 'pointer',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                        cursor: 'pointer'
                       }}
                     >
-                      <Navigation size={14} color="#76D800" />
+                      <Navigation size={14} color="#111111" />
                       <span>Acompanhar Motorista / Rota ao Vivo</span>
                     </button>
                   </div>
@@ -653,10 +653,10 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       setLiveTrackingRide(target);
                     }}
                     style={{
-                      backgroundColor: '#76D800',
-                      color: '#121A21',
+                      backgroundColor: '#111111',
+                      color: '#FFFFFF',
                       border: 'none',
-                      borderRadius: 12,
+                      borderRadius: 10,
                       height: 44,
                       padding: '0 14px',
                       display: 'flex',
@@ -666,11 +666,10 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       fontSize: '0.88rem',
                       fontWeight: 800,
                       cursor: 'pointer',
-                      boxShadow: '0 4px 12px rgba(118, 216, 0, 0.28)',
                       width: '100%'
                     }}
                   >
-                    <Navigation size={17} color="#121A21" />
+                    <Navigation size={17} color="#FFFFFF" />
                     <span>Ver Motorista no GPS em Tempo Real</span>
                   </button>
                 )}
