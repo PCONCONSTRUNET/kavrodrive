@@ -390,3 +390,4 @@ export const PasswordRecoveryModal: React.FC<PasswordRecoveryModalProps> = ({
     </div>
   );
 };
+

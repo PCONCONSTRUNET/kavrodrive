@@ -17,6 +17,7 @@ const db = require('../server/db.cjs');
 const finance = require('../server/financeEngine.cjs');
 const audit = require('../server/auditEngine.cjs');
 const realtimeHub = require('../server/realtimeHub.cjs');
+const security = require('../server/securityUtils.cjs');
 const { handleApiRequest } = require('../server/apiHandler.cjs');
 
 // Garante que chaves de serviços externos carregadas do .env não disparem chamadas externas em testes
@@ -142,9 +143,43 @@ test('GET /api/health retorna diagnóstico de prontidão e status SSE', async ()
   assert.equal(typeof json.services?.turnstileConfigured, 'boolean');
 });
 
-test('GET /api/realtime/stream abre stream SSE e transmite evento ao vivo', async () => {
+test('GET /api/realtime/stream isola anonimos e entrega eventos apenas com escopo autorizado', async () => {
+  // 1) Visitante anônimo tentando forçar ?rideId=UP-901 NÃO pode receber chat:message
   await new Promise((resolve, reject) => {
-    const req = http.get(`${baseUrl}/api/realtime/stream?rideId=UP-SSE-1`, (res) => {
+    const req = http.get(`${baseUrl}/api/realtime/stream?rideId=UP-901`, (res) => {
+      assert.equal(res.statusCode, 200);
+      let buffer = '';
+      let sentPublish = false;
+      const doneTimer = setTimeout(() => {
+        req.destroy();
+        assert.ok(buffer.includes('"viewerRole":"anon"'));
+        assert.ok(!buffer.includes('event: chat:message'), 'SSE anônimo não deve receber chat:message privado');
+        resolve();
+      }, 220);
+
+      res.on('data', (chunk) => {
+        buffer += chunk.toString('utf8');
+        if (!sentPublish && buffer.includes('event: connected')) {
+          sentPublish = true;
+          realtimeHub.publish('chat:message', { rideId: 'UP-901', message: { id: 'm-anon', text: 'Segredo!' } }, { rideId: 'UP-901' });
+        }
+      });
+
+      res.on('error', (err) => {
+        if (err && err.code === 'ECONNRESET') return;
+        clearTimeout(doneTimer);
+        reject(err);
+      });
+    });
+
+    activeSseRequests.add(req);
+    req.on('close', () => activeSseRequests.delete(req));
+  });
+
+  // 2) Espectador com token de rastreamento assinado da corrida recebe chat:message ao vivo
+  const trackToken = security.signTrackingToken('ride', 'UP-901');
+  await new Promise((resolve, reject) => {
+    const req = http.get(`${baseUrl}/api/realtime/stream?rideId=UP-901&t=${encodeURIComponent(trackToken)}`, (res) => {
       assert.equal(res.statusCode, 200);
       assert.ok(String(res.headers['content-type'] || '').includes('text/event-stream'));
 
@@ -160,7 +195,7 @@ test('GET /api/realtime/stream abre stream SSE e transmite evento ao vivo', asyn
         buffer += chunk.toString('utf8');
         if (!sentPublish && buffer.includes('event: connected')) {
           sentPublish = true;
-          realtimeHub.publish('chat:message', { rideId: 'UP-SSE-1', message: { id: 'm-1', text: 'Olá!' } }, { rideId: 'UP-SSE-1' });
+          realtimeHub.publish('chat:message', { rideId: 'UP-901', message: { id: 'm-1', text: 'Olá!' } }, { rideId: 'UP-901' });
         }
         if (buffer.includes('event: chat:message') && buffer.includes('Olá!')) {
           clearTimeout(timer);
@@ -404,8 +439,8 @@ test('Taxas financeiras por meio de pagamento e saque são aplicadas em corridas
       clientPhone: '(48) 99333-4455',
       originAddress: 'Centro',
       destinationAddress: 'Aeroporto',
-      distanceKm: 10,
-      durationMin: 20,
+      distanceKm: 25,
+      durationMin: 24,
       totalPrice: 100,
       commissionPercent: 20,
       category: 'kavro_go',
@@ -625,4 +660,343 @@ test('Multa de cancelamento, cashDeductFromBalanceFirst=false e Auditoria em Por
   const listedAudit = await audit.listAuditLogs({ category: 'financeiro_corridas', search: cancelRideId });
   assert.ok(listedAudit.total >= 1);
   assert.ok(listedAudit.logs[0].title.includes('Cancelamento com multa aplicada'));
+});
+
+test('Seguranca Critica: blindagem de preco, anti-takeover, RBAC, webhook fail-closed e KYC/mensagens', async () => {
+  // 1) Bloqueia account takeover no cadastro de motorista duplicado (inclusive motorista existente)
+  const dupDrvRes = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Invasor',
+      phone: '(48) 99888-7766',
+      email: 'motorista.teste@kavro.test',
+      document: '12345678909',
+      password: 'hack',
+      vehicleBrand: 'VW',
+      vehicleModel: 'Polo',
+      vehiclePlate: 'DUP1D11',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(dupDrvRes.status, 409);
+
+  // 2) /api/drivers/check não expõe CPF (document) nem placa (vehiclePlate)
+  const chkDrvRes = await apiJson('/api/drivers/check', {
+    method: 'POST',
+    body: { identifier: 'motorista.teste@kavro.test' }
+  });
+  assert.equal(chkDrvRes.status, 200);
+  assert.equal(chkDrvRes.json.found, true);
+  assert.ok(!chkDrvRes.json.driver?.document, 'Não deve vazar CPF em /api/drivers/check');
+  assert.ok(!chkDrvRes.json.driver?.vehiclePlate, 'Não deve vazar placa em /api/drivers/check');
+
+  // 3) Cliente com password_hash=NULL não pode sofrer hijack no login nem sobrescrita via /register
+  const noPwdClientId = `cli-nopwd-${Date.now()}`;
+  await db.query(
+    `INSERT INTO public.clients (id, name, phone, email, created_at) VALUES ($1, $2, $3, $4, NOW())`,
+    [noPwdClientId, 'Sem Senha Original', '(48) 99123-4567', 'sem.senha@kavro.test']
+  );
+
+  const hijackLoginRes = await apiJson('/api/clients/login', {
+    method: 'POST',
+    body: { identifier: 'sem.senha@kavro.test', password: 'minha-senha-arbitraria' }
+  });
+  assert.equal(hijackLoginRes.status, 403);
+  assert.equal(hijackLoginRes.json.code, 'PASSWORD_SETUP_REQUIRED');
+
+  const hijackRegRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Atacante',
+      phone: '(48) 99123-4567',
+      email: 'sem.senha@kavro.test',
+      password: 'hack',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(hijackRegRes.status, 409);
+
+  const anonPostClient = await apiJson('/api/clients', {
+    method: 'POST',
+    body: { id: noPwdClientId, name: 'Atacante Direto', phone: '48999999999' }
+  });
+  assert.equal(anonPostClient.status, 401);
+
+  // 4) Endpoints sensíveis rejeitam anônimos e headers forjáveis
+  const kycLeak = await apiJson('/api/kyc/driver/drv-1001');
+  assert.equal(kycLeak.status, 401);
+
+  const sosLeak = await apiJson('/api/sos/alerts');
+  assert.equal(sosLeak.status, 401);
+
+  const notifCreateAnon = await apiJson('/api/notifications', {
+    method: 'POST',
+    body: { title: 'Falsa', message: 'Spam' }
+  });
+  assert.equal(notifCreateAnon.status, 401);
+
+  const syncAnon = await apiJson('/api/sync');
+  assert.equal(syncAnon.status, 200);
+  assert.deepEqual(syncAnon.json.rides, []);
+
+  // 5) Webhook Mercado Pago em produção sem secret falha fechado (401)
+  const prevEnv = process.env.NODE_ENV;
+  delete process.env.MERCADOPAGO_WEBHOOK_SECRET;
+  process.env.NODE_ENV = 'production';
+  try {
+    const mpFailClosed = await apiJson('/api/webhooks/mercadopago', {
+      method: 'POST',
+      body: { type: 'payment', data: { id: 'fake-1' } }
+    });
+    assert.equal(mpFailClosed.status, 401);
+  } finally {
+    process.env.NODE_ENV = prevEnv;
+  }
+
+  // 6) Servidor recalcula tarifa oficial (rejeita totalPrice: 0.01 adulterado) e impede gorjeta falsa/pagamento falso
+  const cliRegSec = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Passageiro Blindagem',
+      phone: '(48) 99555-1212',
+      email: 'blindagem@kavro.test',
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliRegSec.status, 200);
+  const secCliToken = cliRegSec.json.clientToken;
+
+  const tamperedRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': secCliToken },
+    body: {
+      clientId: cliRegSec.json.client.id,
+      clientName: 'Passageiro Blindagem',
+      clientPhone: '(48) 99555-1212',
+      originAddress: 'Origem Real',
+      destinationAddress: 'Destino Real',
+      distanceKm: 10,
+      durationMin: 10,
+      totalPrice: 0.01,
+      commissionPercent: 0,
+      category: 'kavro_go',
+      paymentMethod: 'pix'
+    }
+  });
+  assert.equal(tamperedRide.status, 200);
+  assert.ok(tamperedRide.json.ride.totalPrice >= 15, 'Servidor deve ignorar preço adulterado R$ 0,01');
+  assert.ok(tamperedRide.json.ride.commissionPercent > 0, 'Servidor deve aplicar comissão oficial');
+
+  const secRideId = tamperedRide.json.ride.id;
+  // Spoofing via header x-client-id (mesmo sabendo o clientId real) deve ser bloqueado (401)
+  const spoofChatRes = await apiJson(`/api/rides/${encodeURIComponent(secRideId)}/messages`, {
+    method: 'GET',
+    headers: { 'x-client-id': cliRegSec.json.client.id }
+  });
+  assert.equal(spoofChatRes.status, 401);
+
+  // Gorjeta em corrida não finalizada deve falhar (400) e passageiro não pode forjar pagamento via PATCH /payment (403)
+  const earlyTipRes = await apiJson(`/api/rides/${encodeURIComponent(secRideId)}/rate`, {
+    method: 'POST',
+    headers: { 'x-client-token': secCliToken },
+    body: { role: 'client', rating: 5, tipAmount: 500 }
+  });
+  assert.equal(earlyTipRes.status, 400);
+
+  const spoofPayRes = await apiJson(`/api/rides/${encodeURIComponent(secRideId)}/payment`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': secCliToken },
+    body: { paymentStatus: 'pago', paidAmount: 50 }
+  });
+  assert.equal(spoofPayRes.status, 403);
+});
+
+test('Operacao Uber Real: trava atomica de aceite simultaneo, PIN de embarque 4 digitos, saque atomico e LGPD', async () => {
+  // Cria dois motoristas aprovados distintos para disputar a mesma corrida simultaneamente
+  const drvEmailA = `disputa.a.${Date.now()}@kavro.test`;
+  const drvEmailB = `disputa.b.${Date.now()}@kavro.test`;
+  const regA = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Motorista A',
+      phone: '(48) 98111-1111',
+      email: drvEmailA,
+      document: '11122233344',
+      password: '1234',
+      vehicleBrand: 'VW',
+      vehicleModel: 'Polo',
+      vehiclePlate: 'AAA1A11',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  const regB = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Motorista B',
+      phone: '(48) 98222-2222',
+      email: drvEmailB,
+      document: '55566677788',
+      password: '1234',
+      vehicleBrand: 'GM',
+      vehicleModel: 'Onix',
+      vehiclePlate: 'BBB2B22',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(regA.status, 200);
+  assert.equal(regB.status, 200);
+
+  const drvA = await finance.getDriverById(regA.json.driver.id);
+  const drvB = await finance.getDriverById(regB.json.driver.id);
+  await finance.saveDriverRecord({ ...drvA, approvalStatus: 'aprovado', kyc: { status: 'aprovado' } });
+  await finance.saveDriverRecord({ ...drvB, approvalStatus: 'aprovado', kyc: { status: 'aprovado' } });
+
+  const tokA = regA.json.driverToken;
+  const tokB = regB.json.driverToken;
+
+  const cliRegPin = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Passageiro PIN',
+      phone: '(48) 98333-3333',
+      email: `pin.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliRegPin.status, 200);
+  const pinCliToken = cliRegPin.json.clientToken;
+
+  const createPinRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': pinCliToken },
+    body: {
+      clientId: cliRegPin.json.client.id,
+      clientName: 'Passageiro PIN',
+      clientPhone: '(48) 98333-3333',
+      originAddress: 'Ponto A',
+      destinationAddress: 'Ponto B',
+      distanceKm: 5,
+      durationMin: 10,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(createPinRide.status, 200);
+  const rideId = createPinRide.json.ride.id;
+  const officialPin = createPinRide.json.ride.boardingPin;
+  assert.match(String(officialPin || ''), /^\d{4}$/);
+
+  // 1) Corrida de aceite atômico entre 2 motoristas simultaneamente
+  const [accA, accB] = await Promise.all([
+    apiJson(`/api/rides/${encodeURIComponent(rideId)}/accept`, {
+      method: 'POST',
+      headers: { 'x-driver-token': tokA },
+      body: { driverId: drvA.id }
+    }),
+    apiJson(`/api/rides/${encodeURIComponent(rideId)}/accept`, {
+      method: 'POST',
+      headers: { 'x-driver-token': tokB },
+      body: { driverId: drvB.id }
+    })
+  ]);
+  const statuses = [accA.status, accB.status].sort();
+  assert.deepEqual(statuses, [200, 409]);
+
+  const winnerToken = accA.status === 200 ? tokA : tokB;
+  const winnerRes = accA.status === 200 ? accA : accB;
+
+  // Motorista vencedor NÃO recebe o boardingPin e recebe telefone do passageiro mascarado
+  assert.equal(winnerRes.json.ride.boardingPin, undefined);
+  assert.equal(winnerRes.json.ride.requiresBoardingPin, true);
+  assert.equal(winnerRes.json.ride.clientPhone, '');
+  assert.equal(winnerRes.json.ride.clientPhoneMasked, '••••-3333');
+
+  // 2) Embarque exige o PIN correto de 4 dígitos
+  const wrongPinRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': winnerToken },
+    body: { status: 'em_andamento', boardingPin: '0000' === officialPin ? '9999' : '0000' }
+  });
+  assert.equal(wrongPinRes.status, 400);
+
+  const rightPinRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': winnerToken },
+    body: { status: 'em_andamento', boardingPin: officialPin }
+  });
+  assert.equal(rightPinRes.status, 200);
+  assert.equal(rightPinRes.json.ride.status, 'em_andamento');
+
+  // 3) Trava concorrente de saque impede duplicidade de saldo disponível
+  const winnerDrvId = accA.status === 200 ? drvA.id : drvB.id;
+  const winnerCpf = accA.status === 200 ? '11122233344' : '55566677788';
+  await finance.saveDriverRecord({
+    ...(await finance.getDriverById(winnerDrvId)),
+    pixKey: winnerCpf,
+    pixType: 'cpf',
+    pixKeys: [{
+      id: 'pk-conc-1',
+      pixType: 'cpf',
+      pixKey: winnerCpf,
+      bankName: 'Inter',
+      holderName: 'Motorista',
+      isDefault: true
+    }]
+  });
+  await finance.recordLedgerEntry({
+    idempotencyKey: `credit_conc_${Date.now()}`,
+    driverId: winnerDrvId,
+    driverName: 'Motorista Disputa',
+    entryType: 'ride_earning_credit',
+    paymentMethod: 'pix',
+    grossAmount: 100,
+    commissionPercent: 0,
+    commissionAmount: 0,
+    driverNetAmount: 100,
+    balanceDelta: 100,
+    balanceBucket: 'available',
+    status: 'confirmado',
+    description: 'Saldo teste concorrencia'
+  });
+
+  const [w1, w2] = await Promise.all([
+    apiJson(`/api/drivers/${encodeURIComponent(winnerDrvId)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': winnerToken },
+      body: { amount: 100, pixKey: winnerCpf, pixType: 'cpf' }
+    }),
+    apiJson(`/api/drivers/${encodeURIComponent(winnerDrvId)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': winnerToken },
+      body: { amount: 100, pixKey: winnerCpf, pixType: 'cpf' }
+    })
+  ]);
+  const wSuccessCount = [w1, w2].filter(x => x && x.status === 200 && x.json?.ok).length;
+  assert.equal(wSuccessCount, 1, 'Apenas 1 dos 2 saques simultâneos pode ser aprovado');
+  const finalWallet = await finance.getDriverWallet(winnerDrvId);
+  assert.equal(finalWallet.availableBalance, 0);
+
+  // 4) Exclusão LGPD bloqueada durante viagem ativa e liberada após finalização
+  const lgpdBlocked = await apiJson('/api/privacy/delete-account', {
+    method: 'POST',
+    headers: { 'x-client-token': pinCliToken },
+    body: { role: 'client' }
+  });
+  assert.equal(lgpdBlocked.status, 409);
+
+  const finishRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': winnerToken },
+    body: { status: 'finalizada' }
+  });
+  assert.equal(finishRes.status, 200);
+  const lgpdAllowed = await apiJson('/api/privacy/delete-account', {
+    method: 'POST',
+    headers: { 'x-client-token': pinCliToken },
+    body: { role: 'client' }
+  });
+  assert.equal(lgpdAllowed.status, 200);
+  assert.equal(lgpdAllowed.json.anonymized, true);
 });

@@ -699,12 +699,18 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     refreshData();
   };
 
-  const handleStartTrip = async (ride: Ride) => {
-    await fetch(`/api/rides/${encodeURIComponent(ride.id)}/status`, {
+  const handleStartTrip = async (ride: Ride, boardingPin?: string) => {
+    setStatusError('');
+    const res = await fetch(`/api/rides/${encodeURIComponent(ride.id)}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
-      body: JSON.stringify({ status: 'em_andamento' })
+      body: JSON.stringify({ status: 'em_andamento', boardingPin })
     });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      setStatusError(errData.error || 'PIN de embarque inválido.');
+      return;
+    }
     await StorageService.syncFromDatabase();
     refreshData();
   };
@@ -2304,8 +2310,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           onOpenSos={() => setIsSosOpen(true)}
           onRecenterMap={() => setRecenterSignal(s => s + 1)}
           onArrivePickup={() => handleArrivePickup(activeRide)}
-          onStartTrip={() => handleStartTrip(activeRide)}
+          onStartTrip={(pin) => handleStartTrip(activeRide, pin)}
           onInitiateComplete={() => handleInitiateCompleteRide(activeRide)}
+          startTripError={statusError}
         />
       )}
 
@@ -2686,14 +2693,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             >
               {copiedDebtPix ? 'Copiado!' : 'Copiar Código PIX'}
             </button>
-            <button
-              type="button"
-              onClick={handleSimulateDebtPixWebhook}
-              disabled={isSimulatingDebtWebhook}
-              style={{ width: '100%', padding: '12px', borderRadius: 10, backgroundColor: '#111111', color: '#FFFFFF', border: 'none', fontWeight: 800, marginBottom: 8, cursor: 'pointer' }}
-            >
-              {isSimulatingDebtWebhook ? 'Confirmando...' : 'Confirmar Pagamento'}
-            </button>
+            {import.meta.env.DEV && (
+              <button
+                type="button"
+                onClick={handleSimulateDebtPixWebhook}
+                disabled={isSimulatingDebtWebhook}
+                style={{ width: '100%', padding: '12px', borderRadius: 10, backgroundColor: '#111111', color: '#FFFFFF', border: 'none', fontWeight: 800, marginBottom: 8, cursor: 'pointer' }}
+              >
+                {isSimulatingDebtWebhook ? 'Confirmando...' : 'Confirmar Pagamento'}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setDebtPixModalData(null)}

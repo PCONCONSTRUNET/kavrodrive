@@ -455,3 +455,4 @@ export async function readCrlvDocumentFile(
   const ocrText = await runOcrOnImageDataUrl(imgUrl, onProgress);
   return parseCrlvText(ocrText, 'ocr');
 }
+

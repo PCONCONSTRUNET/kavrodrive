@@ -1079,3 +1079,4 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     </form>
   );
 };
+

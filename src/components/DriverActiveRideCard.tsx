@@ -24,8 +24,9 @@ interface DriverActiveRideCardProps {
   onOpenSos?: () => void;
   onRecenterMap?: () => void;
   onArrivePickup?: () => void;
-  onStartTrip: () => void;
+  onStartTrip: (boardingPin?: string) => void;
   onInitiateComplete: () => void;
+  startTripError?: string | null;
 }
 
 export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
@@ -41,8 +42,12 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
   onArrivePickup,
   onStartTrip,
   onInitiateComplete,
+  startTripError,
 }) => {
   const [isDetailsExpanded, setIsDetailsExpanded] = useState(true);
+  const [showPinPrompt, setShowPinPrompt] = useState(false);
+  const [pinInput, setPinInput] = useState('');
+  const [localPinError, setLocalPinError] = useState('');
   const category = getCategoryById(ride.category, config);
   const cleanPhone = getCleanWhatsappNumber(ride.clientPhone || '');
   const isTripInProgress = ride.status === 'em_andamento';
@@ -543,28 +548,96 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                 )}
 
                 {!isTripInProgress ? (
-                  <button
-                    type="button"
-                    onClick={onStartTrip}
-                    style={{
-                      flex: 1,
-                      height: 48,
-                      borderRadius: 12,
-                      backgroundColor: '#15803D',
-                      color: '#FFFFFF',
-                      border: 'none',
-                      fontSize: '0.96rem',
-                      fontWeight: 800,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 8,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <ArrowRight size={19} strokeWidth={2.8} />
-                    <span>Iniciar {category.name}</span>
-                  </button>
+                  ride.requiresBoardingPin && showPinPrompt ? (
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        <input
+                          type="tel"
+                          inputMode="numeric"
+                          maxLength={4}
+                          value={pinInput}
+                          onChange={(e) => {
+                            setPinInput(e.target.value.replace(/\D/g, '').slice(0, 4));
+                            setLocalPinError('');
+                          }}
+                          placeholder="PIN 4 dígitos"
+                          autoFocus
+                          style={{
+                            width: 120,
+                            height: 48,
+                            borderRadius: 12,
+                            border: '2px solid #2563EB',
+                            textAlign: 'center',
+                            fontSize: '1.1rem',
+                            fontWeight: 900,
+                            letterSpacing: '0.2em',
+                            color: '#111111',
+                            outline: 'none'
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (pinInput.length !== 4) {
+                              setLocalPinError('Digite o PIN de 4 dígitos informado pelo passageiro.');
+                              return;
+                            }
+                            setLocalPinError('');
+                            onStartTrip(pinInput);
+                          }}
+                          style={{
+                            flex: 1,
+                            height: 48,
+                            borderRadius: 12,
+                            backgroundColor: '#15803D',
+                            color: '#FFFFFF',
+                            border: 'none',
+                            fontSize: '0.9rem',
+                            fontWeight: 800,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Confirmar Embarque
+                        </button>
+                      </div>
+                      {(localPinError || startTripError) && (
+                        <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#DC2626' }}>
+                          {localPinError || startTripError}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (ride.requiresBoardingPin) {
+                          setPinInput('');
+                          setLocalPinError('');
+                          setShowPinPrompt(true);
+                        } else {
+                          onStartTrip();
+                        }
+                      }}
+                      style={{
+                        flex: 1,
+                        height: 48,
+                        borderRadius: 12,
+                        backgroundColor: '#15803D',
+                        color: '#FFFFFF',
+                        border: 'none',
+                        fontSize: '0.96rem',
+                        fontWeight: 800,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 8,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <ArrowRight size={19} strokeWidth={2.8} />
+                      <span>Iniciar {category.name}</span>
+                    </button>
+                  )
                 ) : (
                   <button
                     type="button"

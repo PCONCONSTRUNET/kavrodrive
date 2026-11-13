@@ -549,6 +549,36 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
                 </div>
               </div>
 
+              {ride.boardingPin && (ride.status === 'confirmada' || ride.status === 'a_caminho') && (
+                <div style={{
+                  marginTop: 12,
+                  padding: '10px 14px',
+                  borderRadius: 12,
+                  backgroundColor: '#EFF6FF',
+                  border: '1px solid #BFDBFE',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10
+                }}>
+                  <div style={{ fontSize: '0.75rem', color: '#1E40AF', fontWeight: 700 }}>
+                    PIN de Embarque: informe ao motorista ao entrar no carro
+                  </div>
+                  <div style={{
+                    fontSize: '1.15rem',
+                    fontWeight: 900,
+                    letterSpacing: '0.18em',
+                    color: '#1E3A8A',
+                    backgroundColor: '#FFFFFF',
+                    padding: '4px 10px',
+                    borderRadius: 8,
+                    border: '1px solid #93C5FD'
+                  }}>
+                    {ride.boardingPin}
+                  </div>
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={() => setIsLiveMapOpen(true)}

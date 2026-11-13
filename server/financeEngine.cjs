@@ -284,6 +284,34 @@ async function ensureExtendedSchema() {
         used_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS public.sos_alerts (
+        id VARCHAR(64) PRIMARY KEY,
+        name TEXT,
+        phone VARCHAR(40),
+        lat NUMERIC,
+        lng NUMERIC,
+        accuracy NUMERIC DEFAULT 0,
+        heading NUMERIC DEFAULT 0,
+        speed_kmh NUMERIC DEFAULT 0,
+        address TEXT,
+        ride_id VARCHAR(50),
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS role VARCHAR(30) DEFAULT 'passageiro';
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'ativo';
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS notes TEXT;
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS driver_id VARCHAR(64);
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS driver_name TEXT;
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS driver_phone TEXT;
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS driver_vehicle TEXT;
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS driver_plate VARCHAR(20);
+      ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS ride_code VARCHAR(30);
+      CREATE INDEX IF NOT EXISTS idx_rides_status_driver ON public.rides (status, driver_id);
+      CREATE INDEX IF NOT EXISTS idx_rides_client_id ON public.rides (client_id);
+      CREATE INDEX IF NOT EXISTS idx_financial_ledger_driver_created ON public.financial_ledger (driver_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sos_alerts_active_updated ON public.sos_alerts (active, updated_at DESC);
     `);
     extendedSchemaReady = true;
   } catch (err) {
@@ -1529,109 +1557,193 @@ async function listWithdrawals(driverId = null) {
   });
 }
 
-async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
-  const cfg = await getSystemConfig();
-  const driver = await getDriverById(driverId);
-  if (!driver) throw new Error('Motorista não encontrado.');
-  if (driver.financialBlocked) {
-    throw new Error('Funções financeiras temporariamente bloqueadas para esta conta.');
-  }
+const WITHDRAWAL_LOCKS = new Map();
 
-  const wallet = await getDriverWallet(driverId);
-  const reqAmount = round2(amount);
-  const minAmount = round2(cfg.minWithdrawalAmount ?? 10);
-  const feePct = Math.max(0, Math.min(100, Number(cfg.withdrawalFeePercent ?? 0) || 0));
-  const feeFixed = Math.max(0, round2(cfg.withdrawalFeeFixed ?? 0));
-  const feeAmount = round2(Math.min(reqAmount, (reqAmount * (feePct / 100)) + feeFixed));
-  const netPayoutAmount = round2(Math.max(0, reqAmount - feeAmount));
-
-  if (reqAmount <= 0) throw new Error('Informe um valor válido para saque.');
-  if (reqAmount < minAmount) throw new Error(`O valor mínimo para saque é R$ ${minAmount.toFixed(2)}.`);
-  if (reqAmount > wallet.availableBalance) {
-    throw new Error(`Saldo disponível insuficiente (Disponível: R$ ${wallet.availableBalance.toFixed(2)}).`);
-  }
-  if (netPayoutAmount <= 0) {
-    throw new Error(`O valor do saque precisa ser maior que a taxa de transferência (R$ ${feeAmount.toFixed(2)}).`);
-  }
-
-  // Impede saques duplicados simultâneos (idempotência por janela de 60s)
-  const existingPending = wallet.withdrawals.find(
-    w => (w.status === 'solicitado' || w.status === 'processando') &&
-      Math.abs(w.amount - reqAmount) < 0.01 &&
-      Date.now() - new Date(w.createdAt).getTime() < 60000
-  );
-  if (existingPending) {
-    throw new Error('Já existe uma solicitação de saque idêntica em processamento. Aguarde a conclusão.');
-  }
-
-  const wdId = `wd-${Date.now()}`;
-  const driverPixKeys = Array.isArray(driver.pixKeys) ? driver.pixKeys : [];
-  const defaultSavedKey = driverPixKeys.find(k => k.isDefault) || driverPixKeys[0];
-  const requestedKeyStr = String(pixKey || '').trim();
-  const matchedRegisteredKey = requestedKeyStr
-    ? driverPixKeys.find(k => String(k.pixKey || '').trim().toLowerCase() === requestedKeyStr.toLowerCase())
-    : null;
-  const targetPixKey = requestedKeyStr || defaultSavedKey?.pixKey || String(driver.pixKey || '').trim();
-  const targetPixType = String(matchedRegisteredKey?.pixType || pixType || defaultSavedKey?.pixType || driver.pixType || 'cpf');
-  if (!targetPixKey) {
-    throw new Error('Cadastre uma chave PIX válida de mesma titularidade na sua carteira antes de solicitar o saque.');
-  }
-  if (targetPixType === 'cpf' && driver.document) {
-    const ownerDigits = String(driver.document).replace(/\D/g, '');
-    const keyDigits = targetPixKey.replace(/\D/g, '');
-    if (ownerDigits && keyDigits !== ownerDigits) {
-      throw new Error('Saque bloqueado: a chave PIX em CPF precisa pertencer ao mesmo titular (CPF) do motorista.');
+async function withDriverWithdrawalLock(driverId, fn) {
+  const prev = WITHDRAWAL_LOCKS.get(driverId) || Promise.resolve();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  WITHDRAWAL_LOCKS.set(driverId, prev.then(() => gate, () => gate));
+  await prev;
+  try {
+    return await fn();
+  } finally {
+    release();
+    if (WITHDRAWAL_LOCKS.get(driverId) === gate) {
+      WITHDRAWAL_LOCKS.delete(driverId);
     }
   }
+}
 
-  const { entry } = await recordLedgerEntry({
-    idempotencyKey: `withdrawal_${wdId}`,
-    driverId: driver.id,
-    driverName: driver.name,
-    entryType: 'payout_withdrawal',
-    paymentMethod: 'pix',
-    grossAmount: reqAmount,
-    commissionPercent: feePct,
-    commissionAmount: feeAmount,
-    driverNetAmount: netPayoutAmount,
-    balanceDelta: -reqAmount,
-    balanceBucket: 'available',
-    status: 'confirmado',
-    description: feeAmount > 0
+async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
+  return withDriverWithdrawalLock(driverId, async () => {
+    const cfg = await getSystemConfig();
+    const driver = await getDriverById(driverId);
+    if (!driver) throw new Error('Motorista não encontrado.');
+    if (driver.financialBlocked) {
+      throw new Error('Funções financeiras temporariamente bloqueadas para esta conta.');
+    }
+
+    const reqAmount = round2(amount);
+    const minAmount = round2(cfg.minWithdrawalAmount ?? 10);
+    const feePct = Math.max(0, Math.min(100, Number(cfg.withdrawalFeePercent ?? 0) || 0));
+    const feeFixed = Math.max(0, round2(cfg.withdrawalFeeFixed ?? 0));
+    const feeAmount = round2(Math.min(reqAmount, (reqAmount * (feePct / 100)) + feeFixed));
+    const netPayoutAmount = round2(Math.max(0, reqAmount - feeAmount));
+
+    if (reqAmount <= 0) throw new Error('Informe um valor válido para saque.');
+    if (reqAmount < minAmount) throw new Error(`O valor mínimo para saque é R$ ${minAmount.toFixed(2)}.`);
+    if (netPayoutAmount <= 0) {
+      throw new Error(`O valor do saque precisa ser maior que a taxa de transferência (R$ ${feeAmount.toFixed(2)}).`);
+    }
+
+    const driverPixKeys = Array.isArray(driver.pixKeys) ? driver.pixKeys : [];
+    const defaultSavedKey = driverPixKeys.find(k => k.isDefault) || driverPixKeys[0];
+    const requestedKeyStr = String(pixKey || '').trim();
+    const matchedRegisteredKey = requestedKeyStr
+      ? driverPixKeys.find(k => String(k.pixKey || '').trim().toLowerCase() === requestedKeyStr.toLowerCase())
+      : null;
+    const targetPixKey = requestedKeyStr || defaultSavedKey?.pixKey || String(driver.pixKey || '').trim();
+    const targetPixType = String(matchedRegisteredKey?.pixType || pixType || defaultSavedKey?.pixType || driver.pixType || 'cpf');
+    if (!targetPixKey) {
+      throw new Error('Cadastre uma chave PIX válida de mesma titularidade na sua carteira antes de solicitar o saque.');
+    }
+    if (targetPixType === 'cpf' && driver.document) {
+      const ownerDigits = String(driver.document).replace(/\D/g, '');
+      const keyDigits = targetPixKey.replace(/\D/g, '');
+      if (ownerDigits && keyDigits !== ownerDigits) {
+        throw new Error('Saque bloqueado: a chave PIX em CPF precisa pertencer ao mesmo titular (CPF) do motorista.');
+      }
+    }
+
+    const wdId = `wd-${Date.now()}-${crypto.randomBytes(2).toString('hex')}`;
+    const ledgerId = `led-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`;
+    const desc = feeAmount > 0
       ? `Solicitação de saque via PIX (${targetPixKey}) — Líquido R$ ${netPayoutAmount.toFixed(2)} | Taxa saque R$ ${feeAmount.toFixed(2)}`
-      : `Solicitação de saque via PIX (${targetPixKey})`,
-    metadata: { withdrawalId: wdId, pixKey: targetPixKey, pixType: targetPixType, feeAmount, netPayoutAmount }
+      : `Solicitação de saque via PIX (${targetPixKey})`;
+
+    if (!db.pool) {
+      const wallet = await getDriverWallet(driverId);
+      if (reqAmount > wallet.availableBalance) {
+        throw new Error(`Saldo disponível insuficiente (Disponível: R$ ${wallet.availableBalance.toFixed(2)}).`);
+      }
+
+      const existingPending = wallet.withdrawals.find(
+        w => (w.status === 'solicitado' || w.status === 'processando') &&
+          Math.abs(w.amount - reqAmount) < 0.01 &&
+          Date.now() - new Date(w.createdAt).getTime() < 60000
+      );
+      if (existingPending) {
+        throw new Error('Já existe uma solicitação de saque idêntica em processamento. Aguarde a conclusão.');
+      }
+
+      const { entry } = await recordLedgerEntry({
+        id: ledgerId,
+        idempotencyKey: `withdrawal_${wdId}`,
+        driverId: driver.id,
+        driverName: driver.name,
+        entryType: 'payout_withdrawal',
+        paymentMethod: 'pix',
+        grossAmount: reqAmount,
+        commissionPercent: feePct,
+        commissionAmount: feeAmount,
+        driverNetAmount: netPayoutAmount,
+        balanceDelta: -reqAmount,
+        balanceBucket: 'available',
+        status: 'confirmado',
+        description: desc,
+        metadata: { withdrawalId: wdId, pixKey: targetPixKey, pixType: targetPixType, feeAmount, netPayoutAmount }
+      });
+
+      const now = new Date().toISOString();
+      const row = {
+        id: wdId,
+        driver_id: driver.id,
+        driver_name: driver.name,
+        amount: reqAmount,
+        fee_amount: feeAmount,
+        net_payout_amount: netPayoutAmount,
+        pix_key: targetPixKey,
+        pix_type: targetPixType,
+        status: 'solicitado',
+        ledger_entry_id: entry.id,
+        notes: '',
+        created_at: now,
+        processed_at: null
+      };
+      db.localStore.withdrawal_requests.unshift(row);
+      db.saveLocalStore();
+      return { ...row, feeAmount, netPayoutAmount };
+    }
+
+    // PostgreSQL com bloqueio pessimista FOR UPDATE na linha do motorista (evita corrida de saques simultâneos)
+    await ensureExtendedSchema();
+    const pgClient = await db.pool.connect();
+    try {
+      await pgClient.query('BEGIN');
+      await pgClient.query('SELECT id FROM public.drivers WHERE id = $1 FOR UPDATE', [driverId]);
+
+      const balRes = await pgClient.query(
+        `SELECT COALESCE(SUM(CASE WHEN balance_bucket = 'available' AND status = 'confirmado' THEN balance_delta ELSE 0 END), 0) AS avail
+         FROM public.financial_ledger WHERE driver_id = $1`,
+        [driverId]
+      );
+      const availBal = round2(balRes.rows[0]?.avail || 0);
+      if (reqAmount > availBal) {
+        throw new Error(`Saldo disponível insuficiente (Disponível: R$ ${availBal.toFixed(2)}).`);
+      }
+
+      const dupRes = await pgClient.query(
+        `SELECT id FROM public.withdrawal_requests
+         WHERE driver_id = $1
+           AND status IN ('solicitado', 'processando')
+           AND ABS(amount - $2) < 0.01
+           AND created_at > NOW() - INTERVAL '60 seconds'
+         LIMIT 1`,
+        [driverId, reqAmount]
+      );
+      if (dupRes.rows[0]) {
+        throw new Error('Já existe uma solicitação de saque idêntica em processamento. Aguarde a conclusão.');
+      }
+
+      await pgClient.query(
+        `INSERT INTO public.financial_ledger (
+          id, idempotency_key, driver_id, driver_name, entry_type, payment_method,
+          gross_amount, commission_percent, commission_amount, driver_net_amount,
+          balance_delta, balance_bucket, status, description, metadata, created_at
+        ) VALUES ($1,$2,$3,$4,'payout_withdrawal','pix',$5,$6,$7,$8,$9,'available','confirmado',$10,$11,NOW())`,
+        [
+          ledgerId,
+          `withdrawal_${wdId}`,
+          driver.id,
+          driver.name,
+          reqAmount,
+          feePct,
+          feeAmount,
+          netPayoutAmount,
+          -reqAmount,
+          desc,
+          JSON.stringify({ withdrawalId: wdId, pixKey: targetPixKey, pixType: targetPixType, feeAmount, netPayoutAmount })
+        ]
+      );
+
+      const r = await pgClient.query(
+        `INSERT INTO public.withdrawal_requests (
+          id, driver_id, driver_name, amount, fee_amount, net_payout_amount, pix_key, pix_type, status, ledger_entry_id, created_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'solicitado',$9,NOW()) RETURNING *`,
+        [wdId, driver.id, driver.name, reqAmount, feeAmount, netPayoutAmount, targetPixKey, targetPixType, ledgerId]
+      );
+      await pgClient.query('COMMIT');
+      return { ...r.rows[0], feeAmount, netPayoutAmount };
+    } catch (err) {
+      await pgClient.query('ROLLBACK').catch(() => {});
+      throw err;
+    } finally {
+      pgClient.release();
+    }
   });
-
-  const now = new Date().toISOString();
-  if (!db.pool) {
-    const row = {
-      id: wdId,
-      driver_id: driver.id,
-      driver_name: driver.name,
-      amount: reqAmount,
-      fee_amount: feeAmount,
-      net_payout_amount: netPayoutAmount,
-      pix_key: targetPixKey,
-      pix_type: targetPixType,
-      status: 'solicitado',
-      ledger_entry_id: entry.id,
-      notes: '',
-      created_at: now,
-      processed_at: null
-    };
-    db.localStore.withdrawal_requests.unshift(row);
-    db.saveLocalStore();
-    return { ...row, feeAmount, netPayoutAmount };
-  }
-
-  const r = await db.query(
-    `INSERT INTO public.withdrawal_requests (
-      id, driver_id, driver_name, amount, fee_amount, net_payout_amount, pix_key, pix_type, status, ledger_entry_id, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'solicitado',$9,NOW()) RETURNING *`,
-    [wdId, driver.id, driver.name, reqAmount, feeAmount, netPayoutAmount, targetPixKey, targetPixType, entry.id]
-  );
-  return { ...r.rows[0], feeAmount, netPayoutAmount };
 }
 
 function mapAsaasPixType(pixType) {
@@ -2774,6 +2886,249 @@ async function getPlatformFinancialOverview() {
   };
 }
 
+// ============================================================
+// Aceite Atômico de Corrida (Evita Race Condition entre 2 Motoristas)
+// ============================================================
+async function claimRideAtomically({ rideId, driver, newStatus, isQueued }) {
+  await ensureExtendedSchema();
+  const driverVehicle = `${driver.vehicleBrand || ''} ${driver.vehicleModel || ''}`.trim();
+
+  if (!db.pool) {
+    const idx = db.localStore.rides.findIndex(r => r.id === rideId);
+    if (idx < 0) return { ok: false, status: 404, error: 'Corrida não encontrada.' };
+    const existing = db.localStore.rides[idx];
+    if (existing.status === 'aguardando_pagamento') {
+      return { ok: false, status: 400, error: 'Esta corrida PIX ainda aguarda confirmação do gateway.' };
+    }
+    if (existing.driver_id && existing.driver_id !== driver.id && existing.status !== 'aguardando_confirmacao') {
+      return { ok: false, status: 409, error: 'Outro motorista já aceitou esta corrida.' };
+    }
+    db.localStore.rides[idx] = {
+      ...existing,
+      driver_id: driver.id,
+      driver_name: driver.name,
+      driver_phone: driver.phone,
+      driver_photo: driver.photo || '',
+      driver_vehicle: driverVehicle,
+      driver_plate: driver.vehiclePlate,
+      driver_car_color: driver.vehicleColor,
+      driver_rating: driver.rating || 5.0,
+      driver_location: driver.location || existing.driver_location || null,
+      is_queued_ride: Boolean(isQueued),
+      queued_for_driver_id: isQueued ? driver.id : null,
+      status: newStatus,
+      updated_at: new Date().toISOString()
+    };
+    db.saveLocalStore();
+    return { ok: true, row: db.localStore.rides[idx] };
+  }
+
+  const pgClient = await db.pool.connect();
+  try {
+    await pgClient.query('BEGIN');
+    const lockRes = await pgClient.query('SELECT * FROM public.rides WHERE id = $1 FOR UPDATE', [rideId]);
+    const existing = lockRes.rows[0];
+    if (!existing) {
+      await pgClient.query('ROLLBACK');
+      return { ok: false, status: 404, error: 'Corrida não encontrada.' };
+    }
+    if (existing.status === 'aguardando_pagamento') {
+      await pgClient.query('ROLLBACK');
+      return { ok: false, status: 400, error: 'Esta corrida PIX ainda aguarda confirmação do gateway.' };
+    }
+    if (existing.driver_id && existing.driver_id !== driver.id && existing.status !== 'aguardando_confirmacao') {
+      await pgClient.query('ROLLBACK');
+      return { ok: false, status: 409, error: 'Outro motorista já aceitou esta corrida.' };
+    }
+
+    const upd = await pgClient.query(
+      `UPDATE public.rides
+       SET driver_id = $2,
+           driver_name = $3,
+           driver_phone = $4,
+           driver_photo = $5,
+           driver_vehicle = $6,
+           driver_plate = $7,
+           driver_car_color = $8,
+           driver_rating = $9,
+           driver_location = $10,
+           is_queued_ride = $11,
+           queued_for_driver_id = $12,
+           status = $13,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        rideId,
+        driver.id,
+        driver.name,
+        driver.phone,
+        driver.photo || '',
+        driverVehicle,
+        driver.vehiclePlate,
+        driver.vehicleColor,
+        driver.rating || 5.0,
+        driver.location ? JSON.stringify(driver.location) : (existing.driver_location ? JSON.stringify(existing.driver_location) : null),
+        Boolean(isQueued),
+        isQueued ? driver.id : null,
+        newStatus
+      ]
+    );
+    await pgClient.query('COMMIT');
+    return { ok: true, row: upd.rows[0] };
+  } catch (err) {
+    await pgClient.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    pgClient.release();
+  }
+}
+
+// ============================================================
+// Persistência Unificada do SOS (PostgreSQL + LocalStore)
+// ============================================================
+function formatSosRow(row) {
+  if (!row) return null;
+  const updatedAt = row.updated_at || row.updatedAt || row.created_at || row.createdAt || new Date().toISOString();
+  const createdAt = row.created_at || row.createdAt || updatedAt;
+  const active = row.active !== undefined ? Boolean(row.active) : row.status !== 'resolvido';
+  return {
+    id: row.id,
+    role: row.role || 'passageiro',
+    status: row.status || (active ? 'ativo' : 'resolvido'),
+    name: row.name || 'Passageiro em Emergência',
+    phone: row.phone || '',
+    lat: Number(row.lat || 0),
+    lng: Number(row.lng || 0),
+    accuracy: Number(row.accuracy || 0),
+    heading: Number(row.heading || 0),
+    speedKmH: Number(row.speed_kmh ?? row.speedKmH ?? 0),
+    address: row.address || '',
+    rideId: row.ride_id ?? row.rideId ?? null,
+    rideCode: row.ride_code ?? row.rideCode ?? null,
+    driverId: row.driver_id ?? row.driverId ?? null,
+    driverName: row.driver_name ?? row.driverName ?? null,
+    driverPhone: row.driver_phone ?? row.driverPhone ?? null,
+    driverVehicle: row.driver_vehicle ?? row.driverVehicle ?? null,
+    driverPlate: row.driver_plate ?? row.driverPlate ?? null,
+    notes: row.notes || undefined,
+    active,
+    createdAt: new Date(createdAt).toISOString(),
+    updatedAt: new Date(updatedAt).toISOString(),
+    updatedAtMs: new Date(updatedAt).getTime()
+  };
+}
+
+async function listSosAlertsDb() {
+  await ensureExtendedSchema();
+  if (!db.pool) {
+    const raw = db.localStore?.sos_alerts;
+    const list = Array.isArray(raw) ? raw : Object.values(raw || {});
+    return list.map(formatSosRow).filter(Boolean);
+  }
+  const r = await db.query('SELECT * FROM public.sos_alerts ORDER BY updated_at DESC LIMIT 200');
+  return (r.rows || []).map(formatSosRow).filter(Boolean);
+}
+
+async function getSosAlertByIdDb(id) {
+  await ensureExtendedSchema();
+  if (!db.pool) {
+    const raw = db.localStore?.sos_alerts;
+    const list = Array.isArray(raw) ? raw : Object.values(raw || {});
+    const found = list.find(s => s && s.id === id);
+    return formatSosRow(found);
+  }
+  const r = await db.query('SELECT * FROM public.sos_alerts WHERE id = $1 LIMIT 1', [id]);
+  return formatSosRow(r.rows[0]);
+}
+
+async function upsertSosAlertDb(alertData) {
+  await ensureExtendedSchema();
+  if (!db.pool) {
+    if (!Array.isArray(db.localStore.sos_alerts)) {
+      db.localStore.sos_alerts = Object.values(db.localStore.sos_alerts || {});
+    }
+    const idx = db.localStore.sos_alerts.findIndex(s => s && s.id === alertData.id);
+    if (idx >= 0) db.localStore.sos_alerts[idx] = alertData;
+    else db.localStore.sos_alerts.unshift(alertData);
+    db.saveLocalStore();
+    return formatSosRow(alertData);
+  }
+
+  const r = await db.query(
+    `INSERT INTO public.sos_alerts (
+      id, name, phone, lat, lng, accuracy, heading, speed_kmh, address, ride_id,
+      role, status, notes, driver_id, driver_name, driver_phone, driver_vehicle, driver_plate, ride_code,
+      active, created_at, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
+    ON CONFLICT (id) DO UPDATE SET
+      name = COALESCE(EXCLUDED.name, public.sos_alerts.name),
+      phone = COALESCE(EXCLUDED.phone, public.sos_alerts.phone),
+      lat = EXCLUDED.lat,
+      lng = EXCLUDED.lng,
+      accuracy = EXCLUDED.accuracy,
+      heading = EXCLUDED.heading,
+      speed_kmh = EXCLUDED.speed_kmh,
+      address = COALESCE(EXCLUDED.address, public.sos_alerts.address),
+      ride_id = COALESCE(EXCLUDED.ride_id, public.sos_alerts.ride_id),
+      role = COALESCE(EXCLUDED.role, public.sos_alerts.role),
+      status = COALESCE(EXCLUDED.status, public.sos_alerts.status),
+      driver_id = COALESCE(EXCLUDED.driver_id, public.sos_alerts.driver_id),
+      driver_name = COALESCE(EXCLUDED.driver_name, public.sos_alerts.driver_name),
+      driver_phone = COALESCE(EXCLUDED.driver_phone, public.sos_alerts.driver_phone),
+      driver_vehicle = COALESCE(EXCLUDED.driver_vehicle, public.sos_alerts.driver_vehicle),
+      driver_plate = COALESCE(EXCLUDED.driver_plate, public.sos_alerts.driver_plate),
+      ride_code = COALESCE(EXCLUDED.ride_code, public.sos_alerts.ride_code),
+      active = EXCLUDED.active,
+      updated_at = NOW()
+    RETURNING *`,
+    [
+      alertData.id, alertData.name, alertData.phone, alertData.lat, alertData.lng,
+      alertData.accuracy, alertData.heading, alertData.speedKmH, alertData.address, alertData.rideId,
+      alertData.role || 'passageiro', alertData.status || 'ativo', alertData.notes || null,
+      alertData.driverId || null, alertData.driverName || null, alertData.driverPhone || null,
+      alertData.driverVehicle || null, alertData.driverPlate || null, alertData.rideCode || null,
+      alertData.active !== false, alertData.createdAt || new Date().toISOString()
+    ]
+  );
+  return formatSosRow(r.rows[0]);
+}
+
+async function updateSosStatusDb(id, { status = 'resolvido', active = false, notes }) {
+  await ensureExtendedSchema();
+  if (!db.pool) {
+    if (!Array.isArray(db.localStore.sos_alerts)) {
+      db.localStore.sos_alerts = Object.values(db.localStore.sos_alerts || {});
+    }
+    const idx = db.localStore.sos_alerts.findIndex(s => s && s.id === id);
+    if (idx < 0) return null;
+    const prev = db.localStore.sos_alerts[idx];
+    const next = {
+      ...prev,
+      status,
+      active,
+      notes: notes !== undefined ? notes : prev.notes,
+      updatedAt: new Date().toISOString(),
+      updatedAtMs: Date.now()
+    };
+    db.localStore.sos_alerts[idx] = next;
+    db.saveLocalStore();
+    return formatSosRow(next);
+  }
+
+  const r = await db.query(
+    `UPDATE public.sos_alerts
+     SET status = $2,
+         active = $3,
+         notes = COALESCE($4, notes),
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [id, status, active, notes !== undefined ? notes : null]
+  );
+  return formatSosRow(r.rows[0]);
+}
+
 module.exports = {
   round2,
   calculateSplit,
@@ -2810,6 +3165,11 @@ module.exports = {
   createDriverDebtSettlementPix,
   confirmDriverDebtSettlementWebhook,
   processRideCancellationFinance,
-  getPlatformFinancialOverview
+  getPlatformFinancialOverview,
+  claimRideAtomically,
+  listSosAlertsDb,
+  getSosAlertByIdDb,
+  upsertSosAlertDb,
+  updateSosStatusDb
 };
 

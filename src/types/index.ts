@@ -504,9 +504,13 @@ export interface Ride {
   clientId?: string;
   clientName: string;
   clientPhone: string;
+  clientPhoneMasked?: string;
   driverId?: string | null;
   driverName?: string | null;
   driverPhone?: string | null;
+  driverPhoneMasked?: string | null;
+  boardingPin?: string | null;
+  requiresBoardingPin?: boolean;
   driverPhoto?: string | null;
   driverVehicle?: string | null;
   driverPlate?: string | null;

@@ -266,6 +266,15 @@ async function localQuery(text, params = []) {
       });
       return { rows, rowCount: rows.length };
     }
+    if (upper.includes("STATUS NOT IN ('FINALIZADA', 'CANCELADA')")) {
+      const targetId = params[0];
+      const byDriver = upper.includes('DRIVER_ID = $1');
+      const rows = localStore.rides.filter(r => {
+        const ownerOk = byDriver ? r.driver_id === targetId : r.client_id === targetId;
+        return ownerOk && r.status !== 'finalizada' && r.status !== 'cancelada';
+      });
+      return { rows: rows.slice(0, 1), rowCount: Math.min(1, rows.length) };
+    }
     const sorted = [...localStore.rides].sort((a, b) => {
       const cmpCreated = String(b.created_at || '').localeCompare(String(a.created_at || ''));
       if (cmpCreated !== 0) return cmpCreated;
@@ -555,6 +564,23 @@ async function localQuery(text, params = []) {
       }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
     }
+    if (upper.includes('PASSAGEIRO REMOVIDO (LGPD)')) {
+      const c = localStore.clients.find(item => item.id === params[1]);
+      if (c) {
+        c.name = 'Passageiro Removido (LGPD)';
+        c.phone = params[0];
+        c.email = null;
+        c.document = null;
+        c.password_hash = null;
+        c.photo = null;
+        c.blocked = true;
+        c.saved_addresses = [];
+        c.saved_cards = [];
+        c.notes = 'Conta anonimizada pelo titular (LGPD Art. 18)';
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
     if (upper.includes('SET NAME = $1, PHONE = $2, EMAIL = $3, DOCUMENT = $4, PROFILE_CHANGE_REQUEST = $5 WHERE ID = $6')) {
       const c = localStore.clients.find(item => item.id === params[5]);
       if (c) {
@@ -641,10 +667,29 @@ async function localQuery(text, params = []) {
     return { rows: [], rowCount: 1 };
   }
 
-  // 9. drivers password reset
+  // 9. drivers password reset & LGPD anonymization
   if (upper.startsWith('UPDATE PUBLIC.DRIVERS') && upper.includes('SET PASSWORD_HASH = $1 WHERE ID = $2')) {
     const d = localStore.drivers.find(item => item.id === params[1]);
     if (d) { d.password_hash = params[0]; d.updated_at = new Date().toISOString(); saveLocalStore(); }
+    return { rows: d ? [d] : [], rowCount: d ? 1 : 0 };
+  }
+  if (upper.startsWith('UPDATE PUBLIC.DRIVERS') && upper.includes('MOTORISTA REMOVIDO (LGPD)')) {
+    const d = localStore.drivers.find(item => item.id === params[1]);
+    if (d) {
+      d.name = 'Motorista Removido (LGPD)';
+      d.phone = params[0];
+      d.email = null;
+      d.document = null;
+      d.password_hash = null;
+      d.photo = null;
+      d.status = 'offline';
+      d.approval_status = 'bloqueado';
+      d.bank_data = {};
+      d.kyc_data = null;
+      d.vehicles = [];
+      d.updated_at = new Date().toISOString();
+      saveLocalStore();
+    }
     return { rows: d ? [d] : [], rowCount: d ? 1 : 0 };
   }
 

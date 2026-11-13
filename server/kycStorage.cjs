@@ -88,8 +88,50 @@ function inferContentTypeFromFilename(filename) {
   return 'image/jpeg';
 }
 
-// Tokens temporários de visualização com expiração automática (15 minutos)
+// Tokens temporários de visualização com assinatura HMAC stateless + compatibilidade em memória (15 minutos)
 const tempSignedTokens = new Map();
+
+function getKycTokenSecret() {
+  const configured = String(process.env.ADMIN_SESSION_SECRET || '').trim();
+  if (configured) return configured;
+  return crypto
+    .createHash('sha256')
+    .update(`${process.env.DATABASE_URL || 'local'}:${process.env.ADMIN_MASTER_EMAIL || 'kavro'}:kyc_v1`)
+    .digest('hex');
+}
+
+function signStatelessDocToken(payloadObj) {
+  const encoded = Buffer.from(JSON.stringify(payloadObj), 'utf8').toString('base64url');
+  const sig = crypto
+    .createHmac('sha256', getKycTokenSecret())
+    .update(`kyc.${encoded}`)
+    .digest('base64url');
+  return `kdoc_${encoded}_${sig}`;
+}
+
+function verifyStatelessDocToken(token) {
+  if (!token || !String(token).startsWith('kdoc_')) return null;
+  const parts = String(token).split('_');
+  if (parts.length !== 3) return null;
+  const [, encoded, sig] = parts;
+  if (!encoded || !sig) return null;
+
+  const expectedSig = crypto
+    .createHmac('sha256', getKycTokenSecret())
+    .update(`kyc.${encoded}`)
+    .digest('base64url');
+  const a = Buffer.from(sig, 'utf8');
+  const b = Buffer.from(expectedSig, 'utf8');
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+
+  try {
+    const data = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+    if (!data || Number(data.exp || 0) < Date.now() || !data.filename) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
 
 function cleanExpiredTokens() {
   const now = Date.now();
@@ -240,14 +282,21 @@ async function generateTemporarySignedUrl(docInfo, driverId, reqHost) {
     }
   }
 
-  // 3. Token assinado seguro para o cofre local
-  const token = crypto.randomBytes(24).toString('hex');
+  // 3. Token assinado stateless por HMAC-SHA256 para o cofre local (compatível com múltiplas instâncias serverless)
+  const safeFilename = path.basename(String(docInfo.path || docInfo.filename || ''));
+  const resolvedMime = docInfo.contentType || inferContentTypeFromFilename(safeFilename);
   const expiresAt = Date.now() + 15 * 60 * 1000; // 15 minutos
+  const token = signStatelessDocToken({
+    driverId,
+    filename: safeFilename,
+    contentType: resolvedMime,
+    exp: expiresAt
+  });
 
   tempSignedTokens.set(token, {
     driverId,
-    filename: docInfo.path || docInfo.filename,
-    contentType: docInfo.contentType || inferContentTypeFromFilename(docInfo.path || docInfo.filename),
+    filename: safeFilename,
+    contentType: resolvedMime,
     expiresAt
   });
 
@@ -260,20 +309,25 @@ async function generateTemporarySignedUrl(docInfo, driverId, reqHost) {
  */
 function resolveTemporaryDocument(token) {
   cleanExpiredTokens();
-  const item = tempSignedTokens.get(token);
-  if (!item) return null;
-  if (item.expiresAt < Date.now()) {
-    tempSignedTokens.delete(token);
-    return null;
+  let item = verifyStatelessDocToken(token);
+  if (!item) {
+    const legacyItem = tempSignedTokens.get(token);
+    if (!legacyItem || legacyItem.expiresAt < Date.now()) {
+      if (legacyItem) tempSignedTokens.delete(token);
+      return null;
+    }
+    item = legacyItem;
   }
 
   const vaultDir = resolveLocalVaultDir();
-  const filePath = path.join(vaultDir, item.filename);
+  const safeFilename = path.basename(String(item.filename || ''));
+  if (!safeFilename) return null;
+  const filePath = path.join(vaultDir, safeFilename);
   if (!fs.existsSync(filePath)) return null;
 
   return {
     buffer: fs.readFileSync(filePath),
-    contentType: item.contentType || inferContentTypeFromFilename(item.filename),
+    contentType: item.contentType || inferContentTypeFromFilename(safeFilename),
     driverId: item.driverId
   };
 }

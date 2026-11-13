@@ -26,10 +26,8 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
   onPaymentConfirmed,
   isClientView = false,
 }) => {
-  if (!isOpen || !ride) return null;
-
   const [selectedMethod, setSelectedMethod] = useState<PaymentMethod>(
-    ride.paymentMethod === 'dinheiro' || ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'pix'
+    ride?.paymentMethod === 'dinheiro' || ride?.paymentMethod === 'cartao_credito' || ride?.paymentMethod === 'pix'
       ? ride.paymentMethod
       : 'pix'
   );
@@ -42,8 +40,9 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
   // Geração do Payload PIX Padrão Banco Central do Brasil
   const pixKey = config.pixKey || 'contato@upmobilidade.com.br';
   const beneficiary = config.pixBeneficiary || config.companyName || 'Kavro Drive';
-  
+
   const pixPayload = useMemo(() => {
+    if (!ride) return '';
     return generatePixPayload(
       pixKey,
       beneficiary,
@@ -51,11 +50,14 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
       ride.totalPrice,
       ride.id.replace(/\D/g, '') || 'UPMOB'
     );
-  }, [pixKey, beneficiary, ride.totalPrice, ride.id]);
+  }, [pixKey, beneficiary, ride]);
 
   const qrCodeUrl = useMemo(() => {
+    if (!pixPayload) return '';
     return getQrCodeImageUrl(pixPayload, 240);
   }, [pixPayload]);
+
+  if (!isOpen || !ride) return null;
 
   const handleCopyKey = () => {
     navigator.clipboard.writeText(pixKey);

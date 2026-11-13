@@ -636,3 +636,4 @@ export const AdminDocumentsCenterTab: React.FC<AdminDocumentsCenterTabProps> = (
     </div>
   );
 };
+

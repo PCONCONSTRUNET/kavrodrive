@@ -46,7 +46,18 @@ class RealtimeClient {
     if (this.source) return;
 
     this.setState('connecting');
-    const url = `/api/realtime/stream?role=${encodeURIComponent(role)}`;
+    const token = typeof window !== 'undefined'
+      ? (role === 'admin'
+          ? localStorage.getItem('up_admin_token')
+          : role === 'driver'
+            ? localStorage.getItem('up_driver_token') || localStorage.getItem('up_admin_token')
+            : role === 'client'
+              ? localStorage.getItem('up_client_token') || localStorage.getItem('up_admin_token')
+              : localStorage.getItem('up_admin_token') || localStorage.getItem('up_driver_token') || localStorage.getItem('up_client_token'))
+      : null;
+    const url = token
+      ? `/api/realtime/stream?role=${encodeURIComponent(role)}&token=${encodeURIComponent(token)}`
+      : `/api/realtime/stream?role=${encodeURIComponent(role)}`;
 
     try {
       const es = new EventSource(url);

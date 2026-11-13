@@ -191,6 +191,11 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       if (check.exists) {
         setExistingClientName(check.firstName || check.name || 'Passageiro');
         setLoginPassword('');
+        setErrorMsg(
+          check.hasPassword === false
+            ? 'Esta conta ainda não possui senha definida. Clique em "Esqueci minha senha • Redefinir com código" abaixo para criar sua senha com OTP.'
+            : ''
+        );
         setActiveModal('password_login');
       } else {
         setRegName('');

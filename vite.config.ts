@@ -45,6 +45,22 @@ function supabaseApiPlugin() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), supabaseApiPlugin()],
+  build: {
+    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined
+          if (id.includes('@vladmandic/human') || id.includes('@tensorflow')) return 'vendor-biometrics'
+          if (id.includes('pdfjs-dist')) return 'vendor-pdfjs'
+          if (id.includes('jspdf') || id.includes('html2canvas')) return 'vendor-pdf-export'
+          if (id.includes('leaflet')) return 'vendor-maps'
+          if (id.includes('react') || id.includes('lucide-react')) return 'vendor-react'
+          return 'vendor-misc'
+        }
+      }
+    }
+  },
   server: {
     host: true,
     port: 5173

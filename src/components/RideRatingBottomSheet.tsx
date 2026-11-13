@@ -480,3 +480,4 @@ export const RideRatingBottomSheet: React.FC<RideRatingBottomSheetProps> = ({
     </div>
   );
 };
+

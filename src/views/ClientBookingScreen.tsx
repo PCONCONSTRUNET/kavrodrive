@@ -552,33 +552,35 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             🔒 <strong>Segurança Automática:</strong> Não é necessário enviar comprovante. O sistema libera a corrida automaticamente assim que o gateway confirma a liquidação.
           </div>
 
-          {/* Botão de Simulação do Webhook para testes imediatos em Localhost */}
-          <button
-            type="button"
-            onClick={handleSimulatePixWebhook}
-            disabled={isSimulatingWebhook}
-            style={{
-              width: '100%',
-              padding: '12px 14px',
-              borderRadius: 12,
-              backgroundColor: '#76D800',
-              color: '#121A21',
-              border: 'none',
-              fontWeight: 900,
-              fontSize: '0.82rem',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              marginBottom: 10
-            }}
-          >
-            <Sparkles size={16} />
-            <span>
-              {isSimulatingWebhook ? 'Confirmando no Gateway...' : '⚡ Simular Confirmação Webhook Gateway (Teste)'}
-            </span>
-          </button>
+          {/* Botão de Simulação do Webhook apenas em ambiente de desenvolvimento */}
+          {import.meta.env.DEV && (
+            <button
+              type="button"
+              onClick={handleSimulatePixWebhook}
+              disabled={isSimulatingWebhook}
+              style={{
+                width: '100%',
+                padding: '12px 14px',
+                borderRadius: 12,
+                backgroundColor: '#76D800',
+                color: '#121A21',
+                border: 'none',
+                fontWeight: 900,
+                fontSize: '0.82rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                marginBottom: 10
+              }}
+            >
+              <Sparkles size={16} />
+              <span>
+                {isSimulatingWebhook ? 'Confirmando no Gateway...' : '⚡ Simular Confirmação Webhook Gateway (Teste)'}
+              </span>
+            </button>
+          )}
 
           <button
             type="button"
@@ -821,6 +823,42 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   <MercosulPlateBadge plate={activeRide.driverPlate} size="sm" />
                 )}
               </div>
+
+              {activeRide.boardingPin && (activeRide.status === 'confirmada' || activeRide.status === 'a_caminho' || activeRide.status === 'no_local') && (
+                <div style={{
+                  marginTop: 10,
+                  padding: '10px 14px',
+                  borderRadius: 12,
+                  backgroundColor: '#EFF6FF',
+                  border: '1px solid #BFDBFE',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12
+                }}>
+                  <div>
+                    <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#1E40AF', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                      Código de Embarque (PIN)
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: '#3B82F6', fontWeight: 600 }}>
+                      Informe ao motorista para iniciar a viagem
+                    </div>
+                  </div>
+                  <div style={{
+                    fontSize: '1.25rem',
+                    fontWeight: 900,
+                    letterSpacing: '0.2em',
+                    color: '#1E3A8A',
+                    backgroundColor: '#FFFFFF',
+                    padding: '6px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #93C5FD',
+                    fontVariantNumeric: 'tabular-nums'
+                  }}>
+                    {activeRide.boardingPin}
+                  </div>
+                </div>
+              )}
 
               {/* Ações rápidas com o motorista (Chat ao vivo no app + Ligar) */}
               {activeRide.driverId && (

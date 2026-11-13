@@ -8,6 +8,7 @@ const driverTermsContract = require('./driverTermsContract.cjs');
 const passengerTermsContract = require('./passengerTermsContract.cjs');
 const realtimeHub = require('./realtimeHub.cjs');
 const audit = require('./auditEngine.cjs');
+const security = require('./securityUtils.cjs');
 
 function getRequestClientIp(req) {
   return (
@@ -119,7 +120,11 @@ function verifyWebhookSecret(req) {
 
 function verifyMercadoPagoWebhookSignature(req, dataId) {
   const secret = String(process.env.MERCADOPAGO_WEBHOOK_SECRET || '').trim();
-  if (!secret) return true; // Quando secret não configurado, valida obrigatoriamente consultando a API MP
+  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
+  if (!secret) {
+    // Em produção/Vercel exige obrigatoriamente MERCADOPAGO_WEBHOOK_SECRET configurado (fail-closed)
+    return !isProd;
+  }
   const sigHeader = String(req.headers['x-signature'] || '').trim();
   const reqId = String(req.headers['x-request-id'] || '').trim();
   if (!sigHeader) return false;
@@ -701,14 +706,13 @@ function parseBody(req) {
   });
 }
 
-function sendJson(res, statusCode, data) {
-  res.writeHead(statusCode, {
+function sendJson(res, statusCode, data, extraHeaders = {}) {
+  const cors = security.buildCorsHeaders(res._req, {
     'Content-Type': 'application/json',
     'Cache-Control': 'no-store, no-cache, must-revalidate',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-driver-token, x-client-token, x-webhook-secret, x-client-id, x-client-phone, x-driver-id'
+    ...extraHeaders
   });
+  res.writeHead(statusCode, cors);
   res.end(JSON.stringify(data));
 }
 
@@ -1077,16 +1081,13 @@ async function dispatchOtpDelivery({ role, user, code }) {
 }
 
 async function handleApiRequest(req, res) {
+  res._req = req;
   const url = new URL(req.url, 'http://localhost');
   const pathname = url.pathname;
   const method = req.method;
 
   if (method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-driver-token, x-client-token, x-webhook-secret, x-client-id, x-client-phone, x-driver-id'
-    });
+    res.writeHead(204, security.buildCorsHeaders(req));
     return res.end();
   }
 
@@ -1112,9 +1113,58 @@ async function handleApiRequest(req, res) {
       });
     }
 
-    // 0.0.1 REAL-TIME STREAM (Server-Sent Events)
+    // 0.0.1 REAL-TIME STREAM (Server-Sent Events Autenticado & Escopado)
     if (pathname === '/api/realtime/stream' && method === 'GET') {
-      return realtimeHub.handleStreamRequest(req, res, url);
+      const qToken = String(url.searchParams.get('token') || '').trim();
+      const qRideId = url.searchParams.get('rideId') ? normalizeRideId(url.searchParams.get('rideId')) : '';
+      const qSosId = String(url.searchParams.get('sosId') || '').trim();
+      const qTrackingToken = String(url.searchParams.get('t') || '').trim();
+
+      let viewerRole = 'anon';
+      let userId = null;
+      let scopedRideId = '';
+      let trackingSosId = null;
+
+      if (await isAuthorizedAdmin(req) || (qToken.startsWith('kavro_adm.') && verifyAdminSessionToken(qToken))) {
+        viewerRole = 'admin';
+        userId = 'admin-master';
+        scopedRideId = qRideId;
+      } else {
+        const drvSess = verifyDriverToken(req) || (qToken.startsWith('kavro_drv.') ? verifyUserRoleToken(qToken, 'driver') : null);
+        if (drvSess?.sub) {
+          viewerRole = 'driver';
+          userId = drvSess.sub;
+          scopedRideId = qRideId;
+        } else {
+          const cliSess = verifyClientToken(req) || (qToken.startsWith('kavro_cli.') ? verifyUserRoleToken(qToken, 'client') : null);
+          if (cliSess?.sub) {
+            viewerRole = 'client';
+            userId = cliSess.sub;
+            if (qRideId) {
+              const rChk = await db.query('SELECT client_id, client_phone FROM public.rides WHERE id = $1 LIMIT 1', [qRideId]);
+              const rRow = rChk.rows[0];
+              const phoneMatch = cliSess.phone && rRow?.client_phone &&
+                normalizePhoneDigitsServer(cliSess.phone) === normalizePhoneDigitsServer(rRow.client_phone);
+              if (rRow && (rRow.client_id === cliSess.sub || phoneMatch)) {
+                scopedRideId = qRideId;
+              }
+            }
+          } else if (qRideId && qTrackingToken && security.verifyTrackingToken(qTrackingToken, 'ride', qRideId)) {
+            viewerRole = 'tracking';
+            scopedRideId = qRideId;
+          } else if (qSosId && qTrackingToken && security.verifyTrackingToken(qTrackingToken, 'sos', qSosId)) {
+            viewerRole = 'tracking';
+            trackingSosId = qSosId;
+          }
+        }
+      }
+
+      return realtimeHub.handleStreamRequest(req, res, url, {
+        viewerRole,
+        userId,
+        rideId: scopedRideId,
+        trackingSosId
+      });
     }
 
     // 0.0.2 RECUPERAÇÃO DE SENHA VIA OTP IN-APP (Passageiro e Motorista)
@@ -1123,6 +1173,11 @@ async function handleApiRequest(req, res) {
       const body = await parseBody(req);
       const role = body.role === 'driver' ? 'driver' : 'client';
       const rawIdentifier = String(body.identifier || '').trim();
+      const ip = getRequestClientIp(req);
+      const rl = security.checkRateLimit('otp_req', `${ip}:${rawIdentifier.toLowerCase()}`, 5, 5 * 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas solicitações de código. Aguarde ${rl.retryAfterSec}s para tentar novamente.` }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
       if (!rawIdentifier) {
         return sendJson(res, 400, { ok: false, error: 'Informe seu WhatsApp, E-mail ou CPF cadastrado.' });
       }
@@ -1318,6 +1373,10 @@ async function handleApiRequest(req, res) {
 
     // 0.3 LOGIN E SESSÃO DO PAINEL ADMIN MASTER (Exclusivo Supabase Auth + allowlist estrita)
     if (pathname === '/api/admin/login' && method === 'POST') {
+      const rl = security.checkRateLimit('admin_login', getRequestClientIp(req), 10, 5 * 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas tentativas de login. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
       const body = await parseBody(req);
       const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
       if (!turnstile.ok) {
@@ -1392,14 +1451,14 @@ async function handleApiRequest(req, res) {
         .filter(d => d.approvalStatus === 'aprovado' && d.isOnline)
         .map(d => ({
           id: d.id,
-          name: d.name,
-          photo: d.photo,
+          name: (isAdmin || isAuthedDriver || Boolean(clientSession?.sub)) ? d.name : '',
+          photo: (isAdmin || isAuthedDriver || Boolean(clientSession?.sub)) ? d.photo : '',
           vehicleBrand: d.vehicleBrand,
           vehicleModel: d.vehicleModel,
           vehicleVersion: d.vehicleVersion,
           vehicleYear: d.vehicleYear,
           vehicleColor: d.vehicleColor,
-          vehiclePlate: d.vehiclePlate,
+          vehiclePlate: (isAdmin || isAuthedDriver) ? d.vehiclePlate : '',
           vehicleCategory: d.vehicleCategory,
           eligibleCategories: d.eligibleCategories,
           enabledCategories: d.enabledCategories,
@@ -1470,9 +1529,9 @@ async function handleApiRequest(req, res) {
         });
 
         const formattedRides = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
-        const driverScopedRides = formattedRides.filter(
-          r => r.driverId === verifiedDriverId || (r.status === 'aguardando_confirmacao' && !r.driverId)
-        );
+        const driverScopedRides = formattedRides
+          .filter(r => r.driverId === verifiedDriverId || (r.status === 'aguardando_confirmacao' && !r.driverId))
+          .map(r => security.sanitizeRideForViewer(r, { isDriver: true }));
         const selfDriver = allDrivers.find(d => d.id === verifiedDriverId);
         const driversPayload = selfDriver
           ? [selfDriver, ...onlineDriversPublic.filter(d => d.id !== verifiedDriverId)]
@@ -1502,7 +1561,9 @@ async function handleApiRequest(req, res) {
 
       const [cfgRes, ridesRes, slotsRes, selfCliRes] = await Promise.all([
         db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
-        db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC'),
+        (verifiedClientId || verifiedClientPhoneDigits.length >= 8)
+          ? db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC')
+          : Promise.resolve({ rows: [] }),
         db.query('SELECT date, slots FROM public.blocked_slots'),
         selfClientPromise
       ]);
@@ -1512,11 +1573,18 @@ async function handleApiRequest(req, res) {
         blockedSlotsMap[r.date] = r.slots || [];
       });
 
-      const publicRidesWithRatings = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
+      const rawClientRides = ridesRes.rows.map(formatRideFromDb).filter(ride => {
+        const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
+        return (
+          (verifiedClientId && ride.clientId && String(verifiedClientId) === String(ride.clientId)) ||
+          (verifiedClientPhoneDigits.length >= 8 && ridePhoneDigits === verifiedClientPhoneDigits)
+        );
+      });
+      const publicRidesWithRatings = await attachClientRatingsToRides(rawClientRides);
 
       return sendJson(res, 200, {
         config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, false),
-        rides: publicRidesWithRatings.map(r => sanitizeRideForPublic(r, verifiedClientId, verifiedClientPhoneDigits)),
+        rides: publicRidesWithRatings.map(r => security.sanitizeRideForViewer(r, { isOwnerClient: true })),
         onlineDrivers: onlineDriversPublic,
         onlineDriversCount: onlineDriversPublic.length,
         expenses: [],
@@ -1717,6 +1785,10 @@ async function handleApiRequest(req, res) {
     // 2.5 MOTORISTAS (CADASTRO ESTILO UBER, LOGIN, ONLINE/OFFLINE, CARTEIRA)
     // ============================================================
     if (pathname === '/api/drivers/register' && method === 'POST') {
+      const rl = security.checkRateLimit('drv_reg', getRequestClientIp(req), 10, 10 * 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas tentativas de cadastro. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
       const body = await parseBody(req);
       const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
       if (!turnstile.ok) {
@@ -1750,20 +1822,18 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 400, { ok: false, error: 'É necessário concordar com os Termos e Condições de Uso para concluir o cadastro.' });
       }
 
-      const existing = await finance.findDriverByIdentifier(cleanPhone) || await finance.findDriverByIdentifier(document);
-      let targetId = `drv-${Date.now()}`;
+      const cleanEmailReg = String(body.email || '').trim().toLowerCase();
+      const existing =
+        await finance.findDriverByIdentifier(cleanPhone) ||
+        await finance.findDriverByIdentifier(document) ||
+        (cleanEmailReg ? await finance.findDriverByIdentifier(cleanEmailReg) : null);
+      const targetId = `drv-${Date.now()}`;
 
       if (existing) {
-        // Se for a conta demo mock 'drv-1001' OU se o usuário estiver recadastrando seus próprios dados
-        const existingCleanPhone = String(existing.phone || '').replace(/\D/g, '');
-        if (existing.id === 'drv-1001' || existing.document === document || existingCleanPhone === cleanPhone) {
-          targetId = existing.id;
-        } else {
-          return sendJson(res, 409, {
-            ok: false,
-            error: 'Já existe um motorista cadastrado com este CPF ou WhatsApp. Faça login na aba Entrar.'
-          });
-        }
+        return sendJson(res, 409, {
+          ok: false,
+          error: 'Já existe um motorista cadastrado com este CPF, WhatsApp ou E-mail. Faça login na aba Entrar ou recupere sua senha.'
+        });
       }
 
       const photoUrl = body.photo ? await kycStorage.savePublicMedia(targetId, 'avatar', body.photo) : '';
@@ -1863,6 +1933,10 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/drivers/check' && method === 'POST') {
+      const rl = security.checkRateLimit('drv_chk', getRequestClientIp(req), 25, 5 * 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas consultas. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
       const body = await parseBody(req);
       const identifier = String(body.identifier || body.cpf || body.document || body.phone || '').trim();
       if (!identifier) {
@@ -1889,15 +1963,7 @@ async function handleApiRequest(req, res) {
             validationCode: rawTermsSig.validationCode,
             documentHash: rawTermsSig.documentHash,
             signedAt: rawTermsSig.signedAt,
-            signedAtBrasilia: rawTermsSig.signedAtBrasilia,
-            driverSnapshot: rawTermsSig.driverSnapshot
-              ? {
-                  name: rawTermsSig.driverSnapshot.name,
-                  vehicle: rawTermsSig.driverSnapshot.vehicle,
-                  vehiclePlate: rawTermsSig.driverSnapshot.vehiclePlate,
-                  city: rawTermsSig.driverSnapshot.city
-                }
-              : undefined
+            signedAtBrasilia: rawTermsSig.signedAtBrasilia
           }
         : null;
 
@@ -1906,16 +1972,16 @@ async function handleApiRequest(req, res) {
         found: true,
         driver: {
           id: src.id,
-          name: src.name,
+          name: firstName,
           firstName,
-          document: src.document || '',
+          document: '',
           phone: '',
           email: '',
           approvalStatus: src.approvalStatus || 'pendente_aprovacao',
           rejectionReason: src.rejectionReason || null,
           vehicleBrand: src.vehicleBrand || '',
           vehicleModel: src.vehicleModel || '',
-          vehiclePlate: src.vehiclePlate || '',
+          vehiclePlate: '',
           city: src.city || '',
           termsSigned: isTermsSigned,
           termsSignature: safeTermsSummary,
@@ -1932,6 +1998,10 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/drivers/login' && method === 'POST') {
+      const rl = security.checkRateLimit('drv_login', getRequestClientIp(req), 15, 5 * 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas tentativas de login. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
       const body = await parseBody(req);
       const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
       if (!turnstile.ok) {
@@ -2744,14 +2814,19 @@ async function handleApiRequest(req, res) {
         ]
       });
 
-      realtimeHub.publish('driver:updated', { driverId: updated.id, driver: updated });
+      realtimeHub.publish('driver:updated', { driverId: updated.id, driver: security.sanitizeDriverForSse(updated) });
       return sendJson(res, 200, { ok: true, driver: updated, autoPurged: true });
     }
 
-    // 4. Obtenção de Documentos com URLs Temporárias Novas para Visualização Segura pelo Admin
+    // 4. Obtenção de Documentos com URLs Temporárias Novas para Visualização Segura pelo Admin ou Próprio Motorista
     const kycDriverMatch = pathname.match(/^\/api\/kyc\/driver\/([^/]+)$/);
     if (kycDriverMatch && method === 'GET') {
       const driverId = decodeURIComponent(kycDriverMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && (!driverSession || driverSession.sub !== driverId)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso não autorizado aos documentos KYC.' });
+      }
       const driver = await finance.getDriverById(driverId);
       if (!driver) {
         return sendJson(res, 404, { ok: false, error: 'Motorista não localizado.' });
@@ -2772,7 +2847,7 @@ async function handleApiRequest(req, res) {
       }
 
       // Registra no log de auditoria que os documentos foram inspecionados
-      if (await isAuthorizedAdmin(req)) {
+      if (isAdmin) {
         const auditLog = {
           id: `aud-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           timestamp: new Date().toISOString(),
@@ -2828,29 +2903,44 @@ async function handleApiRequest(req, res) {
         const isAdmin = await isAuthorizedAdmin(req);
         const driverSession = verifyDriverToken(req);
         const clientSession = verifyClientToken(req);
-        const verifiedClientId = isAdmin
-          ? String(url.searchParams.get('clientId') || req.headers['x-client-id'] || '').trim()
-          : (clientSession?.sub || '');
+        if (!isAdmin && !driverSession?.sub && !clientSession?.sub) {
+          return sendJson(res, 200, []);
+        }
+        const verifiedClientId = clientSession?.sub || '';
         const verifiedClientPhoneDigits = clientSession
-          ? String(clientSession.phone || '').replace(/\D/g, '')
+          ? normalizePhoneDigitsServer(clientSession.phone)
           : '';
         const r = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC');
         const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
-        if (isAdmin) return sendJson(res, 200, formatted);
+        if (isAdmin) {
+          return sendJson(res, 200, formatted.map(ride => security.sanitizeRideForViewer(ride, { isAdmin: true })));
+        }
         if (driverSession?.sub) {
           return sendJson(
             res,
             200,
-            formatted.filter(ride => ride.driverId === driverSession.sub || (ride.status === 'aguardando_confirmacao' && !ride.driverId))
+            formatted
+              .filter(ride => ride.driverId === driverSession.sub || (ride.status === 'aguardando_confirmacao' && !ride.driverId))
+              .map(ride => security.sanitizeRideForViewer(ride, { isDriver: true }))
           );
         }
-        return sendJson(res, 200, formatted.map(ride => sanitizeRideForPublic(ride, verifiedClientId, verifiedClientPhoneDigits)));
+        const ownClientRides = formatted.filter(ride => {
+          const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
+          return (
+            (verifiedClientId && ride.clientId && String(verifiedClientId) === String(ride.clientId)) ||
+            (verifiedClientPhoneDigits.length >= 8 && ridePhoneDigits === verifiedClientPhoneDigits)
+          );
+        });
+        return sendJson(res, 200, ownClientRides.map(ride => security.sanitizeRideForViewer(ride, { isOwnerClient: true })));
       }
       if (method === 'POST') {
         const ride = await parseBody(req);
         const isAdmin = await isAuthorizedAdmin(req);
         const driverSession = verifyDriverToken(req);
         const clientSession = verifyClientToken(req);
+        if (!isAdmin && !driverSession && !clientSession) {
+          return sendJson(res, 401, { ok: false, error: 'Faça login para solicitar ou gerenciar corridas.' });
+        }
         const cfg = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
         const commPct = Number(cfg.platformCommissionPercent ?? 20);
 
@@ -2863,11 +2953,25 @@ async function handleApiRequest(req, res) {
           : { rows: [] };
         const before = prevRes.rows[0] ? formatRideFromDb(prevRes.rows[0]) : null;
 
-        if (before) {
-          const isOwnerClient = Boolean(clientSession && clientSession.sub && (clientSession.sub === before.clientId || !before.clientId));
+        if (!before) {
+          if (!isAdmin && !clientSession?.sub) {
+            return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para solicitar uma corrida.' });
+          }
+          if (!isAdmin && clientSession?.sub) {
+            ride.clientId = clientSession.sub;
+            ride.isManualBooking = false;
+          }
+        } else {
+          const isOwnerClient = Boolean(clientSession && clientSession.sub && clientSession.sub === before.clientId);
           const isAssignedDriver = Boolean(driverSession && driverSession.sub && driverSession.sub === before.driverId);
           if (!isAdmin && !isOwnerClient && !isAssignedDriver) {
             return sendJson(res, 401, { ok: false, error: 'Sem permissão para alterar esta corrida.' });
+          }
+          if (!isAdmin) {
+            // Impede alteração arbitrária de preço ou vínculo financeiro por não-admins em corridas existentes
+            ride.totalPrice = before.totalPrice;
+            ride.driverId = before.driverId;
+            ride.clientId = before.clientId;
           }
         }
 
@@ -2924,20 +3028,47 @@ async function handleApiRequest(req, res) {
 
         ride.category = matchedCat ? matchedCat.id : mappedCatId;
         ride.categoryName = ride.categoryName || before?.categoryName || matchedCat?.name || 'KAVRO GO';
+        const officialFare = !before && !(isAdmin && ride.isManualBooking)
+          ? security.calculateOfficialRidePriceServer({
+              cfg,
+              categoryObj: matchedCat,
+              distanceKm: ride.distanceKm,
+              durationMin: ride.durationMin,
+              origin: ride.origin,
+              destination: ride.destination,
+              timeStr: ride.time,
+              city: ride.city
+            })
+          : null;
+
+        const existingPin = before?.appliedFareSnapshot?.boardingPin || null;
+        const generatedPin = !before && !ride.isManualBooking
+          ? String(crypto.randomInt(1000, 9999))
+          : existingPin;
+
         if (!ride.appliedFareSnapshot && matchedCat) {
           ride.appliedFareSnapshot = before?.appliedFareSnapshot || {
             categoryId: matchedCat.id,
             categoryName: matchedCat.name,
-            baseFare: Number(matchedCat.baseFare ?? cfg.baseFare ?? 8.0),
-            pricePerKm: Number(matchedCat.pricePerKm ?? cfg.pricePerKm ?? 3.2),
-            pricePerMinute: Number(matchedCat.pricePerMinute ?? cfg.pricePerMinute ?? 0.5),
-            minimumFare: Number(matchedCat.minimumFare ?? cfg.minimumFare ?? 15.0),
+            baseFare: officialFare ? officialFare.pricing.baseFare : Number(matchedCat.baseFare ?? cfg.baseFare ?? 8.0),
+            pricePerKm: officialFare ? officialFare.pricing.pricePerKm : Number(matchedCat.pricePerKm ?? cfg.pricePerKm ?? 3.2),
+            pricePerMinute: officialFare ? officialFare.pricing.pricePerMinute : Number(matchedCat.pricePerMinute ?? cfg.pricePerMinute ?? 0.5),
+            minimumFare: officialFare ? officialFare.pricing.minimumFare : Number(matchedCat.minimumFare ?? cfg.minimumFare ?? 15.0),
             multiplier: Number(matchedCat.multiplier ?? 1.0),
-            commissionPercent: effectiveCommPct
+            commissionPercent: effectiveCommPct,
+            ...(generatedPin ? { boardingPin: generatedPin } : {})
+          };
+        } else if (ride.appliedFareSnapshot && generatedPin && !ride.appliedFareSnapshot.boardingPin) {
+          ride.appliedFareSnapshot = {
+            ...ride.appliedFareSnapshot,
+            boardingPin: generatedPin
           };
         }
 
-        const split = finance.calculateSplit(ride.totalPrice, effectiveCommPct);
+        const authoritativeTotal = officialFare
+          ? officialFare.totalPrice
+          : Number(ride.totalPrice || before?.totalPrice || 0);
+        const split = finance.calculateSplit(authoritativeTotal, effectiveCommPct);
         ride.estimatedPrice = before ? before.estimatedPrice : split.grossAmount;
         ride.totalPrice = split.grossAmount;
         ride.commissionPercent = split.commissionPercent;
@@ -3034,9 +3165,14 @@ async function handleApiRequest(req, res) {
         realtimeHub.publish(
           before ? 'ride:updated' : 'ride:created',
           { rideId: enrichedSavedRide.id, status: enrichedSavedRide.status },
-          { rideId: enrichedSavedRide.id }
+          { rideId: enrichedSavedRide.id, clientId: enrichedSavedRide.clientId, driverId: enrichedSavedRide.driverId }
         );
-        return sendJson(res, 200, { ok: true, ride: enrichedSavedRide });
+        const viewerRide = security.sanitizeRideForViewer(enrichedSavedRide, {
+          isAdmin,
+          isOwnerClient: Boolean(clientSession && enrichedSavedRide.clientId === clientSession.sub),
+          isDriver: Boolean(driverSession && enrichedSavedRide.driverId === driverSession.sub)
+        });
+        return sendJson(res, 200, { ok: true, ride: viewerRide });
       }
     }
 
@@ -3102,21 +3238,16 @@ async function handleApiRequest(req, res) {
       const isQueued = Boolean(currentActiveRide);
       const newStatus = isQueued ? 'na_fila' : 'a_caminho';
 
-      const updatedRide = await upsertFullRide({
-        ...ride,
-        driverId: driver.id,
-        driverName: driver.name,
-        driverPhone: driver.phone,
-        driverPhoto: driver.photo || '',
-        driverVehicle: `${driver.vehicleBrand} ${driver.vehicleModel}`.trim(),
-        driverPlate: driver.vehiclePlate,
-        driverCarColor: driver.vehicleColor,
-        driverRating: driver.rating || 5.0,
-        driverLocation: driver.location || ride.driverLocation,
-        isQueuedRide: isQueued,
-        queuedForDriverId: isQueued ? driver.id : null,
-        status: newStatus
+      const claimRes = await finance.claimRideAtomically({
+        rideId: ride.id,
+        driver,
+        newStatus,
+        isQueued
       });
+      if (!claimRes.ok) {
+        return sendJson(res, claimRes.status || 409, { ok: false, error: claimRes.error || 'Outro motorista já aceitou esta corrida.' });
+      }
+      const updatedRide = formatRideFromDb(claimRes.row);
 
       await finance.saveDriverRecord({
         ...driver,
@@ -3140,11 +3271,11 @@ async function handleApiRequest(req, res) {
       realtimeHub.publish(
         'ride:updated',
         { rideId: enrichedAcceptedRide.id, status: enrichedAcceptedRide.status, driverId: driver.id },
-        { rideId: enrichedAcceptedRide.id }
+        { rideId: enrichedAcceptedRide.id, driverId: driver.id, clientId: enrichedAcceptedRide.clientId }
       );
       return sendJson(res, 200, {
         ok: true,
-        ride: enrichedAcceptedRide,
+        ride: security.sanitizeRideForViewer(enrichedAcceptedRide, { isAdmin, isDriver: !isAdmin }),
         isQueued,
         activeRideId: currentActiveRide?.id || null
       });
@@ -3155,6 +3286,9 @@ async function handleApiRequest(req, res) {
     if (rideRateMatch && method === 'POST') {
       const id = normalizeRideId(decodeURIComponent(rideRateMatch[1]));
       const body = await parseBody(req);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
       const stars = Math.min(5, Math.max(1, Number(body.stars || 5)));
       const raterRole = body.raterRole === 'motorista' ? 'motorista' : 'cliente';
       const rawComment = body.comment ? String(body.comment).trim() : '';
@@ -3165,15 +3299,44 @@ async function handleApiRequest(req, res) {
         ? finance.round2(Math.min(100, Math.max(0, Number(body.tipAmount || 0))))
         : 0;
 
+      const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      const ride = formatRideFromDb(prevRes.rows[0]);
+
+      if (raterRole === 'cliente') {
+        const isOwnerClient = Boolean(
+          clientSession?.sub &&
+          (clientSession.sub === ride.clientId ||
+            (clientSession.phone && ride.clientPhone &&
+              normalizePhoneDigitsServer(clientSession.phone) === normalizePhoneDigitsServer(ride.clientPhone)))
+        );
+        if (!isAdmin && !isOwnerClient) {
+          return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro dono desta corrida para avaliar.' });
+        }
+        if (tipVal > 0 && ride.status !== 'finalizada') {
+          return sendJson(res, 400, { ok: false, error: 'Gorjetas só podem ser enviadas após a finalização da corrida.' });
+        }
+        if (
+          tipVal > 0 &&
+          (ride.paymentMethod === 'pix' || ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') &&
+          ride.paymentStatus !== 'confirmado' &&
+          ride.paymentStatus !== 'pago' &&
+          !isAdmin
+        ) {
+          return sendJson(res, 400, { ok: false, error: 'A gorjeta requer que o pagamento digital da corrida esteja confirmado.' });
+        }
+      } else {
+        const isAssignedDriver = Boolean(driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId);
+        if (!isAdmin && !isAssignedDriver) {
+          return sendJson(res, 401, { ok: false, error: 'Sessão de motorista não autorizada para avaliar esta corrida.' });
+        }
+      }
+
       const combinedNotes = [
         rawTags.length > 0 ? rawTags.join(' • ') : '',
         rawComment,
         tipVal > 0 ? `Gorjeta: R$ ${tipVal.toFixed(2).replace('.', ',')}` : ''
       ].filter(Boolean).join(' — ') || null;
-
-      const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
-      if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
-      const ride = formatRideFromDb(prevRes.rows[0]);
 
       const patch = raterRole === 'cliente'
         ? { passengerRating: stars, passengerNotes: combinedNotes || ride.passengerNotes }
@@ -3497,6 +3660,21 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para alterar status da corrida.' });
       }
 
+      // Validação de Código PIN de Embarque (4 dígitos estilo Uber) ao iniciar viagem
+      if (!isAdmin && isDriver && body.status === 'em_andamento' && before.status !== 'em_andamento') {
+        const expectedPin = String(before.appliedFareSnapshot?.boardingPin || '').trim();
+        if (expectedPin) {
+          const suppliedPin = String(body.boardingPin || '').replace(/\D/g, '').trim();
+          if (suppliedPin !== expectedPin) {
+            return sendJson(res, 400, {
+              ok: false,
+              code: 'INVALID_BOARDING_PIN',
+              error: 'Código PIN de embarque inválido. Peça os 4 dígitos ao passageiro para iniciar a viagem.'
+            });
+          }
+        }
+      }
+
       // Se a corrida for cancelada, aplica regra de estorno automático e multa de cancelamento (cancellationFeeAmount)
       let nextPaymentStatus = before.paymentStatus;
       let cancelFinance = null;
@@ -3597,17 +3775,35 @@ async function handleApiRequest(req, res) {
       });
     }
 
-    // LIVE GPS LOCATION SYNC
+    // LIVE GPS LOCATION SYNC (Autenticado)
     const rideLocationMatch = pathname.match(/^\/api\/rides\/([^/]+)\/location$/);
     if (rideLocationMatch) {
       const id = normalizeRideId(decodeURIComponent(rideLocationMatch[1]));
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const trackTok = String(url.searchParams.get('t') || '').trim();
+      const hasValidTracking = method === 'GET' && trackTok && security.verifyTrackingToken(trackTok, 'ride', id);
+
+      const metaRes = await db.query(
+        'SELECT id, client_id, client_phone, driver_id, status, payment_status, driver_location, client_location FROM public.rides WHERE id = $1',
+        [id]
+      );
+      if (!metaRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
+      const row = metaRes.rows[0];
+      const isAssignedDriver = Boolean(driverSession?.sub && row.driver_id && driverSession.sub === row.driver_id);
+      const isOwnerClient = Boolean(
+        clientSession?.sub &&
+        ((row.client_id && clientSession.sub === row.client_id) ||
+          (clientSession.phone && row.client_phone &&
+            normalizePhoneDigitsServer(clientSession.phone) === normalizePhoneDigitsServer(row.client_phone)))
+      );
+
+      if (!isAdmin && !isAssignedDriver && !isOwnerClient && !hasValidTracking) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para acessar GPS desta corrida.' });
+      }
+
       if (method === 'GET') {
-        const r = await db.query(
-          'SELECT id, status, payment_status, driver_location, client_location FROM public.rides WHERE id = $1',
-          [id]
-        );
-        if (!r.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
-        const row = r.rows[0];
         return sendJson(res, 200, {
           ok: true,
           id: row.id,
@@ -3620,6 +3816,9 @@ async function handleApiRequest(req, res) {
       if (method === 'PATCH' || method === 'POST') {
         const body = await parseBody(req);
         const role = body.role === 'client' ? 'client' : 'driver';
+        if (!isAdmin && ((role === 'driver' && !isAssignedDriver) || (role === 'client' && !isOwnerClient))) {
+          return sendJson(res, 403, { ok: false, error: 'Sem permissão para atualizar esta coordenada.' });
+        }
         const loc = body.location;
         if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') {
           return sendJson(res, 400, { ok: false, error: 'Invalid location' });
@@ -3637,9 +3836,9 @@ async function handleApiRequest(req, res) {
           [JSON.stringify(payload), id]
         );
         if (!r.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
-        const row = r.rows[0];
+        const updRow = r.rows[0];
 
-        if (role === 'driver' && (row.status === 'a_caminho' || row.status === 'em_andamento')) {
+        if (role === 'driver' && (updRow.status === 'a_caminho' || updRow.status === 'em_andamento')) {
           try {
             await db.query(
               `INSERT INTO public.ride_trail_points (ride_id, status, lat, lng, speed_kmh, heading, recorded_at)
@@ -3648,7 +3847,7 @@ async function handleApiRequest(req, res) {
                  SELECT 1 FROM public.ride_trail_points
                  WHERE ride_id = $1::varchar AND recorded_at > NOW() - INTERVAL '2 seconds'
                )`,
-              [id, row.status, payload.lat, payload.lng, payload.speedKmH, payload.heading]
+              [id, updRow.status, payload.lat, payload.lng, payload.speedKmH, payload.heading]
             );
           } catch (err) {
             console.error('[trail insert]', err.message);
@@ -3658,27 +3857,27 @@ async function handleApiRequest(req, res) {
         realtimeHub.publish(
           'gps:location',
           {
-            rideId: row.id,
+            rideId: updRow.id,
             role,
-            status: row.status,
-            driverLocation: row.driver_location || null,
-            clientLocation: row.client_location || null
+            status: updRow.status,
+            driverLocation: updRow.driver_location || null,
+            clientLocation: updRow.client_location || null
           },
-          { rideId: row.id }
+          { rideId: updRow.id, driverId: row.driver_id, clientId: row.client_id }
         );
 
         return sendJson(res, 200, {
           ok: true,
-          id: row.id,
-          status: row.status,
-          paymentStatus: row.payment_status,
-          driverLocation: row.driver_location || null,
-          clientLocation: row.client_location || null
+          id: updRow.id,
+          status: updRow.status,
+          paymentStatus: updRow.payment_status,
+          driverLocation: updRow.driver_location || null,
+          clientLocation: updRow.client_location || null
         });
       }
     }
 
-    // CHAT EM TEMPO REAL DA CORRIDA (Motorista <-> Passageiro)
+    // CHAT EM TEMPO REAL DA CORRIDA (Motorista <-> Passageiro — Autenticação Estrita)
     const rideMessagesMatch = pathname.match(/^\/api\/rides\/([^/]+)\/messages$/);
     if (rideMessagesMatch) {
       await finance.ensureExtendedSchema();
@@ -3691,21 +3890,14 @@ async function handleApiRequest(req, res) {
       const isAdmin = await isAuthorizedAdmin(req);
       const driverSession = verifyDriverToken(req);
       const clientSession = verifyClientToken(req);
-      const headerClientId = String(req.headers['x-client-id'] || '').trim();
-      const headerClientPhone = normalizePhoneDigitsServer(req.headers['x-client-phone'] || '');
-      const headerDriverId = String(req.headers['x-driver-id'] || '').trim();
 
       const rideClientPhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
       const isAssignedDriver = Boolean(
-        (driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId) ||
-        (headerDriverId && ride.driverId && headerDriverId === ride.driverId)
+        driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId
       );
       const isOwnerClient = Boolean(
-        (clientSession?.sub && (!ride.clientId || clientSession.sub === ride.clientId)) ||
-        (clientSession?.phone && rideClientPhoneDigits && normalizePhoneDigitsServer(clientSession.phone) === rideClientPhoneDigits) ||
-        (headerClientId && ride.clientId && headerClientId === ride.clientId) ||
-        (headerClientPhone && rideClientPhoneDigits && headerClientPhone === rideClientPhoneDigits) ||
-        !ride.clientId
+        (clientSession?.sub && ride.clientId && clientSession.sub === ride.clientId) ||
+        (clientSession?.phone && rideClientPhoneDigits && normalizePhoneDigitsServer(clientSession.phone) === rideClientPhoneDigits)
       );
 
       if (!isAdmin && !isAssignedDriver && !isOwnerClient) {
@@ -3770,7 +3962,11 @@ async function handleApiRequest(req, res) {
           createdAt
         };
 
-        realtimeHub.publish('chat:message', { rideId: id, message }, { rideId: id });
+        realtimeHub.publish(
+          'chat:message',
+          { rideId: id, message },
+          { rideId: id, driverId: ride.driverId, clientId: ride.clientId }
+        );
 
         if (process.env.ONESIGNAL_REST_API_KEY) {
           const targetExtId = senderRole === 'driver'
@@ -3790,10 +3986,27 @@ async function handleApiRequest(req, res) {
       }
     }
 
-    // TRILHA GPS GRAVADA DA CORRIDA
+    // TRILHA GPS GRAVADA DA CORRIDA (Protegida para Admin, Motorista ou Passageiro Dono)
     const rideTrailMatch = pathname.match(/^\/api\/rides\/([^/]+)\/trail$/);
     if (rideTrailMatch && method === 'GET') {
       const id = normalizeRideId(decodeURIComponent(rideTrailMatch[1]));
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const rideMeta = await db.query('SELECT id, client_id, client_phone, driver_id FROM public.rides WHERE id = $1', [id]);
+      const meta = rideMeta.rows[0];
+      if (!meta) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      const isAssignedDriver = Boolean(driverSession?.sub && meta.driver_id && driverSession.sub === meta.driver_id);
+      const isOwnerClient = Boolean(
+        clientSession?.sub &&
+        ((meta.client_id && clientSession.sub === meta.client_id) ||
+          (clientSession.phone && meta.client_phone &&
+            normalizePhoneDigitsServer(clientSession.phone) === normalizePhoneDigitsServer(meta.client_phone)))
+      );
+      if (!isAdmin && !isAssignedDriver && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Sem permissão para acessar o trajeto desta corrida.' });
+      }
+
       const num = parseInt(String(id).replace(/\D/g, ''), 10) || 1;
       const rideCode = `#UP - ${String(num).padStart(3, '0')}`;
       const r = await db.query(
@@ -3817,24 +4030,18 @@ async function handleApiRequest(req, res) {
       });
     }
 
-    // ===== SOS TELEMETRY & EMERGENCY TRACKING =====
+    // ===== SOS TELEMETRY & EMERGENCY TRACKING (Persistido em Postgres + Autenticação) =====
     if (pathname === '/api/sos/alerts' && method === 'GET') {
-      const store = !db.pool ? (typeof db.getLocalStore === 'function' ? db.getLocalStore() : db.localStore) : null;
-      if (store && store.sos_alerts) {
-        const savedList = Array.isArray(store.sos_alerts) ? store.sos_alerts : Object.values(store.sos_alerts);
-        for (const saved of savedList) {
-          if (saved && saved.id && !sosMemoryStore.has(saved.id)) {
-            sosMemoryStore.set(saved.id, saved);
-          }
-        }
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
       }
-
+      const persistedAlerts = await finance.listSosAlertsDb();
       const ridesRes = await db.query('SELECT * FROM rides ORDER BY created_at DESC');
       const allRides = ridesRes.rows || [];
       const driversList = await finance.listDrivers();
       const nowMs = Date.now();
 
-      const alerts = Array.from(sosMemoryStore.values()).map((item) => {
+      const alerts = persistedAlerts.map((item) => {
         const linkedRide = item.rideId
           ? allRides.find(r => r.id === item.rideId)
           : allRides.find(r =>
@@ -3844,9 +4051,10 @@ async function handleApiRequest(req, res) {
 
         const linkedDriver = linkedRide?.driver_id
           ? driversList.find(d => d.id === linkedRide.driver_id)
-          : driversList[0] || null;
+          : (item.driverId ? driversList.find(d => d.id === item.driverId) : null);
 
         const secondsAgo = Math.max(0, Math.round((nowMs - (item.updatedAtMs || new Date(item.updatedAt || nowMs).getTime())) / 1000));
+        const sosToken = security.signTrackingToken('sos', item.id);
         return {
           ...item,
           role: item.role || 'passageiro',
@@ -3856,13 +4064,13 @@ async function handleApiRequest(req, res) {
           clientName: item.clientName || linkedRide?.client_name || item.name || 'Passageiro',
           clientPhone: item.clientPhone || linkedRide?.client_phone || item.phone || '',
           driverId: item.driverId || linkedRide?.driver_id || linkedDriver?.id || null,
-          driverName: item.driverName || linkedRide?.driver_name || linkedDriver?.name || 'Alisson Santos',
-          driverPhone: item.driverPhone || linkedRide?.driver_phone || linkedDriver?.phone || '(48) 99691-5303',
-          driverVehicle: item.driverVehicle || linkedRide?.driver_vehicle || (linkedDriver ? `${linkedDriver.vehicleBrand} ${linkedDriver.vehicleModel}` : 'Toyota Corolla XEi'),
-          driverPlate: item.driverPlate || linkedRide?.driver_plate || linkedDriver?.vehiclePlate || 'QXZ4G21',
+          driverName: item.driverName || linkedRide?.driver_name || linkedDriver?.name || null,
+          driverPhone: item.driverPhone || linkedRide?.driver_phone || linkedDriver?.phone || '',
+          driverVehicle: item.driverVehicle || linkedRide?.driver_vehicle || (linkedDriver ? `${linkedDriver.vehicleBrand} ${linkedDriver.vehicleModel}` : null),
+          driverPlate: item.driverPlate || linkedRide?.driver_plate || linkedDriver?.vehiclePlate || null,
           originAddress: linkedRide?.origin?.address || item.address || '',
           destinationAddress: linkedRide?.destination?.address || '',
-          trackingUrl: `/sos/${encodeURIComponent(item.id)}`,
+          trackingUrl: `/sos/${encodeURIComponent(item.id)}?t=${encodeURIComponent(sosToken)}`,
           googleMapsUrl: `https://www.google.com/maps?q=${item.lat},${item.lng}`,
           secondsAgo,
           isOnline: item.active !== false && secondsAgo < 120
@@ -3874,35 +4082,33 @@ async function handleApiRequest(req, res) {
 
     const sosStatusMatch = pathname.match(/^\/api\/sos\/([^/]+)\/status$/);
     if (sosStatusMatch && (method === 'PATCH' || method === 'POST')) {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
       const id = decodeURIComponent(sosStatusMatch[1]);
       const body = await parseBody(req);
-      const existing = sosMemoryStore.get(id);
-      if (!existing) {
-        return sendJson(res, 404, { ok: false, error: 'Chamado SOS não encontrado.' });
-      }
       const nextStatus = body.status || 'resolvido';
-      const updated = {
-        ...existing,
+      const updated = await finance.updateSosStatusDb(id, {
         status: nextStatus,
         active: nextStatus !== 'resolvido',
-        notes: body.notes !== undefined ? body.notes : existing.notes,
-        updatedAt: new Date().toISOString(),
-        updatedAtMs: Date.now()
-      };
-      sosMemoryStore.set(id, updated);
-
-      if (!db.pool) {
-        const store = db.getLocalStore();
-        if (!Array.isArray(store.sos_alerts)) store.sos_alerts = [];
-        const idx = store.sos_alerts.findIndex(s => s.id === id);
-        if (idx >= 0) store.sos_alerts[idx] = updated;
-        else store.sos_alerts.unshift(updated);
-        db.saveLocalStore();
+        notes: body.notes
+      });
+      if (!updated) {
+        return sendJson(res, 404, { ok: false, error: 'Chamado SOS não encontrado.' });
       }
+      sosMemoryStore.set(id, updated);
+      realtimeHub.publish('sos:updated', { sosId: id, status: nextStatus, active: updated.active }, { sosId: id });
       return sendJson(res, 200, { ok: true, alert: updated });
     }
 
     if (pathname === '/api/sos/location' && (method === 'POST' || method === 'PATCH')) {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !driverSession && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para acionar ou transmitir alerta SOS.' });
+      }
+
       const body = await parseBody(req);
       const sosId = String(body.id || `sos-${Date.now()}`);
       const lat = Number(body.lat);
@@ -3912,17 +4118,16 @@ async function handleApiRequest(req, res) {
       }
 
       const now = new Date();
-      const existing = sosMemoryStore.get(sosId);
+      const existing = await finance.getSosAlertByIdDb(sosId);
       const isNewAlert = !existing;
+      const actorRole = driverSession ? 'motorista' : 'passageiro';
 
       const alertData = {
         id: sosId,
-        role: body.role || existing?.role || 'passageiro',
-        name: body.name || existing?.name || 'Passageiro em Emergência',
-        phone: body.phone || existing?.phone || '',
-        clientName: body.clientName || existing?.clientName || body.name || 'Passageiro',
-        clientPhone: body.clientPhone || existing?.clientPhone || body.phone || '',
-        driverId: body.driverId || existing?.driverId || null,
+        role: isAdmin ? (body.role || existing?.role || 'passageiro') : actorRole,
+        name: body.name || existing?.name || (driverSession ? 'Motorista em Emergência' : 'Passageiro em Emergência'),
+        phone: body.phone || existing?.phone || clientSession?.phone || driverSession?.phone || '',
+        driverId: body.driverId || existing?.driverId || (driverSession?.sub || null),
         driverName: body.driverName || existing?.driverName || null,
         driverPhone: body.driverPhone || existing?.driverPhone || null,
         driverVehicle: body.driverVehicle || existing?.driverVehicle || null,
@@ -3933,7 +4138,7 @@ async function handleApiRequest(req, res) {
         heading: Number(body.heading || 0),
         speedKmH: Number(body.speedKmH || 0),
         address: body.address || existing?.address || 'Localização GPS em tempo real',
-        rideId: body.rideId || existing?.rideId || null,
+        rideId: body.rideId ? normalizeRideId(body.rideId) : (existing?.rideId || null),
         rideCode: body.rideCode || existing?.rideCode || null,
         status: existing?.status || 'ativo',
         active: true,
@@ -3942,37 +4147,8 @@ async function handleApiRequest(req, res) {
         createdAt: existing?.createdAt || now.toISOString()
       };
 
-      sosMemoryStore.set(sosId, alertData);
-
-      if (!db.pool) {
-        const store = db.getLocalStore();
-        if (!Array.isArray(store.sos_alerts)) store.sos_alerts = [];
-        const idx = store.sos_alerts.findIndex(s => s.id === sosId);
-        if (idx >= 0) store.sos_alerts[idx] = alertData;
-        else store.sos_alerts.unshift(alertData);
-        db.saveLocalStore();
-      }
-
-      db.query(`
-        INSERT INTO public.sos_alerts (id, name, phone, lat, lng, accuracy, heading, speed_kmh, address, ride_id, active, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, $11, NOW())
-        ON CONFLICT (id) DO UPDATE SET
-          name = COALESCE(EXCLUDED.name, public.sos_alerts.name),
-          phone = COALESCE(EXCLUDED.phone, public.sos_alerts.phone),
-          lat = EXCLUDED.lat,
-          lng = EXCLUDED.lng,
-          accuracy = EXCLUDED.accuracy,
-          heading = EXCLUDED.heading,
-          speed_kmh = EXCLUDED.speed_kmh,
-          address = COALESCE(EXCLUDED.address, public.sos_alerts.address),
-          ride_id = COALESCE(EXCLUDED.ride_id, public.sos_alerts.ride_id),
-          active = true,
-          updated_at = NOW();
-      `, [
-        alertData.id, alertData.name, alertData.phone, alertData.lat, alertData.lng,
-        alertData.accuracy, alertData.heading, alertData.speedKmH, alertData.address,
-        alertData.rideId, alertData.createdAt
-      ]).catch(() => {});
+      const persisted = await finance.upsertSosAlertDb(alertData);
+      sosMemoryStore.set(sosId, persisted || alertData);
 
       if (isNewAlert) {
         db.query(
@@ -3989,7 +4165,7 @@ async function handleApiRequest(req, res) {
         push.sendToExternalIds(
           [push.ADMIN_EXTERNAL_ID],
           `🚨 ALERTA SOS ACIONADO: ${alertData.name}`,
-          `Passageiro solicitou socorro urgente! Toque para ver a localização no mapa.`,
+          `Auxílio urgente solicitado! Toque para ver a localização no mapa.`,
           { url: `/sos/${encodeURIComponent(sosId)}` }
         ).catch(() => {});
       }
@@ -4001,10 +4177,12 @@ async function handleApiRequest(req, res) {
         active: true,
         address: alertData.address,
         updatedAt: alertData.updatedAt
-      });
+      }, { sosId: alertData.id });
 
+      const trackingToken = security.signTrackingToken('sos', alertData.id);
       return sendJson(res, 200, {
         ok: true,
+        trackingToken,
         alert: {
           id: alertData.id,
           name: alertData.name,
@@ -4013,6 +4191,7 @@ async function handleApiRequest(req, res) {
           lng: alertData.lng,
           accuracy: alertData.accuracy,
           address: alertData.address,
+          trackingUrl: `/sos/${encodeURIComponent(alertData.id)}?t=${encodeURIComponent(trackingToken)}`,
           updatedAt: alertData.updatedAt,
           secondsAgo: 0,
           isOnline: true
@@ -4023,35 +4202,28 @@ async function handleApiRequest(req, res) {
     const sosLocMatch = pathname.match(/^\/api\/sos\/([^/]+)\/location$/);
     if (sosLocMatch && method === 'GET') {
       const id = decodeURIComponent(sosLocMatch[1]);
-      let item = sosMemoryStore.get(id);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const trackTok = String(url.searchParams.get('t') || '').trim();
+      const hasValidTracking = trackTok && security.verifyTrackingToken(trackTok, 'sos', id);
 
-      if (!item) {
-        const r = await db.query('SELECT * FROM public.sos_alerts WHERE id = $1', [id]);
-        if (r.rows[0]) {
-          const row = r.rows[0];
-          const updatedDate = new Date(row.updated_at || row.created_at || Date.now());
-          item = {
-            id: row.id,
-            name: row.name || 'Passageiro em Emergência',
-            phone: row.phone || '',
-            lat: Number(row.lat),
-            lng: Number(row.lng),
-            accuracy: Number(row.accuracy || 0),
-            heading: Number(row.heading || 0),
-            speedKmH: Number(row.speed_kmh || 0),
-            address: row.address || '',
-            rideId: row.ride_id || null,
-            active: row.active !== false,
-            updatedAt: updatedDate.toISOString(),
-            updatedAtMs: updatedDate.getTime(),
-            createdAt: row.created_at
-          };
-          sosMemoryStore.set(id, item);
-        }
+      if (!isAdmin && !hasValidTracking && !driverSession && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Token de acompanhamento SOS ausente ou expirado.' });
       }
 
+      const item = await finance.getSosAlertByIdDb(id) || sosMemoryStore.get(id);
       if (!item) {
         return sendJson(res, 404, { ok: false, error: 'Alerta SOS não encontrado' });
+      }
+
+      if (!isAdmin && !hasValidTracking) {
+        const ownsDriver = driverSession?.sub && item.driverId && driverSession.sub === item.driverId;
+        const ownsPhone = clientSession?.phone && item.phone &&
+          normalizePhoneDigitsServer(clientSession.phone) === normalizePhoneDigitsServer(item.phone);
+        if (!ownsDriver && !ownsPhone) {
+          return sendJson(res, 403, { ok: false, error: 'Sem permissão para visualizar este chamado SOS.' });
+        }
       }
 
       const secondsAgo = Math.max(0, Math.floor((Date.now() - (item.updatedAtMs || new Date(item.updatedAt).getTime())) / 1000));
@@ -4061,7 +4233,7 @@ async function handleApiRequest(req, res) {
         ok: true,
         id: item.id,
         name: item.name,
-        phone: item.phone,
+        phone: isAdmin ? item.phone : security.maskPhoneDisplay(item.phone),
         lat: item.lat,
         lng: item.lng,
         accuracy: item.accuracy,
@@ -4079,12 +4251,23 @@ async function handleApiRequest(req, res) {
     const sosResolveMatch = pathname.match(/^\/api\/sos\/([^/]+)\/resolve$/);
     if (sosResolveMatch && method === 'POST') {
       const id = decodeURIComponent(sosResolveMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const item = await finance.getSosAlertByIdDb(id);
+      const ownsDriver = driverSession?.sub && item?.driverId && driverSession.sub === item.driverId;
+      const ownsPhone = clientSession?.phone && item?.phone &&
+        normalizePhoneDigitsServer(clientSession.phone) === normalizePhoneDigitsServer(item.phone);
+      if (!isAdmin && !ownsDriver && !ownsPhone) {
+        return sendJson(res, 401, { ok: false, error: 'Sem permissão para encerrar chamado SOS.' });
+      }
+
+      await finance.updateSosStatusDb(id, { status: 'resolvido', active: false });
       if (sosMemoryStore.has(id)) {
         const curr = sosMemoryStore.get(id);
-        sosMemoryStore.set(id, { ...curr, active: false });
+        sosMemoryStore.set(id, { ...curr, active: false, status: 'resolvido' });
       }
-      await db.query('UPDATE public.sos_alerts SET active = false, updated_at = NOW() WHERE id = $1', [id]).catch(() => {});
-      realtimeHub.publish('sos:updated', { sosId: id, active: false, resolved: true });
+      realtimeHub.publish('sos:updated', { sosId: id, active: false, resolved: true }, { sosId: id });
       return sendJson(res, 200, { ok: true, id, resolved: true });
     }
 
@@ -4102,11 +4285,19 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
       const body = await parseBody(req);
       const rideId = normalizeRideId(body.rideId);
       const r = await db.query('SELECT * FROM public.rides WHERE id = $1', [rideId]);
       if (!r.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
       const ride = formatRideFromDb(r.rows[0]);
+      const isOwnerClient = Boolean(clientSession?.sub && ride.clientId && clientSession.sub === ride.clientId);
+      const isAssignedDriver = Boolean(driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId);
+      if (!isAdmin && !isOwnerClient && !isAssignedDriver) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para gerar cobrança PIX desta corrida.' });
+      }
       const { tx, split } = await finance.createPixChargeForRide(ride);
       const updated = await upsertFullRide({
         ...ride,
@@ -4383,8 +4574,28 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para atualizar pagamento desta corrida.' });
       }
 
+      const targetMethod = body.paymentMethod || before.paymentMethod;
+      const targetPayStatus = body.paymentStatus || before.paymentStatus;
+      const isConfirmingPayment = ['pago', 'confirmado', 'parcialmente_pago'].includes(targetPayStatus);
+
+      // Passageiro NUNCA pode autodeclarar pagamento como confirmado em nenhum meio de pagamento
+      if (!isAdmin && isOwnerClient && isConfirmingPayment) {
+        return sendJson(res, 403, {
+          ok: false,
+          error: 'Apenas o motorista (em dinheiro) ou o gateway oficial pode confirmar o pagamento.'
+        });
+      }
+
+      // Motorista só pode confirmar recebimento presencial em dinheiro (nunca PIX ou Cartão)
+      if (!isAdmin && isDriver && isConfirmingPayment && targetMethod !== 'dinheiro') {
+        return sendJson(res, 403, {
+          ok: false,
+          error: 'Pagamentos digitais (PIX/Cartão) só podem ser confirmados pelo gateway oficial.'
+        });
+      }
+
       // Regra obrigatória: PIX nunca é marcado como pago manualmente sem webhook do gateway!
-      if ((body.paymentMethod || before.paymentMethod) === 'pix' && (body.paymentStatus === 'pago' || body.paymentStatus === 'confirmado')) {
+      if (targetMethod === 'pix' && (targetPayStatus === 'pago' || targetPayStatus === 'confirmado')) {
         return sendJson(res, 400, {
           ok: false,
           error: 'Pagamentos PIX só podem ser confirmados automaticamente pelo webhook do gateway.'
@@ -4729,6 +4940,10 @@ async function handleApiRequest(req, res) {
 
     // 5. CLIENTS & AUTHENTICATION
     if (pathname === '/api/clients/register' && method === 'POST') {
+      const regLimit = security.checkRateLimit('cli_reg', getRequestClientIp(req), 10, 10 * 60 * 1000);
+      if (!regLimit.allowed) {
+        return sendJson(res, 429, { ok: false, error: 'Muitas tentativas de cadastro. Aguarde alguns minutos.' });
+      }
       await ensureClientsSchema();
       const body = await parseBody(req);
       const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
@@ -4769,31 +4984,13 @@ async function handleApiRequest(req, res) {
 
       if (existingRes.rows[0]) {
         const existing = existingRes.rows[0];
-        if (existing.password_hash) {
-          return sendJson(res, 409, {
-            ok: false,
-            error: 'Já existe uma conta cadastrada com este WhatsApp ou E-mail. Faça login com sua senha.'
-          });
-        }
-        const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
-          clientId: existing.id,
-          name,
-          document,
-          phone,
-          email,
-          ip: clientIp,
-          userAgent: req.headers['user-agent'],
-          host: req.headers.host,
-          clientAcceptance: body.termsAcceptance
+        return sendJson(res, 409, {
+          ok: false,
+          code: existing.password_hash ? 'ACCOUNT_EXISTS' : 'PASSWORD_SETUP_REQUIRED',
+          error: existing.password_hash
+            ? 'Já existe uma conta cadastrada com este WhatsApp ou E-mail. Faça login com sua senha.'
+            : 'Este WhatsApp ou E-mail já possui pré-cadastro no sistema. Use "Esqueci minha senha / Criar senha" para definir sua senha com código OTP.'
         });
-        const updatedRes = await db.query(
-          `UPDATE public.clients
-           SET name = $1, phone = $2, email = $3, document = $4, password_hash = $5, terms_accepted_at = $6, terms_signature = $7
-           WHERE id = $8
-           RETURNING *`,
-          [name, phone, email || null, document || null, passwordHash, termsSignature.signedAt, JSON.stringify(termsSignature), existing.id]
-        );
-        savedClientRow = updatedRes.rows[0];
       } else {
         const newId = body.id || `cli-${Date.now()}`;
         const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
@@ -4847,6 +5044,10 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/clients/check' && (method === 'POST' || method === 'GET')) {
+      const checkLimit = security.checkRateLimit('cli_check', getRequestClientIp(req), 30, 5 * 60 * 1000);
+      if (!checkLimit.allowed) {
+        return sendJson(res, 429, { ok: false, error: 'Muitas consultas em sequência. Aguarde alguns instantes.' });
+      }
       await ensureClientsSchema();
       let identifier = '';
       if (method === 'POST') {
@@ -4873,12 +5074,14 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 200, { ok: true, exists: false });
       }
 
+      const firstName = clientRow.name ? clientRow.name.split(' ')[0] : 'Passageiro';
       return sendJson(res, 200, {
         ok: true,
         exists: true,
         hasPassword: Boolean(clientRow.password_hash),
-        name: clientRow.name,
-        firstName: clientRow.name ? clientRow.name.split(' ')[0] : 'Passageiro',
+        requiresPasswordSetup: !clientRow.password_hash,
+        name: firstName,
+        firstName,
         blocked: Boolean(clientRow.blocked),
         termsSigned: Boolean(clientRow.terms_signature && clientRow.terms_signature.signed),
         termsValidationCode: clientRow.terms_signature?.validationCode || null
@@ -4886,6 +5089,10 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/clients/login' && method === 'POST') {
+      const loginLimit = security.checkRateLimit('cli_login', getRequestClientIp(req), 25, 10 * 60 * 1000);
+      if (!loginLimit.allowed) {
+        return sendJson(res, 429, { ok: false, error: 'Muitas tentativas de login. Aguarde alguns minutos.' });
+      }
       await ensureClientsSchema();
       const body = await parseBody(req);
       const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
@@ -4939,11 +5146,11 @@ async function handleApiRequest(req, res) {
           await db.query('UPDATE public.clients SET password_hash = $1 WHERE id = $2', [upgraded, clientRow.id]).catch(() => {});
         }
       } else {
-        if (password.length < 4) {
-          return sendJson(res, 401, { ok: false, error: 'Senha inválida (mínimo de 4 dígitos).' });
-        }
-        const firstHash = hashPassword(password);
-        await db.query('UPDATE public.clients SET password_hash = $1 WHERE id = $2', [firstHash, clientRow.id]).catch(() => {});
+        return sendJson(res, 403, {
+          ok: false,
+          code: 'PASSWORD_SETUP_REQUIRED',
+          error: 'Esta conta ainda não possui senha definida. Use "Esqueci minha senha / Criar senha" para validar seu código OTP antes de entrar.'
+        });
       }
 
       const sanitizedLoginClient = sanitizeClientRow(clientRow, false);
@@ -5222,7 +5429,31 @@ async function handleApiRequest(req, res) {
       }
       if (method === 'POST') {
         const isAdmin = await isAuthorizedAdmin(req);
+        const clientSession = verifyClientToken(req);
         const cli = await parseBody(req);
+        if (!isAdmin && (!clientSession || !cli.id || clientSession.sub !== cli.id)) {
+          return sendJson(res, 401, { ok: false, error: 'Autenticação necessária para salvar dados do passageiro.' });
+        }
+        if (!isAdmin) {
+          const updatedSelfRes = await db.query(
+            `UPDATE public.clients
+             SET saved_addresses = COALESCE($1, saved_addresses),
+                 terms_accepted_at = COALESCE($2, terms_accepted_at),
+                 terms_signature = COALESCE($3, terms_signature)
+             WHERE id = $4
+             RETURNING *`,
+            [
+              cli.savedAddresses !== undefined ? JSON.stringify(cli.savedAddresses || []) : null,
+              cli.termsAcceptedAt || null,
+              cli.termsSignature ? JSON.stringify(cli.termsSignature) : null,
+              clientSession.sub
+            ]
+          );
+          if (!updatedSelfRes.rows[0]) {
+            return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+          }
+          return sendJson(res, 200, { ok: true, client: sanitizeClientRow(updatedSelfRes.rows[0], false) });
+        }
         if (!cli.id) cli.id = `cli-${Date.now()}`;
         const pwdHash = cli.password ? hashPassword(cli.password) : null;
 
@@ -5234,7 +5465,7 @@ async function handleApiRequest(req, res) {
             phone = CASE WHEN $13::boolean THEN EXCLUDED.phone ELSE public.clients.phone END,
             email = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.email, public.clients.email) ELSE public.clients.email END,
             document = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.document, public.clients.document) ELSE public.clients.document END,
-            password_hash = COALESCE(EXCLUDED.password_hash, public.clients.password_hash),
+            password_hash = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.password_hash, public.clients.password_hash) ELSE public.clients.password_hash END,
             notes = CASE WHEN $13::boolean THEN EXCLUDED.notes ELSE public.clients.notes END,
             blocked = CASE WHEN $13::boolean THEN EXCLUDED.blocked ELSE public.clients.blocked END,
             saved_addresses = EXCLUDED.saved_addresses,
@@ -5491,7 +5722,7 @@ async function handleApiRequest(req, res) {
         ]
       });
 
-      realtimeHub.publish('driver:updated', { driverId: updated.id, driver: updated });
+      realtimeHub.publish('driver:updated', { driverId: updated.id, driver: security.sanitizeDriverForSse(updated) });
       return sendJson(res, 200, { ok: true, driver: updated, vehicle: currentVehicles[targetIdx] });
     }
 
@@ -5674,6 +5905,9 @@ async function handleApiRequest(req, res) {
         })));
       }
       if (method === 'POST') {
+        if (!await isAuthorizedAdmin(req)) {
+          return sendJson(res, 401, { error: 'Acesso não autorizado.' });
+        }
         const n = await parseBody(req);
         if (!n.id) n.id = `notif-${Date.now()}`;
         await db.query(`
@@ -5719,6 +5953,101 @@ async function handleApiRequest(req, res) {
       const isRead = body.read !== undefined ? Boolean(body.read) : true;
       await db.query('UPDATE public.notifications SET read = $1 WHERE id = $2', [isRead, id]);
       return sendJson(res, 200, { ok: true, id, read: isRead });
+    }
+
+    // 8. LGPD / PRIVACIDADE — EXCLUSÃO E ANONIMIZAÇÃO DE CONTA PELO TITULAR
+    if (pathname === '/api/privacy/delete-account' && method === 'POST') {
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const clientSession = verifyClientToken(req);
+      const driverSession = verifyDriverToken(req);
+      const requestedRole = String(body.role || '').trim().toLowerCase();
+
+      const useDriver = driverSession && (requestedRole === 'driver' || !clientSession);
+      const useClient = !useDriver && clientSession;
+
+      if (!useDriver && !useClient) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login na sua conta para solicitar a exclusão de dados (LGPD).' });
+      }
+
+      if (useDriver) {
+        const driverId = driverSession.sub;
+        const activeRideRes = await db.query(
+          `SELECT id FROM public.rides WHERE driver_id = $1 AND status NOT IN ('finalizada', 'cancelada') LIMIT 1`,
+          [driverId]
+        );
+        if (activeRideRes.rows[0]) {
+          return sendJson(res, 409, { ok: false, error: 'Finalize ou cancele sua corrida em andamento antes de excluir a conta.' });
+        }
+        const anonTag = `anon_${Date.now()}`;
+        await db.query(
+          `UPDATE public.drivers
+           SET name = 'Motorista Removido (LGPD)',
+               phone = $1,
+               email = NULL,
+               document = NULL,
+               password_hash = NULL,
+               photo = NULL,
+               status = 'offline',
+               approval_status = 'bloqueado',
+               bank_data = '{}'::jsonb,
+               kyc_data = NULL,
+               vehicles = '[]'::jsonb
+           WHERE id = $2`,
+          [anonTag, driverId]
+        );
+        await audit.recordAuditEvent({
+          category: 'motoristas_kyc',
+          actionKey: 'lgpd_driver_anonymized',
+          title: 'Exclusão / anonimização de conta solicitada pelo motorista (LGPD)',
+          description: `O motorista titular (${driverId}) solicitou anonimização e bloqueio permanente da conta via Art. 18 LGPD.`,
+          actorType: 'motorista',
+          actorId: driverId,
+          actorName: 'Titular (LGPD)',
+          entityType: 'motorista',
+          entityId: driverId,
+          entityLabel: driverId
+        });
+        return sendJson(res, 200, { ok: true, anonymized: true, role: 'driver', id: driverId });
+      }
+
+      const clientId = clientSession.sub;
+      const activeClientRideRes = await db.query(
+        `SELECT id FROM public.rides WHERE client_id = $1 AND status NOT IN ('finalizada', 'cancelada') LIMIT 1`,
+        [clientId]
+      );
+      if (activeClientRideRes.rows[0]) {
+        return sendJson(res, 409, { ok: false, error: 'Conclua ou cancele sua viagem ativa antes de solicitar a exclusão da conta.' });
+      }
+      const anonClientPhone = `anon_${Date.now()}`;
+      await db.query(
+        `UPDATE public.clients
+         SET name = 'Passageiro Removido (LGPD)',
+             phone = $1,
+             email = NULL,
+             document = NULL,
+             password_hash = NULL,
+             photo = NULL,
+             blocked = true,
+             saved_addresses = '[]'::jsonb,
+             saved_cards = '[]'::jsonb,
+             notes = 'Conta anonimizada pelo titular (LGPD Art. 18)'
+         WHERE id = $2`,
+        [anonClientPhone, clientId]
+      );
+      await audit.recordAuditEvent({
+        category: 'sistema',
+        actionKey: 'lgpd_client_anonymized',
+        title: 'Exclusão / anonimização de conta solicitada pelo passageiro (LGPD)',
+        description: `O passageiro titular (${clientId}) solicitou anonimização e exclusão dos dados pessoais via Art. 18 LGPD.`,
+        actorType: 'passageiro',
+        actorId: clientId,
+        actorName: 'Titular (LGPD)',
+        entityType: 'passageiro',
+        entityId: clientId,
+        entityLabel: clientId
+      });
+      return sendJson(res, 200, { ok: true, anonymized: true, role: 'client', id: clientId });
     }
 
     return sendJson(res, 404, { error: 'Not found' });
