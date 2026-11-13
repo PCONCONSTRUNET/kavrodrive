@@ -637,7 +637,7 @@ export const StorageService = {
     }
   },
 
-  async updateDriverProfile(driverId: string, updates: Partial<DriverProfile>): Promise<{ ok: boolean; driver?: DriverProfile }> {
+  async updateDriverProfile(driverId: string, updates: Partial<DriverProfile>): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}`, {
         method: 'PATCH',

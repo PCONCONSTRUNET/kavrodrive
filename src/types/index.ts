@@ -318,6 +318,7 @@ export interface DriverProfile {
   bio?: string;
   pixKey: string;
   pixType: 'cpf' | 'cnpj' | 'telefone' | 'email' | 'aleatoria';
+  pixKeys?: DriverPixKey[];
   bankName?: string;
   bankAgency?: string;
   bankAccount?: string;
@@ -396,9 +397,22 @@ export interface DriverWalletSummary {
   totalWithdrawn: number;         // Total já sacado
   pixKey?: string;
   pixType?: string;
+  pixKeys?: DriverPixKey[];
   autoPayoutWeekly?: boolean;
   ledger: FinancialLedgerEntry[];
   withdrawals: WithdrawalRequest[];
+}
+
+export interface DriverPixKey {
+  id: string;
+  pixType: 'cpf' | 'cnpj' | 'telefone' | 'email' | 'aleatoria';
+  pixKey: string;
+  bankName: string;
+  holderName: string;
+  holderDocument: string;
+  sameOwnershipConfirmed: boolean;
+  isDefault?: boolean;
+  createdAt: string;
 }
 
 export interface WithdrawalRequest {

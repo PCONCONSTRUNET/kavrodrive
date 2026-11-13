@@ -1769,7 +1769,7 @@ async function handleApiRequest(req, res) {
 
         const ALLOWED_DRIVER_SELF_FIELDS = new Set([
           'photo', 'vehiclePhoto', 'bio', 'enabledCategories', 'pendingCategoryRequests',
-          'pixKey', 'pixType', 'bankName', 'bankAgency', 'bankAccount',
+          'pixKey', 'pixType', 'pixKeys', 'bankName', 'bankAgency', 'bankAccount',
           'autoPayoutWeekly', 'acceptsCash'
         ]);
         const nextUpdates = {};
@@ -1777,6 +1777,33 @@ async function handleApiRequest(req, res) {
           if (isAdmin || ALLOWED_DRIVER_SELF_FIELDS.has(k)) {
             nextUpdates[k] = v;
           }
+        }
+        try {
+          if (Array.isArray(nextUpdates.pixKeys)) {
+            const normalizedKeys = finance.validateAndNormalizeDriverPixKeys(
+              nextUpdates.pixKeys,
+              existing,
+              { strict: true }
+            );
+            nextUpdates.pixKeys = normalizedKeys;
+            const defaultKey = normalizedKeys.find(k => k.isDefault) || normalizedKeys[0];
+            nextUpdates.pixKey = defaultKey ? defaultKey.pixKey : '';
+            nextUpdates.pixType = defaultKey ? defaultKey.pixType : (existing.pixType || 'cpf');
+            nextUpdates.bankName = defaultKey ? (defaultKey.bankName || '') : '';
+          } else if (nextUpdates.pixKey !== undefined || nextUpdates.pixType !== undefined) {
+            const singleType = String(nextUpdates.pixType ?? existing.pixType ?? 'cpf').toLowerCase();
+            const singleKey = String(nextUpdates.pixKey ?? existing.pixKey ?? '').trim();
+            if (singleKey && singleType === 'cpf' && existing.document) {
+              if (singleKey.replace(/\D/g, '') !== String(existing.document).replace(/\D/g, '')) {
+                return sendJson(res, 400, {
+                  ok: false,
+                  error: 'Chave PIX do tipo CPF deve ser idêntica ao CPF do motorista titular (mesma titularidade).'
+                });
+              }
+            }
+          }
+        } catch (err) {
+          return sendJson(res, 400, { ok: false, error: err.message });
         }
         if (typeof nextUpdates.photo === 'string' && nextUpdates.photo.startsWith('data:image/')) {
           nextUpdates.photo = await kycStorage.savePublicMedia(existing.id, 'avatar', nextUpdates.photo);

@@ -497,6 +497,98 @@ function computeDriverCategoriesServer(driver, categories) {
   return { eligibleCategories: eligible, enabledCategories: enabled };
 }
 
+function validateAndNormalizeDriverPixKeys(rawKeys, driverCtx = {}, options = {}) {
+  const strict = Boolean(options.strict);
+  const ownerDocDigits = String(driverCtx.document || '').replace(/\D/g, '');
+  const ownerName = String(driverCtx.name || '').trim();
+  const validTypes = new Set(['cpf', 'cnpj', 'telefone', 'email', 'aleatoria']);
+
+  if (!Array.isArray(rawKeys)) {
+    const legacyKey = String(driverCtx.pixKey || '').trim();
+    if (!legacyKey) return [];
+    const legacyType = validTypes.has(String(driverCtx.pixType || '').toLowerCase())
+      ? String(driverCtx.pixType).toLowerCase()
+      : 'cpf';
+    return [{
+      id: 'pix-primary',
+      pixType: legacyType,
+      pixKey: legacyKey,
+      bankName: String(driverCtx.bankName || '').trim(),
+      holderName: ownerName,
+      holderDocument: ownerDocDigits,
+      sameOwnershipConfirmed: true,
+      isDefault: true,
+      createdAt: driverCtx.createdAt || new Date().toISOString()
+    }];
+  }
+
+  if (strict && rawKeys.length > 5) {
+    throw new Error('Limite máximo de 5 chaves PIX por motorista.');
+  }
+
+  const seen = new Set();
+  const normalizedList = [];
+  for (let i = 0; i < rawKeys.length && i < 5; i += 1) {
+    const item = rawKeys[i] || {};
+    const pixTypeRaw = String(item.pixType || 'cpf').toLowerCase().trim();
+    const pixType = validTypes.has(pixTypeRaw) ? pixTypeRaw : 'cpf';
+    const pixKey = String(item.pixKey || '').trim();
+    const bankName = String(item.bankName || '').trim();
+
+    if (!pixKey) {
+      if (strict) throw new Error('Informe a chave PIX antes de salvar.');
+      continue;
+    }
+    if (strict && pixType === 'cpf') {
+      const keyDigits = pixKey.replace(/\D/g, '');
+      if (ownerDocDigits && keyDigits !== ownerDocDigits) {
+        throw new Error('Chave PIX do tipo CPF deve ser idêntica ao CPF do motorista titular (mesma titularidade).');
+      }
+    }
+    const itemHolderDoc = String(item.holderDocument || '').replace(/\D/g, '');
+    if (strict && itemHolderDoc && ownerDocDigits && itemHolderDoc !== ownerDocDigits) {
+      throw new Error('Todas as chaves PIX precisam pertencer à mesma titularidade (mesmo CPF cadastrado).');
+    }
+    if (strict && item.sameOwnershipConfirmed !== true) {
+      throw new Error('Confirme a declaração de mesma titularidade para todas as chaves PIX.');
+    }
+
+    const dedupeKey = `${pixType}:${pixKey.toLowerCase()}`;
+    if (seen.has(dedupeKey)) {
+      if (strict) throw new Error('Esta chave PIX já está cadastrada na sua carteira.');
+      continue;
+    }
+    seen.add(dedupeKey);
+
+    normalizedList.push({
+      id: String(item.id || `pix-${Date.now()}-${i}`),
+      pixType,
+      pixKey,
+      bankName,
+      holderName: ownerName || String(item.holderName || '').trim(),
+      holderDocument: ownerDocDigits || itemHolderDoc,
+      sameOwnershipConfirmed: true,
+      isDefault: Boolean(item.isDefault),
+      createdAt: item.createdAt || new Date().toISOString()
+    });
+  }
+
+  if (normalizedList.length > 0 && !normalizedList.some(k => k.isDefault)) {
+    normalizedList[0].isDefault = true;
+  } else if (normalizedList.length > 0) {
+    let defaultAssigned = false;
+    for (const k of normalizedList) {
+      if (k.isDefault && !defaultAssigned) {
+        defaultAssigned = true;
+      } else {
+        k.isDefault = false;
+      }
+    }
+  }
+
+  return normalizedList;
+}
+
 function formatDriverRow(row, categoriesConfig) {
   if (!row) return null;
   const meta = (row.metadata && typeof row.metadata === 'object') ? row.metadata : {};
@@ -547,6 +639,18 @@ function formatDriverRow(row, categoriesConfig) {
     bio: row.bio || '',
     pixKey: row.pix_key || row.pixKey || '',
     pixType: row.pix_type || row.pixType || 'cpf',
+    pixKeys: validateAndNormalizeDriverPixKeys(
+      Array.isArray(row.pixKeys) ? row.pixKeys : (Array.isArray(meta.pixKeys) ? meta.pixKeys : undefined),
+      {
+        name: row.name,
+        document: row.document,
+        pixKey: row.pix_key || row.pixKey || '',
+        pixType: row.pix_type || row.pixType || 'cpf',
+        bankName: row.bank_name || row.bankName || '',
+        createdAt: row.created_at || row.createdAt
+      },
+      { strict: false }
+    ),
     bankName: row.bank_name || row.bankName || '',
     bankAgency: row.bank_agency || row.bankAgency || '',
     bankAccount: row.bank_account || row.bankAccount || '',
@@ -726,6 +830,18 @@ async function saveDriverRecord(driverRow) {
     enabledCategories: Array.isArray(driverRow.enabledCategories)
       ? driverRow.enabledCategories
       : (Array.isArray(prevMeta.enabledCategories) ? prevMeta.enabledCategories : undefined),
+    pixKeys: validateAndNormalizeDriverPixKeys(
+      Array.isArray(driverRow.pixKeys) ? driverRow.pixKeys : (Array.isArray(prevMeta.pixKeys) ? prevMeta.pixKeys : undefined),
+      {
+        name: driverRow.name,
+        document: driverRow.document,
+        pixKey: driverRow.pix_key ?? driverRow.pixKey ?? '',
+        pixType: driverRow.pix_type ?? driverRow.pixType ?? 'cpf',
+        bankName: driverRow.bank_name ?? driverRow.bankName ?? '',
+        createdAt: driverRow.created_at || driverRow.createdAt
+      },
+      { strict: false }
+    ),
     profileChangeRequest: driverRow.profileChangeRequest !== undefined ? driverRow.profileChangeRequest : (prevMeta.profileChangeRequest || null)
   };
 
@@ -1146,6 +1262,7 @@ async function getDriverWallet(driverId) {
     totalWithdrawn: round2(totalWithdrawn),
     pixKey: driver?.pixKey || '',
     pixType: driver?.pixType || 'cpf',
+    pixKeys: Array.isArray(driver?.pixKeys) ? driver.pixKeys : [],
     autoPayoutWeekly: driver?.autoPayoutWeekly !== false,
     ledger,
     withdrawals
@@ -1227,10 +1344,23 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
   }
 
   const wdId = `wd-${Date.now()}`;
-  const targetPixKey = String(pixKey || driver.pixKey || driver.phone || '').trim();
-  const targetPixType = String(pixType || driver.pixType || 'cpf');
+  const driverPixKeys = Array.isArray(driver.pixKeys) ? driver.pixKeys : [];
+  const defaultSavedKey = driverPixKeys.find(k => k.isDefault) || driverPixKeys[0];
+  const requestedKeyStr = String(pixKey || '').trim();
+  const matchedRegisteredKey = requestedKeyStr
+    ? driverPixKeys.find(k => String(k.pixKey || '').trim().toLowerCase() === requestedKeyStr.toLowerCase())
+    : null;
+  const targetPixKey = requestedKeyStr || defaultSavedKey?.pixKey || String(driver.pixKey || '').trim();
+  const targetPixType = String(matchedRegisteredKey?.pixType || pixType || defaultSavedKey?.pixType || driver.pixType || 'cpf');
   if (!targetPixKey) {
-    throw new Error('Cadastre uma chave PIX válida na sua carteira antes de solicitar o saque.');
+    throw new Error('Cadastre uma chave PIX válida de mesma titularidade na sua carteira antes de solicitar o saque.');
+  }
+  if (targetPixType === 'cpf' && driver.document) {
+    const ownerDigits = String(driver.document).replace(/\D/g, '');
+    const keyDigits = targetPixKey.replace(/\D/g, '');
+    if (ownerDigits && keyDigits !== ownerDigits) {
+      throw new Error('Saque bloqueado: a chave PIX em CPF precisa pertencer ao mesmo titular (CPF) do motorista.');
+    }
   }
 
   const { entry } = await recordLedgerEntry({
@@ -2230,6 +2360,7 @@ module.exports = {
   ensureExtendedSchema,
   normalizeCategoriesServer,
   mapLegacyCategoryIdServer,
+  validateAndNormalizeDriverPixKeys,
   listDrivers,
   getDriverById,
   findDriverByIdentifier,

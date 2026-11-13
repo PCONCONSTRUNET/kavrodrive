@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
+  AlertCircle,
   ArrowLeft,
   Camera,
   Check,
@@ -12,15 +13,17 @@ import {
   Mail,
   MapPin,
   Phone,
+  Plus,
   QrCode,
   Send,
   ShieldCheck,
   Star,
+  Trash2,
   User,
   Wallet,
   XCircle
 } from 'lucide-react';
-import { DriverProfile, DriverWalletSummary, Ride } from '../types';
+import { DriverPixKey, DriverProfile, DriverWalletSummary, Ride } from '../types';
 import { StorageService } from '../services/storage';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { formatCPF, formatPhone, formatRideCode } from '../utils/format';
@@ -112,6 +115,139 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   );
   const [isSubmittingChange, setIsSubmittingChange] = useState(false);
   const [changeFeedback, setChangeFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+
+  // Gestão de Múltiplas Chaves PIX (Mesma Titularidade) & Filtro de Saques
+  const [sameOwnershipChecked, setSameOwnershipChecked] = useState(true);
+  const [pixLocalFeedback, setPixLocalFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+  const [isMutatingPixList, setIsMutatingPixList] = useState(false);
+  const [showAddPixForm, setShowAddPixForm] = useState(false);
+  const [withdrawalFilter, setWithdrawalFilter] = useState<'all' | 'pending' | 'completed' | 'rejected'>('all');
+
+  const ownerDocDigits = String(currentDriver.document || '').replace(/\D/g, '');
+  const savedPixKeys: DriverPixKey[] = (() => {
+    if (Array.isArray(currentDriver.pixKeys) && currentDriver.pixKeys.length > 0) {
+      return currentDriver.pixKeys;
+    }
+    if (currentDriver.pixKey) {
+      return [{
+        id: 'pix-primary',
+        pixType: currentDriver.pixType || 'cpf',
+        pixKey: currentDriver.pixKey,
+        bankName: currentDriver.bankName || '',
+        holderName: currentDriver.name,
+        holderDocument: ownerDocDigits,
+        sameOwnershipConfirmed: true,
+        isDefault: true,
+        createdAt: currentDriver.createdAt
+      }];
+    }
+    return [];
+  })();
+
+  const persistPixKeysList = async (nextList: DriverPixKey[], successMsg: string) => {
+    setPixLocalFeedback(null);
+    setIsMutatingPixList(true);
+    const res = await StorageService.updateDriverProfile(currentDriver.id, {
+      pixKeys: nextList
+    });
+    setIsMutatingPixList(false);
+    if (res.ok && res.driver) {
+      onDriverUpdated(res.driver);
+      setPixLocalFeedback({ type: 'ok', text: successMsg });
+      setTimeout(() => setPixLocalFeedback(null), 4000);
+      return true;
+    }
+    setPixLocalFeedback({
+      type: 'err',
+      text: res.error || 'Não foi possível atualizar as chaves PIX. Verifique a titularidade.'
+    });
+    return false;
+  };
+
+  const handleAddSameOwnerPixKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPixLocalFeedback(null);
+
+    if (savedPixKeys.length >= 5) {
+      setPixLocalFeedback({ type: 'err', text: 'Limite máximo de 5 chaves PIX atingido.' });
+      return;
+    }
+
+    const keyTrimmed = pixEditType === 'cpf' && currentDriver.document
+      ? formatCPF(currentDriver.document)
+      : pixEditKey.trim();
+
+    if (!keyTrimmed) {
+      setPixLocalFeedback({ type: 'err', text: 'Informe a chave PIX que deseja cadastrar.' });
+      return;
+    }
+
+    if (pixEditType === 'cpf' && ownerDocDigits) {
+      if (keyTrimmed.replace(/\D/g, '') !== ownerDocDigits) {
+        setPixLocalFeedback({
+          type: 'err',
+          text: `Chave CPF bloqueada: só é permitido cadastrar seu próprio CPF (${formatCPF(ownerDocDigits)}) por regra de mesma titularidade.`
+        });
+        return;
+      }
+    }
+
+    if (!pixEditBank.trim()) {
+      setPixLocalFeedback({ type: 'err', text: 'Informe o nome do banco de destino (ex: Nubank, Inter).' });
+      return;
+    }
+
+    if (!sameOwnershipChecked) {
+      setPixLocalFeedback({
+        type: 'err',
+        text: 'Confirme a declaração de mesma titularidade antes de cadastrar a chave.'
+      });
+      return;
+    }
+
+    const duplicate = savedPixKeys.some(
+      k => k.pixType === pixEditType && k.pixKey.trim().toLowerCase() === keyTrimmed.toLowerCase()
+    );
+    if (duplicate) {
+      setPixLocalFeedback({ type: 'err', text: 'Esta chave PIX já está cadastrada na sua conta.' });
+      return;
+    }
+
+    const newItem: DriverPixKey = {
+      id: `pix-${Date.now()}`,
+      pixType: pixEditType,
+      pixKey: keyTrimmed,
+      bankName: pixEditBank.trim(),
+      holderName: currentDriver.name,
+      holderDocument: ownerDocDigits,
+      sameOwnershipConfirmed: true,
+      isDefault: savedPixKeys.length === 0,
+      createdAt: new Date().toISOString()
+    };
+
+    const ok = await persistPixKeysList([...savedPixKeys, newItem], 'Nova chave PIX de mesma titularidade adicionada!');
+    if (ok) {
+      onPixKeyChange('');
+      onPixBankChange('');
+      setShowAddPixForm(false);
+    }
+  };
+
+  const handleSetDefaultPixKey = async (targetId: string) => {
+    const nextList = savedPixKeys.map(k => ({
+      ...k,
+      isDefault: k.id === targetId
+    }));
+    await persistPixKeysList(nextList, 'Chave PIX padrão para saques atualizada!');
+  };
+
+  const handleRemovePixKey = async (targetId: string) => {
+    const remaining = savedPixKeys.filter(k => k.id !== targetId);
+    if (remaining.length > 0 && !remaining.some(k => k.isDefault)) {
+      remaining[0] = { ...remaining[0], isDefault: true };
+    }
+    await persistPixKeysList(remaining, 'Chave PIX removida da carteira.');
+  };
 
   useEffect(() => {
     const req = currentDriver.profileChangeRequest?.status === 'pendente'
@@ -430,7 +566,44 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
         {/* ============================================================ */}
         {/* ABA CARTEIRA PIX                                             */}
         {/* ============================================================ */}
-        {activeTab === 'carteira' && (
+        {activeTab === 'carteira' && (() => {
+          const allWithdrawals = wallet?.withdrawals || [];
+          const pendingWithdrawals = allWithdrawals.filter(w => w.status === 'solicitado' || w.status === 'processando');
+          const completedWithdrawals = allWithdrawals.filter(w => w.status === 'pago');
+          const rejectedWithdrawals = allWithdrawals.filter(w => w.status === 'rejeitado');
+          const pendingWithdrawTotal = pendingWithdrawals.reduce((acc, w) => acc + Number(w.amount || 0), 0);
+
+          const filteredWithdrawals = allWithdrawals.filter(w => {
+            if (withdrawalFilter === 'pending') return w.status === 'solicitado' || w.status === 'processando';
+            if (withdrawalFilter === 'completed') return w.status === 'pago';
+            if (withdrawalFilter === 'rejected') return w.status === 'rejeitado';
+            return true;
+          });
+
+          const formatPixTypeLabel = (t?: string) => {
+            if (t === 'cpf') return 'CPF';
+            if (t === 'cnpj') return 'CNPJ';
+            if (t === 'telefone') return 'Celular';
+            if (t === 'email') return 'E-mail';
+            return 'Aleatória';
+          };
+
+          const getStatusStyle = (status: string) => {
+            if (status === 'pago') {
+              return { label: 'Concluído', bg: '#DCFCE7', color: '#15803D', border: '#BBF7D0', icon: <CheckCircle2 size={12} /> };
+            }
+            if (status === 'rejeitado') {
+              return { label: 'Rejeitado', bg: '#FEE2E2', color: '#B91C1C', border: '#FECACA', icon: <XCircle size={12} /> };
+            }
+            if (status === 'processando') {
+              return { label: 'Processando', bg: '#DBEAFE', color: '#1D4ED8', border: '#BFDBFE', icon: <Clock size={12} /> };
+            }
+            return { label: 'Pendente', bg: '#FEF3C7', color: '#B45309', border: '#FDE68A', icon: <Clock size={12} /> };
+          };
+
+          const isAddingMode = savedPixKeys.length === 0 || showAddPixForm;
+
+          return (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
             <div style={CARD_STYLE}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
@@ -456,6 +629,33 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Mini resumo financeiro da carteira */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                gap: 8,
+                marginTop: 12
+              }}>
+                <div style={{ backgroundColor: '#F9FAFB', borderRadius: 10, padding: '8px 10px', border: '1px solid #E5E7EB' }}>
+                  <div style={{ fontSize: '0.66rem', fontWeight: 700, color: '#6B7280' }}>A liberar</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#111111' }}>
+                    R$ {(wallet?.pendingBalance || 0).toFixed(2).replace('.', ',')}
+                  </div>
+                </div>
+                <div style={{ backgroundColor: '#FFFBEB', borderRadius: 10, padding: '8px 10px', border: '1px solid #FDE68A' }}>
+                  <div style={{ fontSize: '0.66rem', fontWeight: 700, color: '#B45309' }}>Saques pendentes</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#92400E' }}>
+                    R$ {pendingWithdrawTotal.toFixed(2).replace('.', ',')}
+                  </div>
+                </div>
+                <div style={{ backgroundColor: '#F0FDF4', borderRadius: 10, padding: '8px 10px', border: '1px solid #BBF7D0' }}>
+                  <div style={{ fontSize: '0.66rem', fontWeight: 700, color: '#15803D' }}>Já sacado</div>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#166534' }}>
+                    R$ {(wallet?.totalWithdrawn || 0).toFixed(2).replace('.', ',')}
+                  </div>
+                </div>
               </div>
 
               <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
@@ -503,97 +703,454 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
               </div>
             </div>
 
-            {/* Configuração de Chave PIX */}
+            {/* Múltiplas Chaves PIX com Mesma Titularidade */}
             <div style={CARD_STYLE}>
-              <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#111111', marginBottom: 4 }}>
-                Chave PIX para Repasses
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: '0.94rem', fontWeight: 900, color: '#111111' }}>
+                    Chaves PIX para Repasses ({savedPixKeys.length}/5)
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: 2 }}>
+                    Cadastre mais de uma chave PIX para receber seus ganhos.
+                  </div>
+                </div>
+                {savedPixKeys.length > 0 && savedPixKeys.length < 5 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const opening = !showAddPixForm;
+                      setShowAddPixForm(opening);
+                      setPixLocalFeedback(null);
+                      if (opening) {
+                        onPixTypeChange('telefone');
+                        onPixKeyChange(currentDriver.phone ? formatPhone(currentDriver.phone) : '');
+                        onPixBankChange('');
+                      }
+                    }}
+                    style={{
+                      padding: '7px 11px',
+                      borderRadius: 9,
+                      border: '1px solid #111111',
+                      backgroundColor: showAddPixForm ? '#F3F4F6' : '#111111',
+                      color: showAddPixForm ? '#111111' : '#FFFFFF',
+                      fontSize: '0.75rem',
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      cursor: 'pointer',
+                      flexShrink: 0
+                    }}
+                  >
+                    {showAddPixForm ? <span>Fechar</span> : <><Plus size={14} /><span>Nova Chave</span></>}
+                  </button>
+                )}
               </div>
-              <div style={{ fontSize: '0.76rem', color: '#6B7280', marginBottom: 12 }}>
-                Usada para transferências dos seus ganhos digitais.
+
+              {/* Selo fixo de Mesma Titularidade Obrigatória */}
+              <div style={{
+                padding: '9px 11px',
+                borderRadius: 10,
+                backgroundColor: '#F0FDF4',
+                border: '1px solid #BBF7D0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 12
+              }}>
+                <ShieldCheck size={16} color="#15803D" style={{ flexShrink: 0 }} />
+                <div style={{ fontSize: '0.73rem', color: '#166534', lineHeight: 1.35 }}>
+                  <strong>Mesma titularidade obrigatória:</strong> apenas contas em nome de{' '}
+                  <strong>{currentDriver.name}</strong> (CPF{' '}
+                  <strong>{ownerDocDigits ? formatCPF(ownerDocDigits) : 'cadastrado'}</strong>).
+                </div>
               </div>
-              <form onSubmit={onSavePixKey} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {([
-                    { id: 'cpf', label: 'CPF' },
-                    { id: 'telefone', label: 'Celular' },
-                    { id: 'email', label: 'E-mail' },
-                    { id: 'aleatoria', label: 'Aleatória' }
-                  ] as const).map(opt => {
-                    const selected = pixEditType === opt.id;
+
+              {/* Lista das chaves já cadastradas */}
+              {savedPixKeys.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: isAddingMode ? 14 : 0 }}>
+                  {savedPixKeys.map((item) => (
+                    <div
+                      key={item.id}
+                      style={{
+                        padding: '11px 12px',
+                        borderRadius: 12,
+                        border: item.isDefault ? '1.5px solid #111111' : '1px solid #E5E7EB',
+                        backgroundColor: item.isDefault ? '#FAFAFA' : '#FFFFFF',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 10
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                          <span style={{
+                            fontSize: '0.67rem',
+                            fontWeight: 800,
+                            padding: '2px 7px',
+                            borderRadius: 999,
+                            backgroundColor: '#E5E7EB',
+                            color: '#1F2937'
+                          }}>
+                            {formatPixTypeLabel(item.pixType)}
+                          </span>
+                          {item.isDefault && (
+                            <span style={{
+                              fontSize: '0.67rem',
+                              fontWeight: 800,
+                              padding: '2px 8px',
+                              borderRadius: 999,
+                              backgroundColor: '#DCFCE7',
+                              color: '#15803D'
+                            }}>
+                              Padrão p/ saques
+                            </span>
+                          )}
+                          {item.bankName && (
+                            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#4B5563' }}>
+                              • {item.bankName}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#111111', wordBreak: 'break-all' }}>
+                          {item.pixKey}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#6B7280', marginTop: 2 }}>
+                          Titular: {item.holderName || currentDriver.name} • CPF{' '}
+                          {item.holderDocument ? formatCPF(item.holderDocument) : formatCPF(ownerDocDigits)}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                        {!item.isDefault && (
+                          <button
+                            type="button"
+                            disabled={isMutatingPixList}
+                            onClick={() => handleSetDefaultPixKey(item.id)}
+                            style={{
+                              padding: '6px 9px',
+                              borderRadius: 8,
+                              border: '1px solid #D1D5DB',
+                              backgroundColor: '#FFFFFF',
+                              color: '#111111',
+                              fontSize: '0.7rem',
+                              fontWeight: 700,
+                              cursor: 'pointer'
+                            }}
+                          >
+                            Definir padrão
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={isMutatingPixList}
+                          onClick={() => handleRemovePixKey(item.id)}
+                          title="Remover chave PIX"
+                          style={{
+                            width: 30,
+                            height: 30,
+                            borderRadius: 8,
+                            border: '1px solid #FECACA',
+                            backgroundColor: '#FEF2F2',
+                            color: '#DC2626',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {(pixLocalFeedback || pixSaveNotice) && (
+                <div style={{
+                  marginBottom: isAddingMode ? 10 : 0,
+                  padding: '8px 10px',
+                  borderRadius: 9,
+                  backgroundColor: (pixLocalFeedback?.type === 'ok' || pixSaveNotice.includes('sucesso')) ? '#F0FDF4' : '#FEF2F2',
+                  border: (pixLocalFeedback?.type === 'ok' || pixSaveNotice.includes('sucesso')) ? '1px solid #BBF7D0' : '1px solid #FECACA',
+                  fontSize: '0.76rem',
+                  fontWeight: 700,
+                  color: (pixLocalFeedback?.type === 'ok' || pixSaveNotice.includes('sucesso')) ? '#15803D' : '#DC2626'
+                }}>
+                  {pixLocalFeedback?.text || pixSaveNotice}
+                </div>
+              )}
+
+              {/* Formulário para cadastrar nova chave PIX */}
+              {isAddingMode && (
+                <form
+                  onSubmit={handleAddSameOwnerPixKey}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 10,
+                    paddingTop: savedPixKeys.length > 0 ? 12 : 0,
+                    borderTop: savedPixKeys.length > 0 ? '1px dashed #E5E7EB' : 'none'
+                  }}
+                >
+                  <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#111111' }}>
+                    {savedPixKeys.length > 0 ? 'Adicionar outra chave PIX (mesmo titular)' : 'Cadastrar chave PIX principal'}
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {([
+                      { id: 'cpf', label: 'CPF (Titular)' },
+                      { id: 'telefone', label: 'Celular' },
+                      { id: 'email', label: 'E-mail' },
+                      { id: 'aleatoria', label: 'Aleatória' }
+                    ] as const).map(opt => {
+                      const selected = pixEditType === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            onPixTypeChange(opt.id);
+                            if (opt.id === 'cpf' && ownerDocDigits) onPixKeyChange(formatCPF(ownerDocDigits));
+                            else if (opt.id === 'telefone' && currentDriver.phone) onPixKeyChange(formatPhone(currentDriver.phone));
+                            else if (opt.id === 'email' && currentDriver.email) onPixKeyChange(currentDriver.email);
+                            else onPixKeyChange('');
+                          }}
+                          style={{
+                            padding: '6px 12px',
+                            borderRadius: 999,
+                            border: selected ? '1.5px solid #111111' : '1px solid #E5E7EB',
+                            backgroundColor: selected ? '#111111' : '#FFFFFF',
+                            color: selected ? '#FFFFFF' : '#374151',
+                            fontSize: '0.75rem',
+                            fontWeight: 700,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder={pixEditType === 'cpf' ? 'CPF do titular' : 'Digite sua chave PIX'}
+                    value={pixEditType === 'cpf' && ownerDocDigits ? formatCPF(ownerDocDigits) : pixEditKey}
+                    readOnly={pixEditType === 'cpf' && Boolean(ownerDocDigits)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (pixEditType === 'cpf') onPixKeyChange(formatCPF(val));
+                      else if (pixEditType === 'telefone') onPixKeyChange(formatPhone(val));
+                      else onPixKeyChange(val);
+                    }}
+                    style={{
+                      ...INPUT_STYLE,
+                      paddingLeft: 12,
+                      backgroundColor: pixEditType === 'cpf' && ownerDocDigits ? '#F3F4F6' : '#F9FAFB'
+                    }}
+                  />
+
+                  <input
+                    type="text"
+                    placeholder="Banco (ex: Nubank, Banco do Brasil, Inter, Itaú)"
+                    value={pixEditBank}
+                    onChange={(e) => onPixBankChange(e.target.value)}
+                    style={{ ...INPUT_STYLE, paddingLeft: 12 }}
+                  />
+
+                  <label style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 8,
+                    padding: '9px 10px',
+                    borderRadius: 10,
+                    backgroundColor: '#F9FAFB',
+                    border: '1px solid #E5E7EB',
+                    fontSize: '0.73rem',
+                    color: '#374151',
+                    lineHeight: 1.4,
+                    cursor: 'pointer'
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={sameOwnershipChecked}
+                      onChange={(e) => setSameOwnershipChecked(e.target.checked)}
+                      style={{ marginTop: 2, accentColor: '#111111' }}
+                    />
+                    <span>
+                      Declaro que esta chave PIX está vinculada a uma conta bancária de{' '}
+                      <strong>mesma titularidade</strong> ({currentDriver.name} • CPF{' '}
+                      {ownerDocDigits ? formatCPF(ownerDocDigits) : 'do titular'}).
+                    </span>
+                  </label>
+
+                  <button
+                    type="submit"
+                    disabled={isMutatingPixList || isSavingPix}
+                    style={{
+                      height: 42,
+                      borderRadius: 10,
+                      border: 'none',
+                      backgroundColor: '#111111',
+                      color: '#FFFFFF',
+                      fontWeight: 800,
+                      fontSize: '0.86rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {(isMutatingPixList || isSavingPix) ? 'Validando e salvando...' : 'Cadastrar Chave PIX'}
+                  </button>
+                </form>
+              )}
+            </div>
+
+            {/* Histórico de Saques (Pendente, Concluído, Rejeitado) */}
+            <div style={CARD_STYLE}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <div>
+                  <div style={{ fontSize: '0.94rem', fontWeight: 900, color: '#111111' }}>
+                    Histórico de Saques &amp; Repasses
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: '#6B7280', marginTop: 2 }}>
+                    Acompanhe solicitações pendentes, transferências concluídas e eventuais estornos.
+                  </div>
+                </div>
+              </div>
+
+              {/* Pills de filtro por status */}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+                {([
+                  { id: 'all', label: `Todos (${allWithdrawals.length})` },
+                  { id: 'pending', label: `Pendentes (${pendingWithdrawals.length})` },
+                  { id: 'completed', label: `Concluídos (${completedWithdrawals.length})` },
+                  { id: 'rejected', label: `Rejeitados (${rejectedWithdrawals.length})` }
+                ] as const).map(tab => {
+                  const active = withdrawalFilter === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setWithdrawalFilter(tab.id)}
+                      style={{
+                        padding: '6px 11px',
+                        borderRadius: 999,
+                        border: active ? '1.5px solid #111111' : '1px solid #E5E7EB',
+                        backgroundColor: active ? '#111111' : '#F9FAFB',
+                        color: active ? '#FFFFFF' : '#374151',
+                        fontSize: '0.73rem',
+                        fontWeight: 700,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {filteredWithdrawals.length === 0 ? (
+                <div style={{
+                  padding: '22px 14px',
+                  borderRadius: 12,
+                  backgroundColor: '#F9FAFB',
+                  border: '1px dashed #E5E7EB',
+                  textAlign: 'center',
+                  fontSize: '0.8rem',
+                  color: '#6B7280'
+                }}>
+                  {allWithdrawals.length === 0
+                    ? 'Você ainda não realizou nenhuma solicitação de saque PIX.'
+                    : 'Nenhum saque encontrado neste filtro.'}
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {filteredWithdrawals.map(wd => {
+                    const st = getStatusStyle(wd.status);
+                    const dateFormatted = wd.createdAt
+                      ? new Date(wd.createdAt).toLocaleString('pt-BR', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          year: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })
+                      : '--';
                     return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => {
-                          onPixTypeChange(opt.id);
-                          if (opt.id === 'cpf' && currentDriver.document) onPixKeyChange(formatCPF(currentDriver.document));
-                          else if (opt.id === 'telefone' && currentDriver.phone) onPixKeyChange(formatPhone(currentDriver.phone));
-                          else if (opt.id === 'email' && currentDriver.email) onPixKeyChange(currentDriver.email);
-                        }}
+                      <div
+                        key={wd.id}
                         style={{
-                          padding: '6px 12px',
-                          borderRadius: 999,
-                          border: selected ? '1.5px solid #111111' : '1px solid #E5E7EB',
-                          backgroundColor: selected ? '#111111' : '#FFFFFF',
-                          color: selected ? '#FFFFFF' : '#374151',
-                          fontSize: '0.76rem',
-                          fontWeight: 700,
-                          cursor: 'pointer'
+                          padding: '12px 13px',
+                          borderRadius: 12,
+                          border: '1px solid #E5E7EB',
+                          backgroundColor: '#FFFFFF',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: 6
                         }}
                       >
-                        {opt.label}
-                      </button>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                          <div style={{ fontSize: '1rem', fontWeight: 900, color: '#111111' }}>
+                            R$ {Number(wd.amount || 0).toFixed(2).replace('.', ',')}
+                          </div>
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            padding: '3px 9px',
+                            borderRadius: 999,
+                            backgroundColor: st.bg,
+                            color: st.color,
+                            border: `1px solid ${st.border}`,
+                            fontSize: '0.71rem',
+                            fontWeight: 800
+                          }}>
+                            {st.icon}
+                            <span>{st.label}</span>
+                          </span>
+                        </div>
+
+                        <div style={{ fontSize: '0.76rem', color: '#4B5563', display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
+                          <span>
+                            Chave: <strong>{formatPixTypeLabel(wd.pixType)}</strong> • {wd.pixKey}
+                          </span>
+                          <span style={{ color: '#6B7280' }}>{dateFormatted}</span>
+                        </div>
+
+                        {wd.payoutProviderTxId && (
+                          <div style={{ fontSize: '0.71rem', color: '#15803D', fontWeight: 700 }}>
+                            Comprovante PIX / ID: {wd.payoutProviderTxId}
+                          </div>
+                        )}
+
+                        {wd.notes && (
+                          <div style={{
+                            marginTop: 2,
+                            padding: '6px 9px',
+                            borderRadius: 8,
+                            backgroundColor: wd.status === 'rejeitado' ? '#FEF2F2' : '#F9FAFB',
+                            color: wd.status === 'rejeitado' ? '#B91C1C' : '#4B5563',
+                            fontSize: '0.72rem',
+                            fontWeight: 600,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 6
+                          }}>
+                            <AlertCircle size={13} style={{ flexShrink: 0 }} />
+                            <span>{wd.notes}</span>
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
-                <input
-                  type="text"
-                  placeholder="Digite sua chave PIX"
-                  value={pixEditKey}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    if (pixEditType === 'cpf') onPixKeyChange(formatCPF(val));
-                    else if (pixEditType === 'telefone') onPixKeyChange(formatPhone(val));
-                    else onPixKeyChange(val);
-                  }}
-                  style={{ ...INPUT_STYLE, paddingLeft: 12 }}
-                />
-                <input
-                  type="text"
-                  placeholder="Banco (ex: Nubank, Banco do Brasil, Inter)"
-                  value={pixEditBank}
-                  onChange={(e) => onPixBankChange(e.target.value)}
-                  style={{ ...INPUT_STYLE, paddingLeft: 12 }}
-                />
-                {pixSaveNotice && (
-                  <div style={{
-                    fontSize: '0.78rem',
-                    fontWeight: 700,
-                    color: pixSaveNotice.includes('sucesso') ? '#15803D' : '#DC2626'
-                  }}>
-                    {pixSaveNotice}
-                  </div>
-                )}
-                <button
-                  type="submit"
-                  disabled={isSavingPix}
-                  style={{
-                    height: 42,
-                    borderRadius: 10,
-                    border: 'none',
-                    backgroundColor: '#111111',
-                    color: '#FFFFFF',
-                    fontWeight: 800,
-                    fontSize: '0.86rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {isSavingPix ? 'Salvando...' : 'Salvar Chave PIX'}
-                </button>
-              </form>
+              )}
             </div>
           </div>
-        )}
+          );
+        })()}
 
         {/* ============================================================ */}
         {/* ABA PERFIL (UBER LIGHT + FOTO + ALTERAÇÃO VIA ADMIN MASTER)  */}

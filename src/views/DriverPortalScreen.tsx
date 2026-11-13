@@ -213,6 +213,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [isWithdrawModalOpen, setIsWithdrawModalOpen] = useState(false);
   const [withdrawAmountStr, setWithdrawAmountStr] = useState('');
   const [withdrawPixKey, setWithdrawPixKey] = useState('');
+  const [withdrawPixType, setWithdrawPixType] = useState<'cpf' | 'cnpj' | 'telefone' | 'email' | 'aleatoria'>('cpf');
   const [withdrawError, setWithdrawError] = useState('');
   const [isRequestingWithdraw, setIsRequestingWithdraw] = useState(false);
 
@@ -641,9 +642,14 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     e.preventDefault();
     if (!currentDriver) return;
     setWithdrawError('');
-    const targetPixKey = (withdrawPixKey || currentDriver.pixKey || '').trim();
+    const savedList = Array.isArray(currentDriver.pixKeys) ? currentDriver.pixKeys : [];
+    const defaultSaved = savedList.find(k => k.isDefault) || savedList[0];
+    const targetPixKey = (withdrawPixKey || defaultSaved?.pixKey || currentDriver.pixKey || '').trim();
+    const targetPixType = withdrawPixKey
+      ? (savedList.find(k => k.pixKey === withdrawPixKey)?.pixType || withdrawPixType)
+      : (defaultSaved?.pixType || currentDriver.pixType || 'cpf');
     if (!targetPixKey) {
-      setWithdrawError('Cadastre ou informe sua chave PIX antes de solicitar o saque.');
+      setWithdrawError('Cadastre uma chave PIX de mesma titularidade na carteira antes de solicitar o saque.');
       return;
     }
     const amount = parseFloat(withdrawAmountStr.replace(',', '.')) || 0;
@@ -651,7 +657,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     const res = await StorageService.requestDriverWithdrawal(currentDriver.id, {
       amount,
       pixKey: targetPixKey,
-      pixType: currentDriver.pixType || 'cpf'
+      pixType: targetPixType
     });
     setIsRequestingWithdraw(false);
     if (!res.ok) {
@@ -2145,7 +2151,14 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             setCurrentDriver(d);
             StorageService.setCurrentDriver(d);
           }}
-          onOpenWithdrawModal={() => setIsWithdrawModalOpen(true)}
+          onOpenWithdrawModal={() => {
+            const list = Array.isArray(currentDriver.pixKeys) ? currentDriver.pixKeys : [];
+            const def = list.find(k => k.isDefault) || list[0];
+            setWithdrawPixKey(def?.pixKey || currentDriver.pixKey || '');
+            setWithdrawPixType(def?.pixType || currentDriver.pixType || 'cpf');
+            setWithdrawError('');
+            setIsWithdrawModalOpen(true);
+          }}
           onOpenDebtPixModal={handleOpenDebtPixModal}
           onPixTypeChange={(t) => setPixEditType(t)}
           onPixKeyChange={(v) => setPixEditKey(v)}
@@ -2262,7 +2275,24 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       )}
 
       {/* 6. Modal de Saque PIX */}
-      {isWithdrawModalOpen && wallet && (
+      {isWithdrawModalOpen && wallet && (() => {
+        const modalPixKeys = Array.isArray(currentDriver.pixKeys) && currentDriver.pixKeys.length > 0
+          ? currentDriver.pixKeys
+          : (currentDriver.pixKey
+            ? [{
+                id: 'pix-primary',
+                pixType: currentDriver.pixType || 'cpf',
+                pixKey: currentDriver.pixKey,
+                bankName: currentDriver.bankName || '',
+                holderName: currentDriver.name,
+                holderDocument: currentDriver.document || '',
+                sameOwnershipConfirmed: true,
+                isDefault: true,
+                createdAt: currentDriver.createdAt
+              }]
+            : []);
+
+        return (
         <div style={{
           position: 'fixed',
           inset: 0,
@@ -2279,7 +2309,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             borderRadius: 20,
             padding: 22,
             width: '100%',
-            maxWidth: 400,
+            maxWidth: 420,
             border: '1px solid #E5E7EB',
             boxShadow: '0 20px 45px rgba(0,0,0,0.22)'
           }}>
@@ -2298,14 +2328,55 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 required
                 style={{ padding: '12px', borderRadius: 10, border: '1.5px solid #E5E7EB', backgroundColor: '#F9FAFB', color: '#111111', fontWeight: 700 }}
               />
-              <input
-                type="text"
-                placeholder="Chave PIX"
-                value={withdrawPixKey || currentDriver.pixKey}
-                onChange={(e) => setWithdrawPixKey(e.target.value)}
-                required
-                style={{ padding: '12px', borderRadius: 10, border: '1.5px solid #E5E7EB', backgroundColor: '#F9FAFB', color: '#111111', fontWeight: 700 }}
-              />
+
+              {modalPixKeys.length > 0 ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div style={{ fontSize: '0.76rem', fontWeight: 800, color: '#374151' }}>
+                    Escolha a chave PIX de destino (mesma titularidade):
+                  </div>
+                  {modalPixKeys.map((k) => {
+                    const selected = (withdrawPixKey || modalPixKeys[0].pixKey) === k.pixKey;
+                    return (
+                      <button
+                        key={k.id}
+                        type="button"
+                        onClick={() => {
+                          setWithdrawPixKey(k.pixKey);
+                          setWithdrawPixType(k.pixType);
+                        }}
+                        style={{
+                          padding: '10px 12px',
+                          borderRadius: 10,
+                          border: selected ? '2px solid #111111' : '1px solid #E5E7EB',
+                          backgroundColor: selected ? '#F8FAFC' : '#FFFFFF',
+                          textAlign: 'left',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#111111' }}>
+                          {k.pixKey}
+                        </div>
+                        <div style={{ fontSize: '0.71rem', color: '#6B7280', marginTop: 2 }}>
+                          {k.pixType.toUpperCase()} {k.bankName ? `• ${k.bankName}` : ''} • Titular CPF {formatCPF(currentDriver.document || '')}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{
+                  padding: '10px 12px',
+                  borderRadius: 10,
+                  backgroundColor: '#FFFBEB',
+                  border: '1px solid #FDE68A',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  color: '#92400E'
+                }}>
+                  Nenhuma chave PIX cadastrada ainda. Cadastre uma chave em sua própria titularidade na aba Carteira &amp; PIX.
+                </div>
+              )}
+
               {withdrawError && <div style={{ color: '#DC2626', fontSize: '0.78rem', fontWeight: 700 }}>{withdrawError}</div>}
               <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                 <button
@@ -2317,16 +2388,26 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isRequestingWithdraw}
-                  style={{ flex: 1, padding: '12px', borderRadius: 10, backgroundColor: '#111111', color: '#FFFFFF', border: 'none', fontWeight: 800, cursor: 'pointer' }}
+                  disabled={isRequestingWithdraw || modalPixKeys.length === 0}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    borderRadius: 10,
+                    backgroundColor: modalPixKeys.length === 0 ? '#9CA3AF' : '#111111',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    fontWeight: 800,
+                    cursor: modalPixKeys.length === 0 ? 'not-allowed' : 'pointer'
+                  }}
                 >
-                  Confirmar Saque
+                  {isRequestingWithdraw ? 'Solicitando...' : 'Confirmar Saque'}
                 </button>
               </div>
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* 7. Modal de Quitação de Dívida PIX */}
       {debtPixModalData && (
