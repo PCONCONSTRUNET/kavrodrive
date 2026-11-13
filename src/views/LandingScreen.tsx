@@ -1324,13 +1324,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             style={{
               display: 'flex',
               flexDirection: isMobile ? 'column' : 'row',
-              alignItems: isMobile ? 'flex-start' : 'flex-end',
+              alignItems: isMobile ? 'stretch' : 'flex-end',
               justifyContent: 'space-between',
-              gap: 18,
+              gap: 20,
               marginBottom: 28,
             }}
           >
-            <div>
+            <div style={{ maxWidth: isMobile ? '100%' : 540 }}>
               <div
                 style={{
                   fontSize: '0.78rem',
@@ -1356,20 +1356,24 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               </h2>
             </div>
 
-            {/* Filtro por Categoria (Muda completamente o visual em comparação ao grid estático) */}
+            {/* Filtro por Categoria em linha única alinhada */}
             <div
               style={{
-                display: 'inline-flex',
+                display: isMobile ? 'grid' : 'inline-flex',
+                gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : undefined,
+                alignItems: 'center',
                 gap: 6,
                 backgroundColor: '#131E26',
                 padding: 5,
                 borderRadius: 12,
-                border: '1px solid rgba(118, 216, 0, 0.18)',
-                flexWrap: 'wrap',
+                border: '1px solid rgba(118, 216, 0, 0.22)',
+                flexWrap: 'nowrap',
+                flexShrink: 0,
+                width: isMobile ? '100%' : 'auto',
               }}
             >
               {[
-                { key: 'all', label: 'Todos os serviços' },
+                { key: 'all', label: 'Todos' },
                 { key: 'mobilidade', label: 'Dia a dia' },
                 { key: 'especial', label: 'Agenda & Envios' },
               ].map((tab) => {
@@ -1381,15 +1385,16 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     onClick={() => setServiceFilter(tab.key as 'all' | 'mobilidade' | 'especial')}
                     style={{
                       height: 36,
-                      padding: '0 14px',
+                      padding: isMobile ? '0 8px' : '0 16px',
                       borderRadius: 9,
                       border: 'none',
                       backgroundColor: active ? '#76D800' : 'transparent',
                       color: active ? '#0B1218' : '#CBD5E1',
-                      fontSize: '0.82rem',
+                      fontSize: isMobile ? '0.76rem' : '0.84rem',
                       fontWeight: 700,
                       cursor: 'pointer',
                       whiteSpace: 'nowrap',
+                      textAlign: 'center',
                     }}
                   >
                     {tab.label}
