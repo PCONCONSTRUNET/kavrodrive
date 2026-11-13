@@ -70,7 +70,7 @@ const QrCanvasBox: React.FC<{ url: string; label?: string }> = ({ url }) => {
     QRCode.toDataURL(url, {
       width: 240,
       margin: 1,
-      color: { dark: '#000000', light: '#FFFFFF' },
+      color: { dark: '#0B1218', light: '#FFFFFF' },
     })
       .then((res) => {
         if (active) setDataUrl(res);
@@ -237,8 +237,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         'Acompanhe o motorista em tempo real no mapa, confira placa e modelo antes de embarcar e pague com PIX, cartão ou dinheiro.',
       actionLabel: 'Solicitar viagem',
       targetRoute: '/cliente',
-      accentBg: 'linear-gradient(135deg, #2A2A2A 0%, #171717 100%)',
-      icon: <Car size={44} strokeWidth={1.75} color="#FFFFFF" />,
+      accentBg: 'linear-gradient(135deg, #162A20 0%, #0D161D 100%)',
+      icon: <Car size={44} strokeWidth={1.75} color="#76D800" />,
     },
     {
       id: 'reserve',
@@ -249,8 +249,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         'Escolha data e horário exatos diretamente no app Kavro Drive e garanta pontualidade para seus deslocamentos planejados.',
       actionLabel: 'Agendar horário',
       targetRoute: '/cliente?flow=schedule',
-      accentBg: 'linear-gradient(135deg, #2D2622 0%, #171717 100%)',
-      icon: <Calendar size={42} strokeWidth={1.75} color="#FFFFFF" />,
+      accentBg: 'linear-gradient(135deg, #162A20 0%, #0D161D 100%)',
+      icon: <Calendar size={42} strokeWidth={1.75} color="#76D800" />,
     },
     {
       id: 'moto',
@@ -261,8 +261,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         'Ideal para trajetos curtos e médios com tarifa acessível e chegada rápida até a porta de casa.',
       actionLabel: 'Ver tarifas Moto',
       targetRoute: '/cliente',
-      accentBg: 'linear-gradient(135deg, #25282C 0%, #171717 100%)',
-      icon: <Bike size={44} strokeWidth={1.75} color="#FFFFFF" />,
+      accentBg: 'linear-gradient(135deg, #162A20 0%, #0D161D 100%)',
+      icon: <Bike size={44} strokeWidth={1.75} color="#76D800" />,
     },
     {
       id: 'envios',
@@ -273,8 +273,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         'Envie ou receba pacotes pela cidade com rastreio ao vivo do percurso do início até a entrega final.',
       actionLabel: 'Enviar um item',
       targetRoute: '/cliente',
-      accentBg: 'linear-gradient(135deg, #2B2820 0%, #171717 100%)',
-      icon: <Package size={42} strokeWidth={1.75} color="#FFFFFF" />,
+      accentBg: 'linear-gradient(135deg, #162A20 0%, #0D161D 100%)',
+      icon: <Package size={42} strokeWidth={1.75} color="#76D800" />,
     },
     {
       id: 'aeroporto',
@@ -285,8 +285,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         'Viaje com conforto e tranquilidade levando malas grandes com motoristas selecionados na região.',
       actionLabel: 'Calcular trajeto',
       targetRoute: '/cliente?flow=schedule',
-      accentBg: 'linear-gradient(135deg, #22262B 0%, #171717 100%)',
-      icon: <Plane size={42} strokeWidth={1.75} color="#FFFFFF" />,
+      accentBg: 'linear-gradient(135deg, #162A20 0%, #0D161D 100%)',
+      icon: <Plane size={42} strokeWidth={1.75} color="#76D800" />,
     },
     {
       id: 'executivo',
@@ -297,8 +297,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         'Ar-condicionado, condução silenciosa e atendimento diferenciado para eventos, reuniões ou ocasiões especiais.',
       actionLabel: 'Explorar Executivo',
       targetRoute: '/cliente',
-      accentBg: 'linear-gradient(135deg, #292929 0%, #161616 100%)',
-      icon: <Star size={42} strokeWidth={1.75} color="#FFFFFF" />,
+      accentBg: 'linear-gradient(135deg, #162A20 0%, #0D161D 100%)',
+      icon: <Star size={42} strokeWidth={1.75} color="#76D800" />,
     },
   ];
 
@@ -307,36 +307,36 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       title: 'Começar',
       desc: 'Digite seu destino no Kavro Drive ou abra o app de passageiros. Confira o valor estimado e confirme.',
       image: '/landing/step-app-phone.jpg',
-      fallbackGradient: 'linear-gradient(135deg, #2A241E 0%, #111111 100%)',
-      icon: <MapPin size={22} strokeWidth={2.4} color="#000000" />,
+      fallbackGradient: 'linear-gradient(135deg, #172721 0%, #0B1218 100%)',
+      icon: <MapPin size={22} strokeWidth={2.4} color="#0B1218" />,
     },
     {
       title: 'Encontre um motorista parceiro',
       desc: 'Um motorista parceiro próximo aceita sua solicitação na hora. Você acompanha a chegada ao vivo.',
       image: '/landing/driver-smile.jpg',
-      fallbackGradient: 'linear-gradient(135deg, #1E252B 0%, #111111 100%)',
-      icon: <UserCheck size={22} strokeWidth={2.3} color="#000000" />,
+      fallbackGradient: 'linear-gradient(135deg, #16232D 0%, #0B1218 100%)',
+      icon: <UserCheck size={22} strokeWidth={2.3} color="#0B1218" />,
     },
     {
       title: 'Confirme seus dados de embarque',
       desc: 'Verifique nome e foto do motorista, modelo e placa do veículo antes de entrar no carro.',
       image: '/landing/hero-traveler.jpg',
-      fallbackGradient: 'linear-gradient(135deg, #27221E 0%, #111111 100%)',
-      icon: <ShieldCheck size={22} strokeWidth={2.3} color="#000000" />,
+      fallbackGradient: 'linear-gradient(135deg, #172721 0%, #0B1218 100%)',
+      icon: <ShieldCheck size={22} strokeWidth={2.3} color="#0B1218" />,
     },
     {
       title: 'Aproveite o trajeto',
       desc: 'Seu motorista segue o melhor caminho pelo GPS e você pode compartilhar sua rota em tempo real.',
       image: '/landing/passenger-ride.jpg',
-      fallbackGradient: 'linear-gradient(135deg, #1F2624 0%, #111111 100%)',
-      icon: <Car size={22} strokeWidth={2.3} color="#000000" />,
+      fallbackGradient: 'linear-gradient(135deg, #16232D 0%, #0B1218 100%)',
+      icon: <Car size={22} strokeWidth={2.3} color="#0B1218" />,
     },
     {
       title: 'Avaliação e pagamento fácil',
       desc: 'Finalize a viagem sem surpresas, deixe sua avaliação ao motorista e baixe o recibo digital.',
       image: '/landing/corporate-ride.jpg',
-      fallbackGradient: 'linear-gradient(135deg, #252229 0%, #111111 100%)',
-      icon: <Sparkles size={22} strokeWidth={2.3} color="#000000" />,
+      fallbackGradient: 'linear-gradient(135deg, #172721 0%, #0B1218 100%)',
+      icon: <Sparkles size={22} strokeWidth={2.3} color="#0B1218" />,
     },
   ];
 
@@ -373,7 +373,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
     <div
       style={{
         minHeight: '100vh',
-        backgroundColor: '#000000',
+        backgroundColor: '#0B1218',
         color: '#FFFFFF',
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
         userSelect: 'text',
@@ -387,8 +387,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           left: 0,
           right: 0,
           height: 64,
-          backgroundColor: '#000000',
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
+          backgroundColor: 'rgba(11, 18, 24, 0.96)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)',
+          borderBottom: '1px solid rgba(118, 216, 0, 0.16)',
           zIndex: 120,
           display: 'flex',
           alignItems: 'center',
@@ -411,10 +413,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               style={{
                 background: 'none',
                 border: 'none',
-                color: '#FFFFFF',
-                fontSize: isMobile ? '1.15rem' : '1.35rem',
-                fontWeight: 700,
-                letterSpacing: '-0.03em',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
@@ -423,7 +421,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 whiteSpace: 'nowrap',
               }}
             >
-              <span>Kavro Drive</span>
+              <img
+                src="/logo-horizontal-white.png"
+                alt="Kavro Drive"
+                style={{ height: isMobile ? 28 : 34, width: 'auto', display: 'block', objectFit: 'contain' }}
+              />
             </button>
 
             {!isMobile && (
@@ -560,8 +562,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 height: 36,
                 padding: isMobile ? '0 13px' : '0 15px',
                 borderRadius: 999,
-                border: '1px solid rgba(255,255,255,0.18)',
-                backgroundColor: '#141414',
+                border: '1px solid rgba(118, 216, 0, 0.38)',
+                backgroundColor: '#131E26',
                 color: '#FFFFFF',
                 fontSize: isMobile ? '0.82rem' : '0.88rem',
                 fontWeight: 600,
@@ -580,10 +582,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 padding: isMobile ? '0 14px' : '0 16px',
                 borderRadius: 999,
                 border: 'none',
-                backgroundColor: '#FFFFFF',
-                color: '#000000',
+                backgroundColor: '#76D800',
+                color: '#0B1218',
                 fontSize: isMobile ? '0.82rem' : '0.88rem',
-                fontWeight: 700,
+                fontWeight: 800,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
               }}
@@ -600,8 +602,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   width: 36,
                   height: 36,
                   borderRadius: '50%',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  backgroundColor: '#141414',
+                  border: '1px solid rgba(118, 216, 0, 0.3)',
+                  backgroundColor: '#131E26',
                   color: '#FFFFFF',
                   display: 'flex',
                   alignItems: 'center',
@@ -626,7 +628,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: '#000000',
+            backgroundColor: '#0B1218',
             zIndex: 118,
             padding: '24px 20px 100px',
             overflowY: 'auto',
@@ -653,9 +655,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 width: '100%',
                 textAlign: 'left',
                 padding: '15px 12px',
-                backgroundColor: '#111111',
+                backgroundColor: '#131E26',
                 color: '#FFFFFF',
-                border: '1px solid rgba(255,255,255,0.08)',
+                border: '1px solid rgba(118, 216, 0, 0.16)',
                 borderRadius: 12,
                 fontSize: '1.02rem',
                 fontWeight: 600,
@@ -666,7 +668,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               }}
             >
               <span>{item.label}</span>
-              <ChevronRight size={18} color="#9CA3AF" />
+              <ChevronRight size={18} color="#76D800" />
             </button>
           ))}
         </div>
@@ -675,10 +677,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       {/* Espaçamento para a navbar fixa */}
       <div style={{ height: 64 }} />
 
-      {/* ═══ SEÇÃO 1: HERO PRINCIPAL PRETO ═══ */}
+      {/* ═══ SEÇÃO 1: HERO PRINCIPAL KAVRO ASPHALT & GREEN ═══ */}
       <section
         style={{
-          backgroundColor: '#000000',
+          background: 'radial-gradient(ellipse at 78% 18%, rgba(118, 216, 0, 0.11) 0%, rgba(11, 18, 24, 0) 55%), #0B1218',
           paddingTop: isMobile ? 22 : 48,
           paddingBottom: isMobile ? 42 : 76,
         }}
@@ -705,7 +707,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 marginBottom: 14,
               }}
             >
-              <MapPin size={15} />
+              <MapPin size={15} color="#76D800" />
               <span style={{ fontWeight: 500 }}>{selectedCity}</span>
               <button
                 type="button"
@@ -713,7 +715,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#E5E7EB',
+                  color: '#8CE826',
                   textDecoration: 'underline',
                   textUnderlineOffset: 4,
                   fontSize: '0.88rem',
@@ -839,7 +841,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     width: 11,
                     height: 11,
                     borderRadius: '50%',
-                    border: '3px solid #000000',
+                    border: '3px solid #76D800',
                     backgroundColor: '#FFFFFF',
                     zIndex: 4,
                   }}
@@ -931,11 +933,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   padding: '0 26px',
                   borderRadius: 10,
                   border: 'none',
-                  backgroundColor: '#FFFFFF',
-                  color: '#000000',
+                  backgroundColor: '#76D800',
+                  color: '#0B1218',
                   fontSize: '0.98rem',
-                  fontWeight: 700,
+                  fontWeight: 800,
                   cursor: 'pointer',
+                  boxShadow: '0 8px 24px rgba(118, 216, 0, 0.25)',
                 }}
               >
                 Ver preços
@@ -947,9 +950,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#FFFFFF',
+                  color: '#E5E7EB',
                   fontSize: '0.94rem',
                   textDecoration: 'underline',
+                  textDecorationColor: '#76D800',
                   textUnderlineOffset: 5,
                   cursor: 'pointer',
                   padding: '4px 0',
@@ -987,8 +991,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     style={{
                       height: 82,
                       borderRadius: 12,
-                      background: 'linear-gradient(135deg, #272727 0%, #151515 100%)',
-                      border: '1px solid rgba(255,255,255,0.08)',
+                      background: 'linear-gradient(135deg, #16242E 0%, #0E171F 100%)',
+                      border: '1px solid rgba(118, 216, 0, 0.16)',
                     }}
                   />
                 </div>
@@ -998,33 +1002,34 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     src="/landing/hero-traveler.jpg"
                     alt="Viajante embarcando com bagagem"
                     height={115}
-                    fallback="linear-gradient(135deg, #2A211B, #131313)"
+                    fallback="linear-gradient(135deg, #172721, #0D161D)"
                   />
                   <LandingPhoto
                     src="/landing/driver-smile.jpg"
                     alt="Motorista parceiro Kavro Drive"
                     height={195}
-                    fallback="linear-gradient(135deg, #1D2824, #121212)"
+                    fallback="linear-gradient(135deg, #162620, #0D161D)"
                   />
                   <div
                     style={{
                       height: 82,
                       borderRadius: 12,
-                      background: 'linear-gradient(135deg, #22262A 0%, #141414 100%)',
-                      border: '1px solid rgba(255,255,255,0.08)',
+                      background: 'linear-gradient(135deg, #16242E 0%, #0E171F 100%)',
+                      border: '1px solid rgba(118, 216, 0, 0.16)',
                     }}
                   />
                 </div>
               </div>
 
-              {/* Faixa translúcida inferior idêntica à referência */}
+              {/* Faixa translúcida inferior no tema Kavro Asphalt + Green */}
               <div
                 style={{
                   position: 'absolute',
                   left: 16,
                   right: 16,
                   bottom: 16,
-                  backgroundColor: 'rgba(130, 118, 108, 0.78)',
+                  backgroundColor: 'rgba(13, 22, 29, 0.84)',
+                  border: '1px solid rgba(118, 216, 0, 0.28)',
                   backdropFilter: 'blur(12px)',
                   WebkitBackdropFilter: 'blur(12px)',
                   borderRadius: 14,
@@ -1046,10 +1051,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     padding: '0 18px',
                     borderRadius: 999,
                     border: 'none',
-                    backgroundColor: '#FFFFFF',
-                    color: '#000000',
+                    backgroundColor: '#76D800',
+                    color: '#0B1218',
                     fontSize: '0.88rem',
-                    fontWeight: 700,
+                    fontWeight: 800,
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
                   }}
@@ -1066,7 +1071,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       <section
         id="servicos"
         style={{
-          backgroundColor: '#000000',
+          backgroundColor: '#0B1218',
           paddingTop: isMobile ? 20 : 48,
           paddingBottom: isMobile ? 48 : 80,
           scrollMarginTop: 72,
@@ -1102,8 +1107,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   type="button"
                   onClick={() => setActiveServiceModal(item)}
                   style={{
-                    backgroundColor: '#1F1F1F',
-                    border: '1px solid rgba(255,255,255,0.06)',
+                    backgroundColor: '#131E26',
+                    border: '1px solid rgba(118, 216, 0, 0.18)',
                     borderRadius: 14,
                     padding: '18px 8px 14px',
                     color: '#FFFFFF',
@@ -1144,14 +1149,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 <div
                   key={item.id}
                   style={{
-                    backgroundColor: '#1C1C1C',
+                    backgroundColor: '#131E26',
                     borderRadius: 14,
                     padding: '22px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     gap: 16,
-                    border: '1px solid rgba(255,255,255,0.06)',
+                    border: '1px solid rgba(118, 216, 0, 0.16)',
                     minHeight: 168,
                   }}
                 >
@@ -1179,7 +1184,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                         style={{
                           fontSize: '0.84rem',
                           lineHeight: 1.45,
-                          color: '#D1D5DB',
+                          color: '#CBD5E1',
                           marginBottom: 14,
                         }}
                       >
@@ -1194,9 +1199,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                           height: 36,
                           padding: '0 16px',
                           borderRadius: 999,
-                          border: 'none',
-                          backgroundColor: '#FFFFFF',
-                          color: '#000000',
+                          border: '1px solid rgba(118, 216, 0, 0.42)',
+                          backgroundColor: '#1A2833',
+                          color: '#8CE826',
                           fontSize: '0.84rem',
                           fontWeight: 700,
                           cursor: 'pointer',
@@ -1217,7 +1222,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                       alignItems: 'center',
                       justifyContent: 'center',
                       flexShrink: 0,
-                      border: '1px solid rgba(255,255,255,0.07)',
+                      border: '1px solid rgba(118, 216, 0, 0.18)',
                     }}
                   >
                     {item.icon}
@@ -1233,8 +1238,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       <section
         id="como-funciona"
         style={{
-          backgroundColor: '#000000',
-          paddingTop: isMobile ? 28 : 44,
+          backgroundColor: '#0F1820',
+          borderTop: '1px solid rgba(118, 216, 0, 0.09)',
+          borderBottom: '1px solid rgba(118, 216, 0, 0.09)',
+          paddingTop: isMobile ? 36 : 56,
           paddingBottom: isMobile ? 52 : 84,
           scrollMarginTop: 72,
         }}
@@ -1275,8 +1282,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   onClick={handlePrevStep}
                   style={{
                     ...circleCarouselBtnStyle,
-                    backgroundColor: stepIndex === 0 ? '#6B7280' : '#FFFFFF',
-                    color: '#000000',
+                    backgroundColor: stepIndex === 0 ? '#1E2B36' : '#76D800',
+                    color: stepIndex === 0 ? '#64748B' : '#0B1218',
                   }}
                 >
                   <ChevronLeft size={20} />
@@ -1287,8 +1294,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   onClick={handleNextStep}
                   style={{
                     ...circleCarouselBtnStyle,
-                    backgroundColor: '#FFFFFF',
-                    color: '#000000',
+                    backgroundColor: '#76D800',
+                    color: '#0B1218',
                   }}
                 >
                   <ChevronRight size={20} />
@@ -1327,8 +1334,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   onClick={handlePrevStep}
                   style={{
                     ...circleCarouselBtnStyle,
-                    backgroundColor: stepIndex === 0 ? '#6B7280' : '#FFFFFF',
-                    color: '#000000',
+                    backgroundColor: stepIndex === 0 ? '#1E2B36' : '#76D800',
+                    color: stepIndex === 0 ? '#64748B' : '#0B1218',
                   }}
                 >
                   <ChevronLeft size={20} />
@@ -1339,8 +1346,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   onClick={handleNextStep}
                   style={{
                     ...circleCarouselBtnStyle,
-                    backgroundColor: stepIndex >= 1 ? '#6B7280' : '#FFFFFF',
-                    color: '#000000',
+                    backgroundColor: stepIndex >= 1 ? '#1E2B36' : '#76D800',
+                    color: stepIndex >= 1 ? '#64748B' : '#0B1218',
                   }}
                 >
                   <ChevronRight size={20} />
@@ -1354,8 +1361,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       {/* ═══ SEÇÃO 4: MAIS FORMAS DE USAR A PLATAFORMA ═══ */}
       <section
         style={{
-          backgroundColor: '#000000',
-          paddingTop: isMobile ? 24 : 36,
+          backgroundColor: '#0B1218',
+          paddingTop: isMobile ? 32 : 48,
           paddingBottom: isMobile ? 64 : 96,
         }}
       >
@@ -1386,7 +1393,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 desc: 'Agende sua corrida com antecedência escolhendo o horário ideal diretamente na Kavro Drive.',
                 cta: 'Reserve já',
                 image: '/landing/hero-traveler.jpg',
-                badgeIcon: <Calendar size={24} color="#000000" />,
+                badgeIcon: <Calendar size={24} color="#0B1218" />,
                 onClick: () => openClientFlow('schedule'),
               },
               {
@@ -1394,7 +1401,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 desc: 'Viaje em carros verificados com motoristas parceiros mais bem avaliados na sua região.',
                 cta: 'Ver preços',
                 image: '/landing/corporate-ride.jpg',
-                badgeIcon: <Car size={24} color="#000000" />,
+                badgeIcon: <Car size={24} color="#0B1218" />,
                 onClick: () => openClientFlow(),
               },
               {
@@ -1402,7 +1409,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 desc: 'Conte com entregas rápidas locais para chaves esquecidas, documentos e encomendas urgentes.',
                 cta: 'Enviar um item',
                 image: '/landing/package-delivery.jpg',
-                badgeIcon: <Package size={24} color="#000000" />,
+                badgeIcon: <Package size={24} color="#0B1218" />,
                 onClick: () => openClientFlow(),
               },
             ].map((card) => (
@@ -1419,7 +1426,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     src={card.image}
                     alt={card.title}
                     height={isMobile ? 210 : 220}
-                    fallback="linear-gradient(135deg, #272727, #151515)"
+                    fallback="linear-gradient(135deg, #172721, #0B1218)"
                   />
                   <div
                     style={{
@@ -1429,11 +1436,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                       width: 68,
                       height: 68,
                       borderRadius: 14,
-                      backgroundColor: '#F3F4F6',
+                      backgroundColor: '#76D800',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      boxShadow: '0 8px 24px rgba(0,0,0,0.35)',
+                      boxShadow: '0 8px 24px rgba(0,0,0,0.4)',
                     }}
                   >
                     {card.badgeIcon}
@@ -1454,7 +1461,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   style={{
                     fontSize: '0.9rem',
                     lineHeight: 1.5,
-                    color: '#D1D5DB',
+                    color: '#CBD5E1',
                     marginBottom: 14,
                   }}
                 >
@@ -1466,9 +1473,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   style={{
                     background: 'none',
                     border: 'none',
-                    color: '#FFFFFF',
+                    color: '#8CE826',
                     fontSize: '0.92rem',
-                    fontWeight: 600,
+                    fontWeight: 700,
                     textDecoration: 'underline',
                     textUnderlineOffset: 5,
                     cursor: 'pointer',
@@ -1483,12 +1490,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         </div>
       </section>
 
-      {/* ═══ SEÇÃO 5 (FUNDO BRANCO): MOTORISTAS PARCEIROS ═══ */}
+      {/* ═══ SEÇÃO 5 (FUNDO CLARO KAVRO): MOTORISTAS PARCEIROS ═══ */}
       <section
         id="motoristas"
         style={{
           backgroundColor: '#FFFFFF',
-          color: '#000000',
+          color: '#0B1218',
           paddingTop: isMobile ? 56 : 84,
           paddingBottom: isMobile ? 48 : 76,
           scrollMarginTop: 64,
@@ -1501,7 +1508,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               fontWeight: 700,
               lineHeight: 1.18,
               letterSpacing: '-0.025em',
-              color: '#000000',
+              color: '#0B1218',
               marginBottom: isMobile ? 24 : 36,
             }}
           >
@@ -1531,7 +1538,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   fontSize: isMobile ? '1.2rem' : '1.45rem',
                   fontWeight: 700,
                   lineHeight: 1.28,
-                  color: '#000000',
+                  color: '#0B1218',
                   marginBottom: 12,
                 }}
               >
@@ -1541,7 +1548,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 style={{
                   fontSize: '0.96rem',
                   lineHeight: 1.55,
-                  color: '#4B5563',
+                  color: '#475569',
                   marginBottom: 20,
                 }}
               >
@@ -1557,10 +1564,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     padding: '0 22px',
                     borderRadius: 10,
                     border: 'none',
-                    backgroundColor: '#000000',
-                    color: '#FFFFFF',
+                    backgroundColor: '#121A21',
+                    color: '#76D800',
                     fontSize: '0.94rem',
-                    fontWeight: 700,
+                    fontWeight: 800,
                     cursor: 'pointer',
                   }}
                 >
@@ -1572,10 +1579,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   style={{
                     background: 'none',
                     border: 'none',
-                    color: '#000000',
+                    color: '#121A21',
                     fontSize: '0.92rem',
-                    fontWeight: 600,
+                    fontWeight: 700,
                     textDecoration: 'underline',
+                    textDecorationColor: '#52C41A',
                     textUnderlineOffset: 5,
                     cursor: 'pointer',
                     padding: 0,
@@ -1594,7 +1602,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         id="empresas"
         style={{
           backgroundColor: '#FFFFFF',
-          color: '#000000',
+          color: '#0B1218',
           paddingTop: isMobile ? 28 : 44,
           paddingBottom: isMobile ? 60 : 88,
           scrollMarginTop: 64,
@@ -1639,23 +1647,23 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               }}
             >
               {[
-                { icon: <Briefcase size={30} color="#38BDF8" />, title: 'Corporativo' },
-                { icon: <BarChart3 size={30} color="#84CC16" />, title: 'Relatórios' },
-                { icon: <ClipboardCheck size={30} color="#F8FAFC" />, title: 'Faturamento' },
+                { icon: <Briefcase size={30} color="#76D800" />, title: 'Corporativo' },
+                { icon: <BarChart3 size={30} color="#38BDF8" />, title: 'Relatórios' },
+                { icon: <ClipboardCheck size={30} color="#E2E8F0" />, title: 'Faturamento' },
               ].map((tile) => (
                 <div
                   key={tile.title}
                   style={{
                     height: isMobile ? 90 : 104,
                     borderRadius: 16,
-                    background: 'linear-gradient(160deg, #1E1E1E 0%, #0A0A0A 100%)',
-                    border: '1px solid rgba(255,255,255,0.12)',
+                    background: 'linear-gradient(160deg, #16242E 0%, #0B1218 100%)',
+                    border: '1px solid rgba(118, 216, 0, 0.22)',
                     display: 'flex',
                     flexDirection: 'column',
                     alignItems: 'center',
                     justifyContent: 'center',
                     gap: 6,
-                    boxShadow: '0 14px 28px rgba(0,0,0,0.22)',
+                    boxShadow: '0 14px 28px rgba(11, 18, 24, 0.22)',
                   }}
                 >
                   {tile.icon}
@@ -1675,7 +1683,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 fontWeight: 700,
                 lineHeight: 1.18,
                 letterSpacing: '-0.025em',
-                color: '#000000',
+                color: '#0B1218',
                 marginBottom: 16,
               }}
             >
@@ -1685,7 +1693,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               style={{
                 fontSize: '0.96rem',
                 lineHeight: 1.6,
-                color: '#374151',
+                color: '#475569',
                 marginBottom: 24,
               }}
             >
@@ -1700,10 +1708,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 padding: '0 24px',
                 borderRadius: 10,
                 border: 'none',
-                backgroundColor: '#000000',
-                color: '#FFFFFF',
+                backgroundColor: '#121A21',
+                color: '#76D800',
                 fontSize: '0.94rem',
-                fontWeight: 700,
+                fontWeight: 800,
                 cursor: 'pointer',
               }}
             >
@@ -1713,12 +1721,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         </div>
       </section>
 
-      {/* ═══ SEÇÃO 7 (CINZA CLARO #F6F6F6): É MAIS FÁCIL PELO APP ═══ */}
+      {/* ═══ SEÇÃO 7 (VERDE SUAVE KAVRO #F2F6F3): É MAIS FÁCIL PELO APP ═══ */}
       <section
         id="apps-qr"
         style={{
-          backgroundColor: '#F6F6F6',
-          color: '#000000',
+          backgroundColor: '#F2F6F3',
+          color: '#0B1218',
           paddingTop: isMobile ? 48 : 68,
           paddingBottom: isMobile ? 56 : 78,
           scrollMarginTop: 64,
@@ -1731,7 +1739,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               fontWeight: 700,
               lineHeight: 1.2,
               letterSpacing: '-0.025em',
-              color: '#000000',
+              color: '#0B1218',
               marginBottom: 28,
             }}
           >
@@ -1753,22 +1761,24 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             >
               {isMobile ? (
                 <div style={mobileAppBadgeStyle}>
-                  <span style={{ fontWeight: 800, fontSize: '0.92rem', letterSpacing: '-0.02em' }}>
-                    Kavro
-                  </span>
+                  <img
+                    src="/logo-icon.png"
+                    alt="App Kavro Drive"
+                    style={{ width: 52, height: 52, objectFit: 'contain', borderRadius: 10 }}
+                  />
                 </div>
               ) : (
                 <QrCanvasBox url={`${baseUrl}/cliente`} />
               )}
               <div style={{ flex: 1, textAlign: 'left' }}>
-                <div style={{ fontSize: '1.12rem', fontWeight: 700, color: '#000000', marginBottom: 4 }}>
+                <div style={{ fontSize: '1.12rem', fontWeight: 700, color: '#0B1218', marginBottom: 4 }}>
                   Baixe o app da Kavro Drive
                 </div>
-                <div style={{ fontSize: '0.88rem', color: '#4B5563' }}>
+                <div style={{ fontSize: '0.88rem', color: '#475569' }}>
                   {isMobile ? 'Toque para entrar e solicitar corridas' : 'Escaneie para abrir no celular'}
                 </div>
               </div>
-              <ArrowRight size={22} color="#000000" />
+              <ArrowRight size={22} color="#16A34A" />
             </button>
 
             {/* Card Motorista Parceiro */}
@@ -1778,39 +1788,35 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               style={appCardBtnStyle}
             >
               {isMobile ? (
-                <div
-                  style={{
-                    ...mobileAppBadgeStyle,
-                    flexDirection: 'column',
-                    gap: 2,
-                  }}
-                >
-                  <span style={{ fontWeight: 800, fontSize: '0.84rem', letterSpacing: '-0.02em' }}>
-                    Kavro
-                  </span>
-                  <ArrowRight size={16} color="#FFFFFF" />
+                <div style={mobileAppBadgeStyle}>
+                  <img
+                    src="/logo-icon.png"
+                    alt="App Parceiro Kavro Drive"
+                    style={{ width: 52, height: 52, objectFit: 'contain', borderRadius: 10 }}
+                  />
                 </div>
               ) : (
                 <QrCanvasBox url={`${baseUrl}/kavro-drive`} />
               )}
               <div style={{ flex: 1, textAlign: 'left' }}>
-                <div style={{ fontSize: '1.12rem', fontWeight: 700, color: '#000000', marginBottom: 4 }}>
+                <div style={{ fontSize: '1.12rem', fontWeight: 700, color: '#0B1218', marginBottom: 4 }}>
                   Baixe o app de parceiro
                 </div>
-                <div style={{ fontSize: '0.88rem', color: '#4B5563' }}>
+                <div style={{ fontSize: '0.88rem', color: '#475569' }}>
                   {isMobile ? 'Toque para abrir o Portal do Motorista' : 'Escaneie para dirigir com a gente'}
                 </div>
               </div>
-              <ArrowRight size={22} color="#000000" />
+              <ArrowRight size={22} color="#16A34A" />
             </button>
           </div>
         </div>
       </section>
 
-      {/* ═══ SEÇÃO 8: RODAPÉ PRETO ═══ */}
+      {/* ═══ SEÇÃO 8: RODAPÉ KAVRO ASPHALT ═══ */}
       <footer
         style={{
-          backgroundColor: '#000000',
+          backgroundColor: '#0B1218',
+          borderTop: '1px solid rgba(118, 216, 0, 0.16)',
           color: '#FFFFFF',
           paddingTop: isMobile ? 48 : 68,
           paddingBottom: isMobile ? 96 : 56,
@@ -1828,17 +1834,20 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             }}
           >
             <div>
-              <div style={{ fontSize: '1.45rem', fontWeight: 700, marginBottom: 18 }}>
-                Kavro Drive
-              </div>
+              <img
+                src="/logo-horizontal-white.png"
+                alt="Kavro Drive"
+                style={{ height: 34, width: 'auto', display: 'block', marginBottom: 18, objectFit: 'contain' }}
+              />
               <button
                 type="button"
                 onClick={() => setHelpModalOpen(true)}
                 style={{
                   background: 'none',
                   border: 'none',
-                  color: '#FFFFFF',
+                  color: '#8CE826',
                   fontSize: '0.92rem',
+                  fontWeight: 600,
                   cursor: 'pointer',
                   padding: 0,
                 }}
@@ -1980,10 +1989,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             bottom: 0,
             left: 0,
             right: 0,
-            backgroundColor: '#FFFFFF',
+            backgroundColor: '#0B1218',
             padding: '12px 16px',
-            borderTop: '1px solid #E5E7EB',
-            boxShadow: '0 -8px 24px rgba(0,0,0,0.18)',
+            borderTop: '1px solid rgba(118, 216, 0, 0.2)',
+            boxShadow: '0 -8px 24px rgba(0,0,0,0.3)',
             zIndex: 115,
           }}
         >
@@ -1995,10 +2004,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               height: 48,
               borderRadius: 10,
               border: 'none',
-              backgroundColor: '#000000',
-              color: '#FFFFFF',
+              backgroundColor: '#76D800',
+              color: '#0B1218',
               fontSize: '0.96rem',
-              fontWeight: 700,
+              fontWeight: 800,
               cursor: 'pointer',
             }}
           >
@@ -2031,9 +2040,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   style={{
                     padding: '8px 14px',
                     borderRadius: 999,
-                    border: selectedCity === city ? '1px solid #000' : '1px solid #E5E7EB',
-                    backgroundColor: selectedCity === city ? '#000000' : '#F3F4F6',
-                    color: selectedCity === city ? '#FFFFFF' : '#111827',
+                    border: selectedCity === city ? '1px solid #76D800' : '1px solid #E2E8F0',
+                    backgroundColor: selectedCity === city ? '#121A21' : '#F3F6F4',
+                    color: selectedCity === city ? '#76D800' : '#121A21',
                     fontSize: '0.86rem',
                     fontWeight: 600,
                     cursor: 'pointer',
@@ -2073,8 +2082,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   padding: '0 18px',
                   borderRadius: 8,
                   border: 'none',
-                  backgroundColor: '#000000',
-                  color: '#FFFFFF',
+                  backgroundColor: '#121A21',
+                  color: '#76D800',
                   fontWeight: 700,
                   cursor: 'pointer',
                 }}
@@ -2120,8 +2129,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 height: 46,
                 borderRadius: 10,
                 border: 'none',
-                backgroundColor: '#000000',
-                color: '#FFFFFF',
+                backgroundColor: '#121A21',
+                color: '#76D800',
                 fontSize: '0.95rem',
                 fontWeight: 700,
                 cursor: 'pointer',
@@ -2156,7 +2165,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 'Agendamento antecipado para viagens de negócios, feiras e aeroportos.',
               ].map((line) => (
                 <div key={line} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <CheckCircle2 size={18} color="#000000" style={{ flexShrink: 0, marginTop: 2 }} />
+                  <CheckCircle2 size={18} color="#16A34A" style={{ flexShrink: 0, marginTop: 2 }} />
                   <span style={{ fontSize: '0.92rem', color: '#374151', lineHeight: 1.45 }}>
                     {line}
                   </span>
@@ -2174,8 +2183,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 height: 46,
                 borderRadius: 10,
                 border: 'none',
-                backgroundColor: '#000000',
-                color: '#FFFFFF',
+                backgroundColor: '#121A21',
+                color: '#76D800',
                 fontSize: '0.95rem',
                 fontWeight: 700,
                 cursor: 'pointer',
@@ -2193,8 +2202,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           <div style={modalCardStyle} onClick={(e) => e.stopPropagation()}>
             <div style={modalHeaderStyle}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <HelpCircle size={20} color="#000000" />
-                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#000000' }}>
+                <HelpCircle size={20} color="#16A34A" />
+                <h3 style={{ fontSize: '1.15rem', fontWeight: 700, color: '#0B1218' }}>
                   Central de Ajuda Kavro Drive
                 </h3>
               </div>
@@ -2217,8 +2226,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   height: 44,
                   borderRadius: 10,
                   border: 'none',
-                  backgroundColor: '#000000',
-                  color: '#FFFFFF',
+                  backgroundColor: '#121A21',
+                  color: '#76D800',
                   fontWeight: 700,
                   cursor: 'pointer',
                 }}
@@ -2235,9 +2244,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   width: '100%',
                   height: 44,
                   borderRadius: 10,
-                  border: '1px solid #D1D5DB',
-                  backgroundColor: '#F9FAFB',
-                  color: '#000000',
+                  border: '1px solid #CBD5E1',
+                  backgroundColor: '#F2F6F3',
+                  color: '#0B1218',
                   fontWeight: 700,
                   cursor: 'pointer',
                 }}
@@ -2337,7 +2346,7 @@ const StepCard: React.FC<{ step: HowItWorksStep; isMobile: boolean }> = ({ step,
           width: isMobile ? 74 : 66,
           height: isMobile ? 74 : 66,
           borderRadius: 14,
-          backgroundColor: '#FFFFFF',
+          backgroundColor: '#76D800',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -2435,8 +2444,9 @@ const mobileAppBadgeStyle: React.CSSProperties = {
   width: 72,
   height: 72,
   borderRadius: 16,
-  backgroundColor: '#000000',
-  color: '#FFFFFF',
+  backgroundColor: '#FFFFFF',
+  border: '1px solid #E2E8F0',
+  color: '#0B1218',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -2467,8 +2477,8 @@ const footerLinkStyle: React.CSSProperties = {
 };
 
 const footerPillStyle: React.CSSProperties = {
-  backgroundColor: '#141414',
-  border: '1px solid rgba(255,255,255,0.16)',
+  backgroundColor: '#131E26',
+  border: '1px solid rgba(118, 216, 0, 0.24)',
   color: '#FFFFFF',
   borderRadius: 8,
   height: 36,
