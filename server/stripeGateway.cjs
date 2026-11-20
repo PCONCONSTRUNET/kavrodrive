@@ -397,7 +397,6 @@ async function createWalletCheckoutSession({
 
   const session = await stripe.checkout.sessions.create({
     mode: 'payment',
-    payment_method_types: ['card'],
     locale: 'pt-BR',
     customer: customerId,
     line_items: [

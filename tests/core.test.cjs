@@ -1515,6 +1515,7 @@ test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual captur
     checkout: {
       sessions: {
         create: async (params) => {
+          assert.equal(params.payment_method_types, undefined);
           const sid = `cs_test_${seq++}`;
           const unitAmount = params.line_items?.[0]?.price_data?.unit_amount || 0;
           const piId = `pi_cs_${seq++}`;
