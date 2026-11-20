@@ -302,7 +302,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
   }, [displayVehiclePos.heading, displayVehiclePos.lat, displayVehiclePos.lng, isOpen]);
 
   const cleanPhone = (ride.clientPhone || '').replace(/\D/g, '');
-  const whatsappUrl = `https://wa.me/55${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(ride.clientName)},%20sou%20seu%20motorista%20da%20UP%20Mobilidade%20estou%20no%20GPS%20a%20caminho%20da%20sua%20corrida%20${ride.id}.`;
+  const whatsappUrl = `https://wa.me/55${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(ride.clientName)},%20sou%20seu%20motorista%20da%20Kavro%20Drive%20e%20estou%20no%20GPS%20a%20caminho%20da%20sua%20corrida%20${encodeURIComponent(String(ride.rideCode || ride.id).replace(/^#?\s*UP\b/i, '#KV'))}.`;
 
   // Atualiza cálculo em tempo real de metros até o cliente, metros até o destino e ETA em segundos
   useEffect(() => {

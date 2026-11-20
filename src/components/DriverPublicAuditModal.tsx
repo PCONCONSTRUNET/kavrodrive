@@ -590,7 +590,7 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
               />
               <input
                 type="text"
-                placeholder="Pesquisar por #UP, rua ou cidade..."
+                placeholder="Pesquisar por #KV, rua ou cidade..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 style={{

@@ -940,8 +940,11 @@ function normalizeRideId(rawId) {
   if (!rawId) return '';
   const str = String(rawId).trim();
   const digits = str.replace(/\D/g, '');
-  if (digits && (/^#?\s*UP/i.test(str) || /^\d+$/.test(str))) {
+  if (digits && /^#?\s*UP\s*-?\s*\d+$/i.test(str)) {
     return `UP-${String(parseInt(digits, 10)).padStart(3, '0')}`;
+  }
+  if (digits && (/^#?\s*KV/i.test(str) || /^\d+$/.test(str))) {
+    return `KV-${String(parseInt(digits, 10)).padStart(3, '0')}`;
   }
   return str;
 }
@@ -964,9 +967,9 @@ function formatRideFromDb(row) {
     : finance.round2(Math.max(0, totalPrice - commAmt));
 
   return {
-    id: row.id || `UP-${padded}`,
+    id: row.id || `KV-${padded}`,
     rideNumber: num,
-    rideCode: `#UP - ${padded}`,
+    rideCode: `#KV - ${padded}`,
     clientName: row.client_name ?? row.clientName,
     clientPhone: row.client_phone ?? row.clientPhone,
     clientId: row.client_id ?? row.clientId,
@@ -3715,11 +3718,11 @@ async function handleApiRequest(req, res) {
         const nextNum = Number(seqRes.rows[0]?.next_num || 1);
         const padded = String(nextNum).padStart(3, '0');
         ride.rideNumber = nextNum;
-        ride.id = `UP-${padded}`;
-        ride.rideCode = `#UP - ${padded}`;
+        ride.id = `KV-${padded}`;
+        ride.rideCode = `#KV - ${padded}`;
       } else {
         ride.rideNumber = before.rideNumber;
-        ride.rideCode = before.rideCode;
+        ride.rideCode = `#KV - ${String(before.rideNumber || parseInt(String(before.id || '').replace(/\D/g, ''), 10) || 1).padStart(3, '0')}`;
       }
 
       const now = new Date();
@@ -5846,7 +5849,7 @@ async function handleApiRequest(req, res) {
       }
 
       const num = parseInt(String(id).replace(/\D/g, ''), 10) || 1;
-      const rideCode = `#UP - ${String(num).padStart(3, '0')}`;
+      const rideCode = `#KV - ${String(num).padStart(3, '0')}`;
       const r = await db.query(
         `SELECT status, lat, lng, speed_kmh, heading, recorded_at
          FROM public.ride_trail_points WHERE ride_id = $1 ORDER BY recorded_at ASC LIMIT 20000`,
@@ -5898,7 +5901,7 @@ async function handleApiRequest(req, res) {
           role: item.role || 'passageiro',
           status: item.status || (item.active !== false ? 'ativo' : 'resolvido'),
           rideId: item.rideId || linkedRide?.id || null,
-          rideCode: item.rideCode || (linkedRide ? `#UP - ${String(linkedRide.ride_number || 1).padStart(3, '0')}` : null),
+          rideCode: item.rideCode ? String(item.rideCode).replace(/^#?\s*UP\b/i, '#KV') : (linkedRide ? `#KV - ${String(linkedRide.ride_number || 1).padStart(3, '0')}` : null),
           clientName: item.clientName || linkedRide?.client_name || item.name || 'Passageiro',
           clientPhone: item.clientPhone || linkedRide?.client_phone || item.phone || '',
           driverId: item.driverId || linkedRide?.driver_id || linkedDriver?.id || null,

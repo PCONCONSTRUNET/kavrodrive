@@ -167,7 +167,7 @@ ${publicTrackingUrl}`;
     setIsDownloading(true);
     try {
       const result = await downloadElementAsPdf(receiptRef.current, {
-        filename: `Recibo_${ride.id}.pdf`,
+        filename: `Recibo_${rideCode.replace(/[^A-Za-z0-9-]+/g, '')}.pdf`,
         title: `Recibo ${companyName} - ${rideCode}`,
       });
       if (result.success) {
@@ -185,7 +185,7 @@ ${publicTrackingUrl}`;
     if (!receiptRef.current) return;
     setIsDownloading(true);
     try {
-      await downloadElementAsImage(receiptRef.current, `Recibo_${ride.id}.png`);
+      await downloadElementAsImage(receiptRef.current, `Recibo_${rideCode.replace(/[^A-Za-z0-9-]+/g, '')}.png`);
       setDownloadFeedback('Imagem salva!');
       setTimeout(() => setDownloadFeedback(''), 3000);
     } finally {

@@ -54,7 +54,7 @@ function getInitialStore() {
           companyName: 'Kavro Drive',
           companyPhone: '(48) 99691-5303',
           companyWhatsapp: '5548996915303',
-          companyEmail: 'contato@upmobilidade.com.br',
+          companyEmail: 'contato@kavrodrive.com.br',
           driverName: 'Alisson Santos',
           driverPhone: '(48) 99691-5303',
           baseFare: 8.0,
@@ -93,11 +93,11 @@ function getInitialStore() {
           cardSettlementDays: 0,
           activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'carteira', 'dinheiro'],
           serviceCategories: [
-            { id: 'standard', name: 'UPX • Particular Padrão', multiplier: 1.0, description: 'Viagens rápidas do dia a dia com ar-condicionado' },
+            { id: 'standard', name: 'Kavro • Particular Padrão', multiplier: 1.0, description: 'Viagens rápidas do dia a dia com ar-condicionado' },
             { id: 'comfort', name: 'Kavro Comfort • Executivo', multiplier: 1.25, description: 'Sedans espaçosos e motoristas mais bem avaliados' },
             { id: 'aeroporto', name: 'Kavro Bagagem / Aeroporto', multiplier: 1.35, description: 'Porta-malas amplo para malas e viagens longas' }
           ],
-          pixKey: 'contato@upmobilidade.com.br',
+          pixKey: 'contato@kavrodrive.com.br',
           pixType: 'email',
           pixBeneficiary: 'Kavro Drive Plataforma',
           whatsappAutomations: {

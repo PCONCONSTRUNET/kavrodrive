@@ -35,7 +35,7 @@ function crc16Ccitt(str) {
 }
 
 function generateDynamicPixPayload({ key, beneficiaryName, city, amount, txid }) {
-  const cleanKey = String(key || 'contato@upmobilidade.com.br').trim();
+  const cleanKey = String(key || 'contato@kavrodrive.com.br').trim();
   const cleanName = String(beneficiaryName || 'KAVRO DRIVE')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -47,7 +47,7 @@ function generateDynamicPixPayload({ key, beneficiaryName, city, amount, txid })
     .slice(0, 15)
     .trim();
   const formattedAmount = amount && Number(amount) > 0 ? Number(amount).toFixed(2) : '';
-  const cleanTxid = String(txid || 'UPMOB').replace(/[^a-zA-Z0-9]/g, '').slice(0, 25) || 'UPMOB';
+  const cleanTxid = String(txid || 'KAVRO').replace(/[^a-zA-Z0-9]/g, '').slice(0, 25) || 'KAVRO';
 
   const merchantAccount =
     formatEmvField('00', 'br.gov.bcb.pix') +
@@ -2367,10 +2367,10 @@ async function createPixChargeForRide(ride) {
   const cfg = await getSystemConfig();
   const effectivePixPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'pix');
   const split = calculateSplit(ride.totalPrice, effectivePixPct, resolveCommissionFixedForRide(cfg, ride));
-  const txid = `UP${String(ride.id || '').replace(/[^a-zA-Z0-9]/g, '')}${Date.now().toString().slice(-4)}`.slice(0, 25);
+  const txid = `KV${String(ride.id || '').replace(/[^a-zA-Z0-9]/g, '')}${Date.now().toString().slice(-4)}`.slice(0, 25);
 
   let pixCopyPaste = generateDynamicPixPayload({
-    key: cfg.pixKey || 'contato@upmobilidade.com.br',
+    key: cfg.pixKey || 'contato@kavrodrive.com.br',
     beneficiaryName: cfg.pixBeneficiary || cfg.companyName || 'KAVRO DRIVE',
     city: cfg.driverCarCity || 'BRASIL',
     amount: split.grossAmount,
@@ -2419,7 +2419,7 @@ async function createPixChargeForRide(ride) {
     const stripePix = await stripeGateway.createPixCharge({
       amountBrl: split.grossAmount,
       rideId: ride.id,
-      rideCode: ride.rideCode || `#UP - ${String(ride.rideNumber || 1).padStart(3, '0')}`,
+      rideCode: ride.rideCode ? String(ride.rideCode).replace(/^#?\s*UP\b/i, '#KV') : `#KV - ${String(ride.rideNumber || 1).padStart(3, '0')}`,
       driverId: ride.driverId || '',
       purpose: 'ride_pix',
       payerName: ride.clientName || 'Passageiro Kavro',
@@ -2449,7 +2449,7 @@ async function createPixChargeForRide(ride) {
           payment_method_id: 'pix',
           external_reference: ride.id,
           payer: {
-            email: 'passageiro@upmobilidade.com.br',
+            email: 'passageiro@kavrodrive.com.br',
             first_name: ride.clientName || 'Passageiro'
           }
         })
@@ -2472,7 +2472,7 @@ async function createPixChargeForRide(ride) {
 
   const tx = await savePaymentTransaction({
     rideId: ride.id,
-    rideCode: ride.rideCode || `#UP - ${String(ride.rideNumber || 1).padStart(3, '0')}`,
+    rideCode: ride.rideCode ? String(ride.rideCode).replace(/^#?\s*UP\b/i, '#KV') : `#KV - ${String(ride.rideNumber || 1).padStart(3, '0')}`,
     driverId: ride.driverId || null,
     driverName: ride.driverName || null,
     clientId: ride.clientId || null,
@@ -2681,7 +2681,7 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
           payment_method_id: mapMpPaymentMethodId(savedCard?.brand || brand, ride.paymentMethod),
           external_reference: ride.id,
           payer: {
-            email: ride.clientEmail || 'passageiro@upmobilidade.com.br',
+            email: ride.clientEmail || 'passageiro@kavrodrive.com.br',
             first_name: String(ride.clientName || 'Passageiro').split(' ')[0]
           }
         })
@@ -3117,7 +3117,7 @@ async function createDriverDebtSettlementPix(driverId, customAmount = null) {
   }
 
   const pixCopyPaste = generateDynamicPixPayload({
-    key: cfg.pixKey || 'contato@upmobilidade.com.br',
+    key: cfg.pixKey || 'contato@kavrodrive.com.br',
     beneficiaryName: cfg.pixBeneficiary || 'KAVRO DRIVE',
     city: 'BRASIL',
     amount: amountToPay,
@@ -3399,7 +3399,7 @@ async function getPlatformFinancialOverview() {
       await savePaymentTransaction({
         id: `tx-sync-${r.id}`,
         rideId: r.id,
-        rideCode: r.ride_code || `#UP - ${String(r.ride_number || 1).padStart(3, '0')}`,
+        rideCode: r.ride_code ? String(r.ride_code).replace(/^#?\s*UP\b/i, '#KV') : `#KV - ${String(r.ride_number || 1).padStart(3, '0')}`,
         driverId: drvId,
         driverName: drvName,
         clientId: r.client_id || null,
@@ -4184,7 +4184,7 @@ async function createClientWalletTopup({
   if (normalizedMethod === 'pix') {
     const txid = `CW${cid.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}${Date.now().toString().slice(-6)}`.slice(0, 25);
     let pixCopyPaste = generateDynamicPixPayload({
-      key: cfg.pixKey || 'contato@upmobilidade.com.br',
+      key: cfg.pixKey || 'contato@kavrodrive.com.br',
       beneficiaryName: cfg.pixBeneficiary || cfg.companyName || 'KAVRO DRIVE',
       city: cfg.driverCarCity || 'BRASIL',
       amount: cleanAmount,

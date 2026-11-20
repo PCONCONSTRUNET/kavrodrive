@@ -180,36 +180,40 @@ export function formatCNH(value: string | undefined | null): string {
   return String(value).replace(/\D/g, '').slice(0, 11);
 }
 
-/** Formata o identificador da viagem no padrão oficial: #UP - 001 */
+/** Formata o identificador da viagem no padrão oficial: #KV - 001 */
 export function formatRideCode(
   rideOrId?: string | number | { id?: string; rideNumber?: number; rideCode?: string } | null
 ): string {
-  if (rideOrId === undefined || rideOrId === null) return '#UP - 001';
+  if (rideOrId === undefined || rideOrId === null) return '#KV - 001';
   if (typeof rideOrId === 'number') {
-    return `#UP - ${String(Math.max(1, rideOrId)).padStart(3, '0')}`;
+    return `#KV - ${String(Math.max(1, rideOrId)).padStart(3, '0')}`;
   }
   if (typeof rideOrId === 'object') {
-    if (rideOrId.rideCode && rideOrId.rideCode.startsWith('#UP - ')) {
-      return rideOrId.rideCode;
-    }
     if (typeof rideOrId.rideNumber === 'number' && rideOrId.rideNumber > 0) {
-      return `#UP - ${String(rideOrId.rideNumber).padStart(3, '0')}`;
+      return `#KV - ${String(rideOrId.rideNumber).padStart(3, '0')}`;
+    }
+    if (rideOrId.rideCode && /^#?(?:UP|KV)\s*-\s*\d+$/i.test(rideOrId.rideCode.trim())) {
+      const digits = rideOrId.rideCode.replace(/\D/g, '');
+      return `#KV - ${String(parseInt(digits, 10) || 1).padStart(3, '0')}`;
+    }
+    if (rideOrId.rideCode) {
+      return rideOrId.rideCode.replace(/^#?\s*UP\b/i, '#KV');
     }
     return formatRideCode(rideOrId.id || '1');
   }
   const str = String(rideOrId).trim();
-  if (/^#UP\s*-\s*\d+$/i.test(str)) {
+  if (/^#?(?:UP|KV)\s*-\s*\d+$/i.test(str)) {
     const digits = str.replace(/\D/g, '');
-    return `#UP - ${String(parseInt(digits, 10) || 1).padStart(3, '0')}`;
+    return `#KV - ${String(parseInt(digits, 10) || 1).padStart(3, '0')}`;
   }
   const digits = str.replace(/\D/g, '');
   if (digits) {
-    return `#UP - ${String(parseInt(digits, 10) || 1).padStart(3, '0')}`;
+    return `#KV - ${String(parseInt(digits, 10) || 1).padStart(3, '0')}`;
   }
-  return `#UP - 001`;
+  return `#KV - 001`;
 }
 
-/** Calcula o próximo ID sequencial de viagem (UP-001, UP-002, ...) a partir da lista atual */
+/** Calcula o próximo ID sequencial de viagem (KV-001, KV-002, ...) a partir da lista atual */
 export function getNextSequentialRideId(
   rides: Array<{ id?: string; rideNumber?: number }> = []
 ): string {
@@ -225,6 +229,6 @@ export function getNextSequentialRideId(
     }
   }
   const next = maxNum + 1;
-  return `UP-${String(next).padStart(3, '0')}`;
+  return `KV-${String(next).padStart(3, '0')}`;
 }
 

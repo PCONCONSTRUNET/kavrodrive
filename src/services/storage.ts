@@ -140,7 +140,7 @@ export const DEFAULT_CONFIG: SystemConfig = {
   companyName: 'Kavro Drive',
   companyPhone: '(48) 99691-5303',
   companyWhatsapp: '5548996915303',
-  companyEmail: 'contato@upmobilidade.com.br',
+  companyEmail: 'contato@kavrodrive.com.br',
   driverName: 'Alisson Santos',
   driverPhoto: '',
   driverPhone: '(48) 99691-5303',
@@ -188,7 +188,7 @@ export const DEFAULT_CONFIG: SystemConfig = {
   activePaymentMethods: ['pix', 'cartao_credito', 'carteira', 'dinheiro'],
   rideCategories: DEFAULT_RIDE_CATEGORIES,
   serviceCategories: DEFAULT_RIDE_CATEGORIES,
-  pixKey: 'contato@upmobilidade.com.br',
+  pixKey: 'contato@kavrodrive.com.br',
   pixType: 'email',
   pixBeneficiary: 'Kavro Drive Plataforma',
   whatsappAutomations: {

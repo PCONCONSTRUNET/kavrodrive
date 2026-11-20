@@ -39,7 +39,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Geração do Payload PIX Padrão Banco Central do Brasil
-  const pixKey = config.pixKey || 'contato@upmobilidade.com.br';
+  const pixKey = config.pixKey || 'contato@kavrodrive.com.br';
   const beneficiary = config.pixBeneficiary || config.companyName || 'Kavro Drive';
 
   const pixPayload = useMemo(() => {
@@ -49,7 +49,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
       beneficiary,
       'BRASIL',
       ride.totalPrice,
-      ride.id.replace(/\D/g, '') || 'UPMOB'
+      ride.id.replace(/\D/g, '') || 'KAVRO'
     );
   }, [pixKey, beneficiary, ride]);
 
@@ -150,7 +150,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
         </button>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <img src="/logo-icon.png" alt="UP" style={{ width: 26, height: 26, borderRadius: 7, objectFit: 'contain' }} />
+          <img src="/logo-icon.png" alt="Kavro" style={{ width: 26, height: 26, borderRadius: 7, objectFit: 'contain' }} />
           <div style={{ textAlign: 'left' }}>
             <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#121A21', lineHeight: 1.1 }}>
               {isClientView ? 'Pagamento da Viagem' : 'Recebimento da Corrida'}

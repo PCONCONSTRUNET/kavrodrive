@@ -186,7 +186,7 @@ export const AdminRecordedRoutesTab: React.FC<AdminRecordedRoutesTabProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Buscar por código (#UP), passageiro ou endereço..."
+              placeholder="Buscar por código (#KV), passageiro ou endereço..."
               style={{
                 width: '100%',
                 height: 34,

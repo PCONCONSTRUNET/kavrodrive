@@ -18,7 +18,7 @@ export const KycBiometricPrivacyModal: React.FC<KycBiometricPrivacyModalProps> =
   if (!isOpen) return null;
 
   const companyName = config?.companyName || 'KAVRO DRIVE';
-  const companyEmail = config?.companyEmail || 'contato@upmobilidade.com.br';
+  const companyEmail = config?.companyEmail || 'contato@kavrodrive.com.br';
   const companyPhone = formatPhone(config?.companyPhone || '(48) 99691-5303');
 
   return createPortal(

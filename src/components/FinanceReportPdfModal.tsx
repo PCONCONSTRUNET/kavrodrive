@@ -79,7 +79,7 @@ export const FinanceReportPdfModal: React.FC<FinanceReportPdfModalProps> = ({
     if (!reportRef.current) return;
     setIsGeneratingPdf(true);
     try {
-      const filename = `Relatorio_Financeiro_UP_${reportId}.pdf`;
+      const filename = `Relatorio_Financeiro_KV_${reportId}.pdf`;
       const res = await downloadElementAsPdf(reportRef.current, {
         filename,
         title: `Relatório Financeiro Kavro Drive - ${periodLabel}`,

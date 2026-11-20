@@ -223,7 +223,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
       .filter((r) => r.status === 'finalizada')
       .map((r) => ({
         id: r.id,
-        rideCode: r.rideCode || formatRideCode(r.id),
+        rideCode: formatRideCode(r),
         date: r.date,
         time: r.time || '00:00',
         originAddress: r.origin?.address || 'Origem registrada',
@@ -1237,7 +1237,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                   type="text"
                   value={rideSearch}
                   onChange={(e) => setRideSearch(e.target.value)}
-                  placeholder="Pesquisar por código #UP, rua, bairro, motorista ou placa..."
+                  placeholder="Pesquisar por código #KV, rua, bairro, motorista ou placa..."
                   style={{
                     width: '100%',
                     height: 38,
@@ -1515,7 +1515,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 <div>
                   <h3 style={clauseTitleStyle}>CLÁUSULA 3ª — INTEGRIDADE DE TARIFAS E RASTREABILIDADE GPS</h3>
                   <p>
-                    3.1. Todas as solicitações registradas geram código identificador único (<code>#UP</code>),
+                    3.1. Todas as solicitações registradas geram código identificador único (<code>#KV</code>),
                     estimativa prévia transparente antes do embarque e trilha de geolocalização durante a execução da
                     viagem. Em caso de divergência ou solicitação judicial, a Central Administrativa mantém registro
                     interno auditável das rotas percorridas.

@@ -46,7 +46,7 @@ export const SosEmergencyModal: React.FC<SosEmergencyModalProps> = ({
   const lastGeocodedRef = useRef<string>('');
 
   const currentUser = StorageService.getCurrentUser();
-  const userName = currentUser?.name || 'Passageiro(a) UP';
+  const userName = currentUser?.name || 'Passageiro(a) Kavro';
   const userPhone = currentUser?.phone ? formatPhone(currentUser.phone) : '';
 
   // Captura e monitora o GPS do aparelho em alta precisão ao abrir o modal
@@ -272,7 +272,7 @@ export const SosEmergencyModal: React.FC<SosEmergencyModalProps> = ({
       `⚠️ *Preciso de auxílio urgente neste momento!*\n` +
       `👤 *Solicitante:* ${userName}\n` +
       (userPhone ? `📱 *Contato:* ${userPhone}\n` : '') +
-      (rideId ? `🚗 *Viagem UP:* ${rideId}\n` : '') +
+      (rideId ? `🚗 *Viagem KV:* ${String(rideId).replace(/^UP-/i, 'KV-')}\n` : '') +
       `📍 *Endereço GPS:* ${addressDesc}\n` +
       `🛰️ *Coordenadas:* ${activeCoords.lat.toFixed(5)}, ${activeCoords.lng.toFixed(5)}\n\n` +
       `🔴 *1. Rastreamento ao Vivo e Rota de Socorro:*\n${liveTrackingUrl}\n\n` +

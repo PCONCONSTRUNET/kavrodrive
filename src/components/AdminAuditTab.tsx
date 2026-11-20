@@ -345,7 +345,7 @@ export const AdminAuditTab: React.FC = () => {
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="Buscar por código AUD-000001, UUID do banco, corrida (#UP), motorista ou palavra-chave..."
+              placeholder="Buscar por código AUD-000001, UUID do banco, corrida (#KV), motorista ou palavra-chave..."
               style={{
                 width: '100%',
                 height: 38,

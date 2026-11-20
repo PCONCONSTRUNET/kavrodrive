@@ -396,7 +396,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         byRideId.set(r.id, {
           id: `tx-ride-${r.id}`,
           rideId: r.id,
-          rideCode: r.rideCode || `#UP-${String(r.rideNumber || 1).padStart(3, '0')}`,
+          rideCode: r.rideCode ? String(r.rideCode).replace(/^#?\s*UP\b/i, '#KV') : `#KV - ${String(r.rideNumber || 1).padStart(3, '0')}`,
           driverId: r.driverId || 'drv-default',
           driverName: r.driverName || config.driverName || 'Motorista Parceiro',
           clientId: r.clientId || null,

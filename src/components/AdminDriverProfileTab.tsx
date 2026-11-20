@@ -1412,7 +1412,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
           />
           <input
             type="text"
-            placeholder="Filtrar corridas finalizadas por código (#UP), cliente, endereço ou data..."
+            placeholder="Filtrar corridas finalizadas por código (#KV), cliente, endereço ou data..."
             value={auditSearch}
             onChange={(e) => setAuditSearch(e.target.value)}
             style={{

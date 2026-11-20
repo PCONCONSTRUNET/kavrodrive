@@ -34,8 +34,8 @@ function supabaseApiPlugin() {
         const html = fs.readFileSync(indexHtmlPath, 'utf8')
         const adminHtml = html
           .replace('href="/manifest.json"', 'href="/manifest-admin.json"')
-          .replace('content="UP Mobilidade"', 'content="UP Motorista"')
-          .replace('<title>UP Mobilidade — Transporte Particular & Viagens Agendadas</title>', '<title>UP Motorista — Painel Operacional</title>')
+          .replace('content="KAVRO DRIVE"', 'content="Kavro Motorista"')
+          .replace('<title>KAVRO DRIVE — Mobilidade Urbana &amp; Corridas na Hora</title>', '<title>Kavro Motorista — Painel Operacional</title>')
         fs.writeFileSync(path.join(distDir, 'admin.html'), adminHtml, 'utf8')
       }
     }

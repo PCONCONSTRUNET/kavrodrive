@@ -225,7 +225,7 @@ export const RideRoutePlaybackModal: React.FC<RideRoutePlaybackModalProps> = ({ 
       `🔗 *VIAGEM VINCULADA:* *${rideCode}*\n\n` +
       `📅 *Data e Horário:* ${ride.date.split('-').reverse().join('/')} às ${ride.time}\n` +
       `👤 *Passageiro(a):* ${ride.clientName}${ride.clientPhone ? ` (${formatPhone(ride.clientPhone)})` : ''}\n` +
-      `🚘 *Motorista:* ${config?.driverName || 'Motorista Executivo UP'}\n` +
+      `🚘 *Motorista:* ${config?.driverName || 'Motorista Executivo Kavro'}\n` +
       `🚗 *Veículo:* ${config?.driverCarModel || config?.driverVehicle || 'Toyota Corolla'}${config?.driverCarColor ? ` (${config.driverCarColor})` : ''} • Placa: ${config?.driverPlate || 'BRA-2E19'}\n\n` +
       `📍 *Embarque (GPS):* ${ride.origin.address}\n` +
       `   ↳ Coord: ${ride.origin.lat.toFixed(5)}, ${ride.origin.lng.toFixed(5)}\n` +
@@ -327,7 +327,7 @@ export const RideRoutePlaybackModal: React.FC<RideRoutePlaybackModalProps> = ({ 
           </div>
           <div class="box">
             <div class="label">Dados Operacionais & Financeiros</div>
-            <div class="val">Motorista: ${config?.driverName || 'Motorista Executivo UP'}</div>
+            <div class="val">Motorista: ${config?.driverName || 'Motorista Executivo Kavro'}</div>
             <div style="font-size:13px;margin-top:4px;"><strong>Veículo Oficial:</strong> ${config?.driverCarModel ? `${config?.driverCarBrand || ''} ${config.driverCarModel}`.trim() : (config?.driverVehicle || 'Veículo Executivo')} ${config?.driverCarColor ? `(${config.driverCarColor})` : ''}${config?.driverPlate ? ` • <strong>Placa:</strong> ${config.driverPlate}` : ''}</div>
             <div style="font-size:13px;"><strong>Valor Total:</strong> ${formatCurrency(ride.totalPrice)} (${ride.paymentMethod.toUpperCase()} - ${ride.paymentStatus.toUpperCase()})</div>
             <div style="font-size:13px;"><strong>Percurso Auditado:</strong> ${totalKm.toFixed(1)} km • Duração: ~${realDurationMin} min</div>

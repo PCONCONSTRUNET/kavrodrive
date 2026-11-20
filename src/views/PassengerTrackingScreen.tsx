@@ -205,7 +205,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
   };
 
   const handleCopyPix = () => {
-    const pix = config.pixKey || 'contato@upmobilidade.com.br';
+    const pix = config.pixKey || 'contato@kavrodrive.com.br';
     navigator.clipboard.writeText(pix);
     setCopiedPix(true);
     setTimeout(() => setCopiedPix(false), 2000);
@@ -1384,7 +1384,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                     <span style={{ fontSize: '0.79rem', color: '#0F172A', fontWeight: 700, wordBreak: 'break-all', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-                      {config.pixKey || 'contato@upmobilidade.com.br'}
+                      {config.pixKey || 'contato@kavrodrive.com.br'}
                     </span>
                     <button
                       type="button"

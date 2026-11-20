@@ -19,7 +19,7 @@ export const TermsPrivacyModal: React.FC<TermsPrivacyModalProps> = ({
 
   const companyName = config?.companyName || 'Kavro Drive';
   const companyPhone = formatPhone(config?.companyPhone || '(48) 99691-5303');
-  const companyEmail = config?.companyEmail || 'contato@upmobilidade.com.br';
+  const companyEmail = config?.companyEmail || 'contato@kavrodrive.com.br';
 
   return createPortal(
     <div
@@ -140,7 +140,7 @@ export const TermsPrivacyModal: React.FC<TermsPrivacyModalProps> = ({
                 Gravação de Rotas e Coordenadas GPS para Segurança Mútua
               </strong>
               <span style={{ color: '#166534', fontSize: '0.78rem' }}>
-                Para a sua segurança e a do motorista, <strong>todos os trajetos, pontos de embarque, desembarque e coordenadas de satélite (GPS) são gravados em tempo real</strong> e vinculados ao código da viagem (ex: #UP - 001). Esses dados servem como garantia jurídica e suporte pericial em caso de necessidade.
+                Para a sua segurança e a do motorista, <strong>todos os trajetos, pontos de embarque, desembarque e coordenadas de satélite (GPS) são gravados em tempo real</strong> e vinculados ao código da viagem (ex: #KV - 001). Esses dados servem como garantia jurídica e suporte pericial em caso de necessidade.
               </span>
             </div>
           </div>

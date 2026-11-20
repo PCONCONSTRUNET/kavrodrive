@@ -58,6 +58,6 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`UP Mobilidade Server running on http://localhost:${PORT}`);
+  console.log(`Kavro Drive Server running on http://localhost:${PORT}`);
 });
 

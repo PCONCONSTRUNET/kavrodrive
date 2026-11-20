@@ -111,8 +111,8 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
         headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
         body: JSON.stringify({
           sosId,
-          rideId: sampleRide?.id || 'UP-001',
-          rideCode: sampleRide?.rideCode || '#UP-001',
+          rideId: sampleRide?.id || 'KV-001',
+          rideCode: sampleRide?.rideCode ? String(sampleRide.rideCode).replace(/^#?\s*UP\b/i, '#KV') : '#KV - 001',
           triggeredBy: 'passageiro',
           status: 'ativo',
           driverId: sampleRide?.driverId || 'drv-default',
