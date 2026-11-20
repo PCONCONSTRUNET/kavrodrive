@@ -324,14 +324,11 @@ export const StorageService = {
   },
 
   // Solicitação de corrida sob demanda (Uber style) com retorno da resposta do gateway (Pix / Cartão / Dinheiro)
-  async requestRideOnDemand(ridePayload: Partial<Ride> & { stripePaymentIntentId?: string }): Promise<{
+  async requestRideOnDemand(ridePayload: Partial<Ride>): Promise<{
     ok: boolean;
     ride?: Ride;
     error?: string;
     paymentStatus?: string;
-    requiresAction?: boolean;
-    clientSecret?: string;
-    paymentIntentId?: string;
   }> {
     try {
       const res = await fetch('/api/rides', {
@@ -344,10 +341,7 @@ export const StorageService = {
         return {
           ok: false,
           error: data.error || 'Não foi possível solicitar a corrida.',
-          paymentStatus: data.paymentStatus,
-          requiresAction: Boolean(data.requiresAction),
-          clientSecret: data.clientSecret,
-          paymentIntentId: data.paymentIntentId
+          paymentStatus: data.paymentStatus
         };
       }
       const savedRide: Ride = data.ride;
@@ -633,14 +627,12 @@ export const StorageService = {
   },
 
   async fetchPaymentsConfig(): Promise<{
-    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
     efiEnabled: boolean;
     efiPixActive: boolean;
     efiSplitEnabled: boolean;
     efiDriverPixSendEnabled: boolean;
     efiSandbox: boolean;
-    stripeEnabled: boolean;
-    stripePublishableKey: string;
     mercadopagoEnabled: boolean;
     mercadopagoPublicKey: string;
     autoPixPayoutEnabled: boolean;
@@ -652,11 +644,9 @@ export const StorageService = {
         const provider =
           d.gatewayProvider === 'efibank'
             ? 'efibank'
-            : d.gatewayProvider === 'stripe'
-              ? 'stripe'
-              : d.gatewayProvider === 'mercadopago'
-                ? 'mercadopago'
-                : 'sandbox';
+            : d.gatewayProvider === 'mercadopago'
+              ? 'mercadopago'
+              : 'sandbox';
         return {
           gatewayProvider: provider,
           efiEnabled: Boolean(d.efiEnabled),
@@ -664,24 +654,19 @@ export const StorageService = {
           efiSplitEnabled: Boolean(d.efiSplitEnabled),
           efiDriverPixSendEnabled: Boolean(d.efiDriverPixSendEnabled),
           efiSandbox: Boolean(d.efiSandbox),
-          stripeEnabled: Boolean(d.stripeEnabled),
-          stripePublishableKey: String(d.stripePublishableKey || '').trim(),
           mercadopagoEnabled: Boolean(d.mercadopagoEnabled),
           mercadopagoPublicKey: String(d.mercadopagoPublicKey || '').trim(),
           autoPixPayoutEnabled: Boolean(d.autoPixPayoutEnabled)
         };
       }
     } catch {}
-    const localStripePub = String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim();
     return {
-      gatewayProvider: localStripePub ? 'stripe' : 'sandbox',
+      gatewayProvider: 'sandbox',
       efiEnabled: false,
       efiPixActive: false,
       efiSplitEnabled: false,
       efiDriverPixSendEnabled: false,
       efiSandbox: false,
-      stripeEnabled: false,
-      stripePublishableKey: localStripePub,
       mercadopagoEnabled: false,
       mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
       autoPixPayoutEnabled: false
@@ -774,85 +759,6 @@ export const StorageService = {
     }
   },
 
-  async createStripeSetupIntent(payload?: {
-    clientId?: string;
-    clientPhone?: string;
-    clientEmail?: string;
-    clientName?: string;
-  }): Promise<{ ok: boolean; clientSecret?: string; setupIntentId?: string; customerId?: string; error?: string }> {
-    try {
-      const res = await fetch('/api/payments/stripe/setup-intent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify(payload || {})
-      });
-      return await res.json();
-    } catch {
-      return { ok: false, error: 'Erro ao iniciar verificação segura do cartão.' };
-    }
-  },
-
-  async createStripeWalletIntent(payload: {
-    clientId?: string;
-    clientName?: string;
-    clientPhone?: string;
-    clientEmail?: string;
-    category: string;
-    distanceKm: number;
-    durationMin: number;
-    time: string;
-    origin?: LocationPoint;
-    destination?: LocationPoint;
-    amountBrl?: number;
-  }): Promise<{ ok: boolean; clientSecret?: string; paymentIntentId?: string; amountBrl?: number; error?: string }> {
-    try {
-      const res = await fetch('/api/payments/stripe/wallet-intent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify(payload)
-      });
-      return await res.json();
-    } catch {
-      return { ok: false, error: 'Erro ao iniciar pré-autorização com carteira digital.' };
-    }
-  },
-
-  async createStripeCheckoutSession(payload: Record<string, unknown>): Promise<{
-    ok: boolean;
-    sessionId?: string;
-    checkoutUrl?: string;
-    amountBrl?: number;
-    error?: string;
-  }> {
-    try {
-      const res = await fetch('/api/payments/stripe/checkout-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify(payload)
-      });
-      return await res.json();
-    } catch {
-      return { ok: false, error: 'Erro ao abrir checkout Apple Pay.' };
-    }
-  },
-
-  async completeStripeCheckoutSession(sessionId: string): Promise<{
-    ok: boolean;
-    ride?: Ride;
-    error?: string;
-  }> {
-    try {
-      const res = await fetch('/api/payments/stripe/checkout-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify({ sessionId })
-      });
-      return await res.json();
-    } catch {
-      return { ok: false, error: 'Erro ao confirmar autorização da corrida.' };
-    }
-  },
-
   async saveTokenizedCard(payload: {
     clientId?: string;
     clientPhone?: string;
@@ -863,8 +769,6 @@ export const StorageService = {
     cvv?: string;
     cardType: 'cartao_credito' | 'cartao_debito';
     mpCardToken?: string;
-    stripeSetupIntentId?: string;
-    stripePaymentMethodId?: string;
     holderDocument?: string;
   }): Promise<{ ok: boolean; card?: SavedCard; error?: string }> {
     try {
@@ -929,14 +833,10 @@ export const StorageService = {
     amount: number;
     method: 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay';
     cardId?: string;
-    stripePaymentIntentId?: string;
     clientId?: string;
   }): Promise<{
     ok: boolean;
     pending?: boolean;
-    requiresAction?: boolean;
-    clientSecret?: string;
-    paymentIntentId?: string;
     entry?: ClientWalletEntry;
     wallet?: ClientWalletSummary;
     error?: string;
@@ -977,66 +877,6 @@ export const StorageService = {
       return data;
     } catch {
       return { ok: false, error: 'Erro ao confirmar depósito PIX.' };
-    }
-  },
-
-  async createWalletTopupIntent(amount: number): Promise<{
-    ok: boolean;
-    clientSecret?: string;
-    paymentIntentId?: string;
-    amountBrl?: number;
-    error?: string;
-  }> {
-    try {
-      const res = await fetch('/api/client/wallet/topup/wallet-intent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify({ amount })
-      });
-      return await res.json();
-    } catch {
-      return { ok: false, error: 'Erro ao iniciar depósito via Apple Pay.' };
-    }
-  },
-
-  async createWalletTopupCheckoutSession(amount: number, returnPath?: string): Promise<{
-    ok: boolean;
-    sessionId?: string;
-    checkoutUrl?: string;
-    amountBrl?: number;
-    error?: string;
-  }> {
-    try {
-      const res = await fetch('/api/client/wallet/topup/checkout-session', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify({ amount, returnPath })
-      });
-      return await res.json();
-    } catch {
-      return { ok: false, error: 'Erro ao abrir checkout de depósito.' };
-    }
-  },
-
-  async completeWalletTopupCheckoutSession(sessionId: string): Promise<{
-    ok: boolean;
-    entry?: ClientWalletEntry;
-    wallet?: ClientWalletSummary;
-    error?: string;
-  }> {
-    try {
-      const res = await fetch('/api/client/wallet/topup/checkout-complete', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-        body: JSON.stringify({ sessionId })
-      });
-      const data = await res.json();
-      if (data.ok && data.wallet) {
-        this._syncClientWalletCache(data.wallet);
-      }
-      return data;
-    } catch {
-      return { ok: false, error: 'Erro ao validar retorno do depósito na carteira.' };
     }
   },
 

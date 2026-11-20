@@ -27,8 +27,6 @@ import {
 } from '../types';
 import { StorageService } from '../services/storage';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
-import { StripeCardForm, confirmStripe3dsPaymentIntent } from './StripeCardForm';
-import { StripeWalletCheckout } from './StripeWalletCheckout';
 
 interface PassengerWalletModalProps {
   isOpen: boolean;
@@ -63,21 +61,25 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   const [selectedCardId, setSelectedCardId] = useState('');
 
   const [paymentsConfig, setPaymentsConfig] = useState<{
-    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
     efiPixActive: boolean;
-    stripeEnabled: boolean;
-    stripePublishableKey: string;
+    mercadopagoPublicKey: string;
   }>({
     gatewayProvider: 'sandbox',
     efiPixActive: false,
-    stripeEnabled: false,
-    stripePublishableKey: String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim()
+    mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim()
   });
 
   const [showDepositPanel, setShowDepositPanel] = useState(false);
   const [showStatement, setShowStatement] = useState(false);
   const [showAddCardSheet, setShowAddCardSheet] = useState(false);
-  const [addCardType, setAddCardType] = useState<'cartao_credito' | 'cartao_debito'>('cartao_credito');
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardHolder, setCardHolder] = useState(currentUser?.name || '');
+  const [cardExpMonth, setCardExpMonth] = useState('12');
+  const [cardExpYear, setCardExpYear] = useState('2029');
+  const [cardCvv, setCardCvv] = useState('');
+  const [cardError, setCardError] = useState('');
+  const [isSavingCard, setIsSavingCard] = useState(false);
 
   const [depositAmountStr, setDepositAmountStr] = useState('20');
   const [depositMethod, setDepositMethod] = useState<'pix' | 'cartao_credito'>('pix');
@@ -132,8 +134,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
         setPaymentsConfig({
           gatewayProvider: cfg.gatewayProvider,
           efiPixActive: cfg.efiPixActive,
-          stripeEnabled: cfg.stripeEnabled,
-          stripePublishableKey: cfg.stripePublishableKey
+          mercadopagoPublicKey: cfg.mercadopagoPublicKey
         })
       )
       .catch(() => {});
@@ -199,36 +200,6 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
       method: depositMethod,
       cardId: depositMethod === 'cartao_credito' ? selectedCardId : undefined
     });
-
-    if (res.requiresAction && res.clientSecret && paymentsConfig.stripePublishableKey) {
-      const actionRes = await confirmStripe3dsPaymentIntent(
-        paymentsConfig.stripePublishableKey,
-        res.clientSecret
-      );
-      if (!actionRes.ok) {
-        setIsProcessingDeposit(false);
-        setDepositError(actionRes.error || 'Autenticação 3DS não concluída.');
-        return;
-      }
-      const finishRes = await StorageService.topupClientWallet({
-        amount: parsedAmount,
-        method: depositMethod,
-        cardId: selectedCardId,
-        stripePaymentIntentId: actionRes.paymentIntentId || res.paymentIntentId
-      });
-      setIsProcessingDeposit(false);
-      if (!finishRes.ok) {
-        setDepositError(finishRes.error || 'Falha ao confirmar depósito no cartão.');
-        return;
-      }
-      if (finishRes.wallet) {
-        setWallet(finishRes.wallet);
-        onWalletUpdated?.(finishRes.wallet);
-      }
-      setDepositSuccessMsg(`Depósito de ${formatBRL(parsedAmount)} confirmado na sua carteira!`);
-      setShowDepositPanel(false);
-      return;
-    }
 
     setIsProcessingDeposit(false);
     if (!res.ok) {
@@ -643,7 +614,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                       >
                         {isConfirmingPix
                           ? 'Verificando pagamento...'
-                          : (paymentsConfig.efiPixActive || paymentsConfig.stripeEnabled)
+                          : paymentsConfig.efiPixActive
                             ? 'Já paguei — verificar agora'
                             : 'Confirmar pagamento PIX (Teste)'}
                       </button>
@@ -1199,27 +1170,137 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
               </div>
 
               <div style={{ padding: 20, flex: 1 }}>
-                {paymentsConfig.stripePublishableKey ? (
-                  <StripeCardForm
-                    publishableKey={paymentsConfig.stripePublishableKey}
-                    clientId={currentUser.id}
-                    defaultHolderName={currentUser.name}
-                    clientPhone={currentUser.phone}
-                    clientEmail={currentUser.email}
-                    cardType={addCardType}
-                    onChangeCardType={setAddCardType}
-                    onCardSaved={(newCard) => {
-                      const nextCards = [newCard, ...savedCards];
-                      setSavedCards(nextCards);
-                      setSelectedCardId(newCard.id);
-                      setShowAddCardSheet(false);
-                    }}
+                <form
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    setCardError('');
+                    setIsSavingCard(true);
+                    let mpCardToken: string | undefined;
+                    try {
+                      if (paymentsConfig.mercadopagoPublicKey) {
+                        const cleanDoc = String(currentUser?.document || '').replace(/\D/g, '');
+                        const tokenBody: Record<string, unknown> = {
+                          card_number: cardNumber.replace(/\D/g, ''),
+                          expiration_month: parseInt(cardExpMonth, 10),
+                          expiration_year: parseInt(cardExpYear.length === 2 ? `20${cardExpYear}` : cardExpYear, 10),
+                          security_code: cardCvv.replace(/\D/g, ''),
+                          cardholder: {
+                            name: cardHolder.toUpperCase().trim(),
+                            ...(cleanDoc.length === 11 || cleanDoc.length === 14
+                              ? { identification: { type: cleanDoc.length === 14 ? 'CNPJ' : 'CPF', number: cleanDoc } }
+                              : {})
+                          }
+                        };
+                        const mpResp = await fetch(
+                          `https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(paymentsConfig.mercadopagoPublicKey)}`,
+                          {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(tokenBody)
+                          }
+                        );
+                        const mpData = await mpResp.json().catch(() => ({}));
+                        if (mpResp.ok && mpData?.id) {
+                          mpCardToken = String(mpData.id);
+                        }
+                      }
+                    } catch {
+                      // Fallback para tokenização no backend
+                    }
+                    const res = await StorageService.saveTokenizedCard({
+                      clientId: currentUser.id,
+                      clientPhone: currentUser.phone,
+                      cardNumber,
+                      holderName: cardHolder,
+                      expMonth: cardExpMonth,
+                      expYear: cardExpYear,
+                      cvv: cardCvv,
+                      cardType: 'cartao_credito',
+                      mpCardToken,
+                      holderDocument: currentUser.document
+                    });
+                    setIsSavingCard(false);
+                    if (!res.ok || !res.card) {
+                      setCardError(res.error || 'Verifique os dados do cartão.');
+                      return;
+                    }
+                    const nextCards = [res.card, ...savedCards];
+                    setSavedCards(nextCards);
+                    setSelectedCardId(res.card.id);
+                    setShowAddCardSheet(false);
+                    setCardNumber('');
+                    setCardCvv('');
+                  }}
+                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Número do Cartão (16 dígitos)"
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(e.target.value)}
+                    required
+                    style={{ padding: '11px 12px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.86rem', fontWeight: 700 }}
                   />
-                ) : (
-                  <div style={{ fontSize: '0.82rem', color: '#64748B', textAlign: 'center', padding: 20 }}>
-                    Gateway de cartão em modo sandbox neste ambiente. Use PIX para testar sua carteira.
+                  <input
+                    type="text"
+                    placeholder="Nome impresso no cartão"
+                    value={cardHolder}
+                    onChange={(e) => setCardHolder(e.target.value)}
+                    required
+                    style={{ padding: '11px 12px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.85rem', fontWeight: 600 }}
+                  />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                    <input
+                      type="text"
+                      placeholder="Mês (MM)"
+                      maxLength={2}
+                      value={cardExpMonth}
+                      onChange={(e) => setCardExpMonth(e.target.value)}
+                      required
+                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Ano (AAAA)"
+                      maxLength={4}
+                      value={cardExpYear}
+                      onChange={(e) => setCardExpYear(e.target.value)}
+                      required
+                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
+                    />
+                    <input
+                      type="password"
+                      placeholder="CVV"
+                      maxLength={4}
+                      value={cardCvv}
+                      onChange={(e) => setCardCvv(e.target.value)}
+                      required
+                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
+                    />
                   </div>
-                )}
+                  {cardError && (
+                    <div style={{ color: '#DC2626', fontSize: '0.75rem', fontWeight: 700, textAlign: 'center' }}>
+                      {cardError}
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={isSavingCard}
+                    style={{
+                      marginTop: 6,
+                      padding: '12px 24px',
+                      borderRadius: 999,
+                      border: 'none',
+                      backgroundColor: '#0F172A',
+                      color: '#FFFFFF',
+                      fontSize: '0.84rem',
+                      fontWeight: 800,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {isSavingCard ? 'Tokenizando...' : 'Salvar Cartão na Carteira'}
+                  </button>
+                </form>
               </div>
             </div>
           </div>

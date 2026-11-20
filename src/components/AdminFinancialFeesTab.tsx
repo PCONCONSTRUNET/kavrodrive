@@ -105,21 +105,19 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     String(config.gatewayFeePercents?.cartao_credito ?? 0)
   );
   const [paymentsStatus, setPaymentsStatus] = useState<{
-    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
     efiEnabled: boolean;
     efiPixActive: boolean;
     efiSplitEnabled: boolean;
     efiDriverPixSendEnabled: boolean;
     efiSandbox: boolean;
-    stripeEnabled: boolean;
   }>({
     gatewayProvider: 'sandbox',
     efiEnabled: false,
     efiPixActive: false,
     efiSplitEnabled: false,
     efiDriverPixSendEnabled: false,
-    efiSandbox: false,
-    stripeEnabled: false
+    efiSandbox: false
   });
 
   useEffect(() => {
@@ -131,8 +129,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
           efiPixActive: cfg.efiPixActive,
           efiSplitEnabled: cfg.efiSplitEnabled,
           efiDriverPixSendEnabled: cfg.efiDriverPixSendEnabled,
-          efiSandbox: cfg.efiSandbox,
-          stripeEnabled: cfg.stripeEnabled
+          efiSandbox: cfg.efiSandbox
         })
       )
       .catch(() => {});
@@ -868,15 +865,15 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       {/* ===================================================================== */}
       {subTab === 'pagamentos' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {/* Status ao vivo do Gateway de Pagamentos (Efí Bank / Stripe / Apple Pay / PIX) */}
+          {/* Status ao vivo do Gateway de Pagamentos (Efí Bank / Mercado Pago / Sandbox) */}
           <div
             style={{
-              background: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled)
+              background: paymentsStatus.efiPixActive
                 ? 'linear-gradient(135deg, #0B1117 0%, #15222C 100%)'
                 : '#F8FAFC',
-              color: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled) ? '#FFFFFF' : '#0F172A',
+              color: paymentsStatus.efiPixActive ? '#FFFFFF' : '#0F172A',
               borderRadius: 12,
-              border: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled) ? '1px solid #1E293B' : '1px solid #E2E8F0',
+              border: paymentsStatus.efiPixActive ? '1px solid #1E293B' : '1px solid #E2E8F0',
               padding: '14px 18px',
               display: 'flex',
               alignItems: 'center',
@@ -889,19 +886,15 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
               <div style={{ fontSize: '0.86rem', fontWeight: 800 }}>
                 Gateway Ativo:{' '}
                 {paymentsStatus.efiPixActive
-                  ? `Efí Bank PIX (${paymentsStatus.efiSandbox ? 'Homologação' : 'Produção'})${paymentsStatus.stripeEnabled ? ' + Cartão de Crédito' : ''}`
-                  : paymentsStatus.stripeEnabled
-                    ? 'Pagamento Online Ativo (PIX • Cartão de Crédito)'
-                    : paymentsStatus.gatewayProvider === 'mercadopago'
-                      ? 'Gateway Conectado'
-                      : 'Modo Sandbox / Manual'}
+                  ? `Efí Bank PIX (${paymentsStatus.efiSandbox ? 'Homologação' : 'Produção'})`
+                  : paymentsStatus.gatewayProvider === 'mercadopago'
+                    ? 'Mercado Pago Conectado'
+                    : 'Modo Sandbox / Manual'}
               </div>
-              <div style={{ fontSize: '0.73rem', color: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled) ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+              <div style={{ fontSize: '0.73rem', color: paymentsStatus.efiPixActive ? '#94A3B8' : '#64748B', marginTop: 2 }}>
                 {paymentsStatus.efiPixActive
                   ? `PIX e Carteira pela Efí Bank${paymentsStatus.efiDriverPixSendEnabled ? ' • Envio de Saque PIX API ativo' : ''}${paymentsStatus.efiSplitEnabled ? ' • Split Efí ativo' : ''}.`
-                  : paymentsStatus.stripeEnabled
-                    ? 'Pré-autorização de Cartão de Crédito e PIX dinâmico com confirmação automática ativos.'
-                    : 'Configure a Efí Bank (Certificado .p12, PIX, Split e Repasses) na aba dedicada do Painel Master.'}
+                  : 'Configure a Efí Bank (Certificado .p12, PIX, Split e Repasses) na aba dedicada do Painel Master.'}
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -911,12 +904,12 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   fontWeight: 800,
                   padding: '4px 10px',
                   borderRadius: 999,
-                  backgroundColor: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled) ? 'rgba(118, 216, 0, 0.16)' : '#E2E8F0',
-                  border: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled) ? '1px solid rgba(118, 216, 0, 0.4)' : '1px solid #CBD5E1',
-                  color: (paymentsStatus.efiPixActive || paymentsStatus.stripeEnabled) ? '#BEF264' : '#334155'
+                  backgroundColor: paymentsStatus.efiPixActive ? 'rgba(118, 216, 0, 0.16)' : '#E2E8F0',
+                  border: paymentsStatus.efiPixActive ? '1px solid rgba(118, 216, 0, 0.4)' : '1px solid #CBD5E1',
+                  color: paymentsStatus.efiPixActive ? '#BEF264' : '#334155'
                 }}
               >
-                {paymentsStatus.efiPixActive ? 'Efí Bank Conectada' : paymentsStatus.stripeEnabled ? 'Gateway Conectado' : 'Sandbox'}
+                {paymentsStatus.efiPixActive ? 'Efí Bank Conectada' : paymentsStatus.gatewayProvider === 'mercadopago' ? 'Gateway Conectado' : 'Sandbox'}
               </span>
               {onOpenEfiConfig && (
                 <button

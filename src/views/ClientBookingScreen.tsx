@@ -33,8 +33,6 @@ import { TrustedContactsModal } from '../components/TrustedContactsModal';
 import { SafetyCenterModal } from '../components/SafetyCenterModal';
 import { RideCheckAlertModal } from '../components/RideCheckAlertModal';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
-import { StripeCardForm, confirmStripe3dsPaymentIntent } from '../components/StripeCardForm';
-import { StripeWalletCheckout } from '../components/StripeWalletCheckout';
 import { RideSearchingStageCard } from '../components/RideSearchingStageCard';
 import { PixQrCode } from '../components/PixQrCode';
 import { RideCancelModal } from '../components/RideCancelModal';
@@ -111,11 +109,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [showExtraOptions, setShowExtraOptions] = useState<boolean>(false);
 
   const [paymentsConfig, setPaymentsConfig] = useState<{
-    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
     efiEnabled?: boolean;
     efiPixActive?: boolean;
-    stripeEnabled: boolean;
-    stripePublishableKey: string;
     mercadopagoEnabled: boolean;
     mercadopagoPublicKey: string;
     autoPixPayoutEnabled: boolean;
@@ -123,8 +119,6 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     gatewayProvider: 'sandbox',
     efiEnabled: false,
     efiPixActive: false,
-    stripeEnabled: false,
-    stripePublishableKey: String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim(),
     mercadopagoEnabled: false,
     mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
     autoPixPayoutEnabled: false
@@ -316,54 +310,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   }, [origin]);
 
-  // Carrega configuração ativa do gateway de pagamento (Stripe / Mercado Pago / Sandbox)
+  // Carrega configuração ativa do gateway de pagamento (Efí Bank / Mercado Pago / Sandbox)
   useEffect(() => {
     StorageService.fetchPaymentsConfig().then(setPaymentsConfig).catch(() => {});
-  }, []);
-
-  // Finaliza corrida automaticamente após retorno do Apple Pay / Stripe Checkout
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const sessionId = String(params.get('stripe_checkout_session_id') || '').trim();
-    const canceled = params.get('stripe_checkout_canceled');
-    if (!sessionId && !canceled) return;
-
-    const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
-    window.history.replaceState({}, '', cleanUrl);
-
-    if (canceled && !sessionId) {
-      setRequestError('Pagamento no Apple Pay cancelado antes da confirmação.');
-      return;
-    }
-
-    let cancelledFlag = false;
-    setIsSubmitting(true);
-    StorageService.completeStripeCheckoutSession(sessionId)
-      .then((res) => {
-        if (cancelledFlag) return;
-        setIsSubmitting(false);
-        if (res.ok && res.ride) {
-          setActiveRide(res.ride);
-          onRideBooked(res.ride);
-          try {
-            confetti({ particleCount: 60, spread: 55, origin: { y: 0.6 } });
-          } catch {
-            // ignore
-          }
-        } else {
-          setRequestError(res.error || 'Não foi possível concluir a autorização via Apple Pay.');
-        }
-      })
-      .catch(() => {
-        if (!cancelledFlag) {
-          setIsSubmitting(false);
-          setRequestError('Erro ao verificar autorização do pagamento Apple Pay.');
-        }
-      });
-    return () => {
-      cancelledFlag = true;
-    };
   }, []);
 
   // Carrega cartões tokenizados salvos
@@ -687,7 +636,6 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     cardId?: string;
     cardLast4?: string;
     cardBrand?: string;
-    stripePaymentIntentId?: string;
     validation: { isDeliveryOrder: boolean; deliveryDetails: RideDeliveryDetails | null };
   }) => {
     const now = new Date();
@@ -721,7 +669,6 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       cardId: cardMeta?.cardId,
       cardLast4: cardMeta?.cardLast4,
       cardBrand: cardMeta?.cardBrand,
-      stripePaymentIntentId: cardMeta?.stripePaymentIntentId,
       notes: v.isDeliveryOrder
         ? (deliveryInstructions.trim() || `Entrega: ${v.deliveryDetails?.itemDescription || ''}`)
         : notes,
@@ -729,30 +676,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     };
   };
 
-  const handleStartApplePayCheckout = async () => {
-    const validation = validateBookingBeforePayment();
-    if (!validation.ok) return;
-
-    setIsSubmitting(true);
-    setRequestError('');
-    const draftPayload = buildValidatedRideDraft('apple_pay', {
-      cardBrand: 'Apple Pay',
-      validation: {
-        isDeliveryOrder: validation.isDeliveryOrder,
-        deliveryDetails: validation.deliveryDetails || null
-      }
-    });
-    const sessionRes = await StorageService.createStripeCheckoutSession(draftPayload);
-    if (!sessionRes.ok || !sessionRes.checkoutUrl) {
-      setIsSubmitting(false);
-      setRequestError(sessionRes.error || 'Não foi possível iniciar o pagamento via Apple Pay.');
-      return;
-    }
-    window.location.assign(sessionRes.checkoutUrl);
-  };
-
   const submitBookingRequest = async (overrides?: {
-    stripePaymentIntentId?: string;
     paymentMethodOverride?: PaymentMethod;
     cardBrandOverride?: string;
   }) => {
@@ -760,53 +684,25 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     if (!validation.ok) return;
 
     const effectiveMethod = overrides?.paymentMethodOverride || paymentMethod;
-    if (effectiveMethod === 'apple_pay' && !overrides?.stripePaymentIntentId) {
-      await handleStartApplePayCheckout();
-      return;
-    }
-
-    const isCard = effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito' || effectiveMethod === 'apple_pay';
+    const isCard = effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito';
     const chosenCard = savedCards.find(c => c.id === selectedCardId);
-    if ((effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito') && !overrides?.stripePaymentIntentId && !chosenCard) {
+    if (isCard && !chosenCard) {
       setIsAddingCardModal(true);
       return;
     }
 
     setIsSubmitting(true);
     const baseRequestPayload = buildValidatedRideDraft(effectiveMethod, {
-      cardId: isCard && !overrides?.stripePaymentIntentId ? chosenCard?.id : undefined,
-      cardLast4: isCard && !overrides?.stripePaymentIntentId ? chosenCard?.last4 : undefined,
-      cardBrand: overrides?.cardBrandOverride || (effectiveMethod === 'apple_pay' ? 'Apple Pay' : isCard ? chosenCard?.brand : undefined),
-      stripePaymentIntentId: overrides?.stripePaymentIntentId,
+      cardId: isCard ? chosenCard?.id : undefined,
+      cardLast4: isCard ? chosenCard?.last4 : undefined,
+      cardBrand: overrides?.cardBrandOverride || (isCard ? chosenCard?.brand : undefined),
       validation: {
         isDeliveryOrder: validation.isDeliveryOrder,
         deliveryDetails: validation.deliveryDetails || null
       }
     });
 
-    let res = await StorageService.requestRideOnDemand(baseRequestPayload);
-
-    if (
-      !res.ok &&
-      res.requiresAction &&
-      res.clientSecret &&
-      res.paymentIntentId &&
-      paymentsConfig.stripePublishableKey
-    ) {
-      const actionRes = await confirmStripe3dsPaymentIntent(
-        paymentsConfig.stripePublishableKey,
-        res.clientSecret
-      );
-      if (!actionRes.ok) {
-        setIsSubmitting(false);
-        setRequestError(actionRes.error || 'Autenticação 3DS do cartão não concluída.');
-        return;
-      }
-      res = await StorageService.requestRideOnDemand({
-        ...baseRequestPayload,
-        stripePaymentIntentId: actionRes.paymentIntentId || res.paymentIntentId
-      });
-    }
+    const res = await StorageService.requestRideOnDemand(baseRequestPayload);
 
     setIsSubmitting(false);
 
@@ -948,7 +844,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               fontWeight: 800
             }}>
               <PaymentMethodIcon method="pix" size={14} />
-              <span>{(paymentsConfig.efiPixActive || paymentsConfig.stripeEnabled) ? 'PIX Instantâneo' : 'PIX Gateway'}</span>
+              <span>{paymentsConfig.efiPixActive ? 'PIX Instantâneo' : 'PIX Gateway'}</span>
               {pixRemainingLabel && (
                 <span style={{
                   display: 'inline-flex',
@@ -1167,7 +1063,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             )}
 
             {/* Botão de Simulação do Webhook apenas em desenvolvimento sem gateway real ativo */}
-            {import.meta.env.DEV && !paymentsConfig.efiPixActive && !paymentsConfig.stripeEnabled && (
+            {import.meta.env.DEV && !paymentsConfig.efiPixActive && (
               <button
                 type="button"
                 onClick={handleSimulatePixWebhook}
@@ -2009,7 +1905,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         onSelect={(p) => setDestination(p)}
       />
 
-      {/* Tela Cheia de Cadastro Seguro de Cartão (100% Personalizado Kavro Drive + Stripe) */}
+      {/* Tela Cheia de Cadastro Seguro de Cartão (Kavro Pay) */}
       {isAddingCardModal && (
         <div style={{
           position: 'fixed',
@@ -2096,25 +1992,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               flexDirection: 'column',
               padding: '20px 20px calc(24px + env(safe-area-inset-bottom, 0px)) 20px'
             }}>
-              {paymentsConfig.stripePublishableKey ? (
-                <StripeCardForm
-                  publishableKey={paymentsConfig.stripePublishableKey}
-                  clientId={currentUser?.id}
-                  clientPhone={currentUser?.phone}
-                  clientEmail={currentUser?.email}
-                  defaultHolderName={currentUser?.name || cardHolder}
-                  cardType={cardType}
-                  onChangeCardType={setCardType}
-                  onCardSaved={(savedCard) => {
-                    const nextCards = [savedCard, ...savedCards];
-                    setSavedCards(nextCards);
-                    setSelectedCardId(savedCard.id);
-                    setPaymentMethod(savedCard.cardType);
-                    setIsAddingCardModal(false);
-                  }}
-                />
-              ) : (
-                <form onSubmit={handleSaveNewCard} style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
+              <form onSubmit={handleSaveNewCard} style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1 }}>
                   <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
                     <button
                       type="button"
@@ -2204,8 +2082,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                       {isSavingCard ? 'Tokenizando...' : 'Salvar e usar cartão'}
                     </button>
                   </div>
-                </form>
-              )}
+              </form>
             </div>
           </div>
         </div>

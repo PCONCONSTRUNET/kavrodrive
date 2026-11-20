@@ -240,29 +240,6 @@ const ClientApp: React.FC<{
     return () => window.removeEventListener('up_rides_updated', handleRideChange);
   }, [resumedBookingRide]);
 
-  // Conclui recarga da Carteira após retorno do Checkout Hospedado
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const params = new URLSearchParams(window.location.search);
-    const walletSessionId = String(params.get('wallet_checkout_session_id') || '').trim();
-    const walletCanceled = params.get('wallet_checkout_canceled');
-    if (!walletSessionId && !walletCanceled) return;
-
-    const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
-    window.history.replaceState({}, '', cleanUrl);
-
-    if (!walletSessionId) return;
-    StorageService.completeWalletTopupCheckoutSession(walletSessionId)
-      .then((res) => {
-        if (res.ok && res.wallet) {
-          const freshUser = StorageService.getCurrentUser();
-          if (freshUser) setCurrentUser(freshUser);
-          setCurrentTab('perfil');
-        }
-      })
-      .catch(() => {});
-  }, []);
-
   // Garante que o aparelho do cliente seja identificado no OneSignal com o telefone (cli-DDDNUMERO)
   useEffect(() => {
     if (currentUser?.phone) {

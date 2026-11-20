@@ -25,9 +25,6 @@ delete process.env.TURNSTILE_SECRET_KEY;
 delete process.env.RESEND_API_KEY;
 delete process.env.OTP_WEBHOOK_URL;
 delete process.env.ONESIGNAL_REST_API_KEY;
-delete process.env.STRIPE_SECRET_KEY;
-delete process.env.STRIPE_PUBLISHABLE_KEY;
-delete process.env.STRIPE_WEBHOOK_SECRET;
 delete process.env.VERCEL;
 
 const originalStoreSnapshot = JSON.parse(JSON.stringify(db.localStore));
@@ -1489,531 +1486,228 @@ test('Taxa geral da plataforma com Valor Fixo + Porcentagem aplicada em PIX, Din
   assert.equal(completeCash.json.ride.driverNetAmount, 82.5);
 });
 
-test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual capture, PIX BRL e webhook Stripe-Signature', async () => {
-  const StripeSdk = require('stripe');
-  const stripeGateway = require('../server/stripeGateway.cjs');
-  const prevSecret = process.env.STRIPE_SECRET_KEY;
-  const prevPub = process.env.STRIPE_PUBLISHABLE_KEY;
-  const prevWh = process.env.STRIPE_WEBHOOK_SECRET;
+test('Gateway de Pagamentos completo (sem Stripe): tokenizacao de cartao, pre-autorizacao, PIX BRL e quitacao de divida', async () => {
+  const prevCfg = db.localStore.system_config?.default?.config || {};
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify({
+      ...prevCfg,
+      platformCommissionPercent: 20,
+      platformCommissionFixed: 0,
+      paymentMethodCommissionPercents: { pix: 20, cartao_credito: 20, dinheiro: 20 },
+      activePaymentMethods: ['pix', 'cartao_credito', 'carteira', 'dinheiro']
+    })]
+  );
 
-  const webhookSecret = 'whsec_test_kavro_stripe_secret_123456';
-  process.env.STRIPE_SECRET_KEY = 'sk_test_mock_kavro_123';
-  process.env.STRIPE_PUBLISHABLE_KEY = 'pk_test_mock_kavro_123';
-  process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
+  // 1) /api/payments/config nao expoe mais chaves Stripe
+  const cfgRes = await apiJson('/api/payments/config');
+  assert.equal(cfgRes.status, 200);
+  assert.ok(['efibank', 'mercadopago', 'sandbox'].includes(cfgRes.json.gatewayProvider));
+  assert.equal(cfgRes.json.stripeEnabled, undefined);
+  assert.equal(cfgRes.json.stripePublishableKey, undefined);
 
-  const piStore = new Map();
-  const csStore = new Map();
-  const capturedCalls = [];
-  const canceledCalls = [];
-  let seq = 1;
-  const realStripeForWebhook = new StripeSdk(process.env.STRIPE_SECRET_KEY);
-
-  stripeGateway._setStripeClientFactoryForTest(() => ({
-    customers: {
-      create: async (params) => ({ id: `cus_test_${seq++}`, ...params })
-    },
-    checkout: {
-      sessions: {
-        create: async (params) => {
-          assert.equal(params.payment_method_types, undefined);
-          const sid = `cs_test_${seq++}`;
-          const unitAmount = params.line_items?.[0]?.price_data?.unit_amount || 0;
-          const piId = `pi_cs_${seq++}`;
-          const pi = {
-            id: piId,
-            client_secret: `${piId}_secret_test`,
-            amount: unitAmount,
-            amount_capturable: unitAmount,
-            amount_received: 0,
-            currency: 'brl',
-            status: 'requires_capture',
-            metadata: params.payment_intent_data?.metadata || {},
-            latest_charge: {
-              id: `ch_cs_${seq}`,
-              payment_method_details: {
-                card: {
-                  brand: 'visa',
-                  last4: '8888',
-                  wallet: { type: 'apple_pay' }
-                }
-              }
-            }
-          };
-          piStore.set(piId, pi);
-          const session = {
-            id: sid,
-            url: `https://checkout.stripe.test/pay/${sid}`,
-            status: 'complete',
-            payment_status: 'paid',
-            amount_total: unitAmount,
-            payment_intent: pi,
-            metadata: params.metadata || {}
-          };
-          csStore.set(sid, session);
-          return session;
-        },
-        retrieve: async (id) => csStore.get(id)
-      }
-    },
-    setupIntents: {
-      create: async (params) => ({
-        id: `seti_test_${seq++}`,
-        client_secret: `seti_test_secret_${seq}`,
-        customer: params.customer,
-        status: 'requires_payment_method'
-      }),
-      retrieve: async (id) => ({
-        id,
-        status: 'succeeded',
-        customer: 'cus_test_1',
-        payment_method: 'pm_test_visa_4242'
-      })
-    },
-    paymentMethods: {
-      retrieve: async (id) => ({
-        id,
-        customer: 'cus_test_1',
-        card: {
-          brand: 'visa',
-          last4: '4242',
-          exp_month: 12,
-          exp_year: 2030,
-          funding: 'credit'
-        }
-      }),
-      attach: async (id, { customer }) => ({ id, customer })
-    },
-    paymentIntents: {
-      create: async (params) => {
-        const id = `pi_test_${seq++}`;
-        const isPix = params?.payment_method_data?.type === 'pix';
-        const pi = {
-          id,
-          client_secret: `${id}_secret_test`,
-          amount: params.amount,
-          amount_capturable: isPix ? 0 : params.amount,
-          amount_received: 0,
-          currency: params.currency,
-          status: isPix ? 'requires_action' : 'requires_capture',
-          metadata: params.metadata || {},
-          latest_charge: isPix ? null : `ch_test_${seq}`,
-          next_action: isPix
-            ? {
-                type: 'pix_display_qr_code',
-                pix_display_qr_code: {
-                  data: `000201010212STRIPEPIX${id}`,
-                  image_url_png: `https://stripe.test/qr/${id}.png`,
-                  expires_at: Math.floor(Date.now() / 1000) + 900
-                }
-              }
-            : null
-        };
-        piStore.set(id, pi);
-        return pi;
-      },
-      retrieve: async (id) => piStore.get(id),
-      capture: async (id, { amount_to_capture }) => {
-        const pi = piStore.get(id);
-        pi.status = 'succeeded';
-        pi.amount_received = amount_to_capture;
-        capturedCalls.push({ id, amount_to_capture });
-        return pi;
-      },
-      cancel: async (id) => {
-        const pi = piStore.get(id);
-        pi.status = 'canceled';
-        canceledCalls.push(id);
-        return pi;
-      }
-    },
-    refunds: {
-      create: async ({ payment_intent, amount }) => ({ id: `re_test_${seq++}`, payment_intent, amount })
-    },
-    webhooks: {
-      constructEvent: (raw, sig, sec) => realStripeForWebhook.webhooks.constructEvent(raw, sig, sec)
+  // 2) Registra passageiro e motorista
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Passageiro Pagamentos',
+      phone: '(48) 99444-5566',
+      document: '88822255500',
+      email: `pay.cli.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
     }
-  }));
+  });
+  assert.equal(cliReg.status, 200);
+  const cliToken = cliReg.json.clientToken;
+  const cliId = cliReg.json.client.id;
 
-  try {
-    // garante taxa limpa padrão (20%)
-    const prevCfg = db.localStore.system_config?.default?.config || {};
-    await db.query(
-      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
-       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
-      [JSON.stringify({
-        ...prevCfg,
-        platformCommissionPercent: 20,
-        platformCommissionFixed: 0,
-        paymentMethodCommissionPercents: { pix: 20, cartao_credito: 20, cartao_debito: 20, dinheiro: 20 },
-        activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro']
-      })]
-    );
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Motorista Pagamentos',
+      phone: '(48) 99444-6677',
+      email: `pay.drv.${Date.now()}@kavro.test`,
+      document: '44556677889',
+      password: '1234',
+      vehicleBrand: 'Toyota',
+      vehicleModel: 'Corolla',
+      vehicleColor: 'Preto',
+      vehiclePlate: 'KVR2B26',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvToken = drvReg.json.driverToken;
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({
+    ...drvObj,
+    approvalStatus: 'aprovado',
+    isOnline: true,
+    kyc: { status: 'aprovado' }
+  });
 
-    // 1) /api/payments/config expõe Stripe ativo + publishableKey
-    const cfgRes = await apiJson('/api/payments/config');
-    assert.equal(cfgRes.status, 200);
-    assert.equal(cfgRes.json.gatewayProvider, 'stripe');
-    assert.equal(cfgRes.json.stripeEnabled, true);
-    assert.equal(cfgRes.json.stripePublishableKey, 'pk_test_mock_kavro_123');
+  // 3) Tokenizacao direta de cartao de credito
+  const cardSaveRes = await apiJson('/api/payments/cards', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      holderName: 'PASSAGEIRO PAGAMENTOS',
+      cardNumber: '4111111111114242',
+      expMonth: '12',
+      expYear: '2030',
+      cvv: '123',
+      cardType: 'cartao_credito'
+    }
+  });
+  assert.equal(cardSaveRes.status, 200);
+  assert.equal(cardSaveRes.json.card.brand, 'Visa');
+  assert.equal(cardSaveRes.json.card.last4, '4242');
 
-    // 2) Registra passageiro e motorista
-    const cliReg = await apiJson('/api/clients/register', {
-      method: 'POST',
-      body: {
-        name: 'Passageiro Stripe',
-        phone: '(48) 99444-5566',
-        document: '88822255500',
-        email: `stripe.cli.${Date.now()}@kavro.test`,
-        password: '1234',
-        termsAcceptance: { accepted: true }
-      }
-    });
-    assert.equal(cliReg.status, 200);
-    const cliToken = cliReg.json.clientToken;
-    const cliId = cliReg.json.client.id;
+  // 4) Corrida no Cartao: pre-autoriza -> motorista aceita, inicia e finaliza -> captura
+  const cardRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Pagamentos',
+      clientPhone: '(48) 99444-5566',
+      originAddress: 'Origem Card',
+      destinationAddress: 'Destino Card',
+      distanceKm: 25,
+      durationMin: 24,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'cartao_credito',
+      cardId: cardSaveRes.json.card.id
+    }
+  });
+  assert.equal(cardRide.status, 200);
+  assert.equal(cardRide.json.ride.paymentStatus, 'autorizado');
+  const cardRideId = cardRide.json.ride.id;
 
-    const drvReg = await apiJson('/api/drivers/register', {
-      method: 'POST',
-      body: {
-        name: 'Motorista Stripe',
-        phone: '(48) 99444-6677',
-        email: `stripe.drv.${Date.now()}@kavro.test`,
-        document: '44556677889',
-        password: '1234',
-        vehicleBrand: 'Toyota',
-        vehicleModel: 'Corolla',
-        vehicleColor: 'Preto',
-        vehiclePlate: 'STP2B26',
-        termsAcceptance: { accepted: true }
-      }
-    });
-    assert.equal(drvReg.status, 200);
-    const drvToken = drvReg.json.driverToken;
-    const drvObj = await finance.getDriverById(drvReg.json.driver.id);
-    await finance.saveDriverRecord({
-      ...drvObj,
-      approvalStatus: 'aprovado',
-      isOnline: true,
-      kyc: { status: 'aprovado' }
-    });
+  const accCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(accCard.status, 200);
 
-    // 3) SetupIntent + salvar cartão Stripe Elements
-    const siRes = await apiJson('/api/payments/stripe/setup-intent', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: { clientId: cliId }
-    });
-    assert.equal(siRes.status, 200);
-    assert.ok(siRes.json.clientSecret.startsWith('seti_test_secret_'));
+  const startCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { status: 'em_andamento', boardingPin: cardRide.json.ride.boardingPin }
+  });
+  assert.equal(startCard.status, 200);
 
-    const cardSaveRes = await apiJson('/api/payments/cards', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        holderName: 'PASSAGEIRO STRIPE',
-        cardType: 'cartao_credito',
-        stripeSetupIntentId: siRes.json.setupIntentId,
-        stripePaymentMethodId: 'pm_test_visa_4242'
-      }
-    });
-    assert.equal(cardSaveRes.status, 200);
-    assert.equal(cardSaveRes.json.card.brand, 'Visa');
-    assert.equal(cardSaveRes.json.card.last4, '4242');
-    assert.match(cardSaveRes.json.card.gatewayToken, /^stripe_pm_cus_test_1:pm_test_visa_4242$/);
+  const completeCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/complete`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(completeCard.status, 200);
+  assert.equal(completeCard.json.ride.paymentStatus, 'confirmado');
 
-    // 4) Corrida no Cartão: pré-autoriza R$ 100,00 -> motorista aceita, inicia e finaliza -> captura via Stripe
-    const cardRide = await apiJson('/api/rides', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        clientName: 'Passageiro Stripe',
-        clientPhone: '(48) 99444-5566',
-        originAddress: 'Origem Card',
-        destinationAddress: 'Destino Card',
-        distanceKm: 25,
-        durationMin: 24,
-        time: '14:00',
-        category: 'kavro_go',
-        paymentMethod: 'cartao_credito',
-        cardId: cardSaveRes.json.card.id
-      }
-    });
-    assert.equal(cardRide.status, 200);
-    assert.equal(cardRide.json.ride.paymentStatus, 'autorizado');
-    const cardRideId = cardRide.json.ride.id;
+  // 5) Cancelamento de pre-autorizacao antes de capturar
+  const cancelHoldRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Pagamentos',
+      clientPhone: '(48) 99444-5566',
+      originAddress: 'Origem Hold',
+      destinationAddress: 'Destino Hold',
+      distanceKm: 25,
+      durationMin: 24,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'cartao_credito',
+      cardId: cardSaveRes.json.card.id
+    }
+  });
+  assert.equal(cancelHoldRide.status, 200);
+  const cancelHoldRes = await apiJson(`/api/rides/${encodeURIComponent(cancelHoldRide.json.ride.id)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cliToken },
+    body: { status: 'cancelada', cancelledBy: 'passenger' }
+  });
+  assert.equal(cancelHoldRes.status, 200);
 
-    const accCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/accept`, {
-      method: 'POST',
-      headers: { 'x-driver-token': drvToken },
-      body: { driverId: drvObj.id }
-    });
-    assert.equal(accCard.status, 200);
+  // 6) Corrida PIX + webhook de confirmacao
+  const pixRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Pagamentos',
+      clientPhone: '(48) 99444-5566',
+      originAddress: 'Origem Pix',
+      destinationAddress: 'Destino Pix',
+      distanceKm: 25,
+      durationMin: 24,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'pix'
+    }
+  });
+  assert.equal(pixRide.status, 200);
+  assert.equal(pixRide.json.ride.status, 'aguardando_pagamento');
+  assert.ok(String(pixRide.json.ride.pixCopyPaste || '').length > 20);
 
-    const startCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/status`, {
-      method: 'PATCH',
-      headers: { 'x-driver-token': drvToken },
-      body: { status: 'em_andamento', boardingPin: cardRide.json.ride.boardingPin }
-    });
-    assert.equal(startCard.status, 200);
+  const whConfirmRes = await apiJson('/api/payments/webhook', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      event: 'payment.confirmed',
+      rideId: pixRide.json.ride.id,
+      amount: pixRide.json.ride.totalPrice,
+      gatewayTxId: pixRide.json.ride.pixCopyPaste ? `gw_pix_${pixRide.json.ride.id}` : undefined
+    }
+  });
+  assert.equal(whConfirmRes.status, 200);
+  assert.equal(whConfirmRes.json.ok, true);
+  assert.equal(whConfirmRes.json.ride.paymentStatus, 'confirmado');
+  assert.equal(whConfirmRes.json.ride.status, 'aguardando_confirmacao');
 
-    const completeCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/complete`, {
-      method: 'POST',
-      headers: { 'x-driver-token': drvToken },
-      body: { driverId: drvObj.id }
-    });
-    assert.equal(completeCard.status, 200);
-    assert.equal(completeCard.json.ride.paymentStatus, 'confirmado');
-    assert.equal(capturedCalls.length, 1);
-    assert.equal(capturedCalls[0].amount_to_capture, 10000);
+  // 7) Quitacao de divida de motorista via PIX + webhook
+  await finance.recordLedgerEntry({
+    idempotencyKey: `debt_seed_${Date.now()}`,
+    driverId: drvObj.id,
+    driverName: drvObj.name,
+    entryType: 'cash_commission_debit',
+    paymentMethod: 'dinheiro',
+    grossAmount: 50,
+    commissionPercent: 20,
+    commissionAmount: 10,
+    driverNetAmount: 40,
+    balanceDelta: -10,
+    balanceBucket: 'cash_debt',
+    status: 'confirmado',
+    description: 'Divida dinheiro teste'
+  });
+  const debtPixRes = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}/debt/pix`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { amount: 10 }
+  });
+  assert.equal(debtPixRes.status, 200);
+  assert.ok(String(debtPixRes.json.pixCopyPaste || '').length > 20);
 
-    // 5) Cancelamento de pré-autorização antes de capturar libera o hold na Stripe
-    const cancelHoldRide = await apiJson('/api/rides', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        clientName: 'Passageiro Stripe',
-        clientPhone: '(48) 99444-5566',
-        originAddress: 'Origem Hold',
-        destinationAddress: 'Destino Hold',
-        distanceKm: 25,
-        durationMin: 24,
-        time: '14:00',
-        category: 'kavro_go',
-        paymentMethod: 'cartao_credito',
-        cardId: cardSaveRes.json.card.id
-      }
-    });
-    assert.equal(cancelHoldRide.status, 200);
-    const holdTxBefore = await finance.getPaymentTxByRide(cancelHoldRide.json.ride.id);
-    const cancelHoldRes = await apiJson(`/api/rides/${encodeURIComponent(cancelHoldRide.json.ride.id)}/status`, {
-      method: 'PATCH',
-      headers: { 'x-client-token': cliToken },
-      body: { status: 'cancelada', cancelledBy: 'passenger' }
-    });
-    assert.equal(cancelHoldRes.status, 200);
-    assert.ok(canceledCalls.includes(holdTxBefore.gatewayTxId));
-
-    // 6) Corrida PIX via Stripe + Webhook Stripe-Signature
-    const pixRide = await apiJson('/api/rides', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        clientName: 'Passageiro Stripe',
-        clientPhone: '(48) 99444-5566',
-        originAddress: 'Origem Pix',
-        destinationAddress: 'Destino Pix',
-        distanceKm: 25,
-        durationMin: 24,
-        time: '14:00',
-        category: 'kavro_go',
-        paymentMethod: 'pix'
-      }
-    });
-    assert.equal(pixRide.status, 200);
-    assert.equal(pixRide.json.ride.status, 'aguardando_pagamento');
-    assert.match(pixRide.json.ride.pixCopyPaste, /^000201010212STRIPEPIXpi_test_/);
-    const pixTx = await finance.getPaymentTxByRide(pixRide.json.ride.id);
-
-    // Assinatura falsa deve ser rejeitada
-    const badWhRes = await fetch(`${baseUrl}/api/webhooks/stripe`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'stripe-signature': 't=1,v1=deadbeef' },
-      body: JSON.stringify({ id: 'evt_bad', type: 'payment_intent.succeeded', data: { object: { id: pixTx.gatewayTxId } } })
-    });
-    assert.equal(badWhRes.status, 400);
-
-    // Webhook autenticado via HMAC Stripe-Signature confirma pagamento e libera corrida
-    const evtPayload = JSON.stringify({
-      id: 'evt_pix_ok_1',
-      object: 'event',
-      type: 'payment_intent.succeeded',
-      data: {
-        object: {
-          id: pixTx.gatewayTxId,
-          object: 'payment_intent',
-          amount: 10000,
-          amount_received: 10000,
-          metadata: { purpose: 'ride_pix', rideId: pixRide.json.ride.id }
-        }
-      }
-    });
-    const validSig = realStripeForWebhook.webhooks.generateTestHeaderString({
-      payload: evtPayload,
-      secret: webhookSecret
-    });
-    const goodWhRes = await fetch(`${baseUrl}/api/webhooks/stripe`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'stripe-signature': validSig },
-      body: evtPayload
-    });
-    const goodWhJson = await goodWhRes.json();
-    assert.equal(goodWhRes.status, 200);
-    assert.equal(goodWhJson.ok, true);
-    assert.equal(goodWhJson.ride.paymentStatus, 'confirmado');
-    assert.equal(goodWhJson.ride.status, 'aguardando_confirmacao');
-
-    // 7) Quitação de dívida de motorista via PIX Stripe + webhook
-    await finance.recordLedgerEntry({
-      idempotencyKey: `debt_seed_st_${Date.now()}`,
+  const debtWhRes = await apiJson('/api/payments/webhook', {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: {
+      event: 'debt.confirmed',
       driverId: drvObj.id,
-      driverName: drvObj.name,
-      entryType: 'cash_commission_debit',
-      paymentMethod: 'dinheiro',
-      grossAmount: 50,
-      commissionPercent: 20,
-      commissionAmount: 10,
-      driverNetAmount: 40,
-      balanceDelta: -10,
-      balanceBucket: 'cash_debt',
-      status: 'confirmado',
-      description: 'Dívida dinheiro teste Stripe'
-    });
-    const debtPixRes = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}/debt/pix`, {
-      method: 'POST',
-      headers: { 'x-driver-token': drvToken },
-      body: { amount: 10 }
-    });
-    assert.equal(debtPixRes.status, 200);
-    assert.equal(debtPixRes.json.provider, 'stripe');
-
-    const debtEvtPayload = JSON.stringify({
-      id: 'evt_debt_ok_1',
-      object: 'event',
-      type: 'payment_intent.succeeded',
-      data: {
-        object: {
-          id: debtPixRes.json.gatewayTxId,
-          object: 'payment_intent',
-          amount: 1000,
-          amount_received: 1000,
-          metadata: { purpose: 'driver_debt_pix', driverId: drvObj.id }
-        }
-      }
-    });
-    const debtSig = realStripeForWebhook.webhooks.generateTestHeaderString({
-      payload: debtEvtPayload,
-      secret: webhookSecret
-    });
-    const debtWhRes = await fetch(`${baseUrl}/api/webhooks/stripe`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'stripe-signature': debtSig },
-      body: debtEvtPayload
-    });
-    const debtWhJson = await debtWhRes.json();
-    assert.equal(debtWhRes.status, 200);
-    assert.equal(debtWhJson.wallet.debtBalance, 0);
-
-    // 8) Wallet Express / Apple Pay: cria hold manual para tarifa oficial e valida anti-adulteracao
-    const walletIntentRes = await apiJson('/api/payments/stripe/wallet-intent', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        category: 'kavro_go',
-        distanceKm: 10,
-        durationMin: 15,
-        time: '14:00'
-      }
-    });
-    assert.equal(walletIntentRes.status, 200);
-    assert.ok(walletIntentRes.json.clientSecret);
-    assert.ok(walletIntentRes.json.paymentIntentId);
-    assert.equal(walletIntentRes.json.amountBrl, 47.5);
-
-    const walletRideRes = await apiJson('/api/rides', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        clientName: 'Cliente Stripe',
-        clientPhone: '(48) 99988-7766',
-        originAddress: 'Origem Wallet, 10',
-        destinationAddress: 'Destino Wallet, 50',
-        distanceKm: 10,
-        durationMin: 15,
-        time: '14:00',
-        category: 'kavro_go',
-        paymentMethod: 'cartao_credito',
-        cardBrand: 'Apple Pay',
-        stripePaymentIntentId: walletIntentRes.json.paymentIntentId
-      }
-    });
-    assert.equal(walletRideRes.status, 200);
-    assert.equal(walletRideRes.json.ride.paymentStatus, 'autorizado');
-    assert.equal(walletRideRes.json.ride.status, 'aguardando_confirmacao');
-
-    // Tentativa de reaproveitar hold menor (R$ 47.50) para corrida de 25km (~R$ 106.75) deve falhar (402)
-    const underpaidWalletRide = await apiJson('/api/rides', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        clientName: 'Cliente Stripe',
-        clientPhone: '(48) 99988-7766',
-        originAddress: 'Origem Longa, 10',
-        destinationAddress: 'Destino Longo, 90',
-        distanceKm: 25,
-        durationMin: 30,
-        time: '14:00',
-        category: 'kavro_go',
-        paymentMethod: 'cartao_credito',
-        cardBrand: 'Apple Pay',
-        stripePaymentIntentId: walletIntentRes.json.paymentIntentId
-      }
-    });
-    assert.equal(underpaidWalletRide.status, 402);
-
-    // 9) Apple Pay Checkout Session (Hosted fallback) cria corrida apple_pay idempotente
-    const csRes = await apiJson('/api/payments/stripe/checkout-session', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: {
-        clientId: cliId,
-        clientName: 'Cliente Apple Pay',
-        clientPhone: '(48) 99988-7766',
-        origin: { address: 'Origem Apple, 10', lat: -27.59, lng: -48.54 },
-        destination: { address: 'Destino Apple, 90', lat: -27.61, lng: -48.51 },
-        distanceKm: 10,
-        durationMin: 15,
-        time: '14:00',
-        category: 'kavro_go',
-        paymentMethod: 'apple_pay'
-      }
-    });
-    assert.equal(csRes.status, 200);
-    assert.ok(csRes.json.sessionId);
-    assert.ok(csRes.json.checkoutUrl);
-
-    const csDoneRes = await apiJson('/api/payments/stripe/checkout-complete', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: { sessionId: csRes.json.sessionId }
-    });
-    assert.equal(csDoneRes.status, 200);
-    assert.equal(csDoneRes.json.ride.paymentMethod, 'apple_pay');
-    assert.equal(csDoneRes.json.ride.paymentStatus, 'autorizado');
-    assert.equal(csDoneRes.json.ride.cardBrand, 'Apple Pay');
-    assert.equal(csDoneRes.json.ride.cardLast4, '8888');
-
-    // Repetir checkout-complete para a mesma sessão retorna a mesma corrida de forma idempotente
-    const csDoneAgain = await apiJson('/api/payments/stripe/checkout-complete', {
-      method: 'POST',
-      headers: { 'x-client-token': cliToken },
-      body: { sessionId: csRes.json.sessionId }
-    });
-    assert.equal(csDoneAgain.status, 200);
-    assert.equal(csDoneAgain.json.idempotent, true);
-    assert.equal(csDoneAgain.json.ride.id, csDoneRes.json.ride.id);
-  } finally {
-    stripeGateway._setStripeClientFactoryForTest(null);
-    if (prevSecret === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = prevSecret;
-    if (prevPub === undefined) delete process.env.STRIPE_PUBLISHABLE_KEY; else process.env.STRIPE_PUBLISHABLE_KEY = prevPub;
-    if (prevWh === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = prevWh;
-  }
+      amount: 10,
+      gatewayTxId: debtPixRes.json.gatewayTxId
+    }
+  });
+  assert.equal(debtWhRes.status, 200);
+  assert.equal(debtWhRes.json.wallet.debtBalance, 0);
 });
 
 test('Cadastro de Passageiro: exige CPF valido, bloqueia CPF invalido/duplicado e preenche Termo Digital', async () => {

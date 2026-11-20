@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const db = require('./db.cjs');
 const env = require('./env.cjs');
-const stripeGateway = require('./stripeGateway.cjs');
 const efiBankGateway = require('./efiBankGateway.cjs');
 
 function round2(n) {
@@ -360,13 +359,6 @@ async function ensureExtendedSchema() {
       CREATE INDEX IF NOT EXISTS idx_rides_client_id ON public.rides (client_id);
       CREATE INDEX IF NOT EXISTS idx_financial_ledger_driver_created ON public.financial_ledger (driver_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_sos_alerts_active_updated ON public.sos_alerts (active, updated_at DESC);
-      CREATE TABLE IF NOT EXISTS public.stripe_checkout_drafts (
-        session_id VARCHAR(128) PRIMARY KEY,
-        client_id VARCHAR(64),
-        payload_json JSONB NOT NULL,
-        created_ride_id VARCHAR(64),
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      );
     `);
     extendedSchemaReady = true;
   } catch (err) {
@@ -2256,78 +2248,52 @@ async function tokenizeAndSaveCard({
   cvv,
   cardType,
   mpCardToken,
-  holderDocument,
-  stripeSetupIntentId,
-  stripePaymentMethodId
+  holderDocument
 }) {
   await ensureExtendedSchema();
   const cardId = `card-${Date.now()}`;
   const now = new Date().toISOString();
 
   let cardObj;
-  if (stripeGateway.isStripeEnabled() && (stripeSetupIntentId || stripePaymentMethodId)) {
-    const resolved = await stripeGateway.resolveSavedCard({
-      setupIntentId: stripeSetupIntentId,
-      paymentMethodId: stripePaymentMethodId,
-      clientId,
-      clientPhone,
-      preferredCardType: cardType
-    });
-    cardObj = {
-      id: cardId,
-      clientId: clientId || '',
-      clientPhone: clientPhone || '',
-      brand: resolved.brand,
-      last4: resolved.last4,
-      holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
-      expMonth: resolved.expMonth,
-      expYear: resolved.expYear,
-      cardType: resolved.cardType,
-      gatewayToken: resolved.gatewayToken,
-      isDefault: true,
-      createdAt: now
-    };
-  } else {
-    const digits = String(cardNumber || '').replace(/\D/g, '');
-    if (digits.length < 13 || digits.length > 19) {
-      throw new Error('Número de cartão inválido.');
-    }
-    if (!cvv || String(cvv).replace(/\D/g, '').length < 3) {
-      throw new Error('Código de segurança (CVV) inválido.');
-    }
-    const last4 = digits.slice(-4);
-    const brand = detectCardBrand(digits);
-
-    // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
-    const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
-      cardNumber: digits,
-      holderName,
-      expMonth,
-      expYear,
-      cvv,
-      holderDoc: holderDocument
-    });
-
-    // Token opaco do gateway — nunca armazena número completo nem CVV
-    const gatewayToken = realMpToken
-      ? `mp_tok_${realMpToken}`
-      : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
-
-    cardObj = {
-      id: cardId,
-      clientId: clientId || '',
-      clientPhone: clientPhone || '',
-      brand,
-      last4,
-      holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
-      expMonth: String(expMonth || '12').padStart(2, '0'),
-      expYear: String(expYear || '2030').slice(-4),
-      cardType: cardType === 'cartao_debito' ? 'cartao_debito' : 'cartao_credito',
-      gatewayToken,
-      isDefault: true,
-      createdAt: now
-    };
+  const digits = String(cardNumber || '').replace(/\D/g, '');
+  if (digits.length < 13 || digits.length > 19) {
+    throw new Error('Número de cartão inválido.');
   }
+  if (!cvv || String(cvv).replace(/\D/g, '').length < 3) {
+    throw new Error('Código de segurança (CVV) inválido.');
+  }
+  const last4 = digits.slice(-4);
+  const brand = detectCardBrand(digits);
+
+  // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
+  const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
+    cardNumber: digits,
+    holderName,
+    expMonth,
+    expYear,
+    cvv,
+    holderDoc: holderDocument
+  });
+
+  // Token opaco do gateway — nunca armazena número completo nem CVV
+  const gatewayToken = realMpToken
+    ? `mp_tok_${realMpToken}`
+    : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
+
+  cardObj = {
+    id: cardId,
+    clientId: clientId || '',
+    clientPhone: clientPhone || '',
+    brand,
+    last4,
+    holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
+    expMonth: String(expMonth || '12').padStart(2, '0'),
+    expYear: String(expYear || '2030').slice(-4),
+    cardType: cardType === 'cartao_debito' ? 'cartao_debito' : 'cartao_credito',
+    gatewayToken,
+    isDefault: true,
+    createdAt: now
+  };
 
   if (!db.pool) {
     db.localStore.saved_cards.unshift({
@@ -2415,25 +2381,6 @@ async function createPixChargeForRide(ride) {
     pixQrCode = efiPix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
     gatewayTxId = efiPix.txid;
     pixExpiresAt = efiPix.expiresAt || pixExpiresAt;
-  } else if (stripeGateway.isStripeEnabled()) {
-    const stripePix = await stripeGateway.createPixCharge({
-      amountBrl: split.grossAmount,
-      rideId: ride.id,
-      rideCode: ride.rideCode ? String(ride.rideCode).replace(/^#?\s*UP\b/i, '#KV') : `#KV - ${String(ride.rideNumber || 1).padStart(3, '0')}`,
-      driverId: ride.driverId || '',
-      purpose: 'ride_pix',
-      payerName: ride.clientName || 'Passageiro Kavro',
-      payerEmail: ride.clientEmail || 'passageiro@kavro.app',
-      description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
-      qrFallbackGenerator: getQrCodeUrl
-    });
-    if (!stripePix.pixCopyPaste && !stripePix.pixQrCode) {
-      throw new Error('Não foi possível gerar o QR Code PIX no momento. Verifique a configuração do gateway e tente novamente.');
-    }
-    pixCopyPaste = stripePix.pixCopyPaste || pixCopyPaste;
-    pixQrCode = stripePix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
-    gatewayTxId = stripePix.paymentIntentId;
-    pixExpiresAt = stripePix.expiresAt || pixExpiresAt;
   } else if (env.MERCADOPAGO_ACCESS_TOKEN) {
     try {
       const mpRes = await fetch('https://api.mercadopago.com/v1/payments', {
@@ -2525,137 +2472,11 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
     return { authorized: false, tx: failedTx, split, error: 'Cartão recusado pelo banco emissor. Escolha outro cartão ou PIX.' };
   }
 
-  // Busca token real salvo ou enviado no checkout para pré-autorização (Stripe prioritário)
+  // Busca token real salvo ou enviado no checkout para pré-autorização
   let savedCard = null;
   if (cardInfo.cardId || ride.cardId) {
     const cards = await listSavedCards(ride.clientId, ride.clientPhone);
     savedCard = cards.find(c => c.id === (cardInfo.cardId || ride.cardId)) || null;
-  }
-
-  if (stripeGateway.isStripeEnabled()) {
-    const buildFailedTx = async (reason, gwId) =>
-      savePaymentTransaction({
-        rideId: ride.id,
-        rideCode: ride.rideCode,
-        clientId: ride.clientId,
-        clientName: ride.clientName,
-        method: ride.paymentMethod || 'cartao_credito',
-        status: 'falhou',
-        estimatedAmount: split.grossAmount,
-        finalAmount: split.grossAmount,
-        paidAmount: 0,
-        commissionPercent: split.commissionPercent,
-        commissionAmount: split.commissionAmount,
-        driverNetAmount: split.driverNetAmount,
-        cardId: cardInfo.cardId || ride.cardId || '',
-        cardLast4: savedCard?.last4 || last4,
-        cardBrand: savedCard?.brand || brand,
-        failureReason: String(reason),
-        gatewayTxId: gwId
-      });
-
-    if (cardInfo.stripePaymentIntentId) {
-      const checkPi = await stripeGateway.verifyAuthorizedPaymentIntent(cardInfo.stripePaymentIntentId);
-      if (!checkPi.authorized) {
-        const failedTx = await buildFailedTx(
-          `Autenticação Stripe não concluída (${checkPi.status}).`,
-          `card_st_fail_${ride.id}_${Date.now()}`
-        );
-        return { authorized: false, tx: failedTx, split, error: 'Pagamento no cartão não foi autorizado após verificação.' };
-      }
-      if (Number(checkPi.amountBrl || 0) + 0.05 < split.grossAmount) {
-        const failedTx = await buildFailedTx(
-          `Valor pré-autorizado (${checkPi.amountBrl}) inferior ao valor oficial da corrida (${split.grossAmount}).`,
-          `card_st_under_${ride.id}_${Date.now()}`
-        );
-        return { authorized: false, tx: failedTx, split, error: 'O valor autorizado não corresponde ao valor oficial da corrida.' };
-      }
-      const tx = await savePaymentTransaction({
-        rideId: ride.id,
-        rideCode: ride.rideCode,
-        driverId: ride.driverId || null,
-        driverName: ride.driverName || null,
-        clientId: ride.clientId || null,
-        clientName: ride.clientName,
-        method: ride.paymentMethod || 'cartao_credito',
-        status: 'autorizado',
-        estimatedAmount: split.grossAmount,
-        finalAmount: split.grossAmount,
-        paidAmount: 0,
-        commissionPercent: split.commissionPercent,
-        commissionAmount: split.commissionAmount,
-        driverNetAmount: split.driverNetAmount,
-        cardId: cardInfo.cardId || ride.cardId || '',
-        cardLast4: checkPi.cardLast4 || savedCard?.last4 || last4,
-        cardBrand: checkPi.cardBrand || savedCard?.brand || brand,
-        gatewayAuthCode: checkPi.authCode,
-        gatewayTxId: checkPi.paymentIntentId
-      });
-      return { authorized: true, tx, split, provider: 'stripe' };
-    }
-
-    const parsedStripe = stripeGateway.parseStripeGatewayToken(savedCard?.gatewayToken);
-    if (!parsedStripe) {
-      return {
-        authorized: false,
-        tx: null,
-        split,
-        error: 'Este cartão precisa ser recadastrado pelo formulário seguro para continuar.'
-      };
-    }
-
-    const authSt = await stripeGateway.authorizeCardHold({
-      amountBrl: split.grossAmount,
-      rideId: ride.id,
-      rideCode: ride.rideCode,
-      customerId: parsedStripe.customerId,
-      paymentMethodId: parsedStripe.paymentMethodId,
-      clientEmail: ride.clientEmail,
-      driverId: ride.driverId
-    });
-
-    if (authSt.requiresAction) {
-      return {
-        authorized: false,
-        requiresAction: true,
-        clientSecret: authSt.clientSecret,
-        paymentIntentId: authSt.paymentIntentId,
-        tx: null,
-        split,
-        error: authSt.error
-      };
-    }
-
-    if (!authSt.authorized) {
-      const failedTx = await buildFailedTx(
-        authSt.error || 'Cartão recusado.',
-        authSt.paymentIntentId || `card_st_fail_${ride.id}_${Date.now()}`
-      );
-      return { authorized: false, tx: failedTx, split, error: authSt.error || 'Cartão recusado pelo banco emissor.' };
-    }
-
-    const tx = await savePaymentTransaction({
-      rideId: ride.id,
-      rideCode: ride.rideCode,
-      driverId: ride.driverId || null,
-      driverName: ride.driverName || null,
-      clientId: ride.clientId || null,
-      clientName: ride.clientName,
-      method: ride.paymentMethod || 'cartao_credito',
-      status: 'autorizado',
-      estimatedAmount: split.grossAmount,
-      finalAmount: split.grossAmount,
-      paidAmount: 0,
-      commissionPercent: split.commissionPercent,
-      commissionAmount: split.commissionAmount,
-      driverNetAmount: split.driverNetAmount,
-      cardId: cardInfo.cardId || ride.cardId || '',
-      cardLast4: savedCard?.last4 || last4,
-      cardBrand: savedCard?.brand || brand,
-      gatewayAuthCode: authSt.authCode,
-      gatewayTxId: authSt.paymentIntentId
-    });
-    return { authorized: true, tx, split, provider: 'stripe' };
   }
 
   const rawTokenCandidate = String(cardInfo.mpCardToken || savedCard?.gatewayToken || '').trim();
@@ -2770,19 +2591,6 @@ async function captureCardForRide(ride, finalAmount) {
   const tx = await getPaymentTxByRide(ride.id);
   const amount = round2(finalAmount ?? ride.totalPrice);
   const gwId = String(tx?.gatewayTxId || '');
-  if (stripeGateway.isStripeEnabled() && gwId.startsWith('pi_')) {
-    try {
-      return await stripeGateway.captureCardHold({
-        paymentIntentId: gwId,
-        finalAmountBrl: amount
-      });
-    } catch (err) {
-      return {
-        captured: false,
-        error: err?.message || 'Falha ao capturar pré-autorização do cartão.'
-      };
-    }
-  }
   const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));
   if (isRealMpId) {
     try {
@@ -2814,16 +2622,6 @@ async function captureCardForRide(ride, finalAmount) {
 
 async function refundGatewayPayment(tx, refundAmount = null) {
   const gwId = String(tx?.gatewayTxId || '');
-  if (stripeGateway.isStripeEnabled() && gwId.startsWith('pi_')) {
-    try {
-      return await stripeGateway.cancelOrRefundPayment({
-        paymentIntentId: gwId,
-        refundAmountBrl: refundAmount
-      });
-    } catch (err) {
-      return { ok: false, error: err?.message || 'Falha ao estornar ou liberar o pagamento.' };
-    }
-  }
   const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));
   if (!isRealMpId) return { ok: true, provider: 'sandbox' };
   try {
@@ -3094,25 +2892,6 @@ async function createDriverDebtSettlementPix(driverId, customAmount = null) {
       pixCopyPaste: efiDebtPix.pixCopyPaste,
       pixQrCode: finalQr,
       provider: 'efibank'
-    };
-  } else if (stripeGateway.isStripeEnabled()) {
-    const stripeDebtPix = await stripeGateway.createPixCharge({
-      amountBrl: amountToPay,
-      driverId,
-      purpose: 'driver_debt_pix',
-      payerName: 'Motorista Parceiro Kavro',
-      payerEmail: 'motorista@kavro.app',
-      description: `Quitação de saldo devedor Kavro Drive (${driverId})`,
-      qrFallbackGenerator: getQrCodeUrl
-    });
-    return {
-      driverId,
-      amount: amountToPay,
-      txid,
-      gatewayTxId: stripeDebtPix.paymentIntentId,
-      pixCopyPaste: stripeDebtPix.pixCopyPaste,
-      pixQrCode: stripeDebtPix.pixQrCode || getQrCodeUrl(stripeDebtPix.pixCopyPaste, 240),
-      provider: 'stripe'
     };
   }
 
@@ -3735,70 +3514,6 @@ async function updateSosStatusDb(id, { status = 'resolvido', active = false, not
   return formatSosRow(r.rows[0]);
 }
 
-async function saveStripeCheckoutDraft(sessionId, clientId, payloadJson) {
-  await ensureExtendedSchema();
-  const sid = String(sessionId || '').trim();
-  const cid = String(clientId || '').trim();
-  if (!sid) return null;
-  if (!db.pool) {
-    if (!db.localStore.stripe_checkout_drafts) db.localStore.stripe_checkout_drafts = {};
-    db.localStore.stripe_checkout_drafts[sid] = {
-      sessionId: sid,
-      clientId: cid,
-      payload: payloadJson || {},
-      createdRideId: null,
-      createdAt: new Date().toISOString()
-    };
-    db.saveLocalStore();
-    return db.localStore.stripe_checkout_drafts[sid];
-  }
-  await db.query(
-    `INSERT INTO public.stripe_checkout_drafts (session_id, client_id, payload_json, created_ride_id, created_at)
-     VALUES ($1, $2, $3::jsonb, NULL, NOW())
-     ON CONFLICT (session_id) DO UPDATE SET payload_json = EXCLUDED.payload_json`,
-    [sid, cid, JSON.stringify(payloadJson || {})]
-  );
-  return { sessionId: sid, clientId: cid, payload: payloadJson || {}, createdRideId: null };
-}
-
-async function getStripeCheckoutDraft(sessionId) {
-  await ensureExtendedSchema();
-  const sid = String(sessionId || '').trim();
-  if (!sid) return null;
-  if (!db.pool) {
-    const row = db.localStore.stripe_checkout_drafts?.[sid];
-    return row || null;
-  }
-  const r = await db.query('SELECT * FROM public.stripe_checkout_drafts WHERE session_id = $1 LIMIT 1', [sid]);
-  const row = r.rows[0];
-  if (!row) return null;
-  return {
-    sessionId: row.session_id,
-    clientId: row.client_id,
-    payload: row.payload_json || {},
-    createdRideId: row.created_ride_id || null,
-    createdAt: row.created_at
-  };
-}
-
-async function markStripeCheckoutDraftRideId(sessionId, rideId) {
-  await ensureExtendedSchema();
-  const sid = String(sessionId || '').trim();
-  const rid = String(rideId || '').trim();
-  if (!sid || !rid) return;
-  if (!db.pool) {
-    if (db.localStore.stripe_checkout_drafts?.[sid]) {
-      db.localStore.stripe_checkout_drafts[sid].createdRideId = rid;
-      db.saveLocalStore();
-    }
-    return;
-  }
-  await db.query(
-    'UPDATE public.stripe_checkout_drafts SET created_ride_id = $2 WHERE session_id = $1',
-    [sid, rid]
-  );
-}
-
 // ============================================================
 // Carteira Digital do Passageiro (Saldo, Depósito Mínimo R$ 20, Débito em Corridas e Estorno)
 // ============================================================
@@ -4001,26 +3716,6 @@ async function getClientWallet(clientId, options = {}) {
         }
       }
     }
-    if (stripeGateway.isStripeEnabled()) {
-      const pendingStripeEntries = entries.filter(
-        e => e.status === 'aguardando' && String(e.gatewayTxId || '').startsWith('pi_')
-      );
-      for (const pe of pendingStripeEntries.slice(0, 5)) {
-        try {
-          const piCheck = await stripeGateway.retrievePaymentIntentStatus(pe.gatewayTxId);
-          if (piCheck && piCheck.status === 'succeeded') {
-            await confirmClientWalletTopup({
-              entryId: pe.id,
-              gatewayTxId: piCheck.id,
-              paidAmount: piCheck.amountBrl
-            });
-            syncedAny = true;
-          }
-        } catch {
-          // ignore transient gateway lookup failures
-        }
-      }
-    }
     if (syncedAny) {
       entries = await listClientWalletEntries(cid);
     }
@@ -4166,7 +3861,6 @@ async function createClientWalletTopup({
   amount,
   method = 'pix',
   cardId = '',
-  stripePaymentIntentId = '',
   idempotencyKey = ''
 }) {
   await ensureExtendedSchema();
@@ -4218,25 +3912,6 @@ async function createClientWalletTopup({
       gatewayTxId = efiPix.txid;
       pixExpiresAt = efiPix.expiresAt || pixExpiresAt;
       pixProvider = 'efibank';
-    } else if (stripeGateway.isStripeEnabled()) {
-      const stripePix = await stripeGateway.createPixCharge({
-        amountBrl: cleanAmount,
-        clientId: cid,
-        entryId,
-        purpose: 'client_wallet_topup',
-        payerName: clientName || 'Passageiro Kavro',
-        payerEmail: clientEmail || 'passageiro@kavro.app',
-        description: `Depósito Carteira Kavro Drive (${cid})`,
-        qrFallbackGenerator: getQrCodeUrl
-      });
-      if (!stripePix.pixCopyPaste && !stripePix.pixQrCode) {
-        throw new Error('Não foi possível gerar o QR Code PIX no momento. Tente novamente em instantes.');
-      }
-      pixCopyPaste = stripePix.pixCopyPaste || pixCopyPaste;
-      pixQrCode = stripePix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
-      gatewayTxId = stripePix.paymentIntentId;
-      pixExpiresAt = stripePix.expiresAt || pixExpiresAt;
-      pixProvider = 'stripe';
     }
 
     const { entry } = await insertClientWalletEntry({
@@ -4262,35 +3937,7 @@ async function createClientWalletTopup({
     return { ok: true, pending: true, entry, wallet };
   }
 
-  // Depósito imediato via Cartão salvo ou Apple Pay / Express Checkout
-  if (stripePaymentIntentId && stripeGateway.isStripeEnabled()) {
-    const checkPi = await stripeGateway.verifyAuthorizedPaymentIntent(stripePaymentIntentId);
-    if (!checkPi.authorized || checkPi.status !== 'succeeded') {
-      return { ok: false, error: 'Pagamento da recarga ainda não foi confirmado.' };
-    }
-    if (Number(checkPi.amountBrl || 0) + 0.05 < cleanAmount) {
-      return { ok: false, error: 'Valor confirmado diferente do valor da recarga.' };
-    }
-    const labelBrand = checkPi.cardBrand || (normalizedMethod === 'apple_pay' ? 'Apple Pay' : 'Cartão');
-    const last4Txt = checkPi.cardLast4 ? ` •••• ${checkPi.cardLast4}` : '';
-    const { entry } = await insertClientWalletEntry({
-      id: entryId,
-      idempotencyKey: idempotencyKey || `wallet_topup_pi_${checkPi.paymentIntentId}`,
-      clientId: cid,
-      clientPhone,
-      clientName,
-      entryType: 'topup',
-      paymentMethod: normalizedMethod,
-      amount: cleanAmount,
-      balanceDelta: cleanAmount,
-      status: 'confirmado',
-      gatewayTxId: checkPi.paymentIntentId,
-      description: `Depósito na carteira via ${labelBrand}${last4Txt}`
-    });
-    const wallet = await getClientWallet(cid, { skipGatewaySync: true });
-    return { ok: true, pending: false, entry, wallet };
-  }
-
+  // Depósito imediato via Cartão salvo
   const cards = await listSavedCards(cid, clientPhone);
   const chosenCard = cards.find(c => c.id === cardId) || null;
   if (!chosenCard) {
@@ -4298,36 +3945,6 @@ async function createClientWalletTopup({
   }
 
   let gatewayTxId = `wallet_card_${Date.now()}`;
-  if (stripeGateway.isStripeEnabled()) {
-    const parsedStripe = stripeGateway.parseStripeGatewayToken(chosenCard.gatewayToken);
-    if (!parsedStripe) {
-      throw new Error('Este cartão precisa ser recadastrado pelo formulário seguro para continuar.');
-    }
-    const chargeRes = await stripeGateway.authorizeCardHold({
-      amountBrl: cleanAmount,
-      customerId: parsedStripe.customerId,
-      paymentMethodId: parsedStripe.paymentMethodId,
-      clientEmail,
-      captureMethod: 'automatic',
-      purpose: 'client_wallet_topup',
-      description: `Depósito Carteira Kavro Drive (${cid})`,
-      idempotencyKey: idempotencyKey || `kavro_st_wallet_topup_${cid}_${entryId}`,
-      metadata: { clientId: cid, entryId }
-    });
-    if (chargeRes.requiresAction) {
-      return {
-        ok: false,
-        requiresAction: true,
-        clientSecret: chargeRes.clientSecret,
-        paymentIntentId: chargeRes.paymentIntentId,
-        error: chargeRes.error || 'Confirme a verificação de segurança (3DS) do cartão.'
-      };
-    }
-    if (!chargeRes.authorized) {
-      return { ok: false, error: chargeRes.error || 'Cartão recusado pelo banco emissor.' };
-    }
-    gatewayTxId = chargeRes.paymentIntentId;
-  }
 
   const { entry } = await insertClientWalletEntry({
     id: entryId,
@@ -4551,9 +4168,6 @@ module.exports = {
   getSosAlertByIdDb,
   upsertSosAlertDb,
   updateSosStatusDb,
-  saveStripeCheckoutDraft,
-  getStripeCheckoutDraft,
-  markStripeCheckoutDraftRideId,
   formatClientWalletEntryRow,
   recomputeClientWalletBalance,
   listClientWalletEntries,

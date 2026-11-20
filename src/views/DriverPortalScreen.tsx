@@ -2490,15 +2490,31 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             border: '1px solid #E5E7EB',
             boxShadow: '0 24px 48px rgba(0,0,0,0.28)'
           }}>
-            <h3 style={{ margin: '0 0 8px 0', fontSize: '1.22rem', fontWeight: 900, color: '#111111' }}>
-              Cobrar do Passageiro: R$ {cashCompleteRide.totalPrice.toFixed(2).replace('.', ',')}
-            </h3>
-            <p style={{ fontSize: '0.84rem', color: '#4B5563', marginBottom: 16, lineHeight: 1.5 }}>
-              Receba o dinheiro em mãos do passageiro. A comissão de{' '}
-              <strong style={{ color: '#111111' }}>{cashCompleteRide.commissionPercent ?? 20}%</strong>{' '}
-              (R$ {((cashCompleteRide.totalPrice * (cashCompleteRide.commissionPercent ?? 20)) / 100).toFixed(2).replace('.', ',')})
-              será descontada automaticamente do seu Saldo Livre; caso não haja saldo suficiente, a diferença entra no seu Saldo Devedor.
-            </p>
+            {(() => {
+              const totalPrice = Number(cashCompleteRide.totalPrice || 0);
+              const commPct = Number(cashCompleteRide.commissionPercent ?? 20);
+              const commFixed = totalPrice > 0 ? Number(cashCompleteRide.commissionFixed ?? config.platformCommissionFixed ?? 0) : 0;
+              const rawComm = (totalPrice * commPct) / 100 + commFixed;
+              const totalComm = Math.min(totalPrice, Math.round(rawComm * 100) / 100);
+              const deductFirst = config.cashDeductFromBalanceFirst !== false;
+              return (
+                <>
+                  <h3 style={{ margin: '0 0 8px 0', fontSize: '1.22rem', fontWeight: 900, color: '#111111' }}>
+                    Cobrar do Passageiro: R$ {totalPrice.toFixed(2).replace('.', ',')}
+                  </h3>
+                  <p style={{ fontSize: '0.84rem', color: '#4B5563', marginBottom: 16, lineHeight: 1.5 }}>
+                    Receba o dinheiro em mãos do passageiro. A comissão de{' '}
+                    <strong style={{ color: '#111111' }}>
+                      {commPct}%{commFixed > 0 ? ` + R$ ${commFixed.toFixed(2).replace('.', ',')}` : ''}
+                    </strong>{' '}
+                    (<strong style={{ color: '#111111' }}>R$ {totalComm.toFixed(2).replace('.', ',')}</strong>){' '}
+                    {deductFirst
+                      ? 'será descontada automaticamente do seu Saldo Livre; caso não haja saldo suficiente, a diferença entra no seu Saldo Devedor.'
+                      : 'será registrada automaticamente no seu Saldo Devedor para quitação via PIX.'}
+                  </p>
+                </>
+              );
+            })()}
             <div style={{ display: 'flex', gap: 10 }}>
               <button
                 type="button"
@@ -2752,7 +2768,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             >
               {copiedDebtPix ? 'Copiado!' : 'Copiar Código PIX'}
             </button>
-            {debtPixModalData.provider === 'stripe' ? (
+            {debtPixModalData.provider === 'efibank' ? (
               <div style={{ fontSize: '0.74rem', color: '#15803D', fontWeight: 700, padding: '8px 10px', borderRadius: 8, backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', marginBottom: 8 }}>
                 PIX oficial gerado. Seu saldo será liberado automaticamente após a confirmação do pagamento.
               </div>

@@ -3,7 +3,6 @@ const db = require('./db.cjs');
 const push = require('./push.cjs');
 const env = require('./env.cjs');
 const finance = require('./financeEngine.cjs');
-const stripeGateway = require('./stripeGateway.cjs');
 const efiBankGateway = require('./efiBankGateway.cjs');
 const kycStorage = require('./kycStorage.cjs');
 const driverTermsContract = require('./driverTermsContract.cjs');
@@ -595,7 +594,6 @@ async function ensureClientsSchema() {
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS account_type VARCHAR(24) DEFAULT 'standard';
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS guardian_client_id VARCHAR(120);
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS birth_date VARCHAR(20);
-      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(100);
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0;
       CREATE TABLE IF NOT EXISTS public.family_members (
         id VARCHAR(120) PRIMARY KEY,
@@ -1845,7 +1843,6 @@ async function handleApiRequest(req, res) {
           pushConfigured: Boolean(process.env.ONESIGNAL_REST_API_KEY),
           googleAuthConfigured: Boolean(getGoogleClientId()),
           turnstileConfigured: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
-          stripeConfigured: stripeGateway.isStripeEnabled(),
           mercadopagoConfigured: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MERCADOPAGO_PUBLIC_KEY),
           otpEmailConfigured: Boolean(process.env.RESEND_API_KEY),
           otpWebhookConfigured: Boolean(process.env.OTP_WEBHOOK_URL)
@@ -3981,27 +3978,13 @@ async function handleApiRequest(req, res) {
             };
           }
         } else if (isCardLikeMethod(ride.paymentMethod)) {
-          // Regra 3: Pré-autoriza cartão ou Apple Pay no gateway ao solicitar a corrida
+          // Regra 3: Pré-autoriza cartão no gateway ao solicitar a corrida
           const authResult = await finance.authorizeCardForRide(ride, {
             cardId: ride.cardId,
             cardLast4: ride.cardLast4,
             cardBrand: ride.cardBrand,
-            mpCardToken: ride.mpCardToken,
-            stripePaymentIntentId: ride.stripePaymentIntentId
+            mpCardToken: ride.mpCardToken
           });
-          if (authResult.requiresAction) {
-            return {
-              status: 402,
-              body: {
-                ok: false,
-                requiresAction: true,
-                clientSecret: authResult.clientSecret,
-                paymentIntentId: authResult.paymentIntentId,
-                error: authResult.error || 'Confirme a verificação de segurança (3DS) do cartão.',
-                paymentStatus: 'acao_necessaria'
-              }
-            };
-          }
           if (!authResult.authorized) {
             return {
               status: 402,
@@ -4538,7 +4521,7 @@ async function handleApiRequest(req, res) {
         newPaymentStatus = cashRes.paymentStatus;
         paidAmount = cashRes.paidAmount;
       } else if (isCardLikeMethod(ride.paymentMethod)) {
-        // Captura o pagamento autorizado no cartão ou Apple Pay (Stripe / Mercado Pago / Sandbox) e lança no Livro-Razão
+        // Captura o pagamento autorizado no cartão (Mercado Pago / Sandbox) e lança no Livro-Razão
         const capRes = await finance.captureCardForRide(ride, finalPrice);
         if (!capRes.captured) {
           return sendJson(res, 402, {
@@ -5105,8 +5088,8 @@ async function handleApiRequest(req, res) {
         }
       } else if (isCardLikeMethod(before.paymentMethod)) {
         const authorizedMax = finance.round2(tx?.estimatedAmount || before.estimatedPrice || before.totalPrice || 0);
-        const isRealStripeHold = Boolean(tx && String(tx.gatewayTxId || '').startsWith('pi_'));
-        if (split.grossAmount > authorizedMax + 0.01 && isRealStripeHold) {
+        const isRealCardHold = Boolean(tx && env.MERCADOPAGO_ACCESS_TOKEN && /^\d+$/.test(String(tx.gatewayTxId || '')));
+        if (split.grossAmount > authorizedMax + 0.01 && isRealCardHold) {
           const reAuth = await finance.authorizeCardForRide(
             {
               ...before,
@@ -6128,19 +6111,17 @@ async function handleApiRequest(req, res) {
     }
 
     // ============================================================
-    // 3.5 GATEWAY DE PAGAMENTOS: STRIPE, PIX DINÂMICO, CARTÕES E WEBHOOKS
+    // 3.5 GATEWAY DE PAGAMENTOS: EFÍ BANK, PIX DINÂMICO, CARTÕES E WEBHOOKS
     // ============================================================
     if (pathname === '/api/payments/config' && method === 'GET') {
       const mpPublicKey = String(process.env.MERCADOPAGO_PUBLIC_KEY || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim();
-      const stripePubKey = stripeGateway.getStripePublishableKey();
-      const stripeOn = stripeGateway.isStripeEnabled();
       const mpOn = Boolean(env.MERCADOPAGO_ACCESS_TOKEN);
       const efiCfg = await efiBankGateway.getEfiConfig();
       const efiOn = await efiBankGateway.isEfiEnabled();
       const efiPixActive = await efiBankGateway.isEfiPixActive();
       const efiSplitEnabled = await efiBankGateway.isEfiSplitActive();
       const efiDriverPixSendEnabled = await efiBankGateway.isEfiDriverPayoutActive();
-      const gatewayProvider = efiPixActive ? 'efibank' : (stripeOn ? 'stripe' : (mpOn ? 'mercadopago' : 'sandbox'));
+      const gatewayProvider = efiPixActive ? 'efibank' : (mpOn ? 'mercadopago' : 'sandbox');
       return sendJson(res, 200, {
         ok: true,
         gatewayProvider,
@@ -6149,8 +6130,6 @@ async function handleApiRequest(req, res) {
         efiSplitEnabled,
         efiDriverPixSendEnabled,
         efiSandbox: Boolean(efiCfg.sandbox),
-        stripeEnabled: stripeOn,
-        stripePublishableKey: stripePubKey,
         mercadopagoEnabled: mpOn,
         mercadopagoPublicKey: mpPublicKey,
         autoPixPayoutEnabled: Boolean(efiDriverPixSendEnabled || process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
@@ -6244,208 +6223,6 @@ async function handleApiRequest(req, res) {
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err?.message || 'Falha ao registrar webhook na Efí Bank.' });
       }
-    }
-
-    if (pathname === '/api/payments/stripe/setup-intent' && method === 'POST') {
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para cadastrar um cartão.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      await ensureClientsSchema();
-      const body = await parseBody(req);
-      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
-      let clientRow = null;
-      if (targetClientId) {
-        const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
-        clientRow = cRes.rows[0] || null;
-      }
-      try {
-        const setupData = await stripeGateway.createCardSetupIntent({
-          clientId: targetClientId,
-          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
-          clientEmail: clientRow?.email || body.clientEmail || clientSession?.email || '',
-          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro'
-        });
-        return sendJson(res, 200, { ok: true, ...setupData });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar tokenização segura do cartão.' });
-      }
-    }
-
-    if (pathname === '/api/payments/stripe/wallet-intent' && method === 'POST') {
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para pagar com Apple Pay ou carteira.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      await ensureClientsSchema();
-      const body = await parseBody(req);
-      const cfg = (await getCachedSystemConfig()) || {};
-      const allCats = finance.normalizeCategoriesServer(cfg);
-      const mappedCatId = finance.mapLegacyCategoryIdServer(body.category || 'kavro_go');
-      const matchedCat = allCats.find(c => c.id === body.category || c.id === mappedCatId) || allCats[0];
-      const officialFare = security.calculateOfficialRidePriceServer({
-        cfg,
-        categoryObj: matchedCat,
-        distanceKm: body.distanceKm,
-        durationMin: body.durationMin,
-        origin: body.origin,
-        destination: body.destination,
-        timeStr: body.time,
-        city: body.city
-      });
-
-      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
-      let clientRow = null;
-      if (targetClientId) {
-        const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
-        clientRow = cRes.rows[0] || null;
-      }
-
-      try {
-        const walletData = await stripeGateway.createWalletHoldIntent({
-          amountBrl: officialFare.totalPrice,
-          clientId: targetClientId,
-          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
-          clientEmail: clientRow?.email || body.clientEmail || clientSession?.email || '',
-          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro',
-          categoryId: matchedCat?.id || mappedCatId
-        });
-        return sendJson(res, 200, { ok: true, ...walletData });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar pagamento via Apple Pay / Carteira.' });
-      }
-    }
-
-    if (pathname === '/api/payments/stripe/checkout-session' && method === 'POST') {
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para pagar com Apple Pay.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      await ensureClientsSchema();
-      const body = await parseBody(req);
-      const cfg = (await getCachedSystemConfig()) || {};
-      const allCats = finance.normalizeCategoriesServer(cfg);
-      const mappedCatId = finance.mapLegacyCategoryIdServer(body.category || 'kavro_go');
-      const matchedCat = allCats.find(c => c.id === body.category || c.id === mappedCatId) || allCats[0];
-      const officialFare = security.calculateOfficialRidePriceServer({
-        cfg,
-        categoryObj: matchedCat,
-        distanceKm: body.distanceKm,
-        durationMin: body.durationMin,
-        origin: body.origin,
-        destination: body.destination,
-        timeStr: body.time,
-        city: body.city
-      });
-
-      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
-      let clientRow = null;
-      if (targetClientId) {
-        const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
-        clientRow = cRes.rows[0] || null;
-      }
-
-      const originHeader = String(req.headers.origin || '').trim();
-      const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
-      const protoHeader = String(req.headers['x-forwarded-proto'] || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
-      const fallbackOrigin = hostHeader ? `${protoHeader}://${hostHeader}` : 'https://kavrodrive.vercel.app';
-      const returnBaseOrigin = originHeader || fallbackOrigin;
-
-      const destLabel = body.destination?.address || 'Corrida Kavro Drive';
-      try {
-        const sessionData = await stripeGateway.createWalletCheckoutSession({
-          amountBrl: officialFare.totalPrice,
-          rideTitle: `Kavro Drive • ${matchedCat?.name || 'Padrão'}`,
-          rideDescription: `Destino: ${destLabel}`,
-          originUrl: returnBaseOrigin,
-          clientId: targetClientId,
-          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
-          clientEmail: clientRow?.email || body.clientEmail || clientSession?.email || '',
-          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro',
-          categoryId: matchedCat?.id || mappedCatId
-        });
-        await finance.saveStripeCheckoutDraft(sessionData.sessionId, targetClientId, {
-          ...body,
-          clientId: targetClientId,
-          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro',
-          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
-          paymentMethod: body.paymentMethod === 'cartao_credito' ? 'cartao_credito' : 'apple_pay'
-        });
-        return sendJson(res, 200, { ok: true, ...sessionData });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao abrir checkout seguro Apple Pay.' });
-      }
-    }
-
-    if (pathname === '/api/payments/stripe/checkout-complete' && method === 'POST') {
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para concluir sua corrida.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      const body = await parseBody(req);
-      const sessionId = String(body.sessionId || '').trim();
-      if (!sessionId) {
-        return sendJson(res, 400, { ok: false, error: 'Identificador da sessão de checkout ausente.' });
-      }
-
-      const draft = await finance.getStripeCheckoutDraft(sessionId);
-      if (!draft) {
-        return sendJson(res, 404, { ok: false, error: 'Sessão de checkout não encontrada.' });
-      }
-      if (!isAdmin && draft.clientId && clientSession?.sub && draft.clientId !== clientSession.sub) {
-        return sendJson(res, 403, { ok: false, error: 'Esta sessão de pagamento pertence a outro passageiro.' });
-      }
-
-      if (draft.createdRideId) {
-        const prevRideRes = await db.query('SELECT * FROM public.rides WHERE id = $1 LIMIT 1', [draft.createdRideId]);
-        if (prevRideRes.rows[0]) {
-          const [formatted] = await attachClientRatingsToRides([formatRideFromDb(prevRideRes.rows[0])]);
-          return sendJson(res, 200, {
-            ok: true,
-            idempotent: true,
-            ride: security.sanitizeRideForViewer(formatted, { isAdmin, isOwnerClient: true })
-          });
-        }
-      }
-
-      const sessionCheck = await stripeGateway.retrieveWalletCheckoutSession(sessionId);
-      if (!sessionCheck.authorized || !sessionCheck.paymentIntentId) {
-        return sendJson(res, 402, { ok: false, error: 'Pagamento no checkout Apple Pay ainda não foi autorizado.' });
-      }
-
-      const ridePayload = {
-        ...(draft.payload || {}),
-        paymentMethod: draft.payload?.paymentMethod || 'apple_pay',
-        cardBrand: sessionCheck.cardBrand || 'Apple Pay',
-        cardLast4: sessionCheck.cardLast4,
-        stripePaymentIntentId: sessionCheck.paymentIntentId
-      };
-      const result = await executeRideSave({
-        ride: ridePayload,
-        isAdmin,
-        driverSession: null,
-        clientSession
-      });
-      if (result.status === 200 && result.body?.ride?.id) {
-        await finance.markStripeCheckoutDraftRideId(sessionId, result.body.ride.id);
-      }
-      return sendJson(res, result.status, result.body);
     }
 
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
@@ -6594,8 +6371,7 @@ async function handleApiRequest(req, res) {
           clientEmail: cliRow.email || clientSession?.email || '',
           amount,
           method: body.method || 'pix',
-          cardId: body.cardId || '',
-          stripePaymentIntentId: body.stripePaymentIntentId || ''
+          cardId: body.cardId || ''
         });
         if (!result.ok) {
           return sendJson(res, 402, result);
@@ -6637,8 +6413,8 @@ async function handleApiRequest(req, res) {
       }
 
       const efiPixActive = await efiBankGateway.isEfiPixActive();
-      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
-      if ((efiPixActive || stripeGateway.isStripeEnabled()) && !isAdmin && !hasValidWebhookSecret) {
+      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN;
+      if (efiPixActive && !isAdmin && !hasValidWebhookSecret) {
         if (!clientSession) {
           return sendJson(res, 401, { ok: false, error: 'Sessão inválida para confirmar depósito.' });
         }
@@ -6651,7 +6427,7 @@ async function handleApiRequest(req, res) {
           const wallet = await finance.getClientWallet(clientSession.sub, { skipGatewaySync: true });
           return sendJson(res, 200, { ok: true, entry: ownedEntry, wallet });
         }
-        if (efiPixActive && ownedEntry.gatewayTxId && (ownedEntry.metadata?.provider === 'efibank' || String(ownedEntry.gatewayTxId).startsWith('KVWLT'))) {
+        if (ownedEntry.gatewayTxId && (ownedEntry.metadata?.provider === 'efibank' || String(ownedEntry.gatewayTxId).startsWith('KVWLT'))) {
           try {
             const efiCheck = await efiBankGateway.getPixChargeStatus(ownedEntry.gatewayTxId);
             if (efiCheck && efiCheck.paid) {
@@ -6664,18 +6440,6 @@ async function handleApiRequest(req, res) {
               return sendJson(res, 200, { ok: true, ...conf });
             }
           } catch {}
-        }
-        if (stripeGateway.isStripeEnabled() && String(ownedEntry.gatewayTxId || '').startsWith('pi_')) {
-          const piCheck = await stripeGateway.retrievePaymentIntentStatus(ownedEntry.gatewayTxId);
-          if (piCheck && piCheck.status === 'succeeded') {
-            const conf = await finance.confirmClientWalletTopup({
-              entryId: ownedEntry.id,
-              gatewayTxId: piCheck.id,
-              paidAmount: piCheck.amountBrl
-            });
-            realtimeHub.publish('wallet:updated', { clientId: clientSession.sub, balance: conf.wallet.balance }, { clientId: clientSession.sub });
-            return sendJson(res, 200, { ok: true, ...conf });
-          }
         }
         return sendJson(res, 402, { ok: false, error: 'Pagamento PIX ainda aguardando compensação bancária.' });
       }
@@ -6716,130 +6480,6 @@ async function handleApiRequest(req, res) {
       }
     }
 
-    if (pathname === '/api/client/wallet/topup/wallet-intent' && method === 'POST') {
-      await ensureClientsSchema();
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login para adicionar saldo com Apple Pay.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      const body = await parseBody(req);
-      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
-      const amount = Number(String(body.amount ?? '').replace(',', '.'));
-      if (!Number.isFinite(amount) || amount < finance.MIN_CLIENT_WALLET_TOPUP_BRL) {
-        return sendJson(res, 400, {
-          ok: false,
-          error: `O valor mínimo para depósito na carteira é de R$ ${finance.MIN_CLIENT_WALLET_TOPUP_BRL.toFixed(2).replace('.', ',')}.`
-        });
-      }
-      const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
-      const cRow = cRes.rows[0] || {};
-      try {
-        const intentData = await stripeGateway.createWalletHoldIntent({
-          amountBrl: amount,
-          clientId: targetClientId,
-          clientPhone: cRow.phone || clientSession?.phone || '',
-          clientEmail: cRow.email || clientSession?.email || '',
-          clientName: cRow.name || 'Passageiro Kavro',
-          captureMethod: 'automatic',
-          purpose: 'client_wallet_topup',
-          description: `Depósito Carteira Kavro Drive (${targetClientId})`
-        });
-        return sendJson(res, 200, { ok: true, ...intentData });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao preparar pagamento Apple Pay.' });
-      }
-    }
-
-    if (pathname === '/api/client/wallet/topup/checkout-session' && method === 'POST') {
-      await ensureClientsSchema();
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login para adicionar saldo na carteira.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      const body = await parseBody(req);
-      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
-      const amount = Number(String(body.amount ?? '').replace(',', '.'));
-      if (!Number.isFinite(amount) || amount < finance.MIN_CLIENT_WALLET_TOPUP_BRL) {
-        return sendJson(res, 400, {
-          ok: false,
-          error: `O valor mínimo para depósito na carteira é de R$ ${finance.MIN_CLIENT_WALLET_TOPUP_BRL.toFixed(2).replace('.', ',')}.`
-        });
-      }
-      const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
-      const cRow = cRes.rows[0] || {};
-      const returnPath = typeof body.returnPath === 'string' && body.returnPath.startsWith('/') ? body.returnPath : '/';
-      const sep = returnPath.includes('?') ? '&' : '?';
-      const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
-      const reqProto = String(req.headers['x-forwarded-proto'] || (reqHost.includes('localhost') || reqHost.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
-      const originUrl = reqHost ? `${reqProto}://${reqHost}` : 'https://kavrodrive.vercel.app';
-      try {
-        const sessionData = await stripeGateway.createWalletCheckoutSession({
-          amountBrl: amount,
-          rideTitle: `Recarga Carteira Kavro Drive (R$ ${amount.toFixed(2).replace('.', ',')})`,
-          rideDescription: 'Saldo para pagar corridas com confirmação instantânea',
-          originUrl,
-          clientId: targetClientId,
-          clientPhone: cRow.phone || clientSession?.phone || '',
-          clientEmail: cRow.email || clientSession?.email || '',
-          clientName: cRow.name || 'Passageiro Kavro',
-          captureMethod: 'automatic',
-          purpose: 'client_wallet_topup',
-          successPath: `${returnPath}${sep}wallet_checkout_session_id={CHECKOUT_SESSION_ID}`,
-          cancelPath: `${returnPath}${sep}wallet_checkout_canceled=1`,
-          extraMetadata: { returnPath }
-        });
-        return sendJson(res, 200, { ok: true, ...sessionData });
-      } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao abrir checkout de recarga.' });
-      }
-    }
-
-    if (pathname === '/api/client/wallet/topup/checkout-complete' && method === 'POST') {
-      await ensureClientsSchema();
-      const isAdmin = await isAuthorizedAdmin(req);
-      const clientSession = verifyClientToken(req);
-      if (!isAdmin && !clientSession) {
-        return sendJson(res, 401, { ok: false, error: 'Faça login para concluir seu depósito.' });
-      }
-      if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
-      }
-      const body = await parseBody(req);
-      const sessionId = String(body.sessionId || '').trim();
-      if (!sessionId) {
-        return sendJson(res, 400, { ok: false, error: 'Identificador da sessão de recarga ausente.' });
-      }
-      const sessionCheck = await stripeGateway.retrieveWalletCheckoutSession(sessionId);
-      if (!sessionCheck.authorized || !sessionCheck.paymentIntentId) {
-        return sendJson(res, 402, { ok: false, error: 'Depósito ainda não foi autorizado.' });
-      }
-      const sessionClientId = String(sessionCheck.metadata?.clientId || clientSession?.sub || '').trim();
-      if (!isAdmin && sessionClientId && clientSession?.sub && sessionClientId !== clientSession.sub) {
-        return sendJson(res, 403, { ok: false, error: 'Esta sessão de depósito pertence a outro passageiro.' });
-      }
-      const result = await finance.createClientWalletTopup({
-        clientId: sessionClientId || clientSession.sub,
-        clientPhone: clientSession?.phone || '',
-        clientEmail: clientSession?.email || '',
-        amount: sessionCheck.amountBrl,
-        method: sessionCheck.walletType === 'apple_pay' ? 'apple_pay' : 'cartao_credito',
-        stripePaymentIntentId: sessionCheck.paymentIntentId,
-        idempotencyKey: `wallet_topup_cs_${sessionId}`
-      });
-      if (result.ok && result.wallet) {
-        realtimeHub.publish('wallet:updated', { clientId: result.wallet.clientId, balance: result.wallet.balance }, { clientId: result.wallet.clientId });
-      }
-      return sendJson(res, 200, result);
-    }
-
     if (pathname === '/api/client/wallet/admin-adjust' && method === 'POST') {
       await ensureClientsSchema();
       if (!await isAuthorizedAdmin(req)) {
@@ -6875,144 +6515,6 @@ async function handleApiRequest(req, res) {
         description: reason
       });
       return sendJson(res, 200, { ok: true, wallet: resCredit?.wallet });
-    }
-
-    // WEBHOOK OFICIAL STRIPE (ASSINATURA CRIPTOGRÁFICA Stripe-Signature + RAW BODY)
-    if (pathname === '/api/webhooks/stripe' && method === 'POST') {
-      const rawBody = await readRawBodyBuffer(req);
-      const sigHeader = String(req.headers['stripe-signature'] || '').trim();
-      let event;
-      try {
-        event = stripeGateway.constructWebhookEvent(rawBody, sigHeader);
-      } catch (err) {
-        return sendJson(res, 400, {
-          ok: false,
-          error: err?.message || 'Assinatura Stripe-Signature inválida.'
-        });
-      }
-
-      const evtType = String(event?.type || '');
-      const evtObj = event?.data?.object || {};
-
-      if (evtType === 'payment_intent.succeeded') {
-        const pi = evtObj;
-        const meta = pi.metadata || {};
-        const paidBrl = stripeGateway.toBrlFromCents(pi.amount_received || pi.amount || 0);
-
-        if (meta.purpose === 'driver_debt_pix' && meta.driverId) {
-          const result = await finance.confirmDriverDebtSettlementWebhook({
-            driverId: String(meta.driverId),
-            amount: paidBrl,
-            gatewayTxId: String(pi.id)
-          });
-          await audit.recordAuditEvent({
-            category: 'financeiro_corridas',
-            actionKey: 'driver_debt_settled',
-            title: 'Quitação de dívida de motorista via PIX',
-            summary: `Dívida de ${result.wallet?.driverName || meta.driverId} quitada via PIX em ${audit.formatMoneyPt(paidBrl)}. Saldo devedor atual: ${audit.formatMoneyPt(result.wallet?.debtBalance || 0)}.`,
-            severity: 'info',
-            actorRole: 'gateway',
-            actorId: String(meta.driverId),
-            actorName: 'Webhook Pagamentos',
-            entityType: 'motorista',
-            entityId: String(meta.driverId),
-            entityLabel: result.wallet?.driverName || String(meta.driverId),
-            relatedIds: { driverId: String(meta.driverId), gatewayTxId: String(pi.id), ledgerId: result.entry?.id || null },
-            ipAddress: getRequestClientIp(req),
-            userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
-          });
-          return sendJson(res, 200, { ok: true, received: true, type: 'driver_debt_pix', ...result });
-        }
-
-        if (meta.purpose === 'client_wallet_topup' && meta.clientId) {
-          const result = await finance.confirmClientWalletTopup({
-            entryId: meta.entryId || null,
-            gatewayTxId: String(pi.id),
-            paidAmount: paidBrl
-          });
-          await audit.recordAuditEvent({
-            category: 'financeiro_corridas',
-            actionKey: 'client_wallet_topup_confirmed',
-            title: 'Depósito na carteira do passageiro confirmado via PIX',
-            summary: `Recarga de ${audit.formatMoneyPt(paidBrl)} confirmada na carteira de ${result.entry?.clientName || meta.clientId}. Saldo atual: ${audit.formatMoneyPt(result.wallet?.balance || 0)}.`,
-            severity: 'info',
-            actorRole: 'gateway',
-            actorId: String(meta.clientId),
-            actorName: 'Webhook Pagamentos',
-            entityType: 'passageiro',
-            entityId: String(meta.clientId),
-            entityLabel: result.entry?.clientName || String(meta.clientId),
-            relatedIds: { clientId: String(meta.clientId), gatewayTxId: String(pi.id), walletEntryId: result.entry?.id || null },
-            ipAddress: getRequestClientIp(req),
-            userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
-          });
-          realtimeHub.publish(
-            'wallet:updated',
-            { clientId: String(meta.clientId), balance: result.wallet?.balance || 0 },
-            { clientId: String(meta.clientId) }
-          );
-          return sendJson(res, 200, { ok: true, received: true, type: 'client_wallet_topup', ...result });
-        }
-
-        let targetRideId = meta.rideId ? normalizeRideId(meta.rideId) : '';
-        if (!targetRideId && pi.id) {
-          const matchedTx = await finance.getPaymentTxByGatewayTxId(pi.id);
-          if (matchedTx?.rideId) targetRideId = matchedTx.rideId;
-        }
-        if (targetRideId) {
-          const settlement = await confirmDigitalRidePaymentAndPublish({
-            rideId: targetRideId,
-            paidAmountBrl: paidBrl,
-            gatewayTxId: String(pi.id),
-            gatewayLabel: 'Stripe'
-          });
-          return sendJson(res, 200, { ok: true, received: true, eventType: evtType, ...settlement });
-        }
-        return sendJson(res, 200, { ok: true, received: true, eventType: evtType, ignored: true });
-      }
-
-      if (evtType === 'payment_intent.payment_failed' || evtType === 'payment_intent.canceled') {
-        const pi = evtObj;
-        const tx = pi?.id ? await finance.getPaymentTxByGatewayTxId(pi.id) : null;
-        if (tx && tx.status === 'aguardando') {
-          await finance.savePaymentTransaction({
-            ...tx,
-            status: evtType === 'payment_intent.canceled' ? 'cancelado' : 'falhou',
-            failureReason: pi.last_payment_error?.message || (evtType === 'payment_intent.canceled' ? 'PIX expirado ou cancelado' : 'Falha no pagamento online')
-          });
-        }
-        return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
-      }
-
-      if (evtType === 'charge.refunded') {
-        const ch = evtObj;
-        const piId = typeof ch.payment_intent === 'string' ? ch.payment_intent : ch.payment_intent?.id;
-        const tx = piId ? await finance.getPaymentTxByGatewayTxId(piId) : null;
-        if (tx) {
-          await finance.savePaymentTransaction({
-            ...tx,
-            status: 'reembolsado',
-            refundedAmount: stripeGateway.toBrlFromCents(ch.amount_refunded || ch.amount || 0)
-          });
-        }
-        return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
-      }
-
-      if (evtType === 'charge.dispute.created') {
-        const disp = evtObj;
-        const piId = typeof disp.payment_intent === 'string' ? disp.payment_intent : disp.payment_intent?.id;
-        const tx = piId ? await finance.getPaymentTxByGatewayTxId(piId) : null;
-        if (tx) {
-          await finance.savePaymentTransaction({
-            ...tx,
-            status: 'contestado',
-            disputeReason: disp.reason || 'Contestação aberta no gateway de pagamento'
-          });
-        }
-        return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
-      }
-
-      return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
     }
 
     // WEBHOOK OFICIAL EFÍ BANK (PIX RECEBIDO COM VALIDAÇÃO HMAC + CONSULTA AO VIVO /v2/cob/:txid)
@@ -7219,9 +6721,9 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 200, mpResult);
       }
 
-      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem Efí/Stripe/MP Live) pelo dono autenticado
+      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem Efí/MP Live) pelo dono autenticado
       const efiPixActive = await efiBankGateway.isEfiPixActive();
-      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
+      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN;
 
       // 1) Quitação de dívida de motorista via PIX
       if (eventType === 'debt.confirmed' && body.driverId) {
