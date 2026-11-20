@@ -1545,6 +1545,7 @@ test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual captur
         const isPix = params?.payment_method_data?.type === 'pix';
         const pi = {
           id,
+          client_secret: `${id}_secret_test`,
           amount: params.amount,
           amount_capturable: isPix ? 0 : params.amount,
           amount_received: 0,
@@ -1861,6 +1862,66 @@ test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual captur
     const debtWhJson = await debtWhRes.json();
     assert.equal(debtWhRes.status, 200);
     assert.equal(debtWhJson.wallet.debtBalance, 0);
+
+    // 8) Wallet Express / Apple Pay: cria hold manual para tarifa oficial e valida anti-adulteracao
+    const walletIntentRes = await apiJson('/api/payments/stripe/wallet-intent', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        category: 'kavro_go',
+        distanceKm: 10,
+        durationMin: 15,
+        time: '14:00'
+      }
+    });
+    assert.equal(walletIntentRes.status, 200);
+    assert.ok(walletIntentRes.json.clientSecret);
+    assert.ok(walletIntentRes.json.paymentIntentId);
+    assert.equal(walletIntentRes.json.amountBrl, 47.5);
+
+    const walletRideRes = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Cliente Stripe',
+        clientPhone: '(48) 99988-7766',
+        originAddress: 'Origem Wallet, 10',
+        destinationAddress: 'Destino Wallet, 50',
+        distanceKm: 10,
+        durationMin: 15,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardBrand: 'Apple Pay',
+        stripePaymentIntentId: walletIntentRes.json.paymentIntentId
+      }
+    });
+    assert.equal(walletRideRes.status, 200);
+    assert.equal(walletRideRes.json.ride.paymentStatus, 'autorizado');
+    assert.equal(walletRideRes.json.ride.status, 'aguardando_confirmacao');
+
+    // Tentativa de reaproveitar hold menor (R$ 47.50) para corrida de 25km (~R$ 106.75) deve falhar (402)
+    const underpaidWalletRide = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Cliente Stripe',
+        clientPhone: '(48) 99988-7766',
+        originAddress: 'Origem Longa, 10',
+        destinationAddress: 'Destino Longo, 90',
+        distanceKm: 25,
+        durationMin: 30,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardBrand: 'Apple Pay',
+        stripePaymentIntentId: walletIntentRes.json.paymentIntentId
+      }
+    });
+    assert.equal(underpaidWalletRide.status, 402);
   } finally {
     stripeGateway._setStripeClientFactoryForTest(null);
     if (prevSecret === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = prevSecret;

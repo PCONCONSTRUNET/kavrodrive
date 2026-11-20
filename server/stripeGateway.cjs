@@ -307,14 +307,66 @@ async function authorizeCardHold({
 
 async function verifyAuthorizedPaymentIntent(paymentIntentId) {
   const stripe = getStripeClient();
-  const pi = await stripe.paymentIntents.retrieve(String(paymentIntentId).trim());
+  const pi = await stripe.paymentIntents.retrieve(String(paymentIntentId).trim(), {
+    expand: ['latest_charge', 'payment_method']
+  });
   const ok = pi && (pi.status === 'requires_capture' || pi.status === 'succeeded');
+  const chargeObj = pi?.latest_charge && typeof pi.latest_charge === 'object' ? pi.latest_charge : null;
+  const chargeCard = chargeObj?.payment_method_details?.card || null;
+  const pmCard = pi?.payment_method && typeof pi.payment_method === 'object' ? pi.payment_method.card : null;
+  const cardInfo = chargeCard || pmCard || {};
+  const walletType = String(cardInfo?.wallet?.type || '').toLowerCase();
+  const cardBrand =
+    walletType === 'apple_pay'
+      ? 'Apple Pay'
+      : walletType === 'google_pay'
+        ? 'Google Pay'
+        : cardInfo?.brand
+          ? normalizeStripeBrand(cardInfo.brand)
+          : undefined;
   return {
     authorized: Boolean(ok),
     paymentIntentId: pi?.id,
     status: pi?.status,
     amountBrl: toBrlFromCents(pi?.amount || 0),
-    authCode: pi?.latest_charge ? String(pi.latest_charge) : `ST-${String(pi?.id || '').slice(-8).toUpperCase()}`
+    authCode: chargeObj?.id ? String(chargeObj.id) : (pi?.latest_charge ? String(pi.latest_charge) : `ST-${String(pi?.id || '').slice(-8).toUpperCase()}`),
+    cardBrand,
+    cardLast4: cardInfo?.last4 ? String(cardInfo.last4) : undefined,
+    walletType: walletType || undefined
+  };
+}
+
+async function createWalletHoldIntent({
+  amountBrl,
+  clientId = '',
+  clientPhone = '',
+  clientEmail = '',
+  clientName = '',
+  categoryId = ''
+}) {
+  const stripe = getStripeClient();
+  const amountCents = toBrlCents(amountBrl);
+  const customerId = await ensureCustomer({ clientId, clientPhone, clientEmail, clientName });
+
+  const pi = await stripe.paymentIntents.create({
+    amount: amountCents,
+    currency: 'brl',
+    customer: customerId,
+    automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+    capture_method: 'manual',
+    description: `Pré-autorização de corrida Kavro Drive`,
+    metadata: {
+      purpose: 'ride_wallet',
+      clientId: String(clientId || ''),
+      categoryId: String(categoryId || '')
+    }
+  });
+
+  return {
+    clientSecret: pi.client_secret,
+    paymentIntentId: pi.id,
+    customerId,
+    amountBrl: toBrlFromCents(pi.amount || amountCents)
   };
 }
 
@@ -476,6 +528,7 @@ module.exports = {
   parseStripeGatewayToken,
   ensureCustomer,
   createCardSetupIntent,
+  createWalletHoldIntent,
   resolveSavedCard,
   authorizeCardHold,
   verifyAuthorizedPaymentIntent,

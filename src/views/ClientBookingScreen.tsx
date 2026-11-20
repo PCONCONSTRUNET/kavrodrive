@@ -34,6 +34,7 @@ import { SafetyCenterModal } from '../components/SafetyCenterModal';
 import { RideCheckAlertModal } from '../components/RideCheckAlertModal';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
 import { StripeCardForm, confirmStripe3dsPaymentIntent } from '../components/StripeCardForm';
+import { StripeWalletCheckout } from '../components/StripeWalletCheckout';
 import { RideSearchingStageCard } from '../components/RideSearchingStageCard';
 import { PixQrCode } from '../components/PixQrCode';
 import { RideCancelModal } from '../components/RideCancelModal';
@@ -155,6 +156,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isRatingSheetOpen, setIsRatingSheetOpen] = useState(false);
   const [ratedRideSheetShownId, setRatedRideSheetShownId] = useState<string>('');
   const [copiedPix, setCopiedPix] = useState(false);
+  const [pixRemainingLabel, setPixRemainingLabel] = useState('');
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
   const [locatingOriginGps, setLocatingOriginGps] = useState(false);
   const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
@@ -167,6 +169,38 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   useEffect(() => {
     setTrustedCount(currentUser?.trustedContacts?.length || 0);
   }, [currentUser?.trustedContacts?.length]);
+
+  const pixExpiresAtRaw =
+    activeRide?.status === 'aguardando_pagamento'
+      ? (activeRide as unknown as { pixExpiresAt?: string; expiresAt?: string }).pixExpiresAt ||
+        (activeRide as unknown as { pixExpiresAt?: string; expiresAt?: string }).expiresAt ||
+        ''
+      : '';
+
+  useEffect(() => {
+    if (!pixExpiresAtRaw) {
+      setPixRemainingLabel('');
+      return;
+    }
+    const updateCountdown = () => {
+      const expiresMs = new Date(pixExpiresAtRaw).getTime();
+      if (!Number.isFinite(expiresMs)) {
+        setPixRemainingLabel('');
+        return;
+      }
+      const diffSec = Math.max(0, Math.floor((expiresMs - Date.now()) / 1000));
+      if (diffSec <= 0) {
+        setPixRemainingLabel('Expirado');
+        return;
+      }
+      const mins = Math.floor(diffSec / 60);
+      const secs = diffSec % 60;
+      setPixRemainingLabel(`${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`);
+    };
+    updateCountdown();
+    const timerId = window.setInterval(updateCountdown, 1000);
+    return () => window.clearInterval(timerId);
+  }, [pixExpiresAtRaw]);
 
   const handleUseCurrentGpsForOrigin = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -473,15 +507,20 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     setCardCvv('');
   };
 
-  const handleRequestRideNow = async () => {
+  const validateBookingBeforePayment = (): {
+    ok: boolean;
+    error?: string;
+    isDeliveryOrder: boolean;
+    deliveryDetails?: RideDeliveryDetails;
+  } => {
     setRequestError('');
     if (!origin) {
       setIsPickingOrigin(true);
-      return;
+      return { ok: false, error: 'Selecione o local de partida.', isDeliveryOrder: false };
     }
     if (!destination) {
       setIsPickingDestination(true);
-      return;
+      return { ok: false, error: 'Selecione o destino da viagem.', isDeliveryOrder: false };
     }
 
     const isDeliveryOrder =
@@ -494,18 +533,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       const phoneDigits = cleanPhone.replace(/\D/g, '');
       const cleanItem = deliveryItemDesc.trim();
       if (cleanName.length < 2) {
-        setRequestError(
-          `Informe o nome completo de quem vai ${deliveryRole === 'sender' ? 'receber' : 'entregar'} o pacote.`
-        );
-        return;
+        const msg = `Informe o nome completo de quem vai ${deliveryRole === 'sender' ? 'receber' : 'entregar'} o pacote.`;
+        setRequestError(msg);
+        return { ok: false, error: msg, isDeliveryOrder };
       }
       if (phoneDigits.length < 10) {
-        setRequestError('Informe um WhatsApp ou telefone válido com DDD para a entrega.');
-        return;
+        const msg = 'Informe um WhatsApp ou telefone válido com DDD para a entrega.';
+        setRequestError(msg);
+        return { ok: false, error: msg, isDeliveryOrder };
       }
       if (cleanItem.length < 2) {
-        setRequestError('Descreva o produto ou item que será enviado na entrega.');
-        return;
+        const msg = 'Descreva o produto ou item que será enviado na entrega.';
+        setRequestError(msg);
+        return { ok: false, error: msg, isDeliveryOrder };
       }
       normalizedDeliveryPayload = {
         role: deliveryRole,
@@ -518,18 +558,28 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       };
     }
 
-    const isCard = paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito';
-    const chosenCard = savedCards.find(c => c.id === selectedCardId);
-    if (isCard && !chosenCard) {
-      setIsAddingCardModal(true);
-      return;
+    if (onlineDrivers.length > 0 && selectedCatStats.availableDriversCount === 0) {
+      const msg = `Não há motoristas disponíveis para ${selectedCatObj.name} neste momento.`;
+      setRequestError(msg);
+      return { ok: false, error: msg, isDeliveryOrder };
     }
 
-    // Verifica se há motoristas disponíveis e habilitados para a categoria escolhida
-    if (onlineDrivers.length > 0 && selectedCatStats.availableDriversCount === 0) {
-      setRequestError(
-        `Não há motoristas disponíveis e habilitados para a categoria ${selectedCatObj.name} neste momento. Selecione outra modalidade disponível abaixo.`
-      );
+    return { ok: true, isDeliveryOrder, deliveryDetails: normalizedDeliveryPayload };
+  };
+
+  const submitBookingRequest = async (overrides?: {
+    stripePaymentIntentId?: string;
+    paymentMethodOverride?: PaymentMethod;
+    cardBrandOverride?: string;
+  }) => {
+    const validation = validateBookingBeforePayment();
+    if (!validation.ok) return;
+
+    const effectiveMethod = overrides?.paymentMethodOverride || paymentMethod;
+    const isCard = effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito';
+    const chosenCard = savedCards.find(c => c.id === selectedCardId);
+    if (isCard && !overrides?.stripePaymentIntentId && !chosenCard) {
+      setIsAddingCardModal(true);
       return;
     }
 
@@ -541,32 +591,33 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       clientId: currentUser?.id,
       clientName: currentUser?.name || 'Passageiro',
       clientPhone: currentUser?.phone || '',
-      origin,
-      destination,
+      origin: origin!,
+      destination: destination!,
       date: todayStr,
       time: nowTimeStr,
-      passengers: isDeliveryOrder ? 0 : passengers,
-      hasLuggage: isDeliveryOrder ? deliveryPackageSize === 'grande' : hasLuggage,
+      passengers: validation.isDeliveryOrder ? 0 : passengers,
+      hasLuggage: validation.isDeliveryOrder ? deliveryPackageSize === 'grande' : hasLuggage,
       distanceKm,
       durationMin,
       category: selectedCategory,
       categoryName: pricing.categoryName,
-      serviceType: (isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
-      deliveryDetails: normalizedDeliveryPayload || null,
+      serviceType: (validation.isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
+      deliveryDetails: validation.deliveryDetails || null,
       appliedFareSnapshot: {
         ...pricing.appliedFareSnapshot,
-        categoryType: (isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
-        ...(normalizedDeliveryPayload ? { deliveryDetails: normalizedDeliveryPayload } : {})
+        categoryType: (validation.isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
+        ...(validation.deliveryDetails ? { deliveryDetails: validation.deliveryDetails } : {})
       },
       baseFare: pricing.appliedFareSnapshot.baseFare,
       commissionPercent: pricing.commissionPercent,
       totalPrice: pricing.totalPrice,
-      paymentMethod,
-      cardId: isCard ? chosenCard?.id : undefined,
-      cardLast4: isCard ? chosenCard?.last4 : undefined,
-      cardBrand: isCard ? chosenCard?.brand : undefined,
-      notes: isDeliveryOrder
-        ? (deliveryInstructions.trim() || `Entrega: ${normalizedDeliveryPayload?.itemDescription || ''}`)
+      paymentMethod: effectiveMethod,
+      cardId: isCard && !overrides?.stripePaymentIntentId ? chosenCard?.id : undefined,
+      cardLast4: isCard && !overrides?.stripePaymentIntentId ? chosenCard?.last4 : undefined,
+      cardBrand: overrides?.cardBrandOverride || (isCard ? chosenCard?.brand : undefined),
+      stripePaymentIntentId: overrides?.stripePaymentIntentId,
+      notes: validation.isDeliveryOrder
+        ? (deliveryInstructions.trim() || `Entrega: ${validation.deliveryDetails?.itemDescription || ''}`)
         : notes,
       isManualBooking: false
     };
@@ -614,6 +665,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   };
 
+  const handleRequestRideNow = () => submitBookingRequest();
+
   const handleSimulatePixWebhook = async () => {
     if (!activeRide) return;
     setIsSimulatingWebhook(true);
@@ -640,215 +693,326 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   if (activeRide && activeRide.status === 'aguardando_pagamento' && activeRide.paymentMethod === 'pix') {
     const qrUrl = activeRide.pixQrCode || '';
     const copyPaste = activeRide.pixCopyPaste || '';
+    const destinationLabel = activeRide.destination?.address || 'Destino selecionado';
 
     return (
-      <div className="animate-fade-in" style={{ padding: '12px 14px 124px 14px', maxWidth: 480, margin: '0 auto' }}>
+      <div className="animate-fade-in" style={{ padding: '12px 14px 124px 14px', maxWidth: 440, margin: '0 auto' }}>
         <div style={{
           backgroundColor: '#FFFFFF',
-          borderRadius: 22,
-          padding: '16px 16px',
-          border: '1.5px solid #E2E8F0',
-          boxShadow: '0 10px 30px rgba(15, 23, 42, 0.06)',
-          textAlign: 'center'
+          borderRadius: 24,
+          overflow: 'hidden',
+          border: '1px solid #E2E8F0',
+          boxShadow: '0 14px 36px rgba(15, 23, 42, 0.08)'
         }}>
+          {/* Cabeçalho exclusivo Kavro Drive */}
           <div style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 6,
-            backgroundColor: '#FEF3C7',
-            color: '#B45309',
-            padding: '5px 12px',
-            borderRadius: 999,
-            fontSize: '0.72rem',
-            fontWeight: 800,
-            marginBottom: 8
+            background: 'linear-gradient(135deg, #0D1419 0%, #16232D 58%, #121A21 100%)',
+            padding: '16px 18px',
+            color: '#FFFFFF'
           }}>
-            <Clock size={14} />
-            <span>
-              {paymentsConfig.stripeEnabled
-                ? 'AGUARDANDO CONFIRMAÇÃO VIA STRIPE PIX'
-                : 'AGUARDANDO CONFIRMAÇÃO DO GATEWAY PIX'}
-            </span>
-          </div>
-
-          <h2 style={{ fontSize: '1.15rem', fontWeight: 900, color: '#0F172A', margin: '0 0 4px 0' }}>
-            Pague com PIX para chamar seu motorista
-          </h2>
-          <p style={{ fontSize: '0.78rem', color: '#64748B', margin: '0 0 10px 0', lineHeight: 1.35 }}>
-            Assim que o banco confirmar o pagamento via webhook, seu motorista é acionado automaticamente na hora.
-          </p>
-
-          <div style={{
-            backgroundColor: '#F8FAFC',
-            borderRadius: 14,
-            padding: '10px 12px',
-            border: '1px solid #E2E8F0',
-            marginBottom: 12
-          }}>
-            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
-              Valor da Corrida ({formatRideCode(activeRide)})
-            </div>
-            <div style={{ fontSize: '1.55rem', fontWeight: 900, color: '#15803D' }}>
-              R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
-            </div>
-          </div>
-
-          {(copyPaste || qrUrl) && (
             <div style={{
-              width: 184,
-              height: 184,
-              margin: '0 auto 12px auto',
-              padding: 8,
-              backgroundColor: '#FFFFFF',
-              borderRadius: 16,
-              border: '2px solid #76D800',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              marginBottom: 14
+            }}>
+              <img
+                src="/logo-horizontal-white.png"
+                alt="Kavro Drive"
+                style={{ height: 22, width: 'auto', objectFit: 'contain' }}
+              />
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                backgroundColor: 'rgba(118, 216, 0, 0.14)',
+                border: '1px solid rgba(118, 216, 0, 0.35)',
+                color: '#BEF264',
+                padding: '4px 10px',
+                borderRadius: 999,
+                fontSize: '0.68rem',
+                fontWeight: 800
+              }}>
+                <span style={{
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  backgroundColor: '#76D800',
+                  boxShadow: '0 0 8px #76D800'
+                }} />
+                <span>{paymentsConfig.stripeEnabled ? 'PIX Stripe' : 'PIX Gateway'}</span>
+                {pixRemainingLabel && (
+                  <span style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    marginLeft: 2,
+                    paddingLeft: 6,
+                    borderLeft: '1px solid rgba(255,255,255,0.18)',
+                    color: pixRemainingLabel === 'Expirado' ? '#FCA5A5' : '#FFFFFF',
+                    fontVariantNumeric: 'tabular-nums'
+                  }}>
+                    <Clock size={11} />
+                    {pixRemainingLabel}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{
+              display: 'flex',
+              alignItems: 'flex-end',
+              justifyContent: 'space-between',
+              gap: 12
+            }}>
+              <div style={{ minWidth: 0, flex: 1, textAlign: 'left' }}>
+                <div style={{
+                  fontSize: '0.66rem',
+                  fontWeight: 700,
+                  color: '#94A3B8',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.05em'
+                }}>
+                  Corrida {formatRideCode(activeRide)}
+                </div>
+                <div style={{
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  color: '#E2E8F0',
+                  marginTop: 2,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}>
+                  {destinationLabel}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 700,
+                  color: '#94A3B8',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em'
+                }}>
+                  Total PIX
+                </div>
+                <div style={{
+                  fontSize: '1.42rem',
+                  fontWeight: 900,
+                  color: '#76D800',
+                  letterSpacing: '-0.02em',
+                  lineHeight: 1.1
+                }}>
+                  R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Corpo do Checkout PIX */}
+          <div style={{ padding: '18px 18px 16px 18px', textAlign: 'center' }}>
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A', margin: '0 0 4px 0' }}>
+              Pague com PIX para chamar seu motorista
+            </h2>
+            <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '0 0 14px 0', lineHeight: 1.35 }}>
+              Liberação automática pelo webhook assim que o banco confirmar.
+            </p>
+
+            {(copyPaste || qrUrl) && (
+              <div style={{
+                width: 176,
+                height: 176,
+                margin: '0 auto 10px auto',
+                padding: 8,
+                backgroundColor: '#FFFFFF',
+                borderRadius: 20,
+                border: '1.5px solid #BEF264',
+                boxShadow: '0 8px 24px rgba(118, 216, 0, 0.14), 0 2px 8px rgba(15, 23, 42, 0.05)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxSizing: 'border-box'
+              }}>
+                <PixQrCode payload={copyPaste} fallbackUrl={qrUrl} size={172} />
+              </div>
+            )}
+
+            {copyPaste && (
+              <>
+                <div style={{
+                  maxWidth: 260,
+                  margin: '0 auto 12px auto',
+                  padding: '5px 10px',
+                  borderRadius: 999,
+                  backgroundColor: '#F8FAFC',
+                  border: '1px solid #E2E8F0',
+                  fontSize: '0.68rem',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  color: '#64748B',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}>
+                  {copyPaste}
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(copyPaste);
+                      setCopiedPix(true);
+                      setTimeout(() => setCopiedPix(false), 2500);
+                    }}
+                    style={{
+                      padding: '10px 22px',
+                      borderRadius: 999,
+                      backgroundColor: copiedPix ? '#16A34A' : '#121A21',
+                      color: '#FFFFFF',
+                      border: 'none',
+                      fontWeight: 800,
+                      fontSize: '0.82rem',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 7,
+                      cursor: 'pointer',
+                      boxShadow: '0 6px 16px rgba(18, 26, 33, 0.18)',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {copiedPix ? <Check size={15} /> : <Copy size={15} />}
+                    <span>{copiedPix ? 'Código Copiado!' : 'Copiar Código PIX'}</span>
+                  </button>
+                </div>
+              </>
+            )}
+
+            <div style={{
+              backgroundColor: '#F0FDF4',
+              border: '1px solid #BBF7D0',
+              borderRadius: 12,
+              padding: '9px 12px',
+              fontSize: '0.73rem',
+              color: '#166534',
+              lineHeight: 1.35,
+              marginBottom: 14,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              textAlign: 'left'
+            }}>
+              <Lock size={14} color="#15803D" style={{ flexShrink: 0 }} />
+              <span>
+                <strong>Segurança automática:</strong> não precisa enviar comprovante. A corrida inicia na hora que o pagamento compensar.
+              </span>
+            </div>
+
+            {/* Botão de Simulação do Webhook apenas em desenvolvimento sem Stripe ativa */}
+            {import.meta.env.DEV && !paymentsConfig.stripeEnabled && (
+              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={handleSimulatePixWebhook}
+                  disabled={isSimulatingWebhook}
+                  style={{
+                    padding: '9px 18px',
+                    borderRadius: 999,
+                    backgroundColor: '#76D800',
+                    color: '#121A21',
+                    border: 'none',
+                    fontWeight: 900,
+                    fontSize: '0.78rem',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6
+                  }}
+                >
+                  <Sparkles size={14} />
+                  <span>
+                    {isSimulatingWebhook ? 'Confirmando no Gateway...' : 'Simular Confirmação PIX (Dev)'}
+                  </span>
+                </button>
+              </div>
+            )}
+
+            <div style={{
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxSizing: 'border-box'
+              flexWrap: 'wrap',
+              gap: 8
             }}>
-              <PixQrCode payload={copyPaste} fallbackUrl={qrUrl} size={184} />
+              {canPassengerEditRoute(activeRide) && (
+                <button
+                  type="button"
+                  onClick={() => setIsEditRouteModalOpen(true)}
+                  style={{
+                    backgroundColor: '#EFF6FF',
+                    border: '1px solid #BFDBFE',
+                    borderRadius: 999,
+                    color: '#1D4ED8',
+                    fontSize: '0.76rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    padding: '8px 14px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5
+                  }}
+                >
+                  <Pencil size={13} />
+                  <span>Alterar trajeto</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsCancelModalOpen(true)}
+                style={{
+                  backgroundColor: '#FEF2F2',
+                  border: '1px solid #FECACA',
+                  borderRadius: 999,
+                  color: '#DC2626',
+                  fontSize: '0.76rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  padding: '8px 14px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5
+                }}
+              >
+                <span>Cancelar ou trocar pagamento</span>
+              </button>
             </div>
-          )}
 
-          {copyPaste && (
-            <button
-              type="button"
-              onClick={() => {
-                navigator.clipboard.writeText(copyPaste);
-                setCopiedPix(true);
-                setTimeout(() => setCopiedPix(false), 2500);
+            <RideEditRouteModal
+              isOpen={isEditRouteModalOpen}
+              ride={activeRide}
+              config={config}
+              onClose={() => setIsEditRouteModalOpen(false)}
+              onUpdated={(updated) => {
+                setIsEditRouteModalOpen(false);
+                setActiveRide(updated);
               }}
-              style={{
-                width: '100%',
-                padding: '13px 16px',
-                borderRadius: 14,
-                backgroundColor: copiedPix ? '#16A34A' : '#121A21',
-                color: '#FFFFFF',
-                border: 'none',
-                fontWeight: 800,
-                fontSize: '0.88rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                cursor: 'pointer',
-                marginBottom: 10
-              }}
-            >
-              {copiedPix ? <Check size={18} /> : <Copy size={18} />}
-              <span>{copiedPix ? 'Código PIX Copiado!' : 'Copiar Código PIX (Copia e Cola)'}</span>
-            </button>
-          )}
+            />
 
-          <div style={{
-            backgroundColor: '#F0FDF4',
-            border: '1px solid #BBF7D0',
-            borderRadius: 12,
-            padding: '10px 12px',
-            fontSize: '0.75rem',
-            color: '#166534',
-            lineHeight: 1.35,
-            marginBottom: 14,
-            textAlign: 'left'
-          }}>
-            🔒 <strong>Segurança Automática:</strong> Não é necessário enviar comprovante. O sistema libera a corrida automaticamente assim que o gateway confirma a liquidação.
+            <RideCancelModal
+              isOpen={isCancelModalOpen}
+              ride={activeRide}
+              config={config}
+              onClose={() => setIsCancelModalOpen(false)}
+              onCancelled={() => {
+                setIsCancelModalOpen(false);
+                setActiveRide(null);
+              }}
+            />
           </div>
-
-          {/* Botão de Simulação do Webhook apenas em desenvolvimento sem Stripe ativa */}
-          {import.meta.env.DEV && !paymentsConfig.stripeEnabled && (
-            <button
-              type="button"
-              onClick={handleSimulatePixWebhook}
-              disabled={isSimulatingWebhook}
-              style={{
-                width: '100%',
-                padding: '12px 14px',
-                borderRadius: 12,
-                backgroundColor: '#76D800',
-                color: '#121A21',
-                border: 'none',
-                fontWeight: 900,
-                fontSize: '0.82rem',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                marginBottom: 10
-              }}
-            >
-              <Sparkles size={16} />
-              <span>
-                {isSimulatingWebhook ? 'Confirmando no Gateway...' : '⚡ Simular Confirmação Webhook Gateway (Teste)'}
-              </span>
-            </button>
-          )}
-
-          {canPassengerEditRoute(activeRide) && (
-            <button
-              type="button"
-              onClick={() => setIsEditRouteModalOpen(true)}
-              style={{
-                backgroundColor: '#EFF6FF',
-                border: '1px solid #BFDBFE',
-                borderRadius: 10,
-                color: '#1D4ED8',
-                fontSize: '0.8rem',
-                fontWeight: 800,
-                cursor: 'pointer',
-                padding: '8px 14px',
-                marginBottom: 8,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6
-              }}
-            >
-              <Pencil size={13} />
-              <span>Alterar origem ou destino</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setIsCancelModalOpen(true)}
-            style={{
-              width: '100%',
-              marginTop: 6,
-              backgroundColor: '#FEF2F2',
-              border: '1px solid #FECACA',
-              borderRadius: 12,
-              color: '#DC2626',
-              fontSize: '0.82rem',
-              fontWeight: 800,
-              cursor: 'pointer',
-              padding: '11px 14px'
-            }}
-          >
-            Cancelar solicitação ou alterar pagamento
-          </button>
-
-          <RideEditRouteModal
-            isOpen={isEditRouteModalOpen}
-            ride={activeRide}
-            config={config}
-            onClose={() => setIsEditRouteModalOpen(false)}
-            onUpdated={(updated) => {
-              setIsEditRouteModalOpen(false);
-              setActiveRide(updated);
-            }}
-          />
-
-          <RideCancelModal
-            isOpen={isCancelModalOpen}
-            ride={activeRide}
-            config={config}
-            onClose={() => setIsCancelModalOpen(false)}
-            onCancelled={() => {
-              setIsCancelModalOpen(false);
-              setActiveRide(null);
-            }}
-          />
         </div>
       </div>
     );
@@ -1590,164 +1754,206 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         onSelect={(p) => setDestination(p)}
       />
 
-      {/* Modal de Cadastro Seguro de Cartão (Tokenização no Gateway) */}
+      {/* Modal de Cadastro Seguro de Cartão (100% Personalizado Kavro Drive + Stripe) */}
       {isAddingCardModal && (
         <div style={{
           position: 'fixed',
           inset: 0,
-          backgroundColor: 'rgba(15, 23, 42, 0.65)',
+          backgroundColor: 'rgba(15, 23, 42, 0.7)',
+          backdropFilter: 'blur(4px)',
           zIndex: 9999,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: 16
+          padding: 14
         }}>
           <div style={{
             backgroundColor: '#FFFFFF',
             borderRadius: 22,
-            padding: 20,
+            overflow: 'hidden',
             width: '100%',
             maxWidth: 400,
-            boxShadow: '0 20px 50px rgba(0,0,0,0.3)'
+            maxHeight: '92dvh',
+            overflowY: 'auto',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.35)'
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Lock size={18} color="#16A34A" />
-                <h3 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 900, color: '#0F172A' }}>
-                  Cadastrar Cartão Seguro
-                </h3>
+            {/* Cabeçalho dark com logo KAVRO DRIVE */}
+            <div style={{
+              background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 100%)',
+              padding: '12px 16px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <img
+                  src="/logo-horizontal-white.png"
+                  alt="KAVRO DRIVE"
+                  style={{ height: 20, objectFit: 'contain' }}
+                />
+                <span style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 800,
+                  color: '#86EFAC',
+                  backgroundColor: 'rgba(118, 216, 0, 0.14)',
+                  border: '1px solid rgba(118, 216, 0, 0.35)',
+                  padding: '2px 8px',
+                  borderRadius: 999
+                }}>
+                  Cartão Seguro
+                </span>
               </div>
               <button
                 type="button"
                 onClick={() => setIsAddingCardModal(false)}
-                style={{ background: 'none', border: 'none', fontSize: '1.1rem', cursor: 'pointer', color: '#64748B' }}
+                aria-label="Fechar"
+                style={{
+                  width: 30,
+                  height: 30,
+                  borderRadius: '50%',
+                  backgroundColor: 'rgba(255, 255, 255, 0.14)',
+                  border: 'none',
+                  fontSize: '0.9rem',
+                  cursor: 'pointer',
+                  color: '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
               >
                 ✕
               </button>
             </div>
 
-            <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '0 0 12px 0', lineHeight: 1.35 }}>
-              {paymentsConfig.stripePublishableKey
-                ? 'Seus dados são criptografados e tokenizados diretamente pela Stripe. A Kavro Drive não armazena número nem CVV.'
-                : 'Seus dados são criptografados e tokenizados diretamente pelo gateway. A Kavro Drive não armazena o número completo nem o CVV do cartão.'}
-            </p>
-
-            {paymentsConfig.stripePublishableKey ? (
-              <StripeCardForm
-                publishableKey={paymentsConfig.stripePublishableKey}
-                clientId={currentUser?.id}
-                clientPhone={currentUser?.phone}
-                clientEmail={currentUser?.email}
-                defaultHolderName={currentUser?.name || cardHolder}
-                cardType={cardType}
-                onChangeCardType={setCardType}
-                onCardSaved={(savedCard) => {
-                  const nextCards = [savedCard, ...savedCards];
-                  setSavedCards(nextCards);
-                  setSelectedCardId(savedCard.id);
-                  setPaymentMethod(savedCard.cardType);
-                  setIsAddingCardModal(false);
-                }}
-              />
-            ) : (
-            <form onSubmit={handleSaveNewCard} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={() => setCardType('cartao_credito')}
-                  style={{
-                    padding: '9px',
-                    borderRadius: 10,
-                    border: cardType === 'cartao_credito' ? '2px solid #121A21' : '1px solid #CBD5E1',
-                    backgroundColor: cardType === 'cartao_credito' ? '#121A21' : '#F8FAFC',
-                    color: cardType === 'cartao_credito' ? '#FFFFFF' : '#475569',
-                    fontWeight: 800,
-                    fontSize: '0.78rem',
-                    cursor: 'pointer'
+            <div style={{ padding: '14px 16px 18px 16px' }}>
+              {paymentsConfig.stripePublishableKey ? (
+                <StripeCardForm
+                  publishableKey={paymentsConfig.stripePublishableKey}
+                  clientId={currentUser?.id}
+                  clientPhone={currentUser?.phone}
+                  clientEmail={currentUser?.email}
+                  defaultHolderName={currentUser?.name || cardHolder}
+                  cardType={cardType}
+                  onChangeCardType={setCardType}
+                  onCardSaved={(savedCard) => {
+                    const nextCards = [savedCard, ...savedCards];
+                    setSavedCards(nextCards);
+                    setSelectedCardId(savedCard.id);
+                    setPaymentMethod(savedCard.cardType);
+                    setIsAddingCardModal(false);
                   }}
-                >
-                  Crédito
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCardType('cartao_debito')}
-                  style={{
-                    padding: '9px',
-                    borderRadius: 10,
-                    border: cardType === 'cartao_debito' ? '2px solid #121A21' : '1px solid #CBD5E1',
-                    backgroundColor: cardType === 'cartao_debito' ? '#121A21' : '#F8FAFC',
-                    color: cardType === 'cartao_debito' ? '#FFFFFF' : '#475569',
-                    fontWeight: 800,
-                    fontSize: '0.78rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Débito
-                </button>
-              </div>
+                />
+              ) : (
+                <form onSubmit={handleSaveNewCard} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
+                    <button
+                      type="button"
+                      onClick={() => setCardType('cartao_credito')}
+                      style={{
+                        padding: '7px 18px',
+                        borderRadius: 999,
+                        border: cardType === 'cartao_credito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
+                        backgroundColor: cardType === 'cartao_credito' ? '#0F172A' : '#F8FAFC',
+                        color: cardType === 'cartao_credito' ? '#FFFFFF' : '#475569',
+                        fontWeight: 800,
+                        fontSize: '0.76rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Crédito
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCardType('cartao_debito')}
+                      style={{
+                        padding: '7px 18px',
+                        borderRadius: 999,
+                        border: cardType === 'cartao_debito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
+                        backgroundColor: cardType === 'cartao_debito' ? '#0F172A' : '#F8FAFC',
+                        color: cardType === 'cartao_debito' ? '#FFFFFF' : '#475569',
+                        fontWeight: 800,
+                        fontSize: '0.76rem',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Débito
+                    </button>
+                  </div>
 
-              <input
-                type="text"
-                placeholder="Número do Cartão (16 dígitos)"
-                value={cardNumber}
-                onChange={(e) => setCardNumber(e.target.value)}
-                required
-                style={{ padding: '12px', borderRadius: 12, border: '1.5px solid #CBD5E1', fontSize: '0.9rem', fontWeight: 700 }}
-              />
-              <input
-                type="text"
-                placeholder="Nome impresso no cartão"
-                value={cardHolder}
-                onChange={(e) => setCardHolder(e.target.value)}
-                required
-                style={{ padding: '12px', borderRadius: 12, border: '1.5px solid #CBD5E1', fontSize: '0.88rem', fontWeight: 600 }}
-              />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                <input
-                  type="text"
-                  placeholder="Mês (MM)"
-                  maxLength={2}
-                  value={cardExpMonth}
-                  onChange={(e) => setCardExpMonth(e.target.value)}
-                  required
-                  style={{ padding: '11px', borderRadius: 12, border: '1.5px solid #CBD5E1', fontSize: '0.85rem', textAlign: 'center' }}
-                />
-                <input
-                  type="text"
-                  placeholder="Ano (AAAA)"
-                  maxLength={4}
-                  value={cardExpYear}
-                  onChange={(e) => setCardExpYear(e.target.value)}
-                  required
-                  style={{ padding: '11px', borderRadius: 12, border: '1.5px solid #CBD5E1', fontSize: '0.85rem', textAlign: 'center' }}
-                />
-                <input
-                  type="password"
-                  placeholder="CVV"
-                  maxLength={4}
-                  value={cardCvv}
-                  onChange={(e) => setCardCvv(e.target.value)}
-                  required
-                  style={{ padding: '11px', borderRadius: 12, border: '1.5px solid #CBD5E1', fontSize: '0.85rem', textAlign: 'center' }}
-                />
-              </div>
+                  <input
+                    type="text"
+                    placeholder="Número do Cartão (16 dígitos)"
+                    value={cardNumber}
+                    onChange={(e) => setCardNumber(e.target.value)}
+                    required
+                    style={{ padding: '11px 12px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.86rem', fontWeight: 700 }}
+                  />
+                  <input
+                    type="text"
+                    placeholder="Nome impresso no cartão"
+                    value={cardHolder}
+                    onChange={(e) => setCardHolder(e.target.value)}
+                    required
+                    style={{ padding: '11px 12px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.85rem', fontWeight: 600 }}
+                  />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+                    <input
+                      type="text"
+                      placeholder="Mês (MM)"
+                      maxLength={2}
+                      value={cardExpMonth}
+                      onChange={(e) => setCardExpMonth(e.target.value)}
+                      required
+                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Ano (AAAA)"
+                      maxLength={4}
+                      value={cardExpYear}
+                      onChange={(e) => setCardExpYear(e.target.value)}
+                      required
+                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
+                    />
+                    <input
+                      type="password"
+                      placeholder="CVV"
+                      maxLength={4}
+                      value={cardCvv}
+                      onChange={(e) => setCardCvv(e.target.value)}
+                      required
+                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
+                    />
+                  </div>
 
-              {cardError && (
-                <div style={{ color: '#DC2626', fontSize: '0.76rem', fontWeight: 700 }}>
-                  {cardError}
-                </div>
+                  {cardError && (
+                    <div style={{ color: '#DC2626', fontSize: '0.75rem', fontWeight: 700, textAlign: 'center' }}>
+                      {cardError}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'center', marginTop: 4 }}>
+                    <button
+                      type="submit"
+                      disabled={isSavingCard}
+                      style={{
+                        padding: '10px 26px',
+                        borderRadius: 999,
+                        border: 'none',
+                        backgroundColor: '#0F172A',
+                        color: '#FFFFFF',
+                        fontSize: '0.84rem',
+                        fontWeight: 800,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {isSavingCard ? 'Tokenizando...' : 'Salvar e usar cartão'}
+                    </button>
+                  </div>
+                </form>
               )}
-
-              <button
-                type="submit"
-                disabled={isSavingCard}
-                className="btn-ios-primary"
-                style={{ width: '100%', padding: '13px', fontSize: '0.9rem', fontWeight: 800, marginTop: 4 }}
-              >
-                {isSavingCard ? 'Tokenizando no Gateway...' : 'Salvar e Usar Cartão'}
-              </button>
-            </form>
-            )}
+            </div>
           </div>
         </div>
       )}
@@ -2254,7 +2460,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           <div style={{
             display: 'grid',
             gridTemplateColumns: `repeat(${Math.max(1, (allowPix ? 1 : 0) + (allowAnyCard ? 1 : 0) + (allowCash ? 1 : 0))}, 1fr)`,
-            gap: 8,
+            gap: 6,
             marginBottom: 8
           }}>
             {allowPix && (
@@ -2262,19 +2468,20 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 type="button"
                 onClick={() => setPaymentMethod('pix')}
                 style={{
-                  padding: '9px 8px',
+                  padding: '8px 6px',
                   borderRadius: 10,
-                  border: paymentMethod === 'pix' ? '2px solid #111111' : '1px solid #E5E7EB',
-                  backgroundColor: paymentMethod === 'pix' ? '#F3F4F6' : '#FFFFFF',
+                  border: paymentMethod === 'pix' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
+                  backgroundColor: paymentMethod === 'pix' ? '#0F172A' : '#FFFFFF',
+                  color: paymentMethod === 'pix' ? '#FFFFFF' : '#111111',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 6,
+                  gap: 5,
                   cursor: 'pointer'
                 }}
               >
-                <QrCode size={16} color={paymentMethod === 'pix' ? '#15803D' : '#6B7280'} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>PIX</span>
+                <QrCode size={14} color={paymentMethod === 'pix' ? '#76D800' : '#16A34A'} />
+                <span style={{ fontSize: '0.78rem', fontWeight: 800 }}>PIX</span>
               </button>
             )}
 
@@ -2283,19 +2490,22 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 type="button"
                 onClick={() => setPaymentMethod(allowCreditCard ? 'cartao_credito' : 'cartao_debito')}
                 style={{
-                  padding: '9px 8px',
+                  padding: '8px 6px',
                   borderRadius: 10,
-                  border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '2px solid #111111' : '1px solid #E5E7EB',
-                  backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#F3F4F6' : '#FFFFFF',
+                  border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
+                  backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#0F172A' : '#FFFFFF',
+                  color: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#FFFFFF' : '#111111',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 6,
+                  gap: 5,
                   cursor: 'pointer'
                 }}
               >
-                <CreditCard size={16} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#276EF1' : '#6B7280'} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>Cartão</span>
+                <CreditCard size={14} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#76D800' : '#2563EB'} />
+                <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                  {paymentsConfig.stripeEnabled ? 'Cartão • Apple Pay' : 'Cartão'}
+                </span>
               </button>
             )}
 
@@ -2304,88 +2514,144 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 type="button"
                 onClick={() => setPaymentMethod('dinheiro')}
                 style={{
-                  padding: '9px 8px',
+                  padding: '8px 6px',
                   borderRadius: 10,
-                  border: paymentMethod === 'dinheiro' ? '2px solid #111111' : '1px solid #E5E7EB',
-                  backgroundColor: paymentMethod === 'dinheiro' ? '#F3F4F6' : '#FFFFFF',
+                  border: paymentMethod === 'dinheiro' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
+                  backgroundColor: paymentMethod === 'dinheiro' ? '#0F172A' : '#FFFFFF',
+                  color: paymentMethod === 'dinheiro' ? '#FFFFFF' : '#111111',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 6,
+                  gap: 5,
                   cursor: 'pointer'
                 }}
               >
-                <Banknote size={16} color={paymentMethod === 'dinheiro' ? '#B45309' : '#6B7280'} />
-                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>Dinheiro</span>
+                <Banknote size={14} color={paymentMethod === 'dinheiro' ? '#76D800' : '#B45309'} />
+                <span style={{ fontSize: '0.78rem', fontWeight: 800 }}>Dinheiro</span>
               </button>
             )}
           </div>
 
-          {/* Cartões tokenizados quando selecionou Cartão */}
+          {/* Cartões tokenizados e Apple Pay / Carteiras Stripe */}
           {(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') && (
             <div style={{
-              backgroundColor: '#F9FAFB',
-              borderRadius: 12,
+              backgroundColor: '#F8FAFC',
+              borderRadius: 14,
               padding: 10,
-              border: '1px solid #E5E7EB',
+              border: '1px solid #E2E8F0',
               marginBottom: 8
             }}>
-              {savedCards.map(c => (
-                <div
-                  key={c.id}
-                  onClick={() => {
-                    setSelectedCardId(c.id);
-                    setPaymentMethod(c.cardType);
-                  }}
+              {/* Mini cabeçalho personalizado Kavro Pay */}
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                marginBottom: 8,
+                paddingBottom: 6,
+                borderBottom: '1px solid #E2E8F0'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <img src="/logo-icon.png" alt="Kavro" style={{ width: 18, height: 18, borderRadius: 4, objectFit: 'contain' }} />
+                  <span style={{ fontSize: '0.73rem', fontWeight: 800, color: '#0F172A' }}>
+                    Kavro Pay • Cartão ou Carteira
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingCardModal(true)}
                   style={{
-                    display: 'flex',
+                    padding: '5px 11px',
+                    borderRadius: 999,
+                    border: '1px solid #0F172A',
+                    backgroundColor: '#0F172A',
+                    color: '#FFFFFF',
+                    fontWeight: 700,
+                    fontSize: '0.71rem',
+                    display: 'inline-flex',
                     alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '8px 10px',
-                    borderRadius: 10,
-                    backgroundColor: selectedCardId === c.id ? '#EFF6FF' : '#FFFFFF',
-                    border: selectedCardId === c.id ? '1.5px solid #276EF1' : '1px solid #E5E7EB',
-                    marginBottom: 6,
+                    gap: 4,
                     cursor: 'pointer'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <CreditCard size={15} color="#276EF1" />
-                    <div>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#111111' }}>
-                        {c.brand} •••• {c.last4}
+                  <Plus size={12} />
+                  <span>Novo cartão</span>
+                </button>
+              </div>
+
+              {savedCards.length > 0 ? (
+                savedCards.map(c => (
+                  <div
+                    key={c.id}
+                    onClick={() => {
+                      setSelectedCardId(c.id);
+                      setPaymentMethod(c.cardType);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 10px',
+                      borderRadius: 10,
+                      backgroundColor: selectedCardId === c.id ? '#EFF6FF' : '#FFFFFF',
+                      border: selectedCardId === c.id ? '1.5px solid #2563EB' : '1px solid #E2E8F0',
+                      marginBottom: 6,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{
+                        padding: '3px 7px',
+                        borderRadius: 6,
+                        backgroundColor: '#0F172A',
+                        color: '#FFFFFF',
+                        fontSize: '0.62rem',
+                        fontWeight: 800
+                      }}>
+                        {String(c.brand || 'CARD').toUpperCase()}
                       </div>
-                      <div style={{ fontSize: '0.68rem', color: '#6B7280' }}>
-                        {c.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val {c.expMonth}/{c.expYear}
+                      <div>
+                        <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>
+                          •••• {c.last4}
+                        </div>
+                        <div style={{ fontSize: '0.67rem', color: '#64748B' }}>
+                          {c.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val {c.expMonth}/{c.expYear}
+                        </div>
                       </div>
                     </div>
+                    {selectedCardId === c.id && <Check size={15} color="#2563EB" />}
                   </div>
-                  {selectedCardId === c.id && <Check size={15} color="#276EF1" />}
+                ))
+              ) : (
+                <div style={{ fontSize: '0.73rem', color: '#64748B', textAlign: 'center', padding: '4px 0 6px 0' }}>
+                  Nenhum cartão salvo — toque em <strong>Novo cartão</strong> ou pague com Apple Pay abaixo.
                 </div>
-              ))}
+              )}
 
-              <button
-                type="button"
-                onClick={() => setIsAddingCardModal(true)}
-                style={{
-                  width: '100%',
-                  padding: '8px',
-                  borderRadius: 10,
-                  border: '1px dashed #9CA3AF',
-                  backgroundColor: '#FFFFFF',
-                  color: '#111111',
-                  fontWeight: 700,
-                  fontSize: '0.76rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                <Plus size={14} />
-                <span>Adicionar cartão</span>
-              </button>
+              {paymentsConfig.stripeEnabled && paymentsConfig.stripePublishableKey && (
+                <StripeWalletCheckout
+                  publishableKey={paymentsConfig.stripePublishableKey}
+                  amountBrl={pricing.totalPrice}
+                  category={selectedCategory}
+                  distanceKm={distanceKm}
+                  durationMin={durationMin}
+                  time={nowTimeStr}
+                  origin={origin}
+                  destination={destination}
+                  clientId={currentUser?.id}
+                  clientName={currentUser?.name}
+                  clientPhone={currentUser?.phone}
+                  clientEmail={currentUser?.email}
+                  onBeforeConfirm={validateBookingBeforePayment}
+                  onWalletAuthorized={async ({ paymentIntentId, brand }) => {
+                    await submitBookingRequest({
+                      stripePaymentIntentId: paymentIntentId,
+                      paymentMethodOverride: 'cartao_credito',
+                      cardBrandOverride: brand
+                    });
+                  }}
+                />
+              )}
             </div>
           )}
 
@@ -2709,7 +2975,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         )}
       </div>
 
-      {/* CTA Preto Sólido Estilo Uber Fixo acima da barra inferior */}
+      {/* CTA Compacto e Elegante Fixo acima da barra inferior */}
       <div style={{
         position: 'fixed',
         bottom: 58,
@@ -2717,12 +2983,15 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         transform: 'translateX(-50%)',
         width: '100%',
         maxWidth: 480,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: 'rgba(255, 255, 255, 0.96)',
+        backdropFilter: 'blur(8px)',
         borderTop: '1px solid #E5E7EB',
-        padding: '10px 16px 12px 16px',
+        padding: '8px 16px 10px 16px',
         zIndex: 45,
-        boxShadow: '0 -6px 20px rgba(0, 0, 0, 0.08)',
-        boxSizing: 'border-box'
+        boxShadow: '0 -6px 18px rgba(15, 23, 42, 0.06)',
+        boxSizing: 'border-box',
+        display: 'flex',
+        justifyContent: 'center'
       }}>
         <button
           type="button"
@@ -2730,36 +2999,38 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           disabled={isSubmitting}
           style={{
             width: '100%',
-            height: 50,
-            borderRadius: 12,
-            backgroundColor: serviceMode === 'entregas' ? '#15803D' : '#000000',
+            maxWidth: 360,
+            height: 44,
+            borderRadius: 999,
+            backgroundColor: serviceMode === 'entregas' ? '#15803D' : '#0F172A',
             color: '#FFFFFF',
             border: 'none',
-            fontSize: '1rem',
+            fontSize: '0.88rem',
             fontWeight: 800,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '0 18px',
+            padding: '0 8px 0 18px',
             cursor: 'pointer',
-            letterSpacing: '-0.01em'
+            letterSpacing: '-0.01em',
+            boxShadow: '0 6px 16px rgba(15, 23, 42, 0.16)'
           }}
         >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-            {isSubmitting && <RefreshCw size={17} className="animate-spin" />}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+            {isSubmitting && <RefreshCw size={15} className="animate-spin" />}
             <span>
               {isSubmitting
                 ? 'Conectando motorista...'
                 : serviceMode === 'entregas'
                   ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
-                  : `Escolher ${selectedCatObj.name || 'Padrão'}`}
+                  : `Confirmar ${selectedCatObj.name || 'Padrão'}`}
             </span>
           </span>
           <span style={{
             backgroundColor: 'rgba(255, 255, 255, 0.16)',
-            padding: '4px 10px',
-            borderRadius: 8,
-            fontSize: '0.96rem',
+            padding: '5px 12px',
+            borderRadius: 999,
+            fontSize: '0.86rem',
             fontWeight: 900
           }}>
             R$ {pricing.totalPrice.toFixed(2).replace('.', ',')}

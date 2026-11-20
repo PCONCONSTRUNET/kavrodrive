@@ -1,13 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import { loadStripe, Stripe } from '@stripe/stripe-js';
-import { Elements, CardElement, useElements, useStripe } from '@stripe/react-stripe-js';
-import { Lock } from 'lucide-react';
+import {
+  Elements,
+  CardNumberElement,
+  CardExpiryElement,
+  CardCvcElement,
+  useElements,
+  useStripe
+} from '@stripe/react-stripe-js';
+import { CreditCard, Lock, ShieldCheck } from 'lucide-react';
 import { SavedCard } from '../types';
 import { StorageService } from '../services/storage';
 
 const stripePromiseCache = new Map<string, Promise<Stripe | null>>();
 
-function getCachedStripePromise(publishableKey: string): Promise<Stripe | null> {
+export function getCachedStripePromise(publishableKey: string): Promise<Stripe | null> {
   const key = String(publishableKey || '').trim();
   if (!stripePromiseCache.has(key)) {
     stripePromiseCache.set(key, loadStripe(key));
@@ -43,6 +50,28 @@ export async function confirmStripe3dsPaymentIntent(
   }
 }
 
+function formatBrandLabel(rawBrand: string): string {
+  const b = String(rawBrand || '').toLowerCase();
+  if (!b || b === 'unknown') return 'KAVRO PAY';
+  if (b === 'visa') return 'VISA';
+  if (b === 'mastercard') return 'MASTERCARD';
+  if (b === 'amex') return 'AMEX';
+  if (b === 'elo') return 'ELO';
+  if (b === 'hipercard') return 'HIPERCARD';
+  return b.toUpperCase();
+}
+
+const STRIPE_INPUT_STYLE = {
+  base: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#0F172A',
+    fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+    '::placeholder': { color: '#94A3B8' }
+  },
+  invalid: { color: '#DC2626' }
+};
+
 interface StripeCardInnerProps {
   clientId?: string;
   clientPhone?: string;
@@ -65,13 +94,14 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
   const stripe = useStripe();
   const elements = useElements();
   const [holderName, setHolderName] = useState(defaultHolderName);
+  const [detectedBrand, setDetectedBrand] = useState('unknown');
   const [errorMsg, setErrorMsg] = useState('');
   const [saving, setSaving] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stripe || !elements) {
-      setErrorMsg('Aguardando carregamento seguro da Stripe...');
+      setErrorMsg('Aguardando inicialização segura da Stripe...');
       return;
     }
     const cleanHolder = holderName.trim();
@@ -79,9 +109,9 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
       setErrorMsg('Informe o nome impresso no cartão.');
       return;
     }
-    const cardEl = elements.getElement(CardElement);
-    if (!cardEl) {
-      setErrorMsg('Campo de cartão indisponível.');
+    const cardNumberEl = elements.getElement(CardNumberElement);
+    if (!cardNumberEl) {
+      setErrorMsg('Campo de número do cartão indisponível.');
       return;
     }
 
@@ -102,7 +132,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
 
       const confirmRes = await stripe.confirmCardSetup(setupRes.clientSecret, {
         payment_method: {
-          card: cardEl,
+          card: cardNumberEl,
           billing_details: {
             name: cleanHolder,
             email: clientEmail || undefined,
@@ -144,19 +174,97 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
   };
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+      {/* Pré-visualização Personalizada do Cartão Kavro Drive */}
+      <div style={{
+        position: 'relative',
+        overflow: 'hidden',
+        borderRadius: 16,
+        padding: '14px 16px',
+        background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 68%, #14532D 145%)',
+        color: '#FFFFFF',
+        boxShadow: '0 10px 24px rgba(15, 23, 42, 0.22)'
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <img
+            src="/logo-horizontal-white.png"
+            alt="KAVRO DRIVE"
+            style={{ height: 18, objectFit: 'contain' }}
+          />
+          <span style={{
+            fontSize: '0.62rem',
+            fontWeight: 800,
+            letterSpacing: '0.06em',
+            padding: '3px 9px',
+            borderRadius: 999,
+            backgroundColor: 'rgba(255, 255, 255, 0.14)',
+            color: '#E2E8F0',
+            textTransform: 'uppercase'
+          }}>
+            {cardType === 'cartao_debito' ? 'Débito' : 'Crédito'}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div style={{
+            width: 34,
+            height: 24,
+            borderRadius: 5,
+            background: 'linear-gradient(135deg, #FDE68A 0%, #D97706 100%)',
+            opacity: 0.92
+          }} />
+          <span style={{
+            fontSize: '0.78rem',
+            fontWeight: 900,
+            letterSpacing: '0.08em',
+            color: '#86EFAC'
+          }}>
+            {formatBrandLabel(detectedBrand)}
+          </span>
+        </div>
+
+        <div style={{
+          fontSize: '0.94rem',
+          fontWeight: 700,
+          letterSpacing: '0.14em',
+          color: '#F8FAFC',
+          fontFamily: 'monospace',
+          marginBottom: 8
+        }}>
+          ••••  ••••  ••••  ••••
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+          <span style={{
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            color: '#CBD5E1',
+            textTransform: 'uppercase',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis'
+          }}>
+            {holderName.trim() || 'SEU NOME NO CARTÃO'}
+          </span>
+          <span style={{ fontSize: '0.66rem', color: '#94A3B8', fontWeight: 700 }}>
+            STRIPE SECURE
+          </span>
+        </div>
+      </div>
+
+      {/* Pills compactas Crédito / Débito */}
+      <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
         <button
           type="button"
           onClick={() => onChangeCardType('cartao_credito')}
           style={{
-            padding: '9px',
-            borderRadius: 10,
-            border: cardType === 'cartao_credito' ? '2px solid #121A21' : '1px solid #CBD5E1',
-            backgroundColor: cardType === 'cartao_credito' ? '#121A21' : '#F8FAFC',
+            padding: '7px 18px',
+            borderRadius: 999,
+            border: cardType === 'cartao_credito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
+            backgroundColor: cardType === 'cartao_credito' ? '#0F172A' : '#F8FAFC',
             color: cardType === 'cartao_credito' ? '#FFFFFF' : '#475569',
             fontWeight: 800,
-            fontSize: '0.78rem',
+            fontSize: '0.76rem',
             cursor: 'pointer'
           }}
         >
@@ -166,13 +274,13 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
           type="button"
           onClick={() => onChangeCardType('cartao_debito')}
           style={{
-            padding: '9px',
-            borderRadius: 10,
-            border: cardType === 'cartao_debito' ? '2px solid #121A21' : '1px solid #CBD5E1',
-            backgroundColor: cardType === 'cartao_debito' ? '#121A21' : '#F8FAFC',
+            padding: '7px 18px',
+            borderRadius: 999,
+            border: cardType === 'cartao_debito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
+            backgroundColor: cardType === 'cartao_debito' ? '#0F172A' : '#F8FAFC',
             color: cardType === 'cartao_debito' ? '#FFFFFF' : '#475569',
             fontWeight: 800,
-            fontSize: '0.78rem',
+            fontSize: '0.76rem',
             cursor: 'pointer'
           }}
         >
@@ -180,58 +288,132 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
         </button>
       </div>
 
-      <input
-        type="text"
-        placeholder="Nome impresso no cartão"
-        value={holderName}
-        onChange={(e) => setHolderName(e.target.value)}
-        required
-        style={{ padding: '12px', borderRadius: 12, border: '1.5px solid #CBD5E1', fontSize: '0.88rem', fontWeight: 600 }}
-      />
-
-      <div
-        style={{
-          padding: '13px 12px',
-          borderRadius: 12,
-          border: '1.5px solid #CBD5E1',
-          backgroundColor: '#FFFFFF'
-        }}
-      >
-        <CardElement
-          options={{
-            hidePostalCode: true,
-            style: {
-              base: {
-                fontSize: '15px',
-                color: '#0F172A',
-                fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, sans-serif',
-                '::placeholder': { color: '#94A3B8' }
-              },
-              invalid: { color: '#DC2626' }
-            }
+      <div>
+        <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+          Nome impresso no cartão
+        </label>
+        <input
+          type="text"
+          placeholder="Ex: LUCAS P SOUZA"
+          value={holderName}
+          onChange={(e) => setHolderName(e.target.value)}
+          required
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '10px 12px',
+            borderRadius: 11,
+            border: '1.5px solid #CBD5E1',
+            fontSize: '0.84rem',
+            fontWeight: 600,
+            color: '#0F172A'
           }}
         />
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.7rem', color: '#15803D', fontWeight: 700 }}>
-        <Lock size={12} />
-        <span>Tokenização segura criptografada diretamente via Stripe</span>
+      <div>
+        <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+          Número do cartão
+        </label>
+        <div style={{
+          padding: '11px 12px',
+          borderRadius: 11,
+          border: '1.5px solid #CBD5E1',
+          backgroundColor: '#FFFFFF',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8
+        }}>
+          <CreditCard size={15} color="#64748B" style={{ flexShrink: 0 }} />
+          <div style={{ flex: 1 }}>
+            <CardNumberElement
+              onChange={(ev) => {
+                if (ev.brand) setDetectedBrand(ev.brand);
+              }}
+              options={{
+                showIcon: false,
+                placeholder: '0000 0000 0000 0000',
+                style: STRIPE_INPUT_STYLE
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+        <div>
+          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+            Validade
+          </label>
+          <div style={{
+            padding: '11px 12px',
+            borderRadius: 11,
+            border: '1.5px solid #CBD5E1',
+            backgroundColor: '#FFFFFF'
+          }}>
+            <CardExpiryElement options={{ placeholder: 'MM / AA', style: STRIPE_INPUT_STYLE }} />
+          </div>
+        </div>
+
+        <div>
+          <label style={{ display: 'block', fontSize: '0.68rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+            Código (CVV)
+          </label>
+          <div style={{
+            padding: '11px 12px',
+            borderRadius: 11,
+            border: '1.5px solid #CBD5E1',
+            backgroundColor: '#FFFFFF'
+          }}>
+            <CardCvcElement options={{ placeholder: '123', style: STRIPE_INPUT_STYLE }} />
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: '0.69rem', color: '#15803D', fontWeight: 700 }}>
+        <ShieldCheck size={13} />
+        <span>Criptografia ponta a ponta Stripe — sem armazenar número ou CVV</span>
       </div>
 
       {errorMsg && (
-        <div style={{ color: '#DC2626', fontSize: '0.76rem', fontWeight: 700 }}>
+        <div style={{
+          backgroundColor: '#FEF2F2',
+          border: '1px solid #FECACA',
+          borderRadius: 10,
+          padding: '8px 10px',
+          color: '#DC2626',
+          fontSize: '0.75rem',
+          fontWeight: 700,
+          textAlign: 'center'
+        }}>
           {errorMsg}
         </div>
       )}
 
-      <button
-        type="submit"
-        disabled={saving || !stripe}
-        className="btn-ios-primary"
-        style={{ width: '100%', padding: '13px', fontSize: '0.9rem', fontWeight: 800, marginTop: 4 }}
-      >
-        {saving ? 'Validando na Stripe...' : 'Salvar e Usar Cartão'}
-      </button>
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
+        <button
+          type="submit"
+          disabled={saving || !stripe}
+          style={{
+            padding: '10px 26px',
+            borderRadius: 999,
+            border: 'none',
+            backgroundColor: '#0F172A',
+            color: '#FFFFFF',
+            fontSize: '0.84rem',
+            fontWeight: 800,
+            cursor: saving || !stripe ? 'not-allowed' : 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 7,
+            opacity: saving || !stripe ? 0.65 : 1,
+            boxShadow: '0 6px 16px rgba(15, 23, 42, 0.2)'
+          }}
+        >
+          <Lock size={14} color="#76D800" />
+          <span>{saving ? 'Validando cartão...' : 'Salvar e usar cartão'}</span>
+        </button>
+      </div>
     </form>
   );
 };

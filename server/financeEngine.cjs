@@ -2402,6 +2402,13 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
         );
         return { authorized: false, tx: failedTx, split, error: 'Pagamento no cartão não foi autorizado após verificação.' };
       }
+      if (Number(checkPi.amountBrl || 0) + 0.05 < split.grossAmount) {
+        const failedTx = await buildFailedTx(
+          `Valor pré-autorizado (${checkPi.amountBrl}) inferior ao valor oficial da corrida (${split.grossAmount}).`,
+          `card_st_under_${ride.id}_${Date.now()}`
+        );
+        return { authorized: false, tx: failedTx, split, error: 'O valor autorizado não corresponde ao valor oficial da corrida.' };
+      }
       const tx = await savePaymentTransaction({
         rideId: ride.id,
         rideCode: ride.rideCode,
@@ -2418,8 +2425,8 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
         commissionAmount: split.commissionAmount,
         driverNetAmount: split.driverNetAmount,
         cardId: cardInfo.cardId || ride.cardId || '',
-        cardLast4: savedCard?.last4 || last4,
-        cardBrand: savedCard?.brand || brand,
+        cardLast4: checkPi.cardLast4 || savedCard?.last4 || last4,
+        cardBrand: checkPi.cardBrand || savedCard?.brand || brand,
         gatewayAuthCode: checkPi.authCode,
         gatewayTxId: checkPi.paymentIntentId
       });

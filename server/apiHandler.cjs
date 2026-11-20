@@ -6010,6 +6010,54 @@ async function handleApiRequest(req, res) {
       }
     }
 
+    if (pathname === '/api/payments/stripe/wallet-intent' && method === 'POST') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para pagar com Apple Pay ou carteira.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor.' });
+      }
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const cfg = (await getCachedSystemConfig()) || {};
+      const allCats = finance.normalizeCategoriesServer(cfg);
+      const mappedCatId = finance.mapLegacyCategoryIdServer(body.category || 'kavro_go');
+      const matchedCat = allCats.find(c => c.id === body.category || c.id === mappedCatId) || allCats[0];
+      const officialFare = security.calculateOfficialRidePriceServer({
+        cfg,
+        categoryObj: matchedCat,
+        distanceKm: body.distanceKm,
+        durationMin: body.durationMin,
+        origin: body.origin,
+        destination: body.destination,
+        timeStr: body.time,
+        city: body.city
+      });
+
+      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
+      let clientRow = null;
+      if (targetClientId) {
+        const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
+        clientRow = cRes.rows[0] || null;
+      }
+
+      try {
+        const walletData = await stripeGateway.createWalletHoldIntent({
+          amountBrl: officialFare.totalPrice,
+          clientId: targetClientId,
+          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
+          clientEmail: clientRow?.email || body.clientEmail || clientSession?.email || '',
+          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro',
+          categoryId: matchedCat?.id || mappedCatId
+        });
+        return sendJson(res, 200, { ok: true, ...walletData });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar pagamento via Apple Pay / Carteira.' });
+      }
+    }
+
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
       const isAdmin = await isAuthorizedAdmin(req);
       const driverSession = verifyDriverToken(req);

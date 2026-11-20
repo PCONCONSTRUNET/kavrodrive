@@ -675,6 +675,31 @@ export const StorageService = {
     }
   },
 
+  async createStripeWalletIntent(payload: {
+    clientId?: string;
+    clientName?: string;
+    clientPhone?: string;
+    clientEmail?: string;
+    category: string;
+    distanceKm: number;
+    durationMin: number;
+    time: string;
+    origin?: LocationPoint;
+    destination?: LocationPoint;
+    amountBrl?: number;
+  }): Promise<{ ok: boolean; clientSecret?: string; paymentIntentId?: string; amountBrl?: number; error?: string }> {
+    try {
+      const res = await fetch('/api/payments/stripe/wallet-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao iniciar pré-autorização com carteira digital.' };
+    }
+  },
+
   async saveTokenizedCard(payload: {
     clientId?: string;
     clientPhone?: string;
