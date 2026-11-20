@@ -16,6 +16,7 @@ import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
 import { PublicAuditScreen } from './views/PublicAuditScreen';
 import { HelpCenterScreen } from './views/HelpCenterScreen';
 import { FamilyInviteScreen } from './views/FamilyInviteScreen';
+import { CitiesServedScreen } from './views/CitiesServedScreen';
 import { KavroSecurityGuideModal } from './components/KavroSecurityGuideModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
@@ -1049,6 +1050,14 @@ export const App: React.FC = () => {
       <Route
         path="/ajuda"
         element={<HelpCenterScreen config={config} />}
+      />
+      <Route
+        path="/cidades-atendidas"
+        element={<CitiesServedScreen config={config} />}
+      />
+      <Route
+        path="/cidades"
+        element={<CitiesServedScreen config={config} />}
       />
       <Route
         path="/seguranca"

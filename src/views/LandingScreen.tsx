@@ -2386,7 +2386,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 <button type="button" onClick={() => navigate('/auditoria')} style={footerLinkStyle}>
                   Auditoria &amp; Segurança
                 </button>
-                <button type="button" onClick={() => setCityModalOpen(true)} style={footerLinkStyle}>
+                <button type="button" onClick={() => navigate('/cidades-atendidas')} style={footerLinkStyle}>
                   Cidades atendidas
                 </button>
                 <button type="button" onClick={() => navigate('/ajuda')} style={footerLinkStyle}>
@@ -2542,8 +2542,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     void handleApplyCityOrCep();
                   }
                 }}
-                style={{
+              style={{
                   flex: 1,
+                  minWidth: 0,
                   height: 44,
                   borderRadius: 8,
                   border: '1px solid #D1D5DB',
@@ -2670,6 +2671,27 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             >
               <Navigation size={14} color="#15803D" />
               <span>{locatingCityGps ? 'Detectando sua cidade pelo GPS...' : 'Usar minha localização atual (GPS)'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setCityModalOpen(false);
+                navigate('/cidades-atendidas');
+              }}
+              style={{
+                marginTop: 10,
+                width: '100%',
+                background: 'none',
+                border: 'none',
+                color: '#15803D',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                padding: '4px 6px',
+              }}
+            >
+              Ver página de cidades atendidas (100% SC e regiões) →
             </button>
           </div>
         </div>
