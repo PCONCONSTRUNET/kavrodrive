@@ -19,6 +19,7 @@ export type PaymentStatus =
   | 'pendente'
   | 'falhou'
   | 'reembolsado'
+  | 'cancelado'
   | 'taxa_cancelamento'
   | 'contestado'
   | 'pago'      // compatibilidade com código existente (= confirmado)
@@ -30,6 +31,18 @@ export interface LocationPoint {
   lng: number;
   reference?: string;
   complement?: string;
+}
+
+export type ServiceCategoryType = 'padrao' | 'entregas';
+
+export interface RideDeliveryDetails {
+  role: 'sender' | 'receiver';
+  recipientName: string;
+  recipientPhone: string;
+  itemDescription: string;
+  packageSize?: 'pequeno' | 'medio' | 'grande';
+  dropoffMode?: 'porta_mao' | 'portaria' | 'recepcao';
+  instructions?: string;
 }
 
 export interface SavedCard {
@@ -110,6 +123,117 @@ export interface ProfileChangeRequest {
   rejectionReason?: string;
 }
 
+export interface TrustedContact {
+  id: string;
+  name: string;
+  relationship: string;
+  phone: string;
+  autoShareAllRides: boolean;
+  autoShareNightOnly: boolean;
+  notifyOnAnomalyOrSos: boolean;
+  createdAt: string;
+}
+
+export interface EmergencyContact {
+  id: string;
+  name: string;
+  phone: string;
+  relationship?: string;
+  createdAt: string;
+}
+
+export interface PassengerSafetyPreferences {
+  boardingPinEnabled: boolean;
+  customBoardingPin?: string;
+  audioRecordingEnabled: boolean;
+  audioAutoRecord: boolean;
+  rideCheckEnabled: boolean;
+  familySafetyEnabled: boolean;
+  familyGuardianName?: string;
+  familyGuardianPhone?: string;
+  updatedAt?: string;
+}
+
+export interface FamilyMemberRideSummary {
+  id: string;
+  rideCode?: string;
+  status: string;
+  originAddress: string;
+  destinationAddress: string;
+  totalPrice: number;
+  driverName?: string | null;
+  driverPlate?: string | null;
+  driverVehicle?: string | null;
+  trackingUrl?: string;
+  createdAt: string;
+}
+
+export interface FamilyMemberRecord {
+  id: string;
+  guardianId: string;
+  guardianName: string;
+  guardianPhone: string;
+  teenClientId?: string | null;
+  teenName: string;
+  teenPhone: string;
+  teenBirthDate: string;
+  teenAge: number;
+  status: 'convite_enviado' | 'ativo' | 'revogado';
+  inviteToken: string;
+  inviteUrl: string;
+  termsAccepted: boolean;
+  termsAcceptedAt: string;
+  apiDispatch?: {
+    whatsappUrl?: string;
+    messageText?: string;
+    channel?: string;
+    sentAt?: string;
+  } | null;
+  activeRide?: FamilyMemberRideSummary | null;
+  recentRides?: FamilyMemberRideSummary[];
+  totalRidesCount?: number;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface SafetyAudioIncidentRecord {
+  id: string;
+  rideId?: string;
+  durationSec: number;
+  mimeType: string;
+  sizeBytes: number;
+  recordedAt: string;
+  reportedBy: 'passageiro' | 'motorista';
+  notes?: string;
+}
+
+export interface RideCheckAlertState {
+  id: string;
+  reason: 'parada_longa' | 'desvio_rota';
+  reasonLabel: string;
+  triggeredAt: string;
+  expiresAt: string;
+  status: 'aguardando_resposta' | 'confirmado_ok' | 'escalado_sos';
+  respondedBy?: 'passageiro' | 'motorista' | 'sistema_timeout';
+  respondedAt?: string;
+  lat?: number;
+  lng?: number;
+  sosAlertId?: string;
+}
+
+export interface TrustedContactDispatchRecord {
+  id: string;
+  contactId: string;
+  contactName: string;
+  contactPhone: string;
+  event: 'ride_started' | 'ridecheck_escalation' | 'sos_triggered' | 'manual_share';
+  trackingUrl: string;
+  whatsappUrl: string;
+  apiDelivered: boolean;
+  channel: string;
+  sentAt: string;
+}
+
 export interface ClientProfile {
   id: string;
   name: string;
@@ -129,6 +253,12 @@ export interface ClientProfile {
     lng: number;
   }>;
   savedCards?: SavedCard[];
+  trustedContacts?: TrustedContact[];
+  emergencyContacts?: EmergencyContact[];
+  safetyPreferences?: PassengerSafetyPreferences;
+  accountType?: 'standard' | 'teen';
+  guardianClientId?: string | null;
+  birthDate?: string;
   termsAcceptedAt?: string;
   termsSignature?: PassengerTermsSignature | null;
   createdAt: string;
@@ -214,11 +344,12 @@ export interface CityCategoryPricingOverride {
 }
 
 export interface RideCategoryConfig {
-  id: string;                 // ex: 'kavro_go' | 'kavro_plus' | 'kavro_exec'
-  code?: string;              // ex: 'GO' | 'PLUS' | 'EXEC'
-  name: string;               // ex: 'KAVRO GO' | 'KAVRO PLUS' | 'KAVRO EXEC'
-  subtitle?: string;          // ex: 'Econômico' | 'Conforto' | 'Executivo'
+  id: string;                 // ex: 'kavro_go' | 'kavro_plus' | 'kavro_exec' | 'kavro_entregas'
+  code?: string;              // ex: 'GO' | 'PLUS' | 'EXEC' | 'ENTREGAS'
+  name: string;               // ex: 'KAVRO GO' | 'KAVRO PLUS' | 'KAVRO EXEC' | 'KAVRO ENTREGAS'
+  subtitle?: string;          // ex: 'Econômico' | 'Conforto' | 'Executivo' | 'Produtos • Encomendas'
   description: string;
+  categoryType?: ServiceCategoryType; // 'padrao' (Viagem) | 'entregas' (Produtos/Encomendas)
   active: boolean;
   sortOrder?: number;
   // Precificação e Comissão Independentes por Categoria
@@ -313,6 +444,7 @@ export interface DriverProfile {
   hasLeatherSeats?: boolean;
   eligibleCategories?: string[];          // IDs de categorias habilitadas pelo motor automático + exceções
   enabledCategories?: string[];           // IDs de categorias ativas pelo motorista para receber chamadas
+  disabledCategoryIds?: string[];         // IDs de categorias desmarcadas manualmente pelo motorista nas Preferências
   approvedCategoryExceptions?: string[];  // IDs de categorias liberadas manualmente por exceção pelo Admin
   blockedCategoryIds?: string[];          // IDs de categorias bloqueadas manualmente pelo Admin
   pendingCategoryRequests?: string[];     // IDs de categorias solicitadas pelo motorista aguardando análise
@@ -534,15 +666,20 @@ export interface Ride {
   durationMin: number;
   category?: string;
   categoryName?: string;
+  serviceType?: ServiceCategoryType;
+  deliveryDetails?: RideDeliveryDetails | null;
   appliedFareSnapshot?: {
     categoryId: string;
     categoryName: string;
+    categoryType?: ServiceCategoryType;
+    deliveryDetails?: RideDeliveryDetails | null;
     baseFare: number;
     pricePerKm: number;
     pricePerMinute: number;
     minimumFare: number;
     multiplier: number;
     commissionPercent: number;
+    commissionFixed?: number;
     nightSurchargePercent?: number;
     city?: string;
   };
@@ -551,6 +688,7 @@ export interface Ride {
   totalPrice: number;
   paidAmount?: number;
   commissionPercent?: number;
+  commissionFixed?: number;
   commissionAmount?: number;
   driverNetAmount?: number;
   cancellationFeeApplied?: number;
@@ -579,6 +717,11 @@ export interface Ride {
     speedKmH?: number;
     updatedAt: string;
   };
+  trackingToken?: string;
+  trackingUrl?: string;
+  rideCheck?: RideCheckAlertState | null;
+  trustedContactsDispatches?: TrustedContactDispatchRecord[];
+  safetyAudioRecords?: SafetyAudioIncidentRecord[];
   isManualBooking?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -635,6 +778,7 @@ export interface SystemConfig {
   bufferBetweenRidesMin: number;
   // Configurações financeiras da plataforma (Comissão, Gateway, Saques, Limite de Dívida e Repasses)
   platformCommissionPercent?: number;   // Ex: 20%
+  platformCommissionFixed?: number;     // Ex: R$ 1.50 fixo por corrida (geral)
   paymentMethodCommissionPercents?: {
     pix?: number;
     cartao_credito?: number;
@@ -663,6 +807,7 @@ export interface SystemConfig {
     name: string;
     multiplier: number;
     description: string;
+    categoryType?: ServiceCategoryType;
     code?: string;
     subtitle?: string;
     active?: boolean;

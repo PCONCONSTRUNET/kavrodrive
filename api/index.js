@@ -4,6 +4,12 @@ import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { handleApiRequest } = require('../server/apiHandler.cjs');
 
+export const config = {
+  api: {
+    bodyParser: false
+  }
+};
+
 export default async function handler(req, res) {
   // O rewrite do vercel.json envia o caminho original em ?__path=...
   const url = new URL(req.url, 'http://localhost');

@@ -23,7 +23,8 @@ const PAYMENT_METHOD_LABELS = {
 };
 
 const CONFIG_FIELD_META = {
-  platformCommissionPercent: { label: 'Comissão Global Padrão da Plataforma', type: 'pct' },
+  platformCommissionPercent: { label: 'Comissão Geral da Plataforma (%)', type: 'pct' },
+  platformCommissionFixed: { label: 'Taxa Fixa Geral por Corrida (R$)', type: 'brl' },
   'paymentMethodCommissionPercents.pix': { label: 'Comissão no PIX', type: 'pct' },
   'paymentMethodCommissionPercents.cartao_credito': { label: 'Comissão no Cartão de Crédito', type: 'pct' },
   'paymentMethodCommissionPercents.cartao_debito': { label: 'Comissão no Cartão de Débito', type: 'pct' },
@@ -58,6 +59,7 @@ const CONFIG_FIELD_META = {
 
 const FEE_FIELDS = new Set([
   'platformCommissionPercent',
+  'platformCommissionFixed',
   'paymentMethodCommissionPercents.pix',
   'paymentMethodCommissionPercents.cartao_credito',
   'paymentMethodCommissionPercents.cartao_debito',

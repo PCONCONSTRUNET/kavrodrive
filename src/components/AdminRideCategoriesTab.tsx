@@ -15,7 +15,8 @@ import {
   DEFAULT_RIDE_CATEGORIES,
   normalizeCategoriesFromConfig,
   evaluateAllDriverCategories,
-  mapLegacyCategoryId
+  mapLegacyCategoryId,
+  resolveCategoryType
 } from '../utils/categoryEngine';
 import { StorageService } from '../services/storage';
 import { formatCurrency, formatRideCode } from '../utils/format';
@@ -63,6 +64,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
 
   // Estados do Modal de Nova Categoria
   const [isNewCatModalOpen, setIsNewCatModalOpen] = useState<boolean>(false);
+  const [newCatType, setNewCatType] = useState<'padrao' | 'entregas'>('padrao');
   const [newCatCode, setNewCatCode] = useState<string>('');
   const [newCatName, setNewCatName] = useState<string>('');
   const [newCatSubtitle, setNewCatSubtitle] = useState<string>('');
@@ -72,7 +74,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   const [newCatMinYear, setNewCatMinYear] = useState<string>('2017');
 
   // Estados da Aba de Motoristas & Exceções
-  const [driverFilter, setDriverFilter] = useState<'todos' | 'pendentes_cadastro' | 'excecoes_solicitadas' | 'kavro_go' | 'kavro_plus' | 'kavro_exec'>('todos');
+  const [driverFilter, setDriverFilter] = useState<'todos' | 'pendentes_cadastro' | 'excecoes_solicitadas' | 'kavro_go' | 'kavro_entregas'>('todos');
   const [driverSearch, setDriverSearch] = useState<string>('');
   const [updatingDriverId, setUpdatingDriverId] = useState<string | null>(null);
   const [kycInspectionDriver, setKycInspectionDriver] = useState<DriverProfile | null>(null);
@@ -180,8 +182,9 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
       id: idSlug,
       code: cleanCode,
       name: cleanName,
-      subtitle: newCatSubtitle.trim() || 'Categoria Personalizada',
+      subtitle: newCatSubtitle.trim() || (newCatType === 'entregas' ? 'Produtos • Encomendas' : 'Categoria Personalizada'),
       description: newCatDesc.trim() || 'Categoria configurada pela administração KAVRO DRIVE.',
+      categoryType: newCatType,
       active: true,
       sortOrder: categories.length + 1,
       multiplier: mult,
@@ -190,12 +193,12 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
       pricePerMinute: Number((goCat.pricePerMinute * mult).toFixed(2)),
       minimumFare: Number((goCat.minimumFare * mult).toFixed(2)),
       commissionPercent: comm,
-      maxPassengers: 4,
+      maxPassengers: newCatType === 'entregas' ? 0 : 4,
       minVehicleYear: minYear,
       minDriverRating: 4.6,
       minCompletedRides: 0,
-      requireFourDoors: true,
-      requireAirConditioning: true,
+      requireFourDoors: newCatType !== 'entregas',
+      requireAirConditioning: newCatType !== 'entregas',
       requireRegularDoc: true,
       requireEar: true,
       requireLargeTrunk: false,
@@ -209,6 +212,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
     persistCategories(next, `Categoria "${cleanName}" criada com sucesso!`);
     setSelectedCategoryId(newCategory.id);
     setIsNewCatModalOpen(false);
+    setNewCatType('padrao');
     setNewCatCode('');
     setNewCatName('');
     setNewCatSubtitle('');
@@ -216,8 +220,8 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   };
 
   const handleDeleteCustomCategory = (catId: string) => {
-    if (catId === 'kavro_go' || catId === 'kavro_plus' || catId === 'kavro_exec') {
-      alert('As categorias nativas (KAVRO GO, KAVRO PLUS e KAVRO EXEC) não podem ser excluídas, apenas ativadas ou desativadas.');
+    if (catId === 'kavro_go' || catId === 'kavro_entregas') {
+      alert('As categorias nativas (Padrão e Entregas) não podem ser excluídas, apenas ativadas ou desativadas.');
       return;
     }
     if (!window.confirm('Deseja realmente remover esta categoria personalizada? Corridas antigas preservarão o histórico.')) {
@@ -356,7 +360,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
       if (driverFilter === 'excecoes_solicitadas' && (!drv.pendingCategoryRequests || drv.pendingCategoryRequests.length === 0)) {
         return false;
       }
-      if (driverFilter === 'kavro_go' || driverFilter === 'kavro_plus' || driverFilter === 'kavro_exec') {
+      if (driverFilter === 'kavro_go' || driverFilter === 'kavro_entregas') {
         const ev = evaluations.find(e => e.categoryId === driverFilter);
         if (!ev || ev.status !== 'liberada') return false;
       }
@@ -407,7 +411,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
             </span>
           </div>
           <p style={{ fontSize: '0.78rem', color: '#64748B', margin: '3px 0 0 0' }}>
-            Gestão completa de modalidades (KAVRO GO, KAVRO PLUS, KAVRO EXEC), tarifas independentes, regras de elegibilidade, modelos e exceções
+            Gestão das 2 categorias do sistema (Padrão e Entregas), tarifas independentes, regras de elegibilidade e exceções
           </p>
         </div>
 
@@ -509,11 +513,11 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
             >
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     <span style={{
                       padding: '3px 8px',
                       borderRadius: 5,
-                      backgroundColor: '#0F172A',
+                      backgroundColor: resolveCategoryType(cat) === 'entregas' ? '#14532D' : '#0F172A',
                       color: '#76D800',
                       fontSize: '0.68rem',
                       fontWeight: 800,
@@ -523,6 +527,16 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                     </span>
                     <span style={{ fontSize: '0.94rem', fontWeight: 700, color: '#0F172A' }}>
                       {cat.name}
+                    </span>
+                    <span style={{
+                      padding: '2px 7px',
+                      borderRadius: 999,
+                      backgroundColor: resolveCategoryType(cat) === 'entregas' ? '#DCFCE7' : '#F1F5F9',
+                      color: resolveCategoryType(cat) === 'entregas' ? '#166534' : '#475569',
+                      fontSize: '0.64rem',
+                      fontWeight: 700
+                    }}>
+                      {resolveCategoryType(cat) === 'entregas' ? 'Entregas' : 'Viagem Padrão'}
                     </span>
                   </div>
 
@@ -725,7 +739,8 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                   </button>
                 )}
 
-                {selectedCategory.id !== 'kavro_go' && selectedCategory.id !== 'kavro_plus' && selectedCategory.id !== 'kavro_exec' && (
+                {selectedCategory.id !== 'kavro_go' &&
+                 selectedCategory.id !== 'kavro_entregas' && (
                   <button
                     type="button"
                     onClick={() => handleDeleteCustomCategory(selectedCategory.id)}
@@ -752,6 +767,33 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
 
             {/* Linha 1: Identificação da Categoria */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                  Tipo de Categoria (Modalidade)
+                </label>
+                <select
+                  value={resolveCategoryType(selectedCategory)}
+                  onChange={(e) => {
+                    const nextType = e.target.value === 'entregas' ? 'entregas' : 'padrao';
+                    handleUpdateCategoryField(selectedCategory.id, 'categoryType', nextType);
+                  }}
+                  style={{
+                    width: '100%',
+                    height: 36,
+                    padding: '0 10px',
+                    borderRadius: 6,
+                    border: '1px solid #CBD5E1',
+                    fontSize: '0.82rem',
+                    fontWeight: 700,
+                    color: '#0F172A',
+                    backgroundColor: '#FFFFFF'
+                  }}
+                >
+                  <option value="padrao">Viagem Padrão (Passageiros)</option>
+                  <option value="entregas">Entregas (Produtos / Encomendas)</option>
+                </select>
+              </div>
+
               <div>
                 <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Nome da Categoria
@@ -816,14 +858,16 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                  Capacidade Máx. Passageiros
+                  {resolveCategoryType(selectedCategory) === 'entregas'
+                    ? 'Passageiros (0 = Apenas Entrega)'
+                    : 'Capacidade Máx. Passageiros'}
                 </label>
                 <input
                   type="number"
-                  min={1}
+                  min={0}
                   max={8}
                   value={selectedCategory.maxPassengers}
-                  onChange={(e) => handleUpdateCategoryField(selectedCategory.id, 'maxPassengers', Math.max(1, parseInt(e.target.value, 10) || 4))}
+                  onChange={(e) => handleUpdateCategoryField(selectedCategory.id, 'maxPassengers', Math.max(0, parseInt(e.target.value, 10) || 0))}
                   style={{
                     width: '100%',
                     height: 36,
@@ -1908,9 +1952,8 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
               { id: 'todos', label: `Todos (${drivers.length})` },
               { id: 'pendentes_cadastro', label: `Cadastro Pendente (${totalPendingDriverApprovals})` },
               { id: 'excecoes_solicitadas', label: `Exceções Solicitadas (${totalPendingCategoryExceptions})` },
-              { id: 'kavro_go', label: `Habilitados GO (${categoryStats['kavro_go']?.eligibleCount || 0})` },
-              { id: 'kavro_plus', label: `Habilitados PLUS (${categoryStats['kavro_plus']?.eligibleCount || 0})` },
-              { id: 'kavro_exec', label: `Habilitados EXEC (${categoryStats['kavro_exec']?.eligibleCount || 0})` },
+              { id: 'kavro_go', label: `Habilitados Padrão (${categoryStats['kavro_go']?.eligibleCount || 0})` },
+              { id: 'kavro_entregas', label: `Habilitados Entregas (${categoryStats['kavro_entregas']?.eligibleCount || 0})` },
             ].map(f => {
               const active = driverFilter === f.id;
               return (
@@ -2340,10 +2383,11 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                 <tbody>
                   {rides.slice(0, 60).map(r => {
                     const snap = r.appliedFareSnapshot;
+                    const mappedR = mapLegacyCategoryId(r.category);
                     const catLabel = r.categoryName || snap?.categoryName || (
-                      mapLegacyCategoryId(r.category) === 'kavro_exec' ? 'KAVRO EXEC' :
-                      mapLegacyCategoryId(r.category) === 'kavro_plus' ? 'KAVRO PLUS' : 'KAVRO GO'
+                      mappedR === 'kavro_entregas' ? 'Entregas' : 'Padrão'
                     );
+                    const isDeliveryHist = r.serviceType === 'entregas' || mappedR === 'kavro_entregas' || snap?.categoryType === 'entregas';
                     const commPct = snap?.commissionPercent ?? r.commissionPercent ?? 20;
                     const commAmt = r.commissionAmount ?? Number(((r.totalPrice * commPct) / 100).toFixed(2));
                     const netAmt = r.driverNetAmount ?? Number((r.totalPrice - commAmt).toFixed(2));
@@ -2364,13 +2408,18 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                           <span style={{
                             padding: '3px 8px',
                             borderRadius: 4,
-                            backgroundColor: '#0F172A',
+                            backgroundColor: isDeliveryHist ? '#14532D' : '#0F172A',
                             color: '#76D800',
                             fontSize: '0.68rem',
                             fontWeight: 700
                           }}>
                             {catLabel}
                           </span>
+                          {isDeliveryHist && r.deliveryDetails?.itemDescription && (
+                            <div style={{ fontSize: '0.66rem', color: '#15803D', marginTop: 3, fontWeight: 600 }}>
+                              📦 {r.deliveryDetails.itemDescription}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '12px 12px', color: '#475569', fontSize: '0.7rem' }}>
                           {snap ? (
@@ -2443,6 +2492,46 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
               >
                 <X size={18} />
               </button>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+                Modalidade / Tipo de Categoria *
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setNewCatType('padrao')}
+                  style={{
+                    height: 36,
+                    borderRadius: 8,
+                    border: newCatType === 'padrao' ? '2px solid #0F172A' : '1px solid #CBD5E1',
+                    backgroundColor: newCatType === 'padrao' ? '#0F172A' : '#FFFFFF',
+                    color: newCatType === 'padrao' ? '#FFFFFF' : '#334155',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Viagem Padrão
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNewCatType('entregas')}
+                  style={{
+                    height: 36,
+                    borderRadius: 8,
+                    border: newCatType === 'entregas' ? '2px solid #15803D' : '1px solid #CBD5E1',
+                    backgroundColor: newCatType === 'entregas' ? '#15803D' : '#FFFFFF',
+                    color: newCatType === 'entregas' ? '#FFFFFF' : '#334155',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Entregas (Produtos)
+                </button>
+              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 10 }}>

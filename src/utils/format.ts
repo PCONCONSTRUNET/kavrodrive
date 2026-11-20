@@ -30,6 +30,23 @@ export function formatCPF(value: string | undefined | null): string {
   return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9, 11)}`;
 }
 
+/** Valida CPF brasileiro (11 dígitos, sem sequência repetida e com dígitos verificadores módulo 11) */
+export function isValidCPF(value: string | undefined | null): boolean {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
+
+  const calcCheckDigit = (len: number) => {
+    let sum = 0;
+    for (let i = 0; i < len; i += 1) {
+      sum += Number(digits[i]) * (len + 1 - i);
+    }
+    const digit = (sum * 10) % 11;
+    return digit === 10 ? 0 : digit;
+  };
+
+  return calcCheckDigit(9) === Number(digits[9]) && calcCheckDigit(10) === Number(digits[10]);
+}
+
 /** Formata um CNPJ: 00.000.000/0000-00 */
 export function formatCNPJ(value: string | undefined | null): string {
   if (!value) return '';

@@ -1,11 +1,18 @@
 const { EventEmitter } = require('events');
-const { buildCorsHeaders } = require('./securityUtils.cjs');
+const crypto = require('crypto');
+const { buildCorsHeaders, isUpstashConfigured, upstashPipeline } = require('./securityUtils.cjs');
 
 const hubEmitter = new EventEmitter();
 hubEmitter.setMaxListeners(500);
 
 const sseClients = new Set();
 let totalEventsPublished = 0;
+const INSTANCE_ID = `inst-${crypto.randomBytes(4).toString('hex')}`;
+const MAX_BUFFERED_EVENTS = 150;
+const recentEventsBuffer = [];
+let remotePollerTimer = null;
+let lastRemoteTsMs = Date.now();
+const seenRemoteSeqs = new Set();
 
 function writeSseFrame(res, eventName, data) {
   try {
@@ -73,20 +80,14 @@ function shouldDeliverToClient(client, eventName, scope = {}) {
   return true;
 }
 
-/**
- * Publish a real-time event to matching authorized SSE clients and internal subscribers.
- */
-function publish(eventName, payload = {}, scope = {}) {
-  totalEventsPublished += 1;
-  const envelope = {
-    type: eventName,
-    ts: new Date().toISOString(),
-    ...payload
-  };
+function pushToRingBuffer(entry) {
+  recentEventsBuffer.push(entry);
+  if (recentEventsBuffer.length > MAX_BUFFERED_EVENTS) {
+    recentEventsBuffer.splice(0, recentEventsBuffer.length - MAX_BUFFERED_EVENTS);
+  }
+}
 
-  hubEmitter.emit(eventName, envelope, scope);
-  hubEmitter.emit('*', { event: eventName, envelope, scope });
-
+function deliverToMatchingClients(eventName, envelope, scope) {
   for (const client of Array.from(sseClients)) {
     if (!shouldDeliverToClient(client, eventName, scope)) {
       continue;
@@ -96,6 +97,83 @@ function publish(eventName, payload = {}, scope = {}) {
       sseClients.delete(client);
       if (client.keepaliveTimer) clearInterval(client.keepaliveTimer);
     }
+  }
+}
+
+function ensureRemotePollerRunning() {
+  if (!isUpstashConfigured() || remotePollerTimer || sseClients.size === 0) return;
+  remotePollerTimer = setInterval(async () => {
+    if (sseClients.size === 0 || !isUpstashConfigured()) {
+      clearInterval(remotePollerTimer);
+      remotePollerTimer = null;
+      return;
+    }
+    try {
+      const res = await upstashPipeline([['LRANGE', 'kavro:rt:events', '0', '25']]);
+      const rawItems = Array.isArray(res?.[0]?.result) ? res[0].result : [];
+      if (rawItems.length === 0) return;
+
+      const parsed = [];
+      for (let i = rawItems.length - 1; i >= 0; i--) {
+        try {
+          const item = JSON.parse(rawItems[i]);
+          if (!item || item.instanceId === INSTANCE_ID) continue;
+          const uid = `${item.instanceId}:${item.seq}`;
+          if (item.tsMs >= lastRemoteTsMs && !seenRemoteSeqs.has(uid)) {
+            seenRemoteSeqs.add(uid);
+            if (seenRemoteSeqs.size > 500) seenRemoteSeqs.clear();
+            parsed.push(item);
+          }
+        } catch {}
+      }
+
+      for (const item of parsed) {
+        if (item.tsMs > lastRemoteTsMs) lastRemoteTsMs = item.tsMs;
+        pushToRingBuffer(item);
+        deliverToMatchingClients(item.eventName, item.envelope, item.scope || {});
+      }
+    } catch {}
+  }, 1500);
+  if (typeof remotePollerTimer.unref === 'function') {
+    remotePollerTimer.unref();
+  }
+}
+
+function stopRemotePollerIfIdle() {
+  if (sseClients.size === 0 && remotePollerTimer) {
+    clearInterval(remotePollerTimer);
+    remotePollerTimer = null;
+  }
+}
+
+/**
+ * Publish a real-time event to matching authorized SSE clients and internal subscribers.
+ */
+function publish(eventName, payload = {}, scope = {}) {
+  totalEventsPublished += 1;
+  const seq = totalEventsPublished;
+  const tsMs = Date.now();
+  const envelope = {
+    type: eventName,
+    seq,
+    tsMs,
+    ts: new Date(tsMs).toISOString(),
+    ...payload
+  };
+
+  pushToRingBuffer({ instanceId: INSTANCE_ID, seq, tsMs, eventName, envelope, scope });
+
+  hubEmitter.emit(eventName, envelope, scope);
+  hubEmitter.emit('*', { event: eventName, envelope, scope });
+
+  deliverToMatchingClients(eventName, envelope, scope);
+
+  if (isUpstashConfigured()) {
+    upstashPipeline([
+      ['LPUSH', 'kavro:rt:events', JSON.stringify({ instanceId: INSTANCE_ID, seq, tsMs, eventName, envelope, scope })],
+      ['LTRIM', 'kavro:rt:events', '0', String(MAX_BUFFERED_EVENTS - 1)],
+      ['EXPIRE', 'kavro:rt:events', '120']
+    ]).catch(() => {});
   }
 
   return envelope;
@@ -166,10 +244,21 @@ function handleStreamRequest(req, res, url, authCtx = null) {
   };
 
   sseClients.add(clientEntry);
+  ensureRemotePollerRunning();
+
+  const sinceTs = Number(url?.searchParams?.get('since') || 0);
+  if (sinceTs > 0 && Number.isFinite(sinceTs)) {
+    for (const item of recentEventsBuffer) {
+      if (item.tsMs > sinceTs && shouldDeliverToClient(clientEntry, item.eventName, item.scope || {})) {
+        writeSseFrame(res, item.eventName, item.envelope);
+      }
+    }
+  }
 
   const cleanup = () => {
     clearInterval(keepaliveTimer);
     sseClients.delete(clientEntry);
+    stopRemotePollerIfIdle();
   };
 
   req.on('close', cleanup);
@@ -180,7 +269,9 @@ function handleStreamRequest(req, res, url, authCtx = null) {
 function getStats() {
   return {
     activeConnections: sseClients.size,
-    totalEventsPublished
+    totalEventsPublished,
+    bufferedEvents: recentEventsBuffer.length,
+    upstashConfigured: isUpstashConfigured()
   };
 }
 

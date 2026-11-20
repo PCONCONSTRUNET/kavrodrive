@@ -4,6 +4,7 @@ import {
   RefreshCw, Search
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
+import { StorageService } from '../services/storage';
 
 export interface SosAlertItem {
   id: string;
@@ -58,7 +59,9 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
   const loadSosAlerts = async () => {
     setIsLoading(true);
     try {
-      const res = await fetch('/api/sos/alerts');
+      const res = await fetch('/api/sos/alerts', {
+        headers: { ...StorageService.getAuthHeaders() }
+      });
       if (res.ok) {
         const data = await res.json();
         const list: SosAlertItem[] = Array.isArray(data.alerts) ? data.alerts : [];
@@ -86,7 +89,7 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
     try {
       await fetch(`/api/sos/${encodeURIComponent(sosId)}/status`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
         body: JSON.stringify({ status, notes })
       });
       await loadSosAlerts();
@@ -105,7 +108,7 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
 
       await fetch('/api/sos/location', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
         body: JSON.stringify({
           sosId,
           rideId: sampleRide?.id || 'UP-001',

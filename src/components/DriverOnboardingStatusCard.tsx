@@ -139,11 +139,11 @@ export const DriverOnboardingStatusCard: React.FC<DriverOnboardingStatusCardProp
     },
     {
       id: 'categorias',
-      label: 'Categorias GO / PLUS / EXEC',
+      label: 'Categorias (Padrão e Entregas)',
       stepNum: 6,
       status: hasCategoriesConfigured ? 'aprovado' : hasVehicleAndCrlv ? 'em_analise' : 'pendente',
       statusText: hasCategoriesConfigured
-        ? `Ativo (${(driverData.eligibleCategories || []).map(c => c.replace('kavro_', '').toUpperCase()).join(' / ')})`
+        ? `Ativo (${Array.from(new Set((driverData.eligibleCategories || []).map(c => c === 'kavro_entregas' || String(c).toLowerCase().includes('entrega') ? 'Entregas' : 'Padrão'))).join(' / ')})`
         : 'Pendente',
     },
     {
@@ -178,7 +178,7 @@ export const DriverOnboardingStatusCard: React.FC<DriverOnboardingStatusCardProp
       inAnalysis: !isSecurityApproved && hasAccountAndPersonal && hasCnhAndEar,
     },
     { step: 5, title: 'Cadastro do veículo + CRLV', done: hasVehicleAndCrlv },
-    { step: 6, title: 'Categorias GO / PLUS / EXEC', done: hasCategoriesConfigured },
+    { step: 6, title: 'Categorias Padrão e Entregas', done: hasCategoriesConfigured },
     { step: 7, title: 'Dados para recebimento', done: hasPayoutData },
   ];
 

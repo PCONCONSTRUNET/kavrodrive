@@ -100,6 +100,73 @@ function clearRateLimitForTests() {
   RATE_BUCKETS.clear();
 }
 
+function getUpstashConfig() {
+  const url = String(process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/+$/, '');
+  const token = String(process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  return { url, token, enabled: Boolean(url && token) };
+}
+
+function isUpstashConfigured() {
+  return getUpstashConfig().enabled;
+}
+
+async function upstashPipeline(commands = []) {
+  const { url, token, enabled } = getUpstashConfig();
+  if (!enabled || !Array.isArray(commands) || commands.length === 0) return null;
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), 1500) : null;
+  try {
+    const resp = await fetch(`${url}/pipeline`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(commands),
+      ...(controller ? { signal: controller.signal } : {})
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json().catch(() => null);
+    return Array.isArray(data) ? data : null;
+  } catch {
+    return null;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function checkRateLimitAsync(namespace, identifier, maxHits = 20, windowMs = 60000) {
+  const localRes = checkRateLimit(namespace, identifier, maxHits, windowMs);
+  if (!localRes.allowed) return localRes;
+  if (!isUpstashConfigured()) return localRes;
+
+  const redisKey = `kavro:rl:${namespace}:${String(identifier || 'unknown').slice(0, 140)}`;
+  const res = await upstashPipeline([
+    ['INCR', redisKey],
+    ['PTTL', redisKey]
+  ]);
+  if (!res || !res[0]) return localRes;
+
+  const count = Number(res[0].result || 1);
+  const pttl = Number(res[1]?.result ?? -1);
+  if (pttl < 0) {
+    upstashPipeline([['PEXPIRE', redisKey, String(windowMs)]]).catch(() => {});
+  }
+  if (count > maxHits) {
+    const effectiveTtl = pttl > 0 ? pttl : windowMs;
+    return {
+      allowed: false,
+      remaining: 0,
+      retryAfterSec: Math.max(1, Math.ceil(effectiveTtl / 1000))
+    };
+  }
+  return {
+    allowed: true,
+    remaining: Math.max(0, maxHits - count),
+    retryAfterSec: 0
+  };
+}
+
 function signTrackingToken(resourceType, resourceId, ttlMs = 24 * 60 * 60 * 1000) {
   const payload = {
     t: String(resourceType),
@@ -165,6 +232,150 @@ function haversineDistanceKm(lat1, lng1, lat2, lng2) {
     Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
   const c = 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
   return Math.max(0, R * c);
+}
+
+/**
+ * Distância perpendicular (em km) do ponto atual ao segmento Origem -> Destino
+ * usando projeção equiretangular local (adequada para trajetos urbanos/regionais).
+ */
+function crossTrackDistanceKm(origin, destination, current) {
+  const oLat = Number(origin?.lat);
+  const oLng = Number(origin?.lng);
+  const dLat = Number(destination?.lat);
+  const dLng = Number(destination?.lng);
+  const pLat = Number(current?.lat);
+  const pLng = Number(current?.lng);
+  if (
+    !Number.isFinite(oLat) || !Number.isFinite(oLng) ||
+    !Number.isFinite(dLat) || !Number.isFinite(dLng) ||
+    !Number.isFinite(pLat) || !Number.isFinite(pLng) ||
+    (oLat === 0 && oLng === 0) || (dLat === 0 && dLng === 0)
+  ) {
+    return 0;
+  }
+
+  const refLatRad = (((oLat + dLat) / 2) * Math.PI) / 180;
+  const kx = 111.32 * Math.cos(refLatRad);
+  const ky = 110.574;
+
+  const ax = 0;
+  const ay = 0;
+  const bx = (dLng - oLng) * kx;
+  const by = (dLat - oLat) * ky;
+  const px = (pLng - oLng) * kx;
+  const py = (pLat - oLat) * ky;
+
+  const abLenSq = bx * bx + by * by;
+  if (abLenSq <= 1e-9) {
+    return Math.hypot(px - ax, py - ay);
+  }
+  const t = Math.max(0, Math.min(1, (px * bx + py * by) / abLenSq));
+  const projX = ax + t * bx;
+  const projY = ay + t * by;
+  return Math.hypot(px - projX, py - projY);
+}
+
+/**
+ * Avalia anomalias estilo Uber RideCheck durante corrida em_andamento:
+ * - parada_longa: velocidade < 2 km/h por >= 3 min longe do destino (> 200 m)
+ * - desvio_rota: afastamento lateral > 800 m do corredor previsto e distToDest > directDist + 500 m
+ */
+function evaluateRideCheckAnomaly(ride, newLoc, nowMs = Date.now(), simulateReason = null) {
+  const snapshot = ride?.appliedFareSnapshot && typeof ride.appliedFareSnapshot === 'object'
+    ? ride.appliedFareSnapshot
+    : {};
+  const prevCheck = snapshot.rideCheck || null;
+  const telemetry = snapshot.rideCheckTelemetry && typeof snapshot.rideCheckTelemetry === 'object'
+    ? snapshot.rideCheckTelemetry
+    : {};
+
+  if (!ride || ride.status !== 'em_andamento' || !newLoc || !Number.isFinite(Number(newLoc.lat)) || !Number.isFinite(Number(newLoc.lng))) {
+    return { triggered: false, rideCheck: prevCheck, telemetry };
+  }
+
+  if (prevCheck && prevCheck.status === 'aguardando_resposta') {
+    return { triggered: false, rideCheck: prevCheck, telemetry };
+  }
+
+  const normalizedSim = simulateReason === 'parada_longa' || simulateReason === 'desvio_rota'
+    ? simulateReason
+    : null;
+
+  if (!normalizedSim && prevCheck?.respondedAt) {
+    const respondedMs = new Date(prevCheck.respondedAt).getTime();
+    if (Number.isFinite(respondedMs) && nowMs - respondedMs < 180 * 1000) {
+      return { triggered: false, rideCheck: prevCheck, telemetry };
+    }
+  }
+
+  const curLat = Number(newLoc.lat);
+  const curLng = Number(newLoc.lng);
+  const speedKmH = Number(newLoc.speedKmH ?? 0);
+  const distToDestKm = haversineDistanceKm(curLat, curLng, ride.destination?.lat, ride.destination?.lng);
+
+  const hasAnchor = Number.isFinite(Number(telemetry.anchorLat)) && Number.isFinite(Number(telemetry.anchorLng));
+  const movedKm = hasAnchor ? haversineDistanceKm(telemetry.anchorLat, telemetry.anchorLng, curLat, curLng) : 999;
+
+  let stationarySince = Number(telemetry.stationarySince || nowMs);
+  let anchorLat = Number(telemetry.anchorLat || curLat);
+  let anchorLng = Number(telemetry.anchorLng || curLng);
+
+  if (speedKmH < 2 && movedKm < 0.03) {
+    stationarySince = telemetry.stationarySince ? Number(telemetry.stationarySince) : nowMs;
+    anchorLat = telemetry.anchorLat !== undefined ? Number(telemetry.anchorLat) : curLat;
+    anchorLng = telemetry.anchorLng !== undefined ? Number(telemetry.anchorLng) : curLng;
+  } else {
+    stationarySince = nowMs;
+    anchorLat = curLat;
+    anchorLng = curLng;
+  }
+
+  const nextTelemetry = {
+    stationarySince,
+    anchorLat,
+    anchorLng,
+    lastEvaluatedAt: new Date(nowMs).toISOString(),
+    lastSpeedKmH: speedKmH
+  };
+
+  const isLongStop = normalizedSim === 'parada_longa' || (
+    Number.isFinite(distToDestKm) &&
+    distToDestKm > 0.2 &&
+    speedKmH < 2 &&
+    (nowMs - stationarySince) >= 180 * 1000
+  );
+
+  const directDistKm = haversineDistanceKm(ride.origin?.lat, ride.origin?.lng, ride.destination?.lat, ride.destination?.lng);
+  const xtkKm = crossTrackDistanceKm(ride.origin, ride.destination, newLoc);
+  const isRouteDeviation = normalizedSim === 'desvio_rota' || (
+    directDistKm > 0.3 &&
+    xtkKm > 0.8 &&
+    distToDestKm > directDistKm + 0.5
+  );
+
+  if (!isLongStop && !isRouteDeviation) {
+    return { triggered: false, rideCheck: prevCheck, telemetry: nextTelemetry };
+  }
+
+  const reason = isRouteDeviation ? 'desvio_rota' : 'parada_longa';
+  const rideCheck = {
+    id: `rc-${nowMs}`,
+    reason,
+    reasonLabel: reason === 'parada_longa'
+      ? 'Parada incomum por mais de 3 minutos longe do destino.'
+      : 'Desvio severo da rota prevista detectado pelo GPS.',
+    triggeredAt: new Date(nowMs).toISOString(),
+    expiresAt: new Date(nowMs + 60 * 1000).toISOString(),
+    status: 'aguardando_resposta',
+    lat: curLat,
+    lng: curLng
+  };
+
+  return {
+    triggered: true,
+    rideCheck,
+    telemetry: nextTelemetry
+  };
 }
 
 function resolveCategoryPricingServer(categoryObj, cfg = {}, city = '') {
@@ -301,19 +512,33 @@ function sanitizeDriverForSse(driver) {
  * - Passageiro dono vê seu boardingPin e mascara telefone pessoal do motorista (usa Chat In-App).
  * - Motorista vê mascara do telefone pessoal do passageiro, NUNCA recebe o boardingPin, mas recebe requiresBoardingPin.
  */
-function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwnerClient = false } = {}) {
+function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwnerClient = false, isTrackingViewer = false } = {}) {
   if (!ride) return null;
   const snapshot = ride.appliedFareSnapshot && typeof ride.appliedFareSnapshot === 'object'
     ? { ...ride.appliedFareSnapshot }
     : undefined;
   const rawPin = snapshot?.boardingPin || ride.boardingPin || undefined;
   const requiresBoardingPin = Boolean(rawPin);
+  const rideCheck = snapshot?.rideCheck || ride.rideCheck || null;
+  const trustedContactsDispatches = Array.isArray(snapshot?.trustedContactsDispatches)
+    ? snapshot.trustedContactsDispatches
+    : (Array.isArray(ride.trustedContactsDispatches) ? ride.trustedContactsDispatches : []);
+  const trackingToken = (isAdmin || isOwnerClient || isTrackingViewer)
+    ? signTrackingToken('ride', ride.id)
+    : undefined;
+  const trackingUrl = trackingToken
+    ? `/track/${encodeURIComponent(ride.id)}?t=${encodeURIComponent(trackingToken)}`
+    : undefined;
 
   if (isAdmin) {
     return {
       ...ride,
       boardingPin: rawPin,
-      requiresBoardingPin
+      requiresBoardingPin,
+      rideCheck,
+      trustedContactsDispatches,
+      trackingToken,
+      trackingUrl
     };
   }
 
@@ -327,6 +552,10 @@ function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwne
       appliedFareSnapshot: snapshot,
       boardingPin: rawPin,
       requiresBoardingPin,
+      rideCheck,
+      trustedContactsDispatches,
+      trackingToken,
+      trackingUrl,
       driverPhone: '',
       driverPhoneMasked: maskPhoneDisplay(ride.driverPhone)
     };
@@ -339,12 +568,66 @@ function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwne
       ...ride,
       appliedFareSnapshot: snapshot,
       requiresBoardingPin,
+      rideCheck,
+      trustedContactsDispatches,
       clientPhone: '',
       clientPhoneMasked: maskPhoneDisplay(ride.clientPhone)
     };
     delete copy.boardingPin;
     delete copy.passengerNotes;
     return copy;
+  }
+
+  if (isTrackingViewer) {
+    const rawDel = ride.deliveryDetails || snapshot?.deliveryDetails || null;
+    const maskedDelivery = rawDel
+      ? {
+          role: rawDel.role || 'sender',
+          recipientName: maskNamePublic(rawDel.recipientName),
+          recipientPhone: maskPhoneDisplay(rawDel.recipientPhone),
+          itemDescription: rawDel.itemDescription || '',
+          packageSize: rawDel.packageSize || 'pequeno',
+          dropoffMode: rawDel.dropoffMode || 'porta_mao'
+        }
+      : null;
+    return {
+      id: ride.id,
+      rideNumber: ride.rideNumber,
+      rideCode: ride.rideCode,
+      status: ride.status,
+      category: ride.category,
+      categoryName: ride.categoryName,
+      serviceType: ride.serviceType || snapshot?.categoryType || 'padrao',
+      deliveryDetails: maskedDelivery,
+      date: ride.date,
+      time: ride.time,
+      origin: ride.origin,
+      destination: ride.destination,
+      distanceKm: ride.distanceKm,
+      durationMin: ride.durationMin,
+      totalPrice: ride.totalPrice,
+      paymentMethod: ride.paymentMethod,
+      paymentStatus: ride.paymentStatus,
+      clientName: maskNamePublic(ride.clientName),
+      clientPhone: '',
+      driverId: ride.driverId || null,
+      driverName: ride.driverName || null,
+      driverPhone: '',
+      driverPhoto: ride.driverPhoto || null,
+      driverVehicle: ride.driverVehicle || null,
+      driverPlate: ride.driverPlate || null,
+      driverCarColor: ride.driverCarColor || null,
+      driverRating: ride.driverRating ?? 5.0,
+      driverLocation: ride.driverLocation || null,
+      clientLocation: ride.clientLocation || null,
+      requiresBoardingPin,
+      rideCheck,
+      trustedContactsDispatches,
+      trackingToken,
+      trackingUrl,
+      createdAt: ride.createdAt,
+      updatedAt: ride.updatedAt
+    };
   }
 
   // Público/anônimo nunca deve receber dados identificáveis ou de terceiros
@@ -355,6 +638,7 @@ function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwne
     status: ride.status,
     category: ride.category,
     categoryName: ride.categoryName,
+    serviceType: ride.serviceType || snapshot?.categoryType || 'padrao',
     date: ride.date,
     time: ride.time,
     totalPrice: ride.totalPrice,
@@ -370,10 +654,15 @@ module.exports = {
   getAllowedCorsOrigin,
   buildCorsHeaders,
   checkRateLimit,
+  checkRateLimitAsync,
   clearRateLimitForTests,
+  isUpstashConfigured,
+  upstashPipeline,
   signTrackingToken,
   verifyTrackingToken,
   haversineDistanceKm,
+  crossTrackDistanceKm,
+  evaluateRideCheckAnomaly,
   calculateOfficialRidePriceServer,
   maskPhoneDisplay,
   maskNamePublic,

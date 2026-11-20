@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const db = require('./db.cjs');
 const env = require('./env.cjs');
+const stripeGateway = require('./stripeGateway.cjs');
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
@@ -72,17 +73,31 @@ function getQrCodeUrl(payload, size = 260) {
 // ============================================================
 // Cálculos de Split & Comissão (Exclusivo no Backend)
 // ============================================================
-function calculateSplit(grossAmount, commissionPercent = 20) {
+function calculateSplit(grossAmount, commissionPercent = 20, commissionFixed = 0) {
   const gross = Math.max(0, round2(grossAmount));
   const pct = Math.min(100, Math.max(0, Number(commissionPercent ?? 20)));
-  const commissionAmount = round2(gross * (pct / 100));
-  const driverNetAmount = round2(gross - commissionAmount);
+  const fixed = Math.max(0, round2(Number(commissionFixed ?? 0) || 0));
+  const rawCommission = round2((gross * (pct / 100)) + (gross > 0 ? fixed : 0));
+  const commissionAmount = round2(Math.min(gross, rawCommission));
+  const driverNetAmount = round2(Math.max(0, gross - commissionAmount));
   return {
     grossAmount: gross,
     commissionPercent: pct,
+    commissionFixed: fixed,
     commissionAmount,
     driverNetAmount
   };
+}
+
+function resolveCommissionFixedForRide(cfg = {}, ride = null) {
+  const raw =
+    ride?.commissionFixed ??
+    ride?.commission_fixed ??
+    ride?.appliedFareSnapshot?.commissionFixed ??
+    ride?.applied_fare_snapshot?.commissionFixed ??
+    cfg?.platformCommissionFixed ??
+    0;
+  return Math.max(0, round2(Number(raw) || 0));
 }
 
 // Resolve a taxa/comissão oficial considerando hierarquia: Categoria (se override ativo) > Meio de Pagamento (PIX, Cartão, Dinheiro) > Global
@@ -246,6 +261,7 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS estimated_price NUMERIC DEFAULT 0;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS paid_amount NUMERIC DEFAULT 0;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS commission_percent NUMERIC DEFAULT 20;
+      ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS commission_fixed NUMERIC DEFAULT 0;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS commission_amount NUMERIC DEFAULT 0;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS driver_net_amount NUMERIC DEFAULT 0;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS payment_tx_id VARCHAR(64);
@@ -331,10 +347,11 @@ async function getSystemConfig() {
 const DEFAULT_RIDE_CATEGORIES_SERVER = [
   {
     id: 'kavro_go',
-    code: 'GO',
-    name: 'KAVRO GO',
-    subtitle: 'Econômico • Dia a Dia',
-    description: 'Viagens econômicas em veículos 4 portas com ar-condicionado e documentação regular.',
+    code: 'PADRAO',
+    name: 'Padrão',
+    subtitle: 'Viagem de passageiros',
+    description: 'Transporte padrão de passageiros em veículos 4 portas com ar-condicionado e documentação regular.',
+    categoryType: 'padrao',
     active: true,
     sortOrder: 1,
     multiplier: 1.0,
@@ -358,87 +375,98 @@ const DEFAULT_RIDE_CATEGORIES_SERVER = [
     cityOverrides: []
   },
   {
-    id: 'kavro_plus',
-    code: 'PLUS',
-    name: 'KAVRO PLUS',
-    subtitle: 'Conforto • Espaço Amplo',
-    description: 'Veículos mais novos, espaçosos e confortáveis com motoristas bem avaliados.',
+    id: 'kavro_entregas',
+    code: 'ENTREGAS',
+    name: 'Entregas',
+    subtitle: 'Produtos e encomendas',
+    description: 'Envie ou receba produtos, pacotes, compras e documentos direto até o endereço informado.',
+    categoryType: 'entregas',
     active: true,
     sortOrder: 2,
-    multiplier: 1.25,
-    baseFare: 10.0,
-    pricePerKm: 4.0,
-    pricePerMinute: 0.62,
-    minimumFare: 18.75,
+    multiplier: 0.95,
+    baseFare: 7.5,
+    pricePerKm: 3.0,
+    pricePerMinute: 0.45,
+    minimumFare: 14.0,
     commissionPercent: 20,
-    maxPassengers: 4,
-    minVehicleYear: 2018,
-    minDriverRating: 4.7,
+    maxPassengers: 0,
+    minVehicleYear: 2012,
+    minDriverRating: 4.5,
     minCompletedRides: 0,
-    requireFourDoors: true,
-    requireAirConditioning: true,
+    requireFourDoors: false,
+    requireAirConditioning: false,
     requireRegularDoc: true,
     requireEar: true,
-    requireLargeTrunk: true,
+    requireLargeTrunk: false,
     requireLeatherSeats: false,
-    allowedModels: [
-      'Onix Plus', 'Prisma', 'Cobalt', 'Cruze', 'Spin', 'Tracker',
-      'HB20S', 'Creta', 'Virtus', 'Voyage', 'Jetta', 'Nivus', 'T-Cross', 'Taos',
-      'Cronos', 'Fastback', 'Pulse', 'Toros',
-      'City', 'Civic', 'HR-V', 'WR-V',
-      'Etios Sedan', 'Yaris Sedan', 'Corolla', 'Corolla Cross',
-      'Versa', 'Sentra', 'Kicks',
-      'Logan', 'Duster', 'Oroch', 'Captur',
-      'Renegade', 'Compass', 'Tiggo', 'Arrizo', 'BYD Dolphin', 'BYD Dolphin Plus', 'BYD King', 'BYD Song'
-    ],
-    allowedCities: [],
-    cityOverrides: []
-  },
-  {
-    id: 'kavro_exec',
-    code: 'EXEC',
-    name: 'KAVRO EXEC',
-    subtitle: 'Executivo • Premium',
-    description: 'Experiência executiva em sedans médios/grandes e SUVs selecionados com padrão superior.',
-    active: true,
-    sortOrder: 3,
-    multiplier: 1.5,
-    baseFare: 12.0,
-    pricePerKm: 4.8,
-    pricePerMinute: 0.75,
-    minimumFare: 22.5,
-    commissionPercent: 18,
-    maxPassengers: 4,
-    minVehicleYear: 2020,
-    minDriverRating: 4.85,
-    minCompletedRides: 0,
-    requireFourDoors: true,
-    requireAirConditioning: true,
-    requireRegularDoc: true,
-    requireEar: true,
-    requireLargeTrunk: true,
-    requireLeatherSeats: true,
-    allowedModels: [
-      'Corolla', 'Corolla XEi', 'Corolla Altis', 'Corolla GR-S', 'Corolla Cross',
-      'Civic', 'Civic Touring', 'HR-V Touring', 'Accord',
-      'Sentra', 'Jetta', 'Passat', 'Taos', 'Tiguan',
-      'Cruze', 'Cruze Premier', 'Equinox',
-      'Compass', 'Commander',
-      'Tiggo 7', 'Tiggo 8', 'Arrizo 6',
-      'Haval H6', 'BYD King', 'BYD Song Plus', 'BYD Seal', 'BYD Yuan Plus',
-      'BMW 320i', 'Audi A3', 'Audi A4', 'Mercedes C180', 'Mercedes C200'
-    ],
+    allowedModels: [],
     allowedCities: [],
     cityOverrides: []
   }
 ];
 
+const DEPRECATED_LEGACY_TIER_IDS_SERVER = new Set([
+  'kavro_plus', 'kavro_exec', 'comfort', 'plus', 'aeroporto', 'exec', 'executivo', 'bagagem'
+]);
+
 function mapLegacyCategoryIdServer(catId) {
   const raw = String(catId || '').trim().toLowerCase();
-  if (!raw || raw === 'standard' || raw === 'upx' || raw === 'go') return 'kavro_go';
-  if (raw === 'comfort' || raw === 'plus') return 'kavro_plus';
-  if (raw === 'aeroporto' || raw === 'exec' || raw === 'executivo' || raw === 'bagagem') return 'kavro_exec';
+  if (
+    !raw ||
+    raw === 'standard' ||
+    raw === 'upx' ||
+    raw === 'go' ||
+    raw === 'padrao' ||
+    raw === 'padrão' ||
+    raw === 'comfort' ||
+    raw === 'plus' ||
+    raw === 'kavro_plus' ||
+    raw === 'aeroporto' ||
+    raw === 'exec' ||
+    raw === 'executivo' ||
+    raw === 'bagagem' ||
+    raw === 'kavro_exec'
+  ) {
+    return 'kavro_go';
+  }
+  if (
+    raw === 'entregas' ||
+    raw === 'entrega' ||
+    raw === 'envios' ||
+    raw === 'envio' ||
+    raw === 'flash' ||
+    raw === 'delivery' ||
+    raw === 'kavro_flash' ||
+    raw === 'kavro_entregas'
+  ) {
+    return 'kavro_entregas';
+  }
   return raw;
+}
+
+function resolveCategoryTypeServer(categoryOrId) {
+  if (typeof categoryOrId === 'string') {
+    const mapped = mapLegacyCategoryIdServer(categoryOrId);
+    if (
+      mapped === 'kavro_entregas' ||
+      /entrega|envio|flash|delivery|pacote|encomenda/.test(String(categoryOrId).toLowerCase())
+    ) {
+      return 'entregas';
+    }
+    return 'padrao';
+  }
+  if (!categoryOrId || typeof categoryOrId !== 'object') return 'padrao';
+  if (categoryOrId.categoryType === 'entregas' || categoryOrId.categoryType === 'padrao') {
+    return categoryOrId.categoryType;
+  }
+  const text = `${categoryOrId.id || ''} ${categoryOrId.code || ''} ${categoryOrId.name || ''}`.toLowerCase();
+  if (
+    mapLegacyCategoryIdServer(categoryOrId.id) === 'kavro_entregas' ||
+    /entrega|envio|flash|delivery|pacote|encomenda/.test(text)
+  ) {
+    return 'entregas';
+  }
+  return 'padrao';
 }
 
 function normalizeCategoriesServer(cfg) {
@@ -449,21 +477,41 @@ function normalizeCategoriesServer(cfg) {
       : [];
 
   const hasKavro = rawList.some(c =>
-    c.id === 'kavro_go' || c.id === 'kavro_plus' || c.id === 'kavro_exec' ||
-    String(c.name || '').toUpperCase().includes('KAVRO GO')
+    c.id === 'kavro_go' || c.id === 'kavro_plus' || c.id === 'kavro_exec' || c.id === 'kavro_entregas' ||
+    String(c.name || '').toUpperCase().includes('KAVRO GO') ||
+    String(c.name || '').toUpperCase() === 'PADRÃO'
   );
 
   if (rawList.length === 0 || !hasKavro) {
     return DEFAULT_RIDE_CATEGORIES_SERVER;
   }
 
-  return rawList.map((item, idx) => {
+  const filteredList = rawList.filter(item => !DEPRECATED_LEGACY_TIER_IDS_SERVER.has(String(item?.id || '').trim().toLowerCase()));
+  const seenIds = new Set();
+  const mappedList = [];
+
+  for (let idx = 0; idx < filteredList.length; idx++) {
+    const item = filteredList[idx];
     const mappedId = mapLegacyCategoryIdServer(item.id);
+    if (seenIds.has(mappedId)) continue;
+    seenIds.add(mappedId);
+
     const def = DEFAULT_RIDE_CATEGORIES_SERVER.find(d => d.id === mappedId) || DEFAULT_RIDE_CATEGORIES_SERVER[0];
-    return {
+    const rawName = String(item.name || '').trim();
+    const isLegacyDefaultName =
+      (mappedId === 'kavro_go' && (!rawName || rawName.toUpperCase() === 'KAVRO GO')) ||
+      (mappedId === 'kavro_entregas' && (!rawName || rawName.toUpperCase() === 'KAVRO ENTREGAS'));
+
+    mappedList.push({
       ...def,
       ...item,
-      id: item.id || def.id,
+      id: mappedId === 'kavro_go' || mappedId === 'kavro_entregas' ? mappedId : (item.id || def.id),
+      code: isLegacyDefaultName ? def.code : (item.code || def.code),
+      name: isLegacyDefaultName ? def.name : rawName,
+      subtitle: isLegacyDefaultName ? def.subtitle : (item.subtitle ?? def.subtitle),
+      categoryType: item.categoryType === 'entregas' || item.categoryType === 'padrao'
+        ? item.categoryType
+        : resolveCategoryTypeServer(item),
       active: item.active !== false,
       sortOrder: Number(item.sortOrder ?? idx + 1),
       multiplier: Number(item.multiplier ?? def.multiplier ?? 1),
@@ -477,8 +525,29 @@ function normalizeCategoriesServer(cfg) {
       minCompletedRides: Number(item.minCompletedRides ?? def.minCompletedRides ?? 0),
       allowedModels: Array.isArray(item.allowedModels) ? item.allowedModels : def.allowedModels,
       allowedCities: Array.isArray(item.allowedCities) ? item.allowedCities : def.allowedCities
-    };
-  });
+    });
+  }
+
+  if (!mappedList.some(c => c.id === 'kavro_go' || resolveCategoryTypeServer(c) === 'padrao')) {
+    const padraoDef = DEFAULT_RIDE_CATEGORIES_SERVER[0];
+    mappedList.unshift({
+      ...padraoDef,
+      commissionPercent: Number(cfg?.platformCommissionPercent ?? padraoDef.commissionPercent ?? 20)
+    });
+  }
+
+  if (!mappedList.some(c => c.id === 'kavro_entregas' || resolveCategoryTypeServer(c) === 'entregas')) {
+    const entregasDef = DEFAULT_RIDE_CATEGORIES_SERVER.find(d => d.id === 'kavro_entregas');
+    if (entregasDef) {
+      mappedList.push({
+        ...entregasDef,
+        sortOrder: mappedList.length + 1,
+        commissionPercent: Number(cfg?.platformCommissionPercent ?? entregasDef.commissionPercent ?? 20)
+      });
+    }
+  }
+
+  return mappedList;
 }
 
 function matchesAllowedModelServer(brand, model, version, allowedModels) {
@@ -542,8 +611,21 @@ function computeDriverCategoriesServer(driver, categories) {
   const rawEnabled = Array.isArray(driver.enabledCategories) && driver.enabledCategories.length > 0
     ? driver.enabledCategories.map(mapLegacyCategoryIdServer)
     : null;
+  const rawDisabled = Array.isArray(driver.disabledCategoryIds)
+    ? driver.disabledCategoryIds.map(mapLegacyCategoryIdServer)
+    : null;
 
-  let enabled = rawEnabled ? eligible.filter(id => rawEnabled.includes(id)) : [...eligible];
+  let enabled;
+  if (rawDisabled) {
+    enabled = eligible.filter(id => !rawDisabled.includes(id));
+  } else if (rawEnabled) {
+    enabled = eligible.filter(id =>
+      rawEnabled.includes(id) ||
+      (resolveCategoryTypeServer(id) === 'entregas' && rawEnabled.includes('kavro_go'))
+    );
+  } else {
+    enabled = [...eligible];
+  }
   if (enabled.length === 0) enabled = [...eligible];
 
   return { eligibleCategories: eligible, enabledCategories: enabled };
@@ -804,6 +886,11 @@ function formatDriverRow(row, categoriesConfig) {
       : Array.isArray(meta.enabledCategories)
         ? meta.enabledCategories
         : undefined,
+    disabledCategoryIds: Array.isArray(row.disabledCategoryIds)
+      ? row.disabledCategoryIds
+      : Array.isArray(meta.disabledCategoryIds)
+        ? meta.disabledCategoryIds
+        : undefined,
     city: row.city || '',
     bio: row.bio || '',
     pixKey: row.pix_key || row.pixKey || '',
@@ -1026,6 +1113,9 @@ async function saveDriverRecord(driverRow) {
     enabledCategories: Array.isArray(driverRow.enabledCategories)
       ? driverRow.enabledCategories
       : (Array.isArray(prevMeta.enabledCategories) ? prevMeta.enabledCategories : undefined),
+    disabledCategoryIds: Array.isArray(driverRow.disabledCategoryIds)
+      ? driverRow.disabledCategoryIds
+      : (Array.isArray(prevMeta.disabledCategoryIds) ? prevMeta.disabledCategoryIds : undefined),
     pixKeys: validateAndNormalizeDriverPixKeys(
       Array.isArray(driverRow.pixKeys) ? driverRow.pixKeys : (Array.isArray(prevMeta.pixKeys) ? prevMeta.pixKeys : undefined),
       {
@@ -1383,6 +1473,23 @@ async function getPaymentTxByRide(rideId) {
   const r = await db.query(
     'SELECT * FROM public.payment_transactions WHERE ride_id = $1 OR id = $1 ORDER BY created_at DESC LIMIT 1',
     [rideId]
+  );
+  return r.rows[0] ? formatPaymentTxRow(r.rows[0]) : null;
+}
+
+async function getPaymentTxByGatewayTxId(gatewayTxId) {
+  const gwId = String(gatewayTxId || '').trim();
+  if (!gwId) return null;
+  await ensureExtendedSchema();
+  if (!db.pool) {
+    const found = (db.localStore.payment_transactions || []).find(
+      p => (p.gateway_tx_id || p.gatewayTxId) === gwId
+    );
+    return found ? formatPaymentTxRow(found) : null;
+  }
+  const r = await db.query(
+    'SELECT * FROM public.payment_transactions WHERE gateway_tx_id = $1 ORDER BY created_at DESC LIMIT 1',
+    [gwId]
   );
   return r.rows[0] ? formatPaymentTxRow(r.rows[0]) : null;
 }
@@ -1929,15 +2036,34 @@ function detectCardBrand(numStr) {
   return 'Mastercard';
 }
 
+function formatSavedCardRow(c) {
+  return {
+    id: c.id,
+    clientId: c.client_id ?? c.clientId ?? '',
+    clientPhone: c.client_phone ?? c.clientPhone ?? '',
+    brand: c.brand || 'Cartão',
+    last4: c.last4 || '',
+    holderName: c.holder_name ?? c.holderName ?? '',
+    expMonth: c.exp_month ?? c.expMonth ?? '',
+    expYear: c.exp_year ?? c.expYear ?? '',
+    cardType: c.card_type ?? c.cardType ?? 'cartao_credito',
+    gatewayToken: c.gateway_token ?? c.gatewayToken ?? '',
+    isDefault: Boolean(c.is_default ?? c.isDefault),
+    createdAt: c.created_at ?? c.createdAt ?? ''
+  };
+}
+
 async function listSavedCards(clientId, clientPhone) {
   await ensureExtendedSchema();
   const cleanPhone = String(clientPhone || '').replace(/\D/g, '');
   if (!db.pool) {
-    return (db.localStore.saved_cards || []).filter(c => {
-      const cPhone = String(c.client_phone || c.clientPhone || '').replace(/\D/g, '');
-      return (clientId && (c.client_id === clientId || c.clientId === clientId)) ||
-        (cleanPhone.length >= 8 && cPhone === cleanPhone);
-    });
+    return (db.localStore.saved_cards || [])
+      .filter(c => {
+        const cPhone = String(c.client_phone || c.clientPhone || '').replace(/\D/g, '');
+        return (clientId && (c.client_id === clientId || c.clientId === clientId)) ||
+          (cleanPhone.length >= 8 && cPhone === cleanPhone);
+      })
+      .map(formatSavedCardRow);
   }
   const r = await db.query(
     `SELECT * FROM public.saved_cards
@@ -1946,20 +2072,7 @@ async function listSavedCards(clientId, clientPhone) {
      ORDER BY created_at DESC`,
     [String(clientId || ''), cleanPhone]
   );
-  return r.rows.map(c => ({
-    id: c.id,
-    clientId: c.client_id,
-    clientPhone: c.client_phone,
-    brand: c.brand,
-    last4: c.last4,
-    holderName: c.holder_name,
-    expMonth: c.exp_month,
-    expYear: c.exp_year,
-    cardType: c.card_type || 'cartao_credito',
-    gatewayToken: c.gateway_token,
-    isDefault: Boolean(c.is_default),
-    createdAt: c.created_at
-  }));
+  return r.rows.map(formatSavedCardRow);
 }
 
 function mapMpPaymentMethodId(brand, cardType) {
@@ -2007,49 +2120,88 @@ async function createMpCardTokenServer({ cardNumber, holderName, expMonth, expYe
   return null;
 }
 
-async function tokenizeAndSaveCard({ clientId, clientPhone, cardNumber, holderName, expMonth, expYear, cvv, cardType, mpCardToken, holderDocument }) {
+async function tokenizeAndSaveCard({
+  clientId,
+  clientPhone,
+  cardNumber,
+  holderName,
+  expMonth,
+  expYear,
+  cvv,
+  cardType,
+  mpCardToken,
+  holderDocument,
+  stripeSetupIntentId,
+  stripePaymentMethodId
+}) {
   await ensureExtendedSchema();
-  const digits = String(cardNumber || '').replace(/\D/g, '');
-  if (digits.length < 13 || digits.length > 19) {
-    throw new Error('Número de cartão inválido.');
-  }
-  if (!cvv || String(cvv).replace(/\D/g, '').length < 3) {
-    throw new Error('Código de segurança (CVV) inválido.');
-  }
-  const last4 = digits.slice(-4);
-  const brand = detectCardBrand(digits);
-
-  // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
-  const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
-    cardNumber: digits,
-    holderName,
-    expMonth,
-    expYear,
-    cvv,
-    holderDoc: holderDocument
-  });
-
-  // Token opaco do gateway — nunca armazena número completo nem CVV
-  const gatewayToken = realMpToken
-    ? `mp_tok_${realMpToken}`
-    : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
   const cardId = `card-${Date.now()}`;
   const now = new Date().toISOString();
 
-  const cardObj = {
-    id: cardId,
-    clientId: clientId || '',
-    clientPhone: clientPhone || '',
-    brand,
-    last4,
-    holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
-    expMonth: String(expMonth || '12').padStart(2, '0'),
-    expYear: String(expYear || '2030').slice(-4),
-    cardType: cardType === 'cartao_debito' ? 'cartao_debito' : 'cartao_credito',
-    gatewayToken,
-    isDefault: true,
-    createdAt: now
-  };
+  let cardObj;
+  if (stripeGateway.isStripeEnabled() && (stripeSetupIntentId || stripePaymentMethodId)) {
+    const resolved = await stripeGateway.resolveSavedCard({
+      setupIntentId: stripeSetupIntentId,
+      paymentMethodId: stripePaymentMethodId,
+      clientId,
+      clientPhone,
+      preferredCardType: cardType
+    });
+    cardObj = {
+      id: cardId,
+      clientId: clientId || '',
+      clientPhone: clientPhone || '',
+      brand: resolved.brand,
+      last4: resolved.last4,
+      holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
+      expMonth: resolved.expMonth,
+      expYear: resolved.expYear,
+      cardType: resolved.cardType,
+      gatewayToken: resolved.gatewayToken,
+      isDefault: true,
+      createdAt: now
+    };
+  } else {
+    const digits = String(cardNumber || '').replace(/\D/g, '');
+    if (digits.length < 13 || digits.length > 19) {
+      throw new Error('Número de cartão inválido.');
+    }
+    if (!cvv || String(cvv).replace(/\D/g, '').length < 3) {
+      throw new Error('Código de segurança (CVV) inválido.');
+    }
+    const last4 = digits.slice(-4);
+    const brand = detectCardBrand(digits);
+
+    // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
+    const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
+      cardNumber: digits,
+      holderName,
+      expMonth,
+      expYear,
+      cvv,
+      holderDoc: holderDocument
+    });
+
+    // Token opaco do gateway — nunca armazena número completo nem CVV
+    const gatewayToken = realMpToken
+      ? `mp_tok_${realMpToken}`
+      : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
+
+    cardObj = {
+      id: cardId,
+      clientId: clientId || '',
+      clientPhone: clientPhone || '',
+      brand,
+      last4,
+      holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
+      expMonth: String(expMonth || '12').padStart(2, '0'),
+      expYear: String(expYear || '2030').slice(-4),
+      cardType: cardType === 'cartao_debito' ? 'cartao_debito' : 'cartao_credito',
+      gatewayToken,
+      isDefault: true,
+      createdAt: now
+    };
+  }
 
   if (!db.pool) {
     db.localStore.saved_cards.unshift({
@@ -2088,7 +2240,7 @@ async function tokenizeAndSaveCard({ clientId, clientPhone, cardNumber, holderNa
 async function createPixChargeForRide(ride) {
   const cfg = await getSystemConfig();
   const effectivePixPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'pix');
-  const split = calculateSplit(ride.totalPrice, effectivePixPct);
+  const split = calculateSplit(ride.totalPrice, effectivePixPct, resolveCommissionFixedForRide(cfg, ride));
   const txid = `UP${String(ride.id || '').replace(/[^a-zA-Z0-9]/g, '')}${Date.now().toString().slice(-4)}`.slice(0, 25);
 
   let pixCopyPaste = generateDynamicPixPayload({
@@ -2100,9 +2252,28 @@ async function createPixChargeForRide(ride) {
   });
   let pixQrCode = getQrCodeUrl(pixCopyPaste, 260);
   let gatewayTxId = `pix_${ride.id}_${Date.now()}`;
+  let pixExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-  // Se houver MERCADOPAGO_ACCESS_TOKEN configurado, tenta gerar cobrança real no Mercado Pago com external_reference = ride.id
-  if (env.MERCADOPAGO_ACCESS_TOKEN) {
+  if (stripeGateway.isStripeEnabled()) {
+    const stripePix = await stripeGateway.createPixCharge({
+      amountBrl: split.grossAmount,
+      rideId: ride.id,
+      rideCode: ride.rideCode || `#UP - ${String(ride.rideNumber || 1).padStart(3, '0')}`,
+      driverId: ride.driverId || '',
+      purpose: 'ride_pix',
+      payerName: ride.clientName || 'Passageiro Kavro',
+      payerEmail: ride.clientEmail || 'passageiro@kavro.app',
+      description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
+      qrFallbackGenerator: getQrCodeUrl
+    });
+    if (!stripePix.pixCopyPaste && !stripePix.pixQrCode) {
+      throw new Error('A Stripe não retornou o QR Code PIX. Verifique se o método PIX está ativado no Painel Stripe.');
+    }
+    pixCopyPaste = stripePix.pixCopyPaste || pixCopyPaste;
+    pixQrCode = stripePix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
+    gatewayTxId = stripePix.paymentIntentId;
+    pixExpiresAt = stripePix.expiresAt || pixExpiresAt;
+  } else if (env.MERCADOPAGO_ACCESS_TOKEN) {
     try {
       const mpRes = await fetch('https://api.mercadopago.com/v1/payments', {
         method: 'POST',
@@ -2155,7 +2326,7 @@ async function createPixChargeForRide(ride) {
     driverNetAmount: split.driverNetAmount,
     pixQrCode,
     pixCopyPaste,
-    pixExpiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    pixExpiresAt,
     gatewayTxId
   });
 
@@ -2165,7 +2336,7 @@ async function createPixChargeForRide(ride) {
 async function authorizeCardForRide(ride, cardInfo = {}) {
   const cfg = await getSystemConfig();
   const effectiveCommPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod || 'cartao_credito');
-  const split = calculateSplit(ride.totalPrice, effectiveCommPct);
+  const split = calculateSplit(ride.totalPrice, effectiveCommPct, resolveCommissionFixedForRide(cfg, ride));
   const last4 = String(cardInfo.cardLast4 || ride.cardLast4 || '4242');
   const brand = String(cardInfo.cardBrand || ride.cardBrand || 'Mastercard');
 
@@ -2193,12 +2364,132 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
     return { authorized: false, tx: failedTx, split, error: 'Cartão recusado pelo banco emissor. Escolha outro cartão ou PIX.' };
   }
 
-  // Busca token real salvo ou enviado no checkout para pré-autorização no Mercado Pago
+  // Busca token real salvo ou enviado no checkout para pré-autorização (Stripe prioritário)
   let savedCard = null;
   if (cardInfo.cardId || ride.cardId) {
     const cards = await listSavedCards(ride.clientId, ride.clientPhone);
     savedCard = cards.find(c => c.id === (cardInfo.cardId || ride.cardId)) || null;
   }
+
+  if (stripeGateway.isStripeEnabled()) {
+    const buildFailedTx = async (reason, gwId) =>
+      savePaymentTransaction({
+        rideId: ride.id,
+        rideCode: ride.rideCode,
+        clientId: ride.clientId,
+        clientName: ride.clientName,
+        method: ride.paymentMethod || 'cartao_credito',
+        status: 'falhou',
+        estimatedAmount: split.grossAmount,
+        finalAmount: split.grossAmount,
+        paidAmount: 0,
+        commissionPercent: split.commissionPercent,
+        commissionAmount: split.commissionAmount,
+        driverNetAmount: split.driverNetAmount,
+        cardId: cardInfo.cardId || ride.cardId || '',
+        cardLast4: savedCard?.last4 || last4,
+        cardBrand: savedCard?.brand || brand,
+        failureReason: String(reason),
+        gatewayTxId: gwId
+      });
+
+    if (cardInfo.stripePaymentIntentId) {
+      const checkPi = await stripeGateway.verifyAuthorizedPaymentIntent(cardInfo.stripePaymentIntentId);
+      if (!checkPi.authorized) {
+        const failedTx = await buildFailedTx(
+          `Autenticação Stripe não concluída (${checkPi.status}).`,
+          `card_st_fail_${ride.id}_${Date.now()}`
+        );
+        return { authorized: false, tx: failedTx, split, error: 'Pagamento no cartão não foi autorizado após verificação.' };
+      }
+      const tx = await savePaymentTransaction({
+        rideId: ride.id,
+        rideCode: ride.rideCode,
+        driverId: ride.driverId || null,
+        driverName: ride.driverName || null,
+        clientId: ride.clientId || null,
+        clientName: ride.clientName,
+        method: ride.paymentMethod || 'cartao_credito',
+        status: 'autorizado',
+        estimatedAmount: split.grossAmount,
+        finalAmount: split.grossAmount,
+        paidAmount: 0,
+        commissionPercent: split.commissionPercent,
+        commissionAmount: split.commissionAmount,
+        driverNetAmount: split.driverNetAmount,
+        cardId: cardInfo.cardId || ride.cardId || '',
+        cardLast4: savedCard?.last4 || last4,
+        cardBrand: savedCard?.brand || brand,
+        gatewayAuthCode: checkPi.authCode,
+        gatewayTxId: checkPi.paymentIntentId
+      });
+      return { authorized: true, tx, split, provider: 'stripe' };
+    }
+
+    const parsedStripe = stripeGateway.parseStripeGatewayToken(savedCard?.gatewayToken);
+    if (!parsedStripe) {
+      return {
+        authorized: false,
+        tx: null,
+        split,
+        error: 'Este cartão foi salvo antes da ativação da Stripe. Cadastre o cartão novamente pelo formulário seguro para continuar.'
+      };
+    }
+
+    const authSt = await stripeGateway.authorizeCardHold({
+      amountBrl: split.grossAmount,
+      rideId: ride.id,
+      rideCode: ride.rideCode,
+      customerId: parsedStripe.customerId,
+      paymentMethodId: parsedStripe.paymentMethodId,
+      clientEmail: ride.clientEmail,
+      driverId: ride.driverId
+    });
+
+    if (authSt.requiresAction) {
+      return {
+        authorized: false,
+        requiresAction: true,
+        clientSecret: authSt.clientSecret,
+        paymentIntentId: authSt.paymentIntentId,
+        tx: null,
+        split,
+        error: authSt.error
+      };
+    }
+
+    if (!authSt.authorized) {
+      const failedTx = await buildFailedTx(
+        authSt.error || 'Cartão recusado na Stripe.',
+        authSt.paymentIntentId || `card_st_fail_${ride.id}_${Date.now()}`
+      );
+      return { authorized: false, tx: failedTx, split, error: authSt.error || 'Cartão recusado pelo banco emissor.' };
+    }
+
+    const tx = await savePaymentTransaction({
+      rideId: ride.id,
+      rideCode: ride.rideCode,
+      driverId: ride.driverId || null,
+      driverName: ride.driverName || null,
+      clientId: ride.clientId || null,
+      clientName: ride.clientName,
+      method: ride.paymentMethod || 'cartao_credito',
+      status: 'autorizado',
+      estimatedAmount: split.grossAmount,
+      finalAmount: split.grossAmount,
+      paidAmount: 0,
+      commissionPercent: split.commissionPercent,
+      commissionAmount: split.commissionAmount,
+      driverNetAmount: split.driverNetAmount,
+      cardId: cardInfo.cardId || ride.cardId || '',
+      cardLast4: savedCard?.last4 || last4,
+      cardBrand: savedCard?.brand || brand,
+      gatewayAuthCode: authSt.authCode,
+      gatewayTxId: authSt.paymentIntentId
+    });
+    return { authorized: true, tx, split, provider: 'stripe' };
+  }
+
   const rawTokenCandidate = String(cardInfo.mpCardToken || savedCard?.gatewayToken || '').trim();
   const realMpToken = rawTokenCandidate.startsWith('mp_tok_')
     ? rawTokenCandidate.slice('mp_tok_'.length)
@@ -2310,7 +2601,21 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
 async function captureCardForRide(ride, finalAmount) {
   const tx = await getPaymentTxByRide(ride.id);
   const amount = round2(finalAmount ?? ride.totalPrice);
-  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && tx?.gatewayTxId && /^\d+$/.test(String(tx.gatewayTxId)));
+  const gwId = String(tx?.gatewayTxId || '');
+  if (stripeGateway.isStripeEnabled() && gwId.startsWith('pi_')) {
+    try {
+      return await stripeGateway.captureCardHold({
+        paymentIntentId: gwId,
+        finalAmountBrl: amount
+      });
+    } catch (err) {
+      return {
+        captured: false,
+        error: err?.message || 'Falha ao capturar pré-autorização do cartão na Stripe.'
+      };
+    }
+  }
+  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));
   if (isRealMpId) {
     try {
       const capResp = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}`, {
@@ -2340,7 +2645,18 @@ async function captureCardForRide(ride, finalAmount) {
 }
 
 async function refundGatewayPayment(tx, refundAmount = null) {
-  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && tx?.gatewayTxId && /^\d+$/.test(String(tx.gatewayTxId)));
+  const gwId = String(tx?.gatewayTxId || '');
+  if (stripeGateway.isStripeEnabled() && gwId.startsWith('pi_')) {
+    try {
+      return await stripeGateway.cancelOrRefundPayment({
+        paymentIntentId: gwId,
+        refundAmountBrl: refundAmount
+      });
+    } catch (err) {
+      return { ok: false, error: err?.message || 'Falha ao estornar/liberar pagamento na Stripe.' };
+    }
+  }
+  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));
   if (!isRealMpId) return { ok: true, provider: 'sandbox' };
   try {
     const body = refundAmount ? { amount: round2(refundAmount) } : {};
@@ -2368,7 +2684,11 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
   if (!ride || !ride.driverId) return null;
   const cfg = await getSystemConfig();
   const finalGross = finalAmountOverride !== null ? round2(finalAmountOverride) : round2(ride.totalPrice);
-  const split = calculateSplit(finalGross, ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod));
+  const split = calculateSplit(
+    finalGross,
+    ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod),
+    resolveCommissionFixedForRide(cfg, ride)
+  );
 
   // Verifica se o motorista possuía dívida anterior para registrar nota de compensação automática
   const walletBefore = await getDriverWallet(ride.driverId);
@@ -2379,6 +2699,10 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
       ? 'pending'
       : 'available';
   const entryStatus = settlementBucket === 'pending' ? 'pendente_liberacao' : 'confirmado';
+
+  const commFormulaLabel = split.commissionFixed > 0
+    ? `${split.commissionPercent}% + R$ ${split.commissionFixed.toFixed(2)}`
+    : `${split.commissionPercent}%`;
 
   // 1. Crédito líquido do motorista
   const { entry: driverEntry, idempotent } = await recordLedgerEntry({
@@ -2398,9 +2722,10 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
     balanceDelta: +split.driverNetAmount,
     balanceBucket: settlementBucket,
     status: entryStatus,
-    description: `Ganho líquido corrida ${ride.rideCode || ride.id} (${ride.paymentMethod.toUpperCase()}) — Bruto R$ ${split.grossAmount.toFixed(2)} (-${split.commissionPercent}% comissão)`,
+    description: `Ganho líquido corrida ${ride.rideCode || ride.id} (${ride.paymentMethod.toUpperCase()}) — Bruto R$ ${split.grossAmount.toFixed(2)} (-${commFormulaLabel} comissão)`,
     metadata: {
       autoSplit: true,
+      commissionFixed: split.commissionFixed,
       debtOffsetApplied: walletBefore.debtBalance > 0 ? Math.min(walletBefore.debtBalance, split.driverNetAmount) : 0
     }
   });
@@ -2423,7 +2748,7 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
     balanceDelta: 0, // Já descontado no valor líquido creditado via split
     balanceBucket: 'platform',
     status: 'confirmado',
-    description: `Comissão Kavro Drive (${split.commissionPercent}%) retida via split na corrida ${ride.rideCode || ride.id}`
+    description: `Comissão Kavro Drive (${commFormulaLabel}) retida via split na corrida ${ride.rideCode || ride.id}`
   });
 
   return { driverEntry, split, idempotent };
@@ -2438,7 +2763,8 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
   const actualPaid = resolutionType === 'pendente' ? 0 : round2(receivedAmount ?? grossFare);
   const split = calculateSplit(
     grossFare,
-    ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'dinheiro')
+    ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, 'dinheiro'),
+    resolveCommissionFixedForRide(cfg, ride)
   );
 
   const deductFromBalanceFirst = cfg.cashDeductFromBalanceFirst !== false;
@@ -2452,13 +2778,17 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     ? 'cash_debt'
     : (deductedFromBalance >= split.commissionAmount ? 'available' : 'debt');
 
+  const cashFormulaLabel = split.commissionFixed > 0
+    ? `${split.commissionPercent}% + R$ ${split.commissionFixed.toFixed(2)}`
+    : `${split.commissionPercent}%`;
+
   const debitDescription = !deductFromBalanceFirst
-    ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) lançada no Saldo Devedor separado (sem abater Saldo Livre) ref. corrida em dinheiro ${ride.rideCode || ride.id}`
+    ? `Comissão Kavro Drive (${cashFormulaLabel} = R$ ${split.commissionAmount.toFixed(2)}) lançada no Saldo Devedor separado (sem abater Saldo Livre) ref. corrida em dinheiro ${ride.rideCode || ride.id}`
     : deductedFromBalance >= split.commissionAmount
-      ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) descontada do Saldo Livre ref. corrida em dinheiro ${ride.rideCode || ride.id}`
+      ? `Comissão Kavro Drive (${cashFormulaLabel} = R$ ${split.commissionAmount.toFixed(2)}) descontada do Saldo Livre ref. corrida em dinheiro ${ride.rideCode || ride.id}`
       : deductedFromBalance > 0
-        ? `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}): R$ ${deductedFromBalance.toFixed(2)} descontado do Saldo Livre + R$ ${addedToDebt.toFixed(2)} no Saldo Devedor ref. corrida ${ride.rideCode || ride.id}`
-        : `Comissão Kavro Drive (${split.commissionPercent}% = R$ ${split.commissionAmount.toFixed(2)}) lançada no Saldo Devedor ref. corrida em dinheiro ${ride.rideCode || ride.id}`;
+        ? `Comissão Kavro Drive (${cashFormulaLabel} = R$ ${split.commissionAmount.toFixed(2)}): R$ ${deductedFromBalance.toFixed(2)} descontado do Saldo Livre + R$ ${addedToDebt.toFixed(2)} no Saldo Devedor ref. corrida ${ride.rideCode || ride.id}`
+        : `Comissão Kavro Drive (${cashFormulaLabel} = R$ ${split.commissionAmount.toFixed(2)}) lançada no Saldo Devedor ref. corrida em dinheiro ${ride.rideCode || ride.id}`;
 
   // 1. Registro informativo do valor recebido em espécie pelo motorista
   await recordLedgerEntry({
@@ -2554,6 +2884,27 @@ async function createDriverDebtSettlementPix(driverId, customAmount = null) {
   }
 
   const txid = `DEBT${String(driverId).replace(/[^a-zA-Z0-9]/g, '')}${Date.now().toString().slice(-5)}`.slice(0, 25);
+  if (stripeGateway.isStripeEnabled()) {
+    const stripeDebtPix = await stripeGateway.createPixCharge({
+      amountBrl: amountToPay,
+      driverId,
+      purpose: 'driver_debt_pix',
+      payerName: 'Motorista Parceiro Kavro',
+      payerEmail: 'motorista@kavro.app',
+      description: `Quitação de saldo devedor Kavro Drive (${driverId})`,
+      qrFallbackGenerator: getQrCodeUrl
+    });
+    return {
+      driverId,
+      amount: amountToPay,
+      txid,
+      gatewayTxId: stripeDebtPix.paymentIntentId,
+      pixCopyPaste: stripeDebtPix.pixCopyPaste,
+      pixQrCode: stripeDebtPix.pixQrCode || getQrCodeUrl(stripeDebtPix.pixCopyPaste, 240),
+      provider: 'stripe'
+    };
+  }
+
   const pixCopyPaste = generateDynamicPixPayload({
     key: cfg.pixKey || 'contato@upmobilidade.com.br',
     beneficiaryName: cfg.pixBeneficiary || 'KAVRO DRIVE',
@@ -2567,8 +2918,10 @@ async function createDriverDebtSettlementPix(driverId, customAmount = null) {
     driverId,
     amount: amountToPay,
     txid,
+    gatewayTxId: `debt_${txid}`,
     pixCopyPaste,
-    pixQrCode
+    pixQrCode,
+    provider: 'sandbox'
   };
 }
 
@@ -2653,6 +3006,29 @@ async function processRideCancellationFinance(before, { cancelledBy = 'passenger
   let savedTx = tx || null;
 
   const wasDigitalPaid = before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago';
+  const isUncapturedAuth = !wasDigitalPaid && (before.paymentStatus === 'autorizado' || tx?.status === 'autorizado');
+  const isPendingGatewayTx =
+    !wasDigitalPaid &&
+    (isUncapturedAuth ||
+      before.status === 'aguardando_pagamento' ||
+      before.paymentStatus === 'aguardando' ||
+      before.paymentStatus === 'pendente' ||
+      tx?.status === 'aguardando' ||
+      tx?.status === 'pendente');
+
+  if (isPendingGatewayTx && appliedCancellationFee === 0) {
+    if (tx && String(tx.gatewayTxId || '').startsWith('pi_')) {
+      await refundGatewayPayment(tx, null).catch(() => {});
+    }
+    nextPaymentStatus = isUncapturedAuth ? 'reembolsado' : 'cancelado';
+    if (tx) {
+      savedTx = await savePaymentTransaction({
+        ...tx,
+        status: nextPaymentStatus,
+        refundedAmount: isUncapturedAuth ? (tx.estimatedAmount || before.totalPrice || 0) : 0
+      });
+    }
+  }
 
   if (wasDigitalPaid) {
     const totalPaid = round2(tx?.paidAmount || tx?.finalAmount || before.totalPrice || 0);
@@ -2775,6 +3151,7 @@ async function processRideCancellationFinance(before, { cancelledBy = 'passenger
 async function getPlatformFinancialOverview() {
   const cfg = await getSystemConfig();
   const commPctDefault = Number(cfg.platformCommissionPercent ?? 20);
+  const commFixedDefault = round2(Math.max(0, Number(cfg.platformCommissionFixed ?? 0)));
   const drivers = await listDrivers();
   let transactions = await listPaymentTransactions();
 
@@ -2786,7 +3163,7 @@ async function getPlatformFinancialOverview() {
       if (!r || !r.id || existingRideIds.has(r.id)) continue;
       const gross = round2(r.total_price ?? r.totalPrice ?? 0);
       if (gross <= 0) continue;
-      const split = calculateSplit(gross, r.commission_percent ?? commPctDefault);
+      const split = calculateSplit(gross, r.commission_percent ?? commPctDefault, resolveCommissionFixedForRide(cfg, r));
       const method = r.payment_method || r.paymentMethod || 'pix';
       const rawPayStatus = r.payment_status || r.paymentStatus || (r.status === 'finalizada' ? 'confirmado' : 'aguardando');
       const normalizedStatus = rawPayStatus === 'pago' ? 'confirmado' : rawPayStatus;
@@ -2849,6 +3226,7 @@ async function getPlatformFinancialOverview() {
 
   return {
     commissionPercent: commPctDefault,
+    commissionFixed: commFixedDefault,
     paymentMethodCommissionPercents: cfg.paymentMethodCommissionPercents || {
       pix: commPctDefault,
       cartao_credito: commPctDefault,
@@ -3133,11 +3511,13 @@ module.exports = {
   round2,
   calculateSplit,
   resolveCommissionPercentForRide,
+  resolveCommissionFixedForRide,
   generateDynamicPixPayload,
   getQrCodeUrl,
   ensureExtendedSchema,
   normalizeCategoriesServer,
   mapLegacyCategoryIdServer,
+  resolveCategoryTypeServer,
   validateAndNormalizeDriverPixKeys,
   normalizeDriverVehicles,
   computeDriverCategoriesServer,
@@ -3149,6 +3529,7 @@ module.exports = {
   listLedgerEntries,
   savePaymentTransaction,
   getPaymentTxByRide,
+  getPaymentTxByGatewayTxId,
   listPaymentTransactions,
   getDriverWallet,
   listWithdrawals,

@@ -460,6 +460,20 @@ input, select, textarea {
   animation: fadeIn 0.25s ease-out;
 }
 
+.kavro-hscroll {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.kavro-hscroll::-webkit-scrollbar {
+  display: none;
+}
+
 /* Pulsação do ponto de localização */
 @keyframes pulseDot {
   0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(118, 216, 0, 0.7); }
@@ -469,6 +483,106 @@ input, select, textarea {
 
 .pulse-location {
   animation: pulseDot 2s infinite;
+}
+
+@keyframes kavroSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: kavroSpin 1s linear infinite;
+}
+
+/* Barra deslizante estilo radar Uber ("Procurando motorista...") */
+@keyframes kavroRadarSweep {
+  0% { transform: translateX(-110%); }
+  50% { transform: translateX(135%); }
+  100% { transform: translateX(-110%); }
+}
+
+.kavro-radar-track {
+  position: relative;
+  width: 100%;
+  height: 4px;
+  border-radius: 999px;
+  background-color: #E2E8F0;
+  overflow: hidden;
+}
+
+.kavro-radar-beam {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 46%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(39, 110, 241, 0) 0%, #276EF1 42%, #76D800 82%, rgba(118, 216, 0, 0) 100%);
+  animation: kavroRadarSweep 1.6s ease-in-out infinite;
+}
+
+/* Ondas de sonar no pino de embarque do mapa */
+@keyframes kavroMapRipple {
+  0% { transform: translate(-50%, -50%) scale(0.32); opacity: 0.72; }
+  75% { opacity: 0.22; }
+  100% { transform: translate(-50%, -50%) scale(1.18); opacity: 0; }
+}
+
+.kavro-map-sonar,
+.kavro-map-sonar-delay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(39, 110, 241, 0.24) 0%, rgba(118, 216, 0, 0.26) 60%, rgba(118, 216, 0, 0) 100%);
+  border: 2px solid rgba(39, 110, 241, 0.45);
+  pointer-events: none;
+  animation: kavroMapRipple 2.1s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+.kavro-map-sonar-delay {
+  animation-delay: 1.05s;
+}
+
+/* Pulsação suave nos carros disponíveis e indicadores de status */
+@keyframes kavroBeaconAmber {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.75); }
+  70% { transform: scale(1.08); box-shadow: 0 0 0 7px rgba(245, 158, 11, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+
+@keyframes kavroBeaconGreen {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.75); }
+  70% { transform: scale(1.08); box-shadow: 0 0 0 7px rgba(34, 197, 94, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+.kavro-beacon-amber {
+  animation: kavroBeaconAmber 1.5s infinite;
+}
+
+.kavro-beacon-green {
+  animation: kavroBeaconGreen 1.8s infinite;
+}
+
+@keyframes kavroCarPulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28); }
+  50% { transform: scale(1.1); box-shadow: 0 0 0 6px rgba(118, 216, 0, 0.28), 0 4px 12px rgba(0, 0, 0, 0.3); }
+}
+
+.kavro-car-beacon {
+  animation: kavroCarPulse 2.2s ease-in-out infinite;
+}
+
+@keyframes kavroTextSwap {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.kavro-text-swap {
+  animation: kavroTextSwap 0.32s ease-out;
 }
 
 /* =========================================================

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { X, User, Star } from 'lucide-react';
+import { X, User, Star, Package } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
-import { getCategoryById } from '../utils/categoryEngine';
+import { getCategoryById, resolveCategoryType } from '../utils/categoryEngine';
 import { calculateHaversineDistance } from '../utils/geo';
+import { playNewRideSound, stopNewRideSound } from '../utils/soundAndVoice';
 
 interface DriverIncomingRideModalProps {
   ride: Ride | null;
@@ -24,23 +25,42 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
   useEffect(() => {
     if (!ride) return;
     setTimeLeft(25);
+    playNewRideSound({ repeatCount: 3 });
     const timer = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
           clearInterval(timer);
+          stopNewRideSound();
           onDecline(ride.id);
           return 0;
         }
         return prev - 1;
       });
     }, 1000);
-    return () => clearInterval(timer);
+    return () => {
+      clearInterval(timer);
+      stopNewRideSound();
+    };
   }, [ride?.id]);
 
   if (!ride) return null;
 
   const category = getCategoryById(ride.category, config);
-  const driverNet = ride.driverNetAmount || (ride.totalPrice * (1 - (ride.commissionPercent || 20) / 100));
+  const isDelivery =
+    ride.serviceType === 'entregas' ||
+    Boolean(ride.deliveryDetails) ||
+    resolveCategoryType(category) === 'entregas';
+  const del = ride.deliveryDetails;
+  const dropoffText = del?.dropoffMode === 'portaria'
+    ? 'Deixar na portaria'
+    : del?.dropoffMode === 'recepcao'
+      ? 'Recepção / Loja'
+      : 'Entregar em mãos';
+  const fallbackCommAmt = Math.min(
+    ride.totalPrice,
+    (ride.totalPrice * (ride.commissionPercent ?? 20)) / 100 + (ride.totalPrice > 0 ? Number(ride.commissionFixed ?? 0) : 0)
+  );
+  const driverNet = ride.driverNetAmount ?? Math.max(0, ride.totalPrice - fallbackCommAmt);
   const kmEst = (driverNet / Math.max(1, ride.distanceKm || 3)).toFixed(2).replace('.', ',');
   const progressPercent = (timeLeft / 25) * 100;
 
@@ -114,29 +134,32 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              backgroundColor: '#0F172A',
+              backgroundColor: isDelivery ? '#15803D' : '#0F172A',
               color: '#FFFFFF',
               padding: '5px 12px',
               borderRadius: 20,
               fontSize: '0.86rem',
               fontWeight: 800
             }}>
-              <User size={14} />
-              <span>{category.name || 'KAVRO GO'}</span>
+              {isDelivery ? <Package size={14} /> : <User size={14} />}
+              <span>{category.name || (isDelivery ? 'Entregas' : 'Padrão')}</span>
             </div>
 
             <span style={{
               fontSize: '0.8rem',
-              fontWeight: 700,
-              color: '#2563EB'
+              fontWeight: 800,
+              color: isDelivery ? '#15803D' : '#2563EB'
             }}>
-              Exclusivo
+              {isDelivery ? 'Entrega • Produto' : 'Exclusivo'}
             </span>
           </div>
 
           <button
             type="button"
-            onClick={() => onDecline(ride.id)}
+            onClick={() => {
+              stopNewRideSound();
+              onDecline(ride.id);
+            }}
             style={{
               width: 32,
               height: 32,
@@ -191,6 +214,37 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
           </div>
         </div>
 
+        {/* Resumo do Produto / Destinatário quando for Entrega */}
+        {isDelivery && del && (
+          <div style={{
+            backgroundColor: '#F0FDF4',
+            border: '1px solid #BBF7D0',
+            borderRadius: 14,
+            padding: '10px 12px',
+            marginBottom: 14,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 4
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#14532D' }}>
+                📦 {del.itemDescription}
+              </span>
+              <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#166534', backgroundColor: '#DCFCE7', padding: '2px 7px', borderRadius: 999 }}>
+                Porte {del.packageSize || 'pequeno'}
+              </span>
+            </div>
+            <div style={{ fontSize: '0.74rem', color: '#166534', fontWeight: 600 }}>
+              {del.role === 'sender' ? 'Entregar para:' : 'Retirar com:'} <strong>{del.recipientName}</strong> • {dropoffText}
+            </div>
+            {del.instructions && (
+              <div style={{ fontSize: '0.72rem', color: '#15803D', fontWeight: 600 }}>
+                Obs: {del.instructions}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Trajeto em Linha Conectada estilo Uber */}
         <div style={{
           position: 'relative',
@@ -207,7 +261,7 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
             backgroundColor: '#0F172A'
           }} />
 
-          {/* Ponto 1: Origem / Embarque */}
+          {/* Ponto 1: Origem / Embarque / Coleta */}
           <div style={{ position: 'relative', marginBottom: 14 }}>
             <div style={{
               position: 'absolute',
@@ -216,14 +270,14 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
               width: 12,
               height: 12,
               borderRadius: '50%',
-              backgroundColor: '#2563EB',
+              backgroundColor: isDelivery ? '#15803D' : '#2563EB',
               border: '2px solid #FFFFFF',
-              boxShadow: '0 0 0 2px #2563EB'
+              boxShadow: `0 0 0 2px ${isDelivery ? '#15803D' : '#2563EB'}`
             }} />
             <div style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: 700 }}>
               {pickupDistKm !== null && pickupEtaMin !== null
-                ? `~${pickupEtaMin} min (${pickupDistKm.toFixed(1)} km até embarque)`
-                : 'Ponto de embarque'}
+                ? `~${pickupEtaMin} min (${pickupDistKm.toFixed(1)} km até ${isDelivery ? 'coleta' : 'embarque'})`
+                : (isDelivery ? 'Ponto de coleta' : 'Ponto de embarque')}
             </div>
             <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.3 }}>
               {ride.origin.address}
@@ -241,7 +295,7 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
               backgroundColor: '#0F172A'
             }} />
             <div style={{ fontSize: '0.78rem', color: '#64748B', fontWeight: 700 }}>
-              ~{ride.durationMin || 12} min ({ride.distanceKm.toFixed(1)} km viagem)
+              ~{ride.durationMin || 12} min ({ride.distanceKm.toFixed(1)} km {isDelivery ? 'entrega' : 'viagem'})
             </div>
             <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.3 }}>
               {ride.destination.address}
@@ -252,12 +306,15 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
         {/* Botão Aceitar Gigante Azul estilo Uber */}
         <button
           type="button"
-          onClick={() => onAccept(ride.id)}
+          onClick={() => {
+            stopNewRideSound();
+            onAccept(ride.id);
+          }}
           style={{
             width: '100%',
             height: 52,
             borderRadius: 14,
-            backgroundColor: '#2563EB',
+            backgroundColor: isDelivery ? '#15803D' : '#2563EB',
             color: '#FFFFFF',
             border: 'none',
             fontSize: '1.15rem',
@@ -266,11 +323,11 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            boxShadow: '0 4px 18px rgba(37, 99, 235, 0.45)',
+            boxShadow: isDelivery ? '0 4px 18px rgba(21, 128, 61, 0.42)' : '0 4px 18px rgba(37, 99, 235, 0.45)',
             letterSpacing: '-0.01em'
           }}
         >
-          Aceitar ({timeLeft}s)
+          {isDelivery ? `Aceitar Entrega (${timeLeft}s)` : `Aceitar (${timeLeft}s)`}
         </button>
       </div>
     </div>

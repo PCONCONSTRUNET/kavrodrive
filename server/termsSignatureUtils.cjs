@@ -28,6 +28,22 @@ function cleanAndFormatCpf(document) {
   return { cleanCpf, formattedCpf };
 }
 
+function isValidCpfDigits(document) {
+  const digits = String(document || '').replace(/\D/g, '');
+  if (digits.length !== 11 || /^(\d)\1{10}$/.test(digits)) return false;
+
+  const calcDigit = (len) => {
+    let sum = 0;
+    for (let i = 0; i < len; i += 1) {
+      sum += Number(digits[i]) * (len + 1 - i);
+    }
+    const digit = (sum * 10) % 11;
+    return digit === 10 ? 0 : digit;
+  };
+
+  return calcDigit(9) === Number(digits[9]) && calcDigit(10) === Number(digits[10]);
+}
+
 function buildTechnicalEvidence({ ip, userAgent, host, clientAcceptance, signedAt }) {
   return {
     ip: String(ip || '127.0.0.1'),
@@ -43,6 +59,7 @@ module.exports = {
   sha256,
   formatDateTimeBrasilia,
   cleanAndFormatCpf,
+  isValidCpfDigits,
   buildTechnicalEvidence
 };
 

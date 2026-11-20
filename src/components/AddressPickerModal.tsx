@@ -223,7 +223,7 @@ export const AddressPickerModal: React.FC<AddressPickerModalProps> = ({
       style={{
         position: 'fixed',
         inset: 0,
-        zIndex: 9999,
+        zIndex: 10080,
         backgroundColor: 'rgba(0,0,0,0.5)',
         display: 'flex',
         alignItems: 'flex-end',

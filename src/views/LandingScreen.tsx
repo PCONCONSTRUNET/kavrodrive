@@ -29,6 +29,12 @@ import {
   Wallet,
 } from 'lucide-react';
 import { SystemConfig } from '../types';
+import {
+  CityOrCepSuggestion,
+  lookupViaCep,
+  reverseGeocode,
+  searchCitiesAndViaCep
+} from '../utils/geo';
 
 interface LandingScreenProps {
   config: SystemConfig;
@@ -57,12 +63,14 @@ interface HowItWorksStep {
 }
 
 const POPULAR_CITIES = [
-  'Criciúma, BR',
-  'Florianópolis, BR',
-  'São Paulo, BR',
-  'Curitiba, BR',
-  'Porto Alegre, BR',
-  'Balneário Camboriú, BR',
+  'Lauro Müller - SC, BR',
+  'Criciúma - SC, BR',
+  'Orleans - SC, BR',
+  'Tubarão - SC, BR',
+  'Florianópolis - SC, BR',
+  'São Paulo - SP, BR',
+  'Curitiba - PR, BR',
+  'Porto Alegre - RS, BR',
 ];
 
 const QrCanvasBox: React.FC<{ url: string; darkMode?: boolean }> = ({ url, darkMode }) => {
@@ -129,6 +137,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
   const [selectedCity, setSelectedCity] = useState<string>(defaultCity);
   const [customCityInput, setCustomCityInput] = useState<string>('');
   const [cityModalOpen, setCityModalOpen] = useState<boolean>(false);
+  const [citySuggestions, setCitySuggestions] = useState<CityOrCepSuggestion[]>([]);
+  const [isSearchingCity, setIsSearchingCity] = useState<boolean>(false);
+  const [cepFeedback, setCepFeedback] = useState<string>('');
+  const [locatingCityGps, setLocatingCityGps] = useState<boolean>(false);
 
   const [pickup, setPickup] = useState<string>('');
   const [destination, setDestination] = useState<string>('');
@@ -155,6 +167,52 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       setSelectedCity(`${config.driverCarCity.trim()}, BR`);
     }
   }, [config.driverCarCity]);
+
+  useEffect(() => {
+    if (!cityModalOpen) {
+      setCitySuggestions([]);
+      setCepFeedback('');
+      return;
+    }
+    const trimmed = customCityInput.trim();
+    if (trimmed.length < 2) {
+      setCitySuggestions([]);
+      setCepFeedback('');
+      setIsSearchingCity(false);
+      return;
+    }
+
+    let active = true;
+    setIsSearchingCity(true);
+    const tid = setTimeout(() => {
+      searchCitiesAndViaCep(trimmed)
+        .then((results) => {
+          if (!active) return;
+          setCitySuggestions(results);
+          const digits = trimmed.replace(/\D/g, '');
+          if (/^[\d.\-\s]+$/.test(trimmed) && digits.length === 8) {
+            if (results[0]?.source === 'viacep') {
+              setCepFeedback(`ViaCEP localizado: ${results[0].subtitle}`);
+            } else {
+              setCepFeedback('CEP não encontrado no ViaCEP. Confira os 8 dígitos.');
+            }
+          } else {
+            setCepFeedback('');
+          }
+        })
+        .catch(() => {
+          if (active) setCitySuggestions([]);
+        })
+        .finally(() => {
+          if (active) setIsSearchingCity(false);
+        });
+    }, 220);
+
+    return () => {
+      active = false;
+      clearTimeout(tid);
+    };
+  }, [customCityInput, cityModalOpen]);
 
   useEffect(() => {
     const onResize = () => setIsMobile(window.innerWidth < 960);
@@ -208,15 +266,95 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
     }
     setLocatingGps(true);
     navigator.geolocation.getCurrentPosition(
-      () => {
-        setPickup(`Minha localização atual (${selectedCity})`);
-        setLocatingGps(false);
+      async (pos) => {
+        try {
+          const resolved = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+          setPickup(resolved && !resolved.startsWith('GPS:') ? resolved : `Minha localização atual (${selectedCity})`);
+        } catch {
+          setPickup(`Minha localização atual (${selectedCity})`);
+        } finally {
+          setLocatingGps(false);
+        }
       },
       () => {
         setPickup(`Centro, ${selectedCity}`);
         setLocatingGps(false);
       },
       { timeout: 6000 }
+    );
+  };
+
+  const handleSelectCitySuggestion = (item: CityOrCepSuggestion) => {
+    setSelectedCity(item.cityLabel);
+    if (item.streetAddress && !pickup.trim()) {
+      setPickup(item.streetAddress);
+    }
+    setCustomCityInput('');
+    setCitySuggestions([]);
+    setCepFeedback('');
+    setCityModalOpen(false);
+  };
+
+  const handleApplyCityOrCep = async () => {
+    const raw = customCityInput.trim();
+    if (!raw) return;
+
+    if (citySuggestions.length > 0) {
+      handleSelectCitySuggestion(citySuggestions[0]);
+      return;
+    }
+
+    const digits = raw.replace(/\D/g, '');
+    if (/^[\d.\-\s]+$/.test(raw) && digits.length === 8) {
+      setIsSearchingCity(true);
+      const via = await lookupViaCep(digits);
+      setIsSearchingCity(false);
+      if (via) {
+        setSelectedCity(via.formattedCity);
+        if (via.formattedAddress && !pickup.trim()) {
+          setPickup(via.formattedAddress);
+        }
+        setCustomCityInput('');
+        setCitySuggestions([]);
+        setCepFeedback('');
+        setCityModalOpen(false);
+        return;
+      }
+      setCepFeedback('CEP não encontrado no ViaCEP. Tente outro CEP ou digite o nome da cidade.');
+      return;
+    }
+
+    setSelectedCity(raw.includes(', BR') ? raw : `${raw}, BR`);
+    setCustomCityInput('');
+    setCitySuggestions([]);
+    setCepFeedback('');
+    setCityModalOpen(false);
+  };
+
+  const handleDetectCityViaGps = () => {
+    if (!navigator.geolocation) return;
+    setLocatingCityGps(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const addr = await reverseGeocode(pos.coords.latitude, pos.coords.longitude);
+          if (addr && !addr.startsWith('GPS:')) {
+            const parts = addr.split(',');
+            const cityChunk = (parts[parts.length - 1] || addr).trim().replace('/', ' - ');
+            setSelectedCity(cityChunk.includes(', BR') ? cityChunk : `${cityChunk}, BR`);
+            if (!pickup.trim()) setPickup(addr);
+            setCityModalOpen(false);
+          }
+        } catch {
+          // ignore
+        } finally {
+          setLocatingCityGps(false);
+        }
+      },
+      () => {
+        setLocatingCityGps(false);
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
     );
   };
 
@@ -2303,7 +2441,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 <X size={20} />
               </button>
             </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+            <p style={{ fontSize: '0.84rem', color: '#475569', margin: '0 0 12px 0', lineHeight: 1.4 }}>
+              Escolha uma cidade abaixo ou busque por <strong>CEP (ViaCEP)</strong> ou nome do município (IBGE):
+            </p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
               {POPULAR_CITIES.map((city) => (
                 <button
                   key={city}
@@ -2318,7 +2459,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     border: selectedCity === city ? '1px solid #76D800' : '1px solid #E2E8F0',
                     backgroundColor: selectedCity === city ? '#121A21' : '#F3F6F4',
                     color: selectedCity === city ? '#76D800' : '#121A21',
-                    fontSize: '0.86rem',
+                    fontSize: '0.84rem',
                     fontWeight: 600,
                     cursor: 'pointer',
                   }}
@@ -2330,9 +2471,26 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             <div style={{ display: 'flex', gap: 8 }}>
               <input
                 type="text"
-                placeholder="Ou digite sua cidade..."
+                placeholder="Digite seu CEP (ex: 88880-000) ou cidade..."
                 value={customCityInput}
-                onChange={(e) => setCustomCityInput(e.target.value)}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  const digitsOnly = val.replace(/\D/g, '');
+                  if (/^[\d-]+$/.test(val) && digitsOnly.length <= 8) {
+                    const formatted = digitsOnly.length > 5
+                      ? `${digitsOnly.slice(0, 5)}-${digitsOnly.slice(5)}`
+                      : digitsOnly;
+                    setCustomCityInput(formatted);
+                  } else {
+                    setCustomCityInput(val);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void handleApplyCityOrCep();
+                  }
+                }}
                 style={{
                   flex: 1,
                   height: 44,
@@ -2345,13 +2503,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               />
               <button
                 type="button"
-                onClick={() => {
-                  if (customCityInput.trim()) {
-                    setSelectedCity(customCityInput.trim());
-                    setCustomCityInput('');
-                    setCityModalOpen(false);
-                  }
-                }}
+                disabled={isSearchingCity}
+                onClick={() => void handleApplyCityOrCep()}
                 style={{
                   height: 44,
                   padding: '0 18px',
@@ -2360,12 +2513,113 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   backgroundColor: '#121A21',
                   color: '#76D800',
                   fontWeight: 700,
-                  cursor: 'pointer',
+                  cursor: isSearchingCity ? 'wait' : 'pointer',
                 }}
               >
-                Aplicar
+                {isSearchingCity ? 'Buscando...' : 'Aplicar'}
               </button>
             </div>
+
+            {cepFeedback && (
+              <div style={{
+                marginTop: 8,
+                padding: '7px 10px',
+                borderRadius: 8,
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                backgroundColor: cepFeedback.startsWith('ViaCEP localizado') ? '#F0FDF4' : '#FEF2F2',
+                border: cepFeedback.startsWith('ViaCEP localizado') ? '1px solid #BBF7D0' : '1px solid #FECACA',
+                color: cepFeedback.startsWith('ViaCEP localizado') ? '#166534' : '#B91C1C'
+              }}>
+                {cepFeedback}
+              </div>
+            )}
+
+            {citySuggestions.length > 0 && (
+              <div style={{
+                marginTop: 10,
+                maxHeight: 210,
+                overflowY: 'auto',
+                border: '1px solid #E2E8F0',
+                borderRadius: 10,
+                backgroundColor: '#F8FAFC',
+                display: 'flex',
+                flexDirection: 'column',
+              }}>
+                {citySuggestions.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleSelectCitySuggestion(item)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      width: '100%',
+                      padding: '10px 12px',
+                      border: 'none',
+                      borderBottom: '1px solid #E2E8F0',
+                      backgroundColor: 'transparent',
+                      textAlign: 'left',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0B1218' }}>
+                        {item.cityLabel}
+                      </div>
+                      <div style={{
+                        fontSize: '0.74rem',
+                        color: '#475569',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {item.subtitle}
+                      </div>
+                    </div>
+                    <span style={{
+                      fontSize: '0.66rem',
+                      fontWeight: 800,
+                      padding: '3px 8px',
+                      borderRadius: 999,
+                      flexShrink: 0,
+                      backgroundColor: item.source === 'viacep' ? '#DCFCE7' : '#E2E8F0',
+                      color: item.source === 'viacep' ? '#15803D' : '#334155',
+                      textTransform: 'uppercase'
+                    }}>
+                      {item.source === 'viacep' ? 'ViaCEP' : item.source === 'ibge' ? 'IBGE' : 'Regional'}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <button
+              type="button"
+              disabled={locatingCityGps}
+              onClick={handleDetectCityViaGps}
+              style={{
+                marginTop: 12,
+                width: '100%',
+                height: 40,
+                borderRadius: 8,
+                border: '1px dashed #CBD5E1',
+                backgroundColor: '#F8FAFC',
+                color: '#0B1218',
+                fontSize: '0.82rem',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 6,
+                cursor: locatingCityGps ? 'wait' : 'pointer',
+              }}
+            >
+              <Navigation size={14} color="#15803D" />
+              <span>{locatingCityGps ? 'Detectando sua cidade pelo GPS...' : 'Usar minha localização atual (GPS)'}</span>
+            </button>
           </div>
         </div>
       )}

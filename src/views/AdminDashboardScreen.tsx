@@ -6420,6 +6420,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           );
 
           const basePlatformPct = Number(currentConfig.platformCommissionPercent ?? 20);
+          const basePlatformFixed = Math.max(0, Number(currentConfig.platformCommissionFixed ?? 0) || 0);
           const simCommByMethod: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro', number> = {
             pix: Number(currentConfig.paymentMethodCommissionPercents?.pix ?? basePlatformPct),
             cartao_credito: Number(currentConfig.paymentMethodCommissionPercents?.cartao_credito ?? basePlatformPct),
@@ -6427,9 +6428,16 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             dinheiro: Number(currentConfig.paymentMethodCommissionPercents?.dinheiro ?? basePlatformPct)
           };
           const commissionPct = simCommByMethod[simPaymentMethod] ?? basePlatformPct;
-          const driverNetPct = Math.round((100 - commissionPct) * 100) / 100;
-          const simCommission = Number(((simPrice.totalPrice * commissionPct) / 100).toFixed(2));
-          const simDriverNet = Number((simPrice.totalPrice - simCommission).toFixed(2));
+          const simCommission = Number(
+            Math.min(
+              simPrice.totalPrice,
+              ((simPrice.totalPrice * commissionPct) / 100) + (simPrice.totalPrice > 0 ? basePlatformFixed : 0)
+            ).toFixed(2)
+          );
+          const simDriverNet = Number(Math.max(0, simPrice.totalPrice - simCommission).toFixed(2));
+          const driverNetPct = simPrice.totalPrice > 0
+            ? Math.round(((simDriverNet / simPrice.totalPrice) * 100) * 100) / 100
+            : Math.round((100 - commissionPct) * 100) / 100;
 
           const fleetCategories = normalizeCategoriesFromConfig(currentConfig);
 
@@ -6948,7 +6956,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                         <strong style={{ fontWeight: 700, color: '#0F172A' }}>{formatCurrency(simPrice.totalPrice)}</strong>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', color: '#15803D' }}>
-                        <span>Taxa Retida Kavro Drive ({commissionPct}%):</span>
+                        <span>
+                          Taxa Retida Kavro Drive ({commissionPct}%{basePlatformFixed > 0 ? ` + ${formatCurrency(basePlatformFixed)}` : ''}):
+                        </span>
                         <strong>{formatCurrency(simCommission)}</strong>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', color: '#334155' }}>
@@ -6992,11 +7002,11 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                     Taxas Financeiras Aplicadas no Sistema
                   </div>
                   <div style={{ fontSize: '0.73rem', color: '#64748B', marginTop: 2 }}>
-                    PIX: <strong style={{ color: '#0F172A' }}>{simCommByMethod.pix}%</strong> •{' '}
-                    Crédito: <strong style={{ color: '#0F172A' }}>{simCommByMethod.cartao_credito}%</strong> •{' '}
-                    Débito: <strong style={{ color: '#0F172A' }}>{simCommByMethod.cartao_debito}%</strong> •{' '}
-                    Dinheiro: <strong style={{ color: '#0F172A' }}>{simCommByMethod.dinheiro}%</strong> •{' '}
-                    Saque mín.: <strong style={{ color: '#0F172A' }}>{formatCurrency(currentConfig.minWithdrawalAmount ?? 20)}</strong> •{' '}
+                    Taxa Geral das Corridas:{' '}
+                    <strong style={{ color: '#0F172A' }}>
+                      {basePlatformPct}%{basePlatformFixed > 0 ? ` + ${formatCurrency(basePlatformFixed)} fixo` : ''}
+                    </strong>{' '}
+                    • Saque mín.: <strong style={{ color: '#0F172A' }}>{formatCurrency(currentConfig.minWithdrawalAmount ?? 20)}</strong> •{' '}
                     Teto Dívida: <strong style={{ color: '#0F172A' }}>{formatCurrency(currentConfig.maxDriverDebtLimit ?? 100)}</strong>
                   </div>
                 </div>
@@ -7036,7 +7046,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                       Categorias de Corridas KAVRO DRIVE & Multiplicadores Tarifários
                     </div>
                     <div style={{ fontSize: '0.73rem', color: '#64748B', marginTop: 2 }}>
-                      Resumo das modalidades configuradas na plataforma (KAVRO GO, KAVRO PLUS, KAVRO EXEC)
+                      Resumo das 2 categorias configuradas na plataforma (Padrão e Entregas)
                     </div>
                   </div>
                   <button

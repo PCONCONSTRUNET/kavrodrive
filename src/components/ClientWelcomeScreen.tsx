@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { User, Mail, Search, ChevronDown, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, X } from 'lucide-react';
 import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
-import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
+import { formatPhone, formatCPF, isValidCPF, getCleanWhatsappNumber } from '../utils/format';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { TurnstileWidget, isTurnstileEnabled } from './TurnstileWidget';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
@@ -104,6 +104,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
 
   // Dados para novo cadastro
   const [regName, setRegName] = useState('');
+  const [regDocument, setRegDocument] = useState('');
   const [regEmail, setRegEmail] = useState('');
   const [regPassword, setRegPassword] = useState('');
   const [regAcceptedTerms, setRegAcceptedTerms] = useState(false);
@@ -115,12 +116,13 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
   const [isEmailRegister, setIsEmailRegister] = useState(false);
   const [emailRegAcceptedTerms, setEmailRegAcceptedTerms] = useState(false);
 
-  // Completar telefone ou e-mail faltante em contas antigas após login
+  // Completar CPF, telefone ou e-mail faltante em contas antigas após login
   const [pendingContactAuth, setPendingContactAuth] = useState<{
     client: ClientProfile;
     password: string;
   } | null>(null);
   const [contactName, setContactName] = useState('');
+  const [contactDocument, setContactDocument] = useState('');
   const [contactPhone, setContactPhone] = useState('');
   const [contactEmail, setContactEmail] = useState('');
 
@@ -136,6 +138,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     picture?: string;
   } | null>(null);
   const [googleName, setGoogleName] = useState('');
+  const [googleDocument, setGoogleDocument] = useState('');
   const [googlePhone, setGooglePhone] = useState('');
   const [googleAcceptedTerms, setGoogleAcceptedTerms] = useState(false);
 
@@ -199,13 +202,17 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         setActiveModal('password_login');
       } else {
         setRegName('');
+        setRegDocument('');
         setRegEmail('');
         setRegPassword('');
+        setRegAcceptedTerms(false);
         setActiveModal('register_new');
       }
     } catch {
       setIsLoading(false);
       // Fallback para novo cadastro
+      setRegDocument('');
+      setRegAcceptedTerms(false);
       setActiveModal('register_new');
     }
   };
@@ -215,10 +222,12 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     const hasValidEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail);
     const cleanPhoneDigits = String(client.phone || '').replace(/\D/g, '');
     const hasRealPhone = cleanPhoneDigits.length >= 10 && cleanPhoneDigits !== '48999990000';
+    const hasValidCpf = isValidCPF(client.document);
 
-    if (!hasValidEmail || !hasRealPhone) {
+    if (!hasValidEmail || !hasRealPhone || !hasValidCpf) {
       setPendingContactAuth({ client, password: usedPassword });
       setContactName(client.name || '');
+      setContactDocument(hasValidCpf ? formatCPF(client.document) : '');
       setContactPhone(hasRealPhone ? formatPhone(client.phone) : phone);
       setContactEmail(hasValidEmail ? cleanEmail : '');
       setErrorMsg('');
@@ -265,6 +274,10 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       setErrorMsg('Informe seu nome completo.');
       return;
     }
+    if (!isValidCPF(regDocument)) {
+      setErrorMsg('Informe um CPF válido com 11 dígitos.');
+      return;
+    }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       setErrorMsg('Informe um endereço de e-mail válido.');
       return;
@@ -292,7 +305,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       name: regName.trim(),
       phone: phone,
       email: cleanEmail,
-      document: '',
+      document: regDocument.trim(),
       password: regPassword,
       termsAcceptedAt: termsAcceptance.acceptedAtClient,
       termsAcceptance,
@@ -328,6 +341,10 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         setErrorMsg('Informe seu nome completo.');
         return;
       }
+      if (!isValidCPF(regDocument)) {
+        setErrorMsg('Informe um CPF válido com 11 dígitos.');
+        return;
+      }
       const cleanRegPhone = emailRegPhone.replace(/\D/g, '');
       if (cleanRegPhone.length < 10) {
         setErrorMsg('Informe um WhatsApp válido com DDD.');
@@ -354,7 +371,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         name: regName.trim(),
         phone: emailRegPhone.trim(),
         email: cleanEmail,
-        document: '',
+        document: regDocument.trim(),
         password: emailPassword,
         termsAcceptedAt: termsAcceptance.acceptedAtClient,
         termsAcceptance,
@@ -391,6 +408,10 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
     }
     const cleanPhoneDigits = contactPhone.replace(/\D/g, '');
     const cleanEmail = contactEmail.trim().toLowerCase();
+    if (!isValidCPF(contactDocument)) {
+      setErrorMsg('Informe um CPF válido com 11 dígitos.');
+      return;
+    }
     if (cleanPhoneDigits.length < 10 || cleanPhoneDigits === '48999990000') {
       setErrorMsg('Informe um número de WhatsApp válido com DDD.');
       return;
@@ -407,6 +428,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       name: contactName.trim() || pendingContactAuth.client.name,
       phone: contactPhone.trim(),
       email: cleanEmail,
+      document: contactDocument.trim(),
     });
     setIsLoading(false);
 
@@ -462,6 +484,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
             picture: res.googleProfile.picture
           });
           setGoogleName(res.googleProfile.name || '');
+          setGoogleDocument(res.googleProfile.existingDocument ? formatCPF(res.googleProfile.existingDocument) : '');
           const prefillPhone = res.googleProfile.existingPhone
             ? formatPhone(res.googleProfile.existingPhone)
             : phone;
@@ -539,6 +562,10 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       setErrorMsg('Informe seu nome completo.');
       return;
     }
+    if (!isValidCPF(googleDocument)) {
+      setErrorMsg('Informe um CPF válido com 11 dígitos.');
+      return;
+    }
     if (cleanPhone.length < 10) {
       setErrorMsg('Informe um WhatsApp válido com DDD para o motorista falar com você.');
       return;
@@ -562,6 +589,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       accessToken: googleSession.accessToken,
       name: cleanName,
       phone: googlePhone,
+      document: googleDocument.trim(),
       termsAcceptance,
       turnstileToken: turnstileToken || undefined
     });
@@ -576,6 +604,32 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
       setTurnstileResetKey(k => k + 1);
     }
   };
+
+  const renderCpfInput = (
+    value: string,
+    onChange: (nextVal: string) => void,
+    label = 'CPF *'
+  ) => (
+    <div>
+      <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
+        {label}
+      </label>
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={14}
+        placeholder="000.000.000-00"
+        value={value}
+        onChange={(e) => onChange(formatCPF(e.target.value))}
+        required
+        style={{
+          width: '100%', height: 48, padding: '0 14px',
+          borderRadius: 10, border: 'none', backgroundColor: '#F3F3F3',
+          fontSize: '0.95rem', color: '#000', boxSizing: 'border-box', outline: 'none'
+        }}
+      />
+    </div>
+  );
 
   const renderCompactTermsConsent = (checked: boolean, onToggle: (next: boolean) => void) => (
     <div style={{
@@ -871,9 +925,11 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
               type="button"
               onClick={() => {
                 setErrorMsg('');
+                setRegDocument('');
                 setEmailIdentifier('');
                 setEmailPassword('');
                 setEmailRegPhone(phone);
+                setEmailRegAcceptedTerms(false);
                 setIsEmailRegister(false);
                 setActiveModal('email_login');
               }}
@@ -1158,6 +1214,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
+              {renderCpfInput(regDocument, setRegDocument)}
+
               <div>
                 <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
                   E-mail *
@@ -1289,6 +1347,7 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                       }}
                     />
                   </div>
+                  {renderCpfInput(regDocument, setRegDocument)}
                   <div>
                     <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>WhatsApp com DDD *</label>
                     <input
@@ -1481,6 +1540,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                 />
               </div>
 
+              {renderCpfInput(googleDocument, setGoogleDocument)}
+
               <div>
                 <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
                   WhatsApp com DDD (para contato do motorista)
@@ -1556,10 +1617,10 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
               <div>
                 <h3 style={{ fontSize: '1.22rem', fontWeight: 800, margin: '0 0 4px 0', color: '#000000' }}>
-                  Complete seus dados de contato
+                  Complete seu cadastro
                 </h3>
                 <p style={{ fontSize: '0.84rem', color: '#6B7280', margin: 0 }}>
-                  Para segurança das corridas, informe seu WhatsApp e E-mail válidos para continuar
+                  Para segurança das corridas e termo digital, confirme seu CPF, WhatsApp e E-mail
                 </p>
               </div>
               <button
@@ -1594,6 +1655,8 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
                   }}
                 />
               </div>
+
+              {renderCpfInput(contactDocument, setContactDocument)}
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.78rem', color: '#6B7280', fontWeight: 600, marginBottom: 4 }}>
@@ -1687,9 +1750,10 @@ export const ClientWelcomeScreen: React.FC<ClientWelcomeScreenProps> = ({
         mode="passenger"
         config={config}
         draftSigner={{
-          name: regName || googleName,
-          phone: activeModal === 'google_complete' ? googlePhone : phone,
-          email: regEmail || emailIdentifier || googleSession?.email
+          name: activeModal === 'google_complete' ? googleName : regName,
+          cpf: activeModal === 'google_complete' ? googleDocument : regDocument,
+          phone: activeModal === 'google_complete' ? googlePhone : activeModal === 'email_login' ? emailRegPhone : phone,
+          email: activeModal === 'google_complete' ? googleSession?.email : activeModal === 'email_login' ? emailIdentifier : regEmail
         }}
         onAccept={() => {
           if (activeModal === 'email_login') {

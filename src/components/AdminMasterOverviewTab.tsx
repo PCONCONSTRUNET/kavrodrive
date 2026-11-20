@@ -59,6 +59,7 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
   }, []);
 
   const commPct = Number(config.platformCommissionPercent ?? 20);
+  const commFixed = Math.max(0, Number(config.platformCommissionFixed ?? 0) || 0);
 
   const stats = useMemo(() => {
     const onlineDrivers = drivers.filter(d => d.isOnline && d.approvalStatus === 'aprovado').length;
@@ -97,8 +98,9 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
 
     for (const r of validRides) {
       const val = Number(r.totalPrice || 0);
-      const fee = Number(r.commissionAmount ?? ((val * commPct) / 100));
-      const net = Number(r.driverNetAmount ?? (val - fee));
+      const fallbackFee = Math.min(val, ((val * commPct) / 100) + (val > 0 ? commFixed : 0));
+      const fee = Number(r.commissionAmount ?? fallbackFee);
+      const net = Number(r.driverNetAmount ?? Math.max(0, val - fee));
       grossTotal += val;
       platformFeeTotal += fee;
       driverNetTotal += net;

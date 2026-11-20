@@ -4,12 +4,19 @@ import {
   Check, ChevronRight, Lock, User, Car, Briefcase, Package
 } from 'lucide-react';
 import { DriverProfile, SystemConfig } from '../types';
-import { evaluateAllDriverCategories, getCategoryById } from '../utils/categoryEngine';
+import {
+  evaluateAllDriverCategories,
+  getCategoryById,
+  normalizeCategoriesFromConfig,
+  resolveCategoryType
+} from '../utils/categoryEngine';
 
 interface DriverPreferencesModalProps {
   isOpen: boolean;
   currentDriver: DriverProfile;
   config: SystemConfig;
+  togglingCategoryId?: string | null;
+  errorMessage?: string;
   onClose: () => void;
   onToggleAcceptCash: (enabled: boolean) => void;
   onToggleCategory: (categoryId: string) => void;
@@ -19,6 +26,8 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
   isOpen,
   currentDriver,
   config,
+  togglingCategoryId = null,
+  errorMessage = '',
   onClose,
   onToggleAcceptCash,
   onToggleCategory,
@@ -41,7 +50,8 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
   if (!isOpen) return null;
 
   const acceptsCash = currentDriver.acceptsCash !== false;
-  const driverCatEval = evaluateAllDriverCategories(currentDriver, config.rideCategories || []);
+  const platformCategories = normalizeCategoriesFromConfig(config);
+  const driverCatEval = evaluateAllDriverCategories(currentDriver, platformCategories);
 
   const handleToggleMinRating = (next: boolean) => {
     setMinRatingEnabled(next);
@@ -57,11 +67,12 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
     } catch { /* noop */ }
   };
 
-  const renderCategoryIcon = (catId: string, isEnabled: boolean) => {
+  const renderCategoryIcon = (catId: string, isEnabled: boolean, catObj?: any) => {
     const color = isEnabled ? '#111111' : '#525252';
+    if (catObj && resolveCategoryType(catObj) === 'entregas') return <Package size={24} color={isEnabled ? '#15803D' : color} strokeWidth={2.1} />;
     if (catId.includes('exec')) return <Briefcase size={24} color={color} strokeWidth={2.1} />;
     if (catId.includes('plus')) return <Car size={24} color={color} strokeWidth={2.1} />;
-    if (catId.includes('flash') || catId.includes('entrega')) return <Package size={24} color={color} strokeWidth={2.1} />;
+    if (catId.includes('flash') || catId.includes('entrega')) return <Package size={24} color={isEnabled ? '#15803D' : color} strokeWidth={2.1} />;
     return <User size={24} color={color} fill={isEnabled ? color : 'none'} strokeWidth={2.1} />;
   };
 
@@ -134,24 +145,26 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
           Filtrar viagens com base nas preferências
         </div>
 
-        {/* Grade 2x2 de Categorias estilo Print Uber Preferências */}
+        {/* Grade 1x2 de Categorias: Padrão e Entregas */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
           gap: 10
         }}>
           {driverCatEval.evaluations.map((ev) => {
-            const cat = getCategoryById(ev.categoryId, config);
+            const cat = platformCategories.find(c => c.id === ev.categoryId) || getCategoryById(ev.categoryId, config);
             const isEligible = ev.isEligible;
             const isEnabled = isEligible && ev.isEnabledByDriver;
+            const isBusy = togglingCategoryId === ev.categoryId;
 
             return (
               <button
                 key={ev.categoryId}
                 type="button"
-                disabled={!isEligible}
+                aria-pressed={isEnabled}
+                disabled={!isEligible || isBusy}
                 onClick={() => {
-                  if (isEligible) onToggleCategory(ev.categoryId);
+                  if (isEligible && !isBusy) onToggleCategory(ev.categoryId);
                 }}
                 style={{
                   position: 'relative',
@@ -165,8 +178,9 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
                   justifyContent: 'space-between',
                   alignItems: 'flex-start',
                   textAlign: 'left',
-                  cursor: isEligible ? 'pointer' : 'not-allowed',
-                  opacity: isEligible ? 1 : 0.68,
+                  userSelect: 'none',
+                  cursor: !isEligible ? 'not-allowed' : isBusy ? 'wait' : 'pointer',
+                  opacity: isEligible ? (isBusy ? 0.72 : 1) : 0.68,
                   boxShadow: isEnabled ? '0 2px 10px rgba(0,0,0,0.06)' : 'none',
                   transition: 'all 0.15s ease'
                 }}
@@ -210,7 +224,7 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
 
                 {/* Ícone + Nome da Categoria */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, width: '100%' }}>
-                  {renderCategoryIcon(ev.categoryId, isEnabled)}
+                  {renderCategoryIcon(ev.categoryId, isEnabled, cat)}
                   <div>
                     <div style={{
                       fontSize: '0.96rem',
@@ -222,12 +236,12 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
                     </div>
                     <div style={{
                       fontSize: '0.7rem',
-                      color: isEligible ? '#6B7280' : '#B91C1C',
+                      color: isEligible ? (resolveCategoryType(cat) === 'entregas' ? '#15803D' : '#6B7280') : '#B91C1C',
                       fontWeight: 600,
                       marginTop: 2
                     }}>
                       {isEligible
-                        ? `R$ ${cat.pricePerKm.toFixed(2).replace('.', ',')}/km`
+                        ? `${resolveCategoryType(cat) === 'entregas' ? 'Entregas • ' : 'Viagem • '}R$ ${cat.pricePerKm.toFixed(2).replace('.', ',')}/km`
                         : (ev.reasons[0] || 'Bloqueada p/ veículo')}
                     </div>
                   </div>
@@ -236,6 +250,21 @@ export const DriverPreferencesModal: React.FC<DriverPreferencesModalProps> = ({
             );
           })}
         </div>
+
+        {errorMessage && (
+          <div style={{
+            backgroundColor: '#FEF2F2',
+            border: '1px solid #FECACA',
+            color: '#B91C1C',
+            padding: '10px 13px',
+            borderRadius: 12,
+            fontSize: '0.8rem',
+            fontWeight: 700,
+            lineHeight: 1.35
+          }}>
+            {errorMessage}
+          </div>
+        )}
 
         {/* Seção Filtros da Viagem (Idêntica ao Print Uber Driver) */}
         <div style={{

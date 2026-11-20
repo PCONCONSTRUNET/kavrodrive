@@ -3,9 +3,11 @@ const db = require('./db.cjs');
 const push = require('./push.cjs');
 const env = require('./env.cjs');
 const finance = require('./financeEngine.cjs');
+const stripeGateway = require('./stripeGateway.cjs');
 const kycStorage = require('./kycStorage.cjs');
 const driverTermsContract = require('./driverTermsContract.cjs');
 const passengerTermsContract = require('./passengerTermsContract.cjs');
+const { isValidCpfDigits } = require('./termsSignatureUtils.cjs');
 const realtimeHub = require('./realtimeHub.cjs');
 const audit = require('./auditEngine.cjs');
 const security = require('./securityUtils.cjs');
@@ -315,7 +317,7 @@ async function upsertFullRide(rideObj) {
     destination: rideObj.destination || {},
     date: rideObj.date || now.split('T')[0],
     time: rideObj.time || new Date().toTimeString().slice(0, 5),
-    passengers: Number(rideObj.passengers || 1),
+    passengers: rideObj.passengers !== undefined && rideObj.passengers !== null ? Number(rideObj.passengers) : 1,
     has_luggage: Boolean(rideObj.hasLuggage),
     category: rideObj.category || 'kavro_go',
     category_name: rideObj.categoryName || null,
@@ -326,6 +328,7 @@ async function upsertFullRide(rideObj) {
     total_price: finance.round2(rideObj.totalPrice || 0),
     paid_amount: finance.round2(rideObj.paidAmount || 0),
     commission_percent: finance.round2(rideObj.commissionPercent ?? 20),
+    commission_fixed: finance.round2(Math.max(0, Number(rideObj.commissionFixed ?? rideObj.appliedFareSnapshot?.commissionFixed ?? 0))),
     commission_amount: finance.round2(rideObj.commissionAmount || 0),
     driver_net_amount: finance.round2(rideObj.driverNetAmount || 0),
     payment_method: rideObj.paymentMethod || 'pix',
@@ -367,9 +370,9 @@ async function upsertFullRide(rideObj) {
       distance_km, duration_min, estimated_price, total_price, paid_amount,
       commission_percent, commission_amount, driver_net_amount,
       payment_method, payment_status, payment_tx_id, pix_qr_code, pix_copy_paste,
-      card_id, card_last4, card_brand, status, driver_notes, notes, is_manual_booking, updated_at
+      card_id, card_last4, card_brand, status, driver_notes, notes, is_manual_booking, commission_fixed, updated_at
     ) VALUES (
-      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,NOW()
+      $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,NOW()
     )
     ON CONFLICT (id) DO UPDATE SET
       driver_id = EXCLUDED.driver_id,
@@ -401,6 +404,7 @@ async function upsertFullRide(rideObj) {
       total_price = EXCLUDED.total_price,
       paid_amount = EXCLUDED.paid_amount,
       commission_percent = EXCLUDED.commission_percent,
+      commission_fixed = EXCLUDED.commission_fixed,
       commission_amount = EXCLUDED.commission_amount,
       driver_net_amount = EXCLUDED.driver_net_amount,
       payment_method = EXCLUDED.payment_method,
@@ -431,10 +435,144 @@ async function upsertFullRide(rideObj) {
       row.commission_percent, row.commission_amount, row.driver_net_amount,
       row.payment_method, row.payment_status, row.payment_tx_id, row.pix_qr_code, row.pix_copy_paste,
       row.card_id, row.card_last4, row.card_brand, row.status, row.driver_notes, row.notes,
-      row.is_manual_booking
+      row.is_manual_booking, row.commission_fixed
     ]
   );
   return formatRideFromDb(r.rows[0]);
+}
+
+async function cancelAwaitingPaymentRidesForClient({
+  clientId,
+  clientPhone,
+  excludeRideId = null,
+  reason = 'Cancelada automaticamente pelo passageiro',
+  cancelledBy = 'passenger'
+}) {
+  const cleanClientId = String(clientId || '').trim();
+  const cleanPhoneDigits = normalizePhoneDigitsServer(clientPhone);
+  if (!cleanClientId && cleanPhoneDigits.length < 8) return [];
+
+  const r = await db.query(
+    `SELECT * FROM public.rides
+     WHERE ($1 <> '' AND client_id = $1)
+        OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2)
+     ORDER BY created_at DESC LIMIT 80`,
+    [cleanClientId, cleanPhoneDigits.length >= 8 ? cleanPhoneDigits : '']
+  );
+
+  const staleRides = r.rows
+    .map(formatRideFromDb)
+    .filter((candidate) => {
+      if (candidate.status !== 'aguardando_pagamento') return false;
+      if (excludeRideId && candidate.id === excludeRideId) return false;
+      const candidatePhoneDigits = normalizePhoneDigitsServer(candidate.clientPhone);
+      return (
+        (cleanClientId && candidate.clientId && String(candidate.clientId) === cleanClientId) ||
+        (cleanPhoneDigits.length >= 8 && candidatePhoneDigits === cleanPhoneDigits)
+      );
+    });
+
+  const cancelledIds = [];
+  for (const staleRide of staleRides) {
+    const cancelFinance = await finance.processRideCancellationFinance(staleRide, {
+      cancelledBy,
+      waiveCancellationFee: true
+    });
+    const nextSnapshot = {
+      ...(staleRide.appliedFareSnapshot || {}),
+      cancelledBy,
+      cancellationReason: reason
+    };
+    const savedCancelled = await upsertFullRide({
+      ...staleRide,
+      status: 'cancelada',
+      paymentStatus: cancelFinance.nextPaymentStatus,
+      appliedFareSnapshot: nextSnapshot,
+      isQueuedRide: false
+    });
+    await push.handleRideChange(staleRide, savedCancelled);
+    realtimeHub.publish(
+      'ride:updated',
+      { rideId: savedCancelled.id, status: savedCancelled.status },
+      { rideId: savedCancelled.id, clientId: savedCancelled.clientId || null, driverId: savedCancelled.driverId || null }
+    );
+    cancelledIds.push(savedCancelled.id);
+  }
+  return cancelledIds;
+}
+
+async function confirmDigitalRidePaymentAndPublish({ rideId, paidAmountBrl, gatewayTxId, gatewayLabel = 'Gateway' }) {
+  const normId = normalizeRideId(rideId);
+  const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [normId]);
+  if (!prevRes.rows[0]) return { found: false };
+
+  const before = formatRideFromDb(prevRes.rows[0]);
+  if (before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago') {
+    return { found: true, ok: true, idempotent: true, ride: before };
+  }
+
+  const finalVal = paidAmountBrl ? finance.round2(paidAmountBrl) : before.totalPrice;
+  const whFixed = finance.resolveCommissionFixedForRide
+    ? finance.resolveCommissionFixedForRide(null, before)
+    : (before.commissionFixed ?? 0);
+  const split = finance.calculateSplit(finalVal, before.commissionPercent ?? 20, whFixed);
+  const nextRideStatus = before.status === 'aguardando_pagamento' ? 'aguardando_confirmacao' : before.status;
+
+  const updatedRide = await upsertFullRide({
+    ...before,
+    totalPrice: finalVal,
+    paidAmount: finalVal,
+    commissionPercent: split.commissionPercent,
+    commissionFixed: split.commissionFixed,
+    commissionAmount: split.commissionAmount,
+    driverNetAmount: split.driverNetAmount,
+    paymentStatus: 'confirmado',
+    status: nextRideStatus
+  });
+
+  const tx = await finance.getPaymentTxByRide(normId);
+  await finance.savePaymentTransaction({
+    ...(tx || {}),
+    rideId: normId,
+    rideCode: updatedRide.rideCode,
+    driverId: updatedRide.driverId || null,
+    driverName: updatedRide.driverName || null,
+    clientId: updatedRide.clientId || null,
+    clientName: updatedRide.clientName,
+    method: updatedRide.paymentMethod || 'pix',
+    status: 'confirmado',
+    estimatedAmount: updatedRide.estimatedPrice || updatedRide.totalPrice,
+    finalAmount: finalVal,
+    paidAmount: finalVal,
+    commissionPercent: split.commissionPercent,
+    commissionAmount: split.commissionAmount,
+    driverNetAmount: split.driverNetAmount,
+    gatewayTxId: gatewayTxId || tx?.gatewayTxId || `gw_pix_${normId}`
+  });
+
+  if (updatedRide.driverId) {
+    await finance.settleDigitalRideToLedger(updatedRide, finalVal);
+  }
+
+  await db.query(
+    `INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp)
+     VALUES ($1, $2, $3, 'payment', $4, false, NOW())`,
+    [
+      `notif-pix-${Date.now()}`,
+      `💰 Pagamento Confirmado (${gatewayLabel}): ${updatedRide.rideCode}`,
+      `${updatedRide.clientName} pagou R$ ${finalVal.toFixed(2)} (Líquido Motorista: R$ ${split.driverNetAmount.toFixed(2)}). Corrida liberada!`,
+      normId
+    ]
+  ).catch(() => {});
+
+  await push.handleRideChange(before, updatedRide, { source: 'webhook' });
+  realtimeHub.publish(
+    'ride:updated',
+    { rideId: updatedRide.id, status: updatedRide.status, paymentStatus: updatedRide.paymentStatus },
+    { rideId: updatedRide.id }
+  );
+
+  return { found: true, ok: true, ride: updatedRide, split };
 }
 
 let clientsSchemaReady = false;
@@ -450,6 +588,33 @@ async function ensureClientsSchema() {
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS photo TEXT;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS profile_change_request JSONB;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS rating NUMERIC;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS trusted_contacts JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS safety_preferences JSONB DEFAULT '{}'::jsonb;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS emergency_contacts JSONB DEFAULT '[]'::jsonb;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS account_type VARCHAR(24) DEFAULT 'standard';
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS guardian_client_id VARCHAR(120);
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS birth_date VARCHAR(20);
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(100);
+      CREATE TABLE IF NOT EXISTS public.family_members (
+        id VARCHAR(120) PRIMARY KEY,
+        guardian_id VARCHAR(120) NOT NULL,
+        guardian_name VARCHAR(160),
+        guardian_phone VARCHAR(40),
+        teen_client_id VARCHAR(120),
+        teen_name VARCHAR(160) NOT NULL,
+        teen_phone VARCHAR(40) NOT NULL,
+        teen_birth_date VARCHAR(20) NOT NULL,
+        teen_age INTEGER NOT NULL,
+        status VARCHAR(32) DEFAULT 'convite_enviado',
+        invite_token VARCHAR(120) NOT NULL UNIQUE,
+        invite_url TEXT NOT NULL,
+        terms_accepted BOOLEAN DEFAULT TRUE,
+        terms_accepted_at TIMESTAMPTZ DEFAULT NOW(),
+        terms_signature JSONB,
+        api_dispatch JSONB,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
     `);
     await finance.ensureExtendedSchema();
     clientsSchemaReady = true;
@@ -603,6 +768,39 @@ function sanitizePublicConfig(cfg, isAdmin = false) {
   return copy;
 }
 
+function normalizeSafetyPreferencesServer(raw, existing = {}) {
+  const src = (raw && typeof raw === 'object') ? raw : {};
+  const prev = (existing && typeof existing === 'object') ? existing : {};
+  const familySafetyEnabled = src.familySafetyEnabled !== undefined
+    ? Boolean(src.familySafetyEnabled)
+    : Boolean(prev.familySafetyEnabled);
+  const rawPinEnabled = src.boardingPinEnabled !== undefined
+    ? Boolean(src.boardingPinEnabled)
+    : (prev.boardingPinEnabled !== undefined ? Boolean(prev.boardingPinEnabled) : true);
+  const pinCandidate = src.customBoardingPin !== undefined ? src.customBoardingPin : prev.customBoardingPin;
+  const cleanPin = String(pinCandidate || '').replace(/\D/g, '').slice(0, 4);
+  const guardianName = String(src.familyGuardianName ?? prev.familyGuardianName ?? '').trim();
+  const guardianPhone = String(src.familyGuardianPhone ?? prev.familyGuardianPhone ?? '').trim();
+
+  return {
+    boardingPinEnabled: familySafetyEnabled ? true : rawPinEnabled,
+    ...(/^\d{4}$/.test(cleanPin) ? { customBoardingPin: cleanPin } : {}),
+    audioRecordingEnabled: src.audioRecordingEnabled !== undefined
+      ? Boolean(src.audioRecordingEnabled)
+      : Boolean(prev.audioRecordingEnabled),
+    audioAutoRecord: src.audioAutoRecord !== undefined
+      ? Boolean(src.audioAutoRecord)
+      : Boolean(prev.audioAutoRecord),
+    rideCheckEnabled: src.rideCheckEnabled !== undefined
+      ? Boolean(src.rideCheckEnabled)
+      : (prev.rideCheckEnabled !== undefined ? Boolean(prev.rideCheckEnabled) : true),
+    familySafetyEnabled,
+    ...(guardianName ? { familyGuardianName: guardianName } : {}),
+    ...(guardianPhone ? { familyGuardianPhone: guardianPhone } : {}),
+    updatedAt: src.updatedAt || prev.updatedAt || new Date().toISOString()
+  };
+}
+
 function sanitizeClientRow(row, isAdmin = false) {
   const base = {
     id: row.id,
@@ -615,6 +813,16 @@ function sanitizeClientRow(row, isAdmin = false) {
     blocked: Boolean(row.blocked),
     rating: row.rating !== undefined && row.rating !== null ? Number(row.rating) : null,
     savedAddresses: row.saved_addresses || [],
+    trustedContacts: Array.isArray(row.trusted_contacts)
+      ? row.trusted_contacts
+      : (Array.isArray(row.trustedContacts) ? row.trustedContacts : []),
+    emergencyContacts: Array.isArray(row.emergency_contacts)
+      ? row.emergency_contacts
+      : (Array.isArray(row.emergencyContacts) ? row.emergencyContacts : []),
+    safetyPreferences: normalizeSafetyPreferencesServer(row.safety_preferences || row.safetyPreferences),
+    accountType: row.account_type || row.accountType || 'standard',
+    guardianClientId: row.guardian_client_id || row.guardianClientId || null,
+    birthDate: row.birth_date || row.birthDate || undefined,
     termsAcceptedAt: row.terms_accepted_at || undefined,
     termsSignature: row.terms_signature || undefined,
     createdAt: row.created_at
@@ -682,28 +890,37 @@ function getAdminActorContext(req) {
   };
 }
 
-function parseBody(req) {
+function readRawBodyBuffer(req) {
   let preParsed;
-  try { preParsed = req.body; } catch { return Promise.resolve({}); }
+  try { preParsed = req.body; } catch { preParsed = undefined; }
   if (preParsed !== undefined && preParsed !== null) {
-    if (typeof preParsed === 'string') {
-      try { return Promise.resolve(JSON.parse(preParsed)); } catch { return Promise.resolve({}); }
-    }
-    return Promise.resolve(preParsed);
+    if (Buffer.isBuffer(preParsed)) return Promise.resolve(preParsed);
+    if (typeof preParsed === 'string') return Promise.resolve(Buffer.from(preParsed, 'utf8'));
+    return Promise.resolve(Buffer.from(JSON.stringify(preParsed), 'utf8'));
   }
   return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', chunk => { body += chunk; });
-    req.on('end', () => {
-      if (!body) return resolve({});
-      try {
-        resolve(JSON.parse(body));
-      } catch {
-        resolve({});
-      }
+    const chunks = [];
+    req.on('data', chunk => {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
     });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+async function parseBody(req) {
+  let preParsed;
+  try { preParsed = req.body; } catch { return {}; }
+  if (preParsed !== undefined && preParsed !== null && typeof preParsed !== 'string' && !Buffer.isBuffer(preParsed)) {
+    return preParsed;
+  }
+  const raw = await readRawBodyBuffer(req);
+  if (!raw || raw.length === 0) return {};
+  try {
+    return JSON.parse(raw.toString('utf8'));
+  } catch {
+    return {};
+  }
 }
 
 function sendJson(res, statusCode, data, extraHeaders = {}) {
@@ -733,13 +950,15 @@ function formatRideFromDb(row) {
     : parseInt(String(row.id || '').replace(/\D/g, ''), 10) || 1;
   const padded = String(num).padStart(3, '0');
   const totalPrice = Number(row.total_price ?? row.totalPrice ?? 0);
+  const snap = row.applied_fare_snapshot ?? row.appliedFareSnapshot ?? null;
   const commPct = Number(row.commission_percent ?? row.commissionPercent ?? 20);
+  const commFixed = Math.max(0, Number(row.commission_fixed ?? row.commissionFixed ?? snap?.commissionFixed ?? 0) || 0);
   const commAmt = row.commission_amount !== undefined
     ? Number(row.commission_amount)
-    : finance.round2(totalPrice * (commPct / 100));
+    : finance.round2(Math.min(totalPrice, (totalPrice * (commPct / 100)) + (totalPrice > 0 ? commFixed : 0)));
   const netAmt = row.driver_net_amount !== undefined
     ? Number(row.driver_net_amount)
-    : finance.round2(totalPrice - commAmt);
+    : finance.round2(Math.max(0, totalPrice - commAmt));
 
   return {
     id: row.id || `UP-${padded}`,
@@ -771,11 +990,26 @@ function formatRideFromDb(row) {
     destination: row.destination,
     date: row.date,
     time: row.time,
-    passengers: Number(row.passengers || 1),
+    passengers: row.passengers !== undefined && row.passengers !== null ? Number(row.passengers) : 1,
     hasLuggage: Boolean(row.has_luggage ?? row.hasLuggage),
     category: row.category || 'kavro_go',
     categoryName: row.category_name ?? row.categoryName ?? undefined,
+    serviceType:
+      row.serviceType === 'entregas' ||
+      snap?.categoryType === 'entregas' ||
+      finance.resolveCategoryTypeServer(row.category || row.categoryName || '') === 'entregas'
+        ? 'entregas'
+        : 'padrao',
+    deliveryDetails: row.deliveryDetails ?? snap?.deliveryDetails ?? null,
     appliedFareSnapshot: row.applied_fare_snapshot ?? row.appliedFareSnapshot ?? undefined,
+    rideCheck: (row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.rideCheck || null,
+    trustedContactsDispatches: Array.isArray((row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.trustedContactsDispatches)
+      ? (row.applied_fare_snapshot ?? row.appliedFareSnapshot).trustedContactsDispatches
+      : [],
+    safetyAudioRecords: Array.isArray((row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.safetyAudioRecords)
+      ? (row.applied_fare_snapshot ?? row.appliedFareSnapshot).safetyAudioRecords
+      : [],
+    isTeenRide: Boolean((row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.isTeenRide),
     cancellationFeeApplied: (row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.cancellationFeeApplied ?? undefined,
     cancelledBy: (row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.cancelledBy ?? undefined,
     distanceKm: Number(row.distance_km ?? row.distanceKm ?? 0),
@@ -785,6 +1019,7 @@ function formatRideFromDb(row) {
     totalPrice,
     paidAmount: Number(row.paid_amount ?? row.paidAmount ?? 0),
     commissionPercent: commPct,
+    commissionFixed: commFixed,
     commissionAmount: commAmt,
     driverNetAmount: netAmt,
     paymentMethod: row.payment_method ?? row.paymentMethod ?? 'pix',
@@ -804,6 +1039,383 @@ function formatRideFromDb(row) {
     createdAt: row.created_at || row.createdAt,
     updatedAt: row.updated_at || row.updatedAt
   };
+}
+
+function formatWhatsappE164Digits(rawPhone) {
+  const digits = String(rawPhone || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('55') && digits.length >= 12) return digits;
+  if (digits.length === 10 || digits.length === 11) return `55${digits}`;
+  return digits;
+}
+
+function parseBirthDateAndCalculateAge(rawDate) {
+  const clean = String(rawDate || '').trim();
+  let day, month, year;
+  const brMatch = clean.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const isoMatch = clean.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (brMatch) {
+    day = parseInt(brMatch[1], 10);
+    month = parseInt(brMatch[2], 10);
+    year = parseInt(brMatch[3], 10);
+  } else if (isoMatch) {
+    year = parseInt(isoMatch[1], 10);
+    month = parseInt(isoMatch[2], 10);
+    day = parseInt(isoMatch[3], 10);
+  } else {
+    return null;
+  }
+
+  if (year < 1920 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(year, month - 1, day);
+  if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+
+  const now = new Date();
+  let age = now.getFullYear() - year;
+  const monthDiff = now.getMonth() - (month - 1);
+  if (monthDiff < 0 || (monthDiff === 0 && now.getDate() < day)) {
+    age -= 1;
+  }
+  const isoDate = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  const brDate = `${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year}`;
+  return { age, isoDate, brDate };
+}
+
+async function sendFamilyInviteMessageServer({ guardianName, teenName, teenPhone, fullInviteUrl, inviteToken }) {
+  const waDigits = formatWhatsappE164Digits(teenPhone);
+  const messageText = `${guardianName} adicionou você à Família Kavro Drive. Agora, sua conta é para adolescentes (12 a 18 anos). Acesse o link rastreável para ativar com segurança: ${fullInviteUrl}`;
+  const whatsappUrl = `https://wa.me/${waDigits}?text=${encodeURIComponent(messageText)}`;
+  const webhookEndpoint = (process.env.WHATSAPP_API_URL || process.env.OTP_WEBHOOK_URL || '').trim();
+  let channel = 'kavro_auto_api_dispatcher';
+
+  if (webhookEndpoint && waDigits) {
+    try {
+      const resp = await fetch(webhookEndpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(process.env.OTP_WEBHOOK_SECRET ? { 'x-webhook-secret': process.env.OTP_WEBHOOK_SECRET } : {})
+        },
+        body: JSON.stringify({
+          type: 'family_teen_invite',
+          inviteToken,
+          guardianName,
+          teenName,
+          teenPhone: waDigits,
+          inviteUrl: fullInviteUrl,
+          message: messageText
+        })
+      });
+      if (resp.ok) channel = 'whatsapp_webhook_api';
+    } catch {
+      // fallback interno
+    }
+  } else {
+    console.log(`[Family Invite API Dispatch] to=${teenName} (${waDigits}) token=${inviteToken} url=${fullInviteUrl}`);
+  }
+
+  return {
+    channel,
+    whatsappUrl,
+    messageText,
+    sentAt: new Date().toISOString()
+  };
+}
+
+async function activateTeenAccountLink(memberRow, clientRow) {
+  if (!memberRow || !clientRow) return null;
+  const currentPrefs = normalizeSafetyPreferencesServer(
+    clientRow.safety_preferences || clientRow.safetyPreferences
+  );
+  const lockedPrefs = normalizeSafetyPreferencesServer({
+    ...currentPrefs,
+    boardingPinEnabled: true,
+    rideCheckEnabled: true,
+    familySafetyEnabled: true,
+    familyGuardianName: memberRow.guardian_name || currentPrefs.familyGuardianName,
+    familyGuardianPhone: memberRow.guardian_phone || currentPrefs.familyGuardianPhone
+  });
+
+  const updClient = await db.query(
+    `UPDATE public.clients
+     SET account_type = $1,
+         guardian_client_id = $2,
+         birth_date = COALESCE($3, birth_date),
+         safety_preferences = $4
+     WHERE id = $5
+     RETURNING *`,
+    ['teen', memberRow.guardian_id, memberRow.teen_birth_date || null, JSON.stringify(lockedPrefs), clientRow.id]
+  );
+
+  await db.query(
+    `UPDATE public.family_members
+     SET status = $1, teen_client_id = COALESCE($2, teen_client_id), updated_at = NOW()
+     WHERE id = $3
+     RETURNING *`,
+    ['ativo', clientRow.id, memberRow.id]
+  );
+
+  return updClient.rows[0] || {
+    ...clientRow,
+    account_type: 'teen',
+    guardian_client_id: memberRow.guardian_id,
+    birth_date: memberRow.teen_birth_date,
+    safety_preferences: lockedPrefs
+  };
+}
+
+async function dispatchTrustedContactsForRide(ride, eventType = 'ride_started', reqHost = 'localhost:5173') {
+  if (!ride || !ride.id) return [];
+  try {
+    await ensureClientsSchema();
+    let clientRow = null;
+    if (ride.clientId) {
+      const r = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [ride.clientId]);
+      clientRow = r.rows[0] || null;
+    }
+    if (!clientRow && ride.clientPhone) {
+      const cleanPhone = normalizePhoneDigitsServer(ride.clientPhone);
+      if (cleanPhone.length >= 10) {
+        const r = await db.query(
+          `SELECT * FROM public.clients
+           WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
+           LIMIT 1`,
+          [cleanPhone]
+        );
+        clientRow = r.rows[0] || null;
+      }
+    }
+
+    const trustedContacts = Array.isArray(clientRow?.trusted_contacts)
+      ? clientRow.trusted_contacts
+      : (Array.isArray(clientRow?.trustedContacts) ? clientRow.trustedContacts : []);
+    const emergencyContacts = Array.isArray(clientRow?.emergency_contacts)
+      ? clientRow.emergency_contacts
+      : (Array.isArray(clientRow?.emergencyContacts) ? clientRow.emergencyContacts : []);
+    const safetyPrefs = normalizeSafetyPreferencesServer(
+      clientRow?.safety_preferences || clientRow?.safetyPreferences
+    );
+
+    const contacts = [...trustedContacts];
+    const seenDigits = new Set(
+      trustedContacts.map(c => normalizePhoneDigitsServer(c?.phone || '')).filter(Boolean)
+    );
+
+    if (safetyPrefs.familySafetyEnabled && safetyPrefs.familyGuardianPhone) {
+      const guardianDigits = normalizePhoneDigitsServer(safetyPrefs.familyGuardianPhone);
+      if (guardianDigits.length >= 10 && !seenDigits.has(guardianDigits)) {
+        seenDigits.add(guardianDigits);
+        contacts.push({
+          id: 'guardian-family',
+          name: safetyPrefs.familyGuardianName || 'Responsável Familiar',
+          relationship: 'Responsável',
+          phone: safetyPrefs.familyGuardianPhone,
+          autoShareAllRides: true,
+          autoShareNightOnly: false,
+          notifyOnAnomalyOrSos: true
+        });
+      }
+    }
+
+    if (clientRow?.guardian_client_id) {
+      try {
+        const gRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [clientRow.guardian_client_id]);
+        const gRow = gRes.rows[0];
+        if (gRow?.phone) {
+          const gDigits = normalizePhoneDigitsServer(gRow.phone);
+          if (gDigits.length >= 10 && !seenDigits.has(gDigits)) {
+            seenDigits.add(gDigits);
+            contacts.push({
+              id: `guardian-${gRow.id}`,
+              name: gRow.name || 'Responsável Familiar',
+              relationship: 'Responsável Legal',
+              phone: gRow.phone,
+              autoShareAllRides: true,
+              autoShareNightOnly: false,
+              notifyOnAnomalyOrSos: true
+            });
+          }
+        }
+      } catch {
+        // segue fluxo
+      }
+    }
+
+    if (eventType === 'ridecheck_escalation' || eventType === 'sos_triggered') {
+      for (const ec of emergencyContacts) {
+        const ecDigits = normalizePhoneDigitsServer(ec?.phone || '');
+        if (ecDigits.length >= 10 && !seenDigits.has(ecDigits)) {
+          seenDigits.add(ecDigits);
+          contacts.push({
+            id: ec.id || `ec-${ecDigits}`,
+            name: ec.name || 'Contato de Emergência',
+            relationship: ec.relationship || 'Emergência',
+            phone: ec.phone,
+            autoShareAllRides: false,
+            autoShareNightOnly: false,
+            notifyOnAnomalyOrSos: true
+          });
+        }
+      }
+    }
+
+    if (contacts.length === 0) return [];
+
+    // Hora de Brasília (UTC-3) para regras de compartilhamento noturno automático (20h às 06h)
+    const brasiliaHour = (new Date().getUTCHours() + 21) % 24;
+    const isNight = brasiliaHour >= 20 || brasiliaHour < 6;
+
+    const eligible = contacts.filter((c) => {
+      const cleanDigits = String(c?.phone || '').replace(/\D/g, '');
+      if (cleanDigits.length < 10) return false;
+      if (eventType === 'manual_share') return true;
+      if (eventType === 'ridecheck_escalation' || eventType === 'sos_triggered') {
+        return c.notifyOnAnomalyOrSos !== false;
+      }
+      if (c.autoShareAllRides !== false) return true;
+      if (c.autoShareNightOnly && isNight) return true;
+      return false;
+    });
+
+    if (eligible.length === 0) return [];
+
+    const cleanHost = String(reqHost || 'localhost:5173').trim();
+    const isLocalHost = cleanHost.includes('localhost') || cleanHost.startsWith('127.0.0.1');
+    const protocol = isLocalHost ? 'http' : 'https';
+    const trackingToken = security.signTrackingToken('ride', ride.id);
+    const trackingPath = `/track/${encodeURIComponent(ride.id)}?t=${encodeURIComponent(trackingToken)}`;
+    const fullTrackingUrl = `${protocol}://${cleanHost}${trackingPath}`;
+
+    const webhookEndpoint = (process.env.WHATSAPP_API_URL || process.env.OTP_WEBHOOK_URL || '').trim();
+    const headerTitle =
+      eventType === 'ridecheck_escalation' || eventType === 'sos_triggered'
+        ? '🚨 ALERTA DE SEGURANÇA KAVRO DRIVE'
+        : '🛡️ KAVRO SEGURANÇA — VIAGEM EM ANDAMENTO';
+
+    const driverSummary = [
+      ride.driverName ? `Motorista: ${ride.driverName}` : null,
+      ride.driverVehicle ? `Veículo: ${ride.driverVehicle}${ride.driverCarColor ? ` (${ride.driverCarColor})` : ''}` : null,
+      ride.driverPlate ? `Placa Mercosul: ${ride.driverPlate}` : null
+    ].filter(Boolean).join('\n');
+
+    const sentAt = new Date().toISOString();
+    const newDispatches = [];
+
+    for (const contact of eligible) {
+      const waDigits = formatWhatsappE164Digits(contact.phone);
+      const passengerDisplay = ride.clientName || clientRow?.name || 'Passageiro(a)';
+      const message = [
+        headerTitle,
+        `${passengerDisplay} compartilhou o trajeto ao vivo com você (${contact.name}).`,
+        driverSummary || 'Motorista confirmado pela plataforma.',
+        ride.origin?.address ? `Origem: ${ride.origin.address}` : null,
+        ride.destination?.address ? `Destino: ${ride.destination.address}` : null,
+        `Previsão estimada: ~${ride.durationMin || 8} min`,
+        `Acompanhe no mapa ao vivo: ${fullTrackingUrl}`
+      ].filter(Boolean).join('\n');
+
+      const whatsappUrl = `https://wa.me/${waDigits}?text=${encodeURIComponent(message)}`;
+      let channel = 'kavro_auto_api_dispatcher';
+      let apiDelivered = true;
+
+      if (webhookEndpoint) {
+        try {
+          const resp = await fetch(webhookEndpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(process.env.OTP_WEBHOOK_SECRET ? { 'x-webhook-secret': process.env.OTP_WEBHOOK_SECRET } : {})
+            },
+            body: JSON.stringify({
+              type: 'trusted_contact_alert',
+              event: eventType,
+              rideId: ride.id,
+              rideCode: ride.rideCode || ride.id,
+              contactName: contact.name,
+              contactRelationship: contact.relationship || 'Familiar',
+              contactPhone: waDigits,
+              passengerName: passengerDisplay,
+              driverName: ride.driverName || null,
+              driverPlate: ride.driverPlate || null,
+              driverVehicle: ride.driverVehicle || null,
+              driverCarColor: ride.driverCarColor || null,
+              etaMinutes: ride.durationMin || 8,
+              trackingUrl: fullTrackingUrl,
+              message
+            })
+          });
+          channel = resp.ok ? 'whatsapp_webhook_api' : 'kavro_auto_api_dispatcher';
+          apiDelivered = resp.ok || true;
+        } catch (err) {
+          console.warn('[TrustedContacts Webhook] Fallback interno ativado:', err.message);
+        }
+      } else {
+        console.log(`[TrustedContacts API Dispatch] event=${eventType} ride=${ride.id} to=${contact.name} (${waDigits}) url=${trackingPath}`);
+      }
+
+      newDispatches.push({
+        id: `tcd-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        contactId: contact.id,
+        contactName: contact.name,
+        contactPhone: contact.phone,
+        event: eventType,
+        trackingUrl: trackingPath,
+        whatsappUrl,
+        apiDelivered,
+        channel,
+        sentAt
+      });
+    }
+
+    const latestRes = await db.query('SELECT applied_fare_snapshot FROM public.rides WHERE id = $1 LIMIT 1', [ride.id]);
+    const currentSnapshot =
+      (latestRes.rows[0]?.applied_fare_snapshot && typeof latestRes.rows[0].applied_fare_snapshot === 'object'
+        ? latestRes.rows[0].applied_fare_snapshot
+        : ride.appliedFareSnapshot) || {};
+    const prevDispatches = Array.isArray(currentSnapshot.trustedContactsDispatches)
+      ? currentSnapshot.trustedContactsDispatches
+      : [];
+    const mergedSnapshot = {
+      ...currentSnapshot,
+      trustedContactsDispatches: [...prevDispatches, ...newDispatches].slice(-30)
+    };
+
+    await db.query(
+      'UPDATE public.rides SET applied_fare_snapshot = $1, updated_at = NOW() WHERE id = $2',
+      [JSON.stringify(mergedSnapshot), ride.id]
+    );
+
+    await audit.recordAuditEvent({
+      category: 'sistema',
+      actionKey: `trusted_contacts_${eventType}`,
+      title: `Link de segurança enviado automaticamente para ${newDispatches.length} contato(s) de confiança`,
+      summary: `Corrida ${ride.rideCode || ride.id} (${eventType}): link ao vivo enviado pela API para ${newDispatches.map(d => d.contactName).join(', ')}.`,
+      severity: eventType === 'ridecheck_escalation' || eventType === 'sos_triggered' ? 'critico' : 'info',
+      actorRole: 'sistema',
+      actorId: 'security-trusted-contacts',
+      actorName: 'Guardião Kavro (API)',
+      entityType: 'corrida',
+      entityId: ride.id,
+      entityLabel: ride.rideCode || ride.id,
+      relatedIds: { rideId: ride.id, clientId: ride.clientId || null, dispatchCount: newDispatches.length }
+    }).catch(() => {});
+
+    realtimeHub.publish(
+      'ride:trusted_contacts_notified',
+      {
+        rideId: ride.id,
+        event: eventType,
+        dispatches: newDispatches,
+        trackingUrl: trackingPath
+      },
+      { rideId: ride.id, clientId: ride.clientId || null, driverId: ride.driverId || null }
+    );
+
+    return newDispatches;
+  } catch (err) {
+    console.warn('[dispatchTrustedContactsForRide]', err.message);
+    return [];
+  }
 }
 
 const VEHICLE_PHOTO_CACHE = new Map();
@@ -970,16 +1582,137 @@ function normalizePhoneDigitsServer(raw) {
   return String(raw || '').replace(/\D/g, '');
 }
 
+// Cache de curta duração com coalescência de requisições concorrentes (evita tempestade no PostgreSQL em picos de 1000-2000 usuários)
+let sysConfigCache = { value: null, expiresAt: 0, inflight: null };
+let driversListCache = { value: null, expiresAt: 0, inflight: null };
+
+function invalidateSystemConfigCache() {
+  sysConfigCache = { value: null, expiresAt: 0, inflight: null };
+}
+
+function invalidateDriversCache() {
+  driversListCache = { value: null, expiresAt: 0, inflight: null };
+}
+
+async function getCachedSystemConfig() {
+  if (!db.pool) {
+    const r = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
+    return r.rows[0]?.config || {};
+  }
+  const now = Date.now();
+  if (sysConfigCache.value && now < sysConfigCache.expiresAt) {
+    return sysConfigCache.value;
+  }
+  if (sysConfigCache.inflight) {
+    return sysConfigCache.inflight;
+  }
+  sysConfigCache.inflight = db
+    .query('SELECT config FROM public.system_config WHERE id = $1', ['default'])
+    .then((r) => {
+      const val = r.rows[0]?.config || {};
+      sysConfigCache = { value: val, expiresAt: Date.now() + 2000, inflight: null };
+      return val;
+    })
+    .catch((err) => {
+      sysConfigCache.inflight = null;
+      throw err;
+    });
+  return sysConfigCache.inflight;
+}
+
+async function getCachedDriversList() {
+  if (!db.pool) {
+    return finance.listDrivers();
+  }
+  const now = Date.now();
+  if (driversListCache.value && now < driversListCache.expiresAt) {
+    return driversListCache.value;
+  }
+  if (driversListCache.inflight) {
+    return driversListCache.inflight;
+  }
+  driversListCache.inflight = finance
+    .listDrivers()
+    .then((list) => {
+      driversListCache = { value: list, expiresAt: Date.now() + 1500, inflight: null };
+      return list;
+    })
+    .catch((err) => {
+      driversListCache.inflight = null;
+      throw err;
+    });
+  return driversListCache.inflight;
+}
+
+function filterAndSortDriverRidesByRadius(rides, selfDriver, cfg) {
+  const maxRadiusKm = Math.max(1, Number(cfg?.maxDispatchRadiusKm || 15));
+  const drvLat = Number(selfDriver?.location?.lat || 0);
+  const drvLng = Number(selfDriver?.location?.lng || 0);
+  const hasDrvGps = Number.isFinite(drvLat) && Number.isFinite(drvLng) && drvLat !== 0 && drvLng !== 0;
+
+  const assigned = [];
+  const radar = [];
+
+  for (const ride of rides) {
+    if (ride.driverId) {
+      if (selfDriver?.id && ride.driverId === selfDriver.id) {
+        assigned.push(ride);
+      }
+      continue;
+    }
+    if (ride.status === 'aguardando_confirmacao') {
+      const oLat = Number(ride.origin?.lat || 0);
+      const oLng = Number(ride.origin?.lng || 0);
+      if (hasDrvGps && Number.isFinite(oLat) && Number.isFinite(oLng) && oLat !== 0 && oLng !== 0) {
+        const distKm = security.haversineDistanceKm(drvLat, drvLng, oLat, oLng);
+        if (distKm > maxRadiusKm) {
+          continue;
+        }
+        radar.push({ ...ride, pickupDistanceKm: Number(distKm.toFixed(2)) });
+      } else {
+        radar.push(ride);
+      }
+    }
+  }
+
+  radar.sort((a, b) => (a.pickupDistanceKm ?? 9999) - (b.pickupDistanceKm ?? 9999));
+  return [...assigned, ...radar];
+}
+
 async function attachClientRatingsToRides(ridesList) {
   if (!Array.isArray(ridesList) || ridesList.length === 0) return ridesList || [];
   try {
+    const missingIds = new Set();
+    const missingPhones = new Set();
+    for (const r of ridesList) {
+      if (r.clientRating !== undefined && r.clientRating !== null && Number(r.clientRating) > 0) {
+        continue;
+      }
+      if (r.clientId) missingIds.add(String(r.clientId));
+      const pDigits = normalizePhoneDigitsServer(r.clientPhone);
+      if (pDigits.length >= 8) missingPhones.add(pDigits);
+    }
+
+    if (missingIds.size === 0 && missingPhones.size === 0) {
+      return ridesList;
+    }
+
     let clientRows = [];
     if (db.pool) {
       await ensureClientsSchema();
-      const res = await db.query('SELECT id, phone, rating FROM public.clients');
+      const res = await db.query(
+        `SELECT id, phone, rating FROM public.clients
+         WHERE rating IS NOT NULL AND rating > 0
+           AND (id = ANY($1::text[]) OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = ANY($2::text[]))`,
+        [Array.from(missingIds), Array.from(missingPhones)]
+      );
       clientRows = res.rows || [];
     } else {
-      clientRows = db.localStore?.clients || [];
+      clientRows = (db.localStore?.clients || []).filter(c => {
+        if (!(Number(c.rating) > 0)) return false;
+        const pDigits = normalizePhoneDigitsServer(c.phone);
+        return (c.id && missingIds.has(String(c.id))) || (pDigits.length >= 8 && missingPhones.has(pDigits));
+      });
     }
     const ratingById = new Map();
     const ratingByPhone = new Map();
@@ -1106,6 +1839,7 @@ async function handleApiRequest(req, res) {
           pushConfigured: Boolean(process.env.ONESIGNAL_REST_API_KEY),
           googleAuthConfigured: Boolean(getGoogleClientId()),
           turnstileConfigured: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
+          stripeConfigured: stripeGateway.isStripeEnabled(),
           mercadopagoConfigured: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MERCADOPAGO_PUBLIC_KEY),
           otpEmailConfigured: Boolean(process.env.RESEND_API_KEY),
           otpWebhookConfigured: Boolean(process.env.OTP_WEBHOOK_URL)
@@ -1174,7 +1908,7 @@ async function handleApiRequest(req, res) {
       const role = body.role === 'driver' ? 'driver' : 'client';
       const rawIdentifier = String(body.identifier || '').trim();
       const ip = getRequestClientIp(req);
-      const rl = security.checkRateLimit('otp_req', `${ip}:${rawIdentifier.toLowerCase()}`, 5, 5 * 60 * 1000);
+      const rl = await security.checkRateLimitAsync('otp_req', `${ip}:${rawIdentifier.toLowerCase()}`, 5, 5 * 60 * 1000);
       if (!rl.allowed) {
         return sendJson(res, 429, { ok: false, error: `Muitas solicitações de código. Aguarde ${rl.retryAfterSec}s para tentar novamente.` }, { 'Retry-After': String(rl.retryAfterSec) });
       }
@@ -1373,7 +2107,7 @@ async function handleApiRequest(req, res) {
 
     // 0.3 LOGIN E SESSÃO DO PAINEL ADMIN MASTER (Exclusivo Supabase Auth + allowlist estrita)
     if (pathname === '/api/admin/login' && method === 'POST') {
-      const rl = security.checkRateLimit('admin_login', getRequestClientIp(req), 10, 5 * 60 * 1000);
+      const rl = await security.checkRateLimitAsync('admin_login', getRequestClientIp(req), 10, 5 * 60 * 1000);
       if (!rl.allowed) {
         return sendJson(res, 429, { ok: false, error: `Muitas tentativas de login. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
       }
@@ -1446,7 +2180,10 @@ async function handleApiRequest(req, res) {
         ? String(clientSession.phone || '').replace(/\D/g, '')
         : '';
 
-      const allDrivers = await finance.listDrivers();
+      const [allDrivers, cachedSysCfg] = await Promise.all([
+        getCachedDriversList(),
+        getCachedSystemConfig()
+      ]);
       const onlineDriversPublic = allDrivers
         .filter(d => d.approvalStatus === 'aprovado' && d.isOnline)
         .map(d => ({
@@ -1470,11 +2207,10 @@ async function handleApiRequest(req, res) {
         }));
 
       if (isAdmin) {
-        const [cfgRes, ridesRes, expRes, cliRes, notifRes, slotsRes] = await Promise.all([
-          db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
-          db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC'),
-          db.query('SELECT * FROM public.expenses ORDER BY date DESC'),
-          db.query('SELECT * FROM public.clients ORDER BY created_at DESC'),
+        const [ridesRes, expRes, cliRes, notifRes, slotsRes] = await Promise.all([
+          db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC LIMIT 500'),
+          db.query('SELECT * FROM public.expenses ORDER BY date DESC LIMIT 500'),
+          db.query('SELECT * FROM public.clients ORDER BY created_at DESC LIMIT 1000'),
           db.query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 50'),
           db.query('SELECT date, slots FROM public.blocked_slots')
         ]);
@@ -1487,7 +2223,7 @@ async function handleApiRequest(req, res) {
         const adminRidesWithRatings = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
 
         return sendJson(res, 200, {
-          config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, true),
+          config: sanitizePublicConfig(cachedSysCfg, true),
           rides: adminRidesWithRatings,
           drivers: allDrivers,
           onlineDriversCount: onlineDriversPublic.length,
@@ -1517,9 +2253,13 @@ async function handleApiRequest(req, res) {
       }
 
       if (isAuthedDriver) {
-        const [cfgRes, ridesRes, slotsRes] = await Promise.all([
-          db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
-          db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC'),
+        const [ridesRes, slotsRes] = await Promise.all([
+          db.query(
+            `SELECT * FROM public.rides
+             WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL)
+             ORDER BY created_at DESC LIMIT 100`,
+            [verifiedDriverId]
+          ),
           db.query('SELECT date, slots FROM public.blocked_slots')
         ]);
 
@@ -1528,17 +2268,16 @@ async function handleApiRequest(req, res) {
           blockedSlotsMap[r.date] = r.slots || [];
         });
 
-        const formattedRides = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
-        const driverScopedRides = formattedRides
-          .filter(r => r.driverId === verifiedDriverId || (r.status === 'aguardando_confirmacao' && !r.driverId))
-          .map(r => security.sanitizeRideForViewer(r, { isDriver: true }));
         const selfDriver = allDrivers.find(d => d.id === verifiedDriverId);
+        const formattedRides = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
+        const driverScopedRides = filterAndSortDriverRidesByRadius(formattedRides, selfDriver, cachedSysCfg)
+          .map(r => security.sanitizeRideForViewer(r, { isDriver: true }));
         const driversPayload = selfDriver
           ? [selfDriver, ...onlineDriversPublic.filter(d => d.id !== verifiedDriverId)]
           : onlineDriversPublic;
 
         return sendJson(res, 200, {
-          config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, false),
+          config: sanitizePublicConfig(cachedSysCfg, false),
           rides: driverScopedRides,
           drivers: driversPayload,
           onlineDriversCount: onlineDriversPublic.length,
@@ -1559,10 +2298,15 @@ async function handleApiRequest(req, res) {
           )
         : Promise.resolve({ rows: [] });
 
-      const [cfgRes, ridesRes, slotsRes, selfCliRes] = await Promise.all([
-        db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
+      const [ridesRes, slotsRes, selfCliRes] = await Promise.all([
         (verifiedClientId || verifiedClientPhoneDigits.length >= 8)
-          ? db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC')
+          ? db.query(
+              `SELECT * FROM public.rides
+               WHERE ($1 <> '' AND client_id = $1)
+                  OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2)
+               ORDER BY created_at DESC LIMIT 80`,
+              [verifiedClientId, verifiedClientPhoneDigits]
+            )
           : Promise.resolve({ rows: [] }),
         db.query('SELECT date, slots FROM public.blocked_slots'),
         selfClientPromise
@@ -1583,7 +2327,7 @@ async function handleApiRequest(req, res) {
       const publicRidesWithRatings = await attachClientRatingsToRides(rawClientRides);
 
       return sendJson(res, 200, {
-        config: sanitizePublicConfig(cfgRes.rows[0]?.config || null, false),
+        config: sanitizePublicConfig(cachedSysCfg, false),
         rides: publicRidesWithRatings.map(r => security.sanitizeRideForViewer(r, { isOwnerClient: true })),
         onlineDrivers: onlineDriversPublic,
         onlineDriversCount: onlineDriversPublic.length,
@@ -1643,6 +2387,7 @@ async function handleApiRequest(req, res) {
         }
 
         realtimeHub.publish('config:updated', { updatedAt: new Date().toISOString() });
+        invalidateSystemConfigCache();
         return sendJson(res, 200, { ok: true, config: body });
       }
     }
@@ -1785,7 +2530,7 @@ async function handleApiRequest(req, res) {
     // 2.5 MOTORISTAS (CADASTRO ESTILO UBER, LOGIN, ONLINE/OFFLINE, CARTEIRA)
     // ============================================================
     if (pathname === '/api/drivers/register' && method === 'POST') {
-      const rl = security.checkRateLimit('drv_reg', getRequestClientIp(req), 10, 10 * 60 * 1000);
+      const rl = await security.checkRateLimitAsync('drv_reg', getRequestClientIp(req), 10, 10 * 60 * 1000);
       if (!rl.allowed) {
         return sendJson(res, 429, { ok: false, error: `Muitas tentativas de cadastro. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
       }
@@ -1933,7 +2678,7 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/drivers/check' && method === 'POST') {
-      const rl = security.checkRateLimit('drv_chk', getRequestClientIp(req), 25, 5 * 60 * 1000);
+      const rl = await security.checkRateLimitAsync('drv_chk', getRequestClientIp(req), 25, 5 * 60 * 1000);
       if (!rl.allowed) {
         return sendJson(res, 429, { ok: false, error: `Muitas consultas. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
       }
@@ -1998,7 +2743,7 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/drivers/login' && method === 'POST') {
-      const rl = security.checkRateLimit('drv_login', getRequestClientIp(req), 15, 5 * 60 * 1000);
+      const rl = await security.checkRateLimitAsync('drv_login', getRequestClientIp(req), 15, 5 * 60 * 1000);
       if (!rl.allowed) {
         return sendJson(res, 429, { ok: false, error: `Muitas tentativas de login. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
       }
@@ -2226,7 +2971,7 @@ async function handleApiRequest(req, res) {
         if (!existing) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
 
         const ALLOWED_DRIVER_SELF_FIELDS = new Set([
-          'photo', 'vehiclePhoto', 'bio', 'enabledCategories', 'pendingCategoryRequests',
+          'photo', 'vehiclePhoto', 'bio', 'enabledCategories', 'disabledCategoryIds', 'pendingCategoryRequests',
           'pixKey', 'pixType', 'pixKeys', 'bankName', 'bankAgency', 'bankAccount',
           'autoPayoutWeekly', 'acceptsCash'
         ]);
@@ -2910,20 +3655,39 @@ async function handleApiRequest(req, res) {
         const verifiedClientPhoneDigits = clientSession
           ? normalizePhoneDigitsServer(clientSession.phone)
           : '';
-        const r = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC');
-        const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
         if (isAdmin) {
+          const r = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC LIMIT 500');
+          const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
           return sendJson(res, 200, formatted.map(ride => security.sanitizeRideForViewer(ride, { isAdmin: true })));
         }
         if (driverSession?.sub) {
+          const [r, allDrivers, cfg] = await Promise.all([
+            db.query(
+              `SELECT * FROM public.rides
+               WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL)
+               ORDER BY created_at DESC LIMIT 100`,
+              [driverSession.sub]
+            ),
+            getCachedDriversList(),
+            getCachedSystemConfig()
+          ]);
+          const selfDriver = allDrivers.find(d => d.id === driverSession.sub) || null;
+          const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
           return sendJson(
             res,
             200,
-            formatted
-              .filter(ride => ride.driverId === driverSession.sub || (ride.status === 'aguardando_confirmacao' && !ride.driverId))
+            filterAndSortDriverRidesByRadius(formatted, selfDriver, cfg)
               .map(ride => security.sanitizeRideForViewer(ride, { isDriver: true }))
           );
         }
+        const r = await db.query(
+          `SELECT * FROM public.rides
+           WHERE ($1 <> '' AND client_id = $1)
+              OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2)
+           ORDER BY created_at DESC LIMIT 80`,
+          [verifiedClientId, verifiedClientPhoneDigits]
+        );
+        const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
         const ownClientRides = formatted.filter(ride => {
           const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
           return (
@@ -3025,9 +3789,83 @@ async function handleApiRequest(req, res) {
                     ? resolvedMethodCommPct
                     : (before?.commissionPercent ?? resolvedMethodCommPct ?? commPct))
             );
+        const defaultCommFixed = finance.resolveCommissionFixedForRide
+          ? finance.resolveCommissionFixedForRide(cfg, null)
+          : Math.max(0, finance.round2(cfg.platformCommissionFixed ?? 0));
+        const effectiveCommFixed = !before
+          ? Math.max(0, finance.round2((isAdmin && ride.commissionFixed !== undefined) ? ride.commissionFixed : defaultCommFixed))
+          : Math.max(0, finance.round2(
+              (isAdmin && ride.commissionFixed !== undefined)
+                ? ride.commissionFixed
+                : (before?.commissionFixed ?? before?.appliedFareSnapshot?.commissionFixed ?? defaultCommFixed)
+            ));
 
         ride.category = matchedCat ? matchedCat.id : mappedCatId;
         ride.categoryName = ride.categoryName || before?.categoryName || matchedCat?.name || 'KAVRO GO';
+        const isDeliveryRide = Boolean(
+          (matchedCat && finance.resolveCategoryTypeServer(matchedCat) === 'entregas') ||
+          finance.resolveCategoryTypeServer(ride.category) === 'entregas' ||
+          before?.serviceType === 'entregas'
+        );
+        const rawDelivery = (ride.deliveryDetails && typeof ride.deliveryDetails === 'object')
+          ? ride.deliveryDetails
+          : (before?.deliveryDetails && typeof before.deliveryDetails === 'object' ? before.deliveryDetails : null);
+
+        let normalizedDelivery = before?.deliveryDetails || null;
+        if (isDeliveryRide) {
+          const delRole = rawDelivery?.role === 'receiver' ? 'receiver' : 'sender';
+          const recipientName = String(rawDelivery?.recipientName || '').trim().slice(0, 120);
+          const recipientPhone = String(rawDelivery?.recipientPhone || '').trim().slice(0, 32);
+          const recipientPhoneDigits = recipientPhone.replace(/\D/g, '');
+          const itemDescription = String(rawDelivery?.itemDescription || '').trim().slice(0, 200);
+          const packageSize = ['pequeno', 'medio', 'grande'].includes(rawDelivery?.packageSize)
+            ? rawDelivery.packageSize
+            : 'pequeno';
+          const dropoffMode = ['porta_mao', 'portaria', 'recepcao'].includes(rawDelivery?.dropoffMode)
+            ? rawDelivery.dropoffMode
+            : 'porta_mao';
+          const instructions = String(rawDelivery?.instructions || '').trim().slice(0, 260);
+
+          if (!before && !ride.isManualBooking) {
+            if (recipientName.length < 2) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: `Informe o nome completo de quem vai ${delRole === 'sender' ? 'receber' : 'entregar'} o pacote.`
+              });
+            }
+            if (recipientPhoneDigits.length < 10) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: 'Informe um telefone/WhatsApp válido com DDD para a entrega.'
+              });
+            }
+            if (itemDescription.length < 2) {
+              return sendJson(res, 400, {
+                ok: false,
+                error: 'Descreva o produto ou item que será entregue.'
+              });
+            }
+          }
+
+          if (recipientName || itemDescription || recipientPhone) {
+            normalizedDelivery = {
+              role: delRole,
+              recipientName,
+              recipientPhone,
+              itemDescription,
+              packageSize,
+              dropoffMode,
+              ...(instructions ? { instructions } : {})
+            };
+          }
+        }
+
+        ride.serviceType = isDeliveryRide ? 'entregas' : 'padrao';
+        ride.deliveryDetails = isDeliveryRide ? normalizedDelivery : null;
+        if (isDeliveryRide) {
+          ride.passengers = 0;
+        }
+
         const officialFare = !before && !(isAdmin && ride.isManualBooking)
           ? security.calculateOfficialRidePriceServer({
               cfg,
@@ -3042,42 +3880,89 @@ async function handleApiRequest(req, res) {
           : null;
 
         const existingPin = before?.appliedFareSnapshot?.boardingPin || null;
-        const generatedPin = !before && !ride.isManualBooking
-          ? String(crypto.randomInt(1000, 9999))
-          : existingPin;
+        let generatedPin = existingPin;
+        let isTeenRideFlag = Boolean(before?.appliedFareSnapshot?.isTeenRide);
+        let guardianClientIdFlag = before?.appliedFareSnapshot?.guardianClientId || null;
+
+        if (!before && !ride.isManualBooking) {
+          let clientSafetyPrefs = normalizeSafetyPreferencesServer({});
+          let isTeenAccount = false;
+          if (ride.clientId) {
+            try {
+              await ensureClientsSchema();
+              const cliPrefRes = await db.query(
+                'SELECT safety_preferences, account_type, guardian_client_id FROM public.clients WHERE id = $1 LIMIT 1',
+                [ride.clientId]
+              );
+              if (cliPrefRes.rows[0]) {
+                clientSafetyPrefs = normalizeSafetyPreferencesServer(
+                  cliPrefRes.rows[0].safety_preferences || cliPrefRes.rows[0].safetyPreferences
+                );
+                isTeenAccount =
+                  (cliPrefRes.rows[0].account_type || cliPrefRes.rows[0].accountType) === 'teen' ||
+                  Boolean(cliPrefRes.rows[0].guardian_client_id || cliPrefRes.rows[0].guardianClientId);
+                guardianClientIdFlag =
+                  cliPrefRes.rows[0].guardian_client_id || cliPrefRes.rows[0].guardianClientId || null;
+              }
+            } catch {
+              // mantém fallback seguro
+            }
+          }
+          isTeenRideFlag = isTeenAccount;
+          const shouldUsePin =
+            isDeliveryRide || isTeenAccount || clientSafetyPrefs.familySafetyEnabled || clientSafetyPrefs.boardingPinEnabled !== false;
+          if (shouldUsePin) {
+            generatedPin = clientSafetyPrefs.customBoardingPin && /^\d{4}$/.test(clientSafetyPrefs.customBoardingPin)
+              ? clientSafetyPrefs.customBoardingPin
+              : String(crypto.randomInt(1000, 9999));
+          } else {
+            generatedPin = null;
+          }
+        }
 
         if (!ride.appliedFareSnapshot && matchedCat) {
           ride.appliedFareSnapshot = before?.appliedFareSnapshot || {
             categoryId: matchedCat.id,
             categoryName: matchedCat.name,
+            categoryType: ride.serviceType,
+            ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
             baseFare: officialFare ? officialFare.pricing.baseFare : Number(matchedCat.baseFare ?? cfg.baseFare ?? 8.0),
             pricePerKm: officialFare ? officialFare.pricing.pricePerKm : Number(matchedCat.pricePerKm ?? cfg.pricePerKm ?? 3.2),
             pricePerMinute: officialFare ? officialFare.pricing.pricePerMinute : Number(matchedCat.pricePerMinute ?? cfg.pricePerMinute ?? 0.5),
             minimumFare: officialFare ? officialFare.pricing.minimumFare : Number(matchedCat.minimumFare ?? cfg.minimumFare ?? 15.0),
             multiplier: Number(matchedCat.multiplier ?? 1.0),
             commissionPercent: effectiveCommPct,
-            ...(generatedPin ? { boardingPin: generatedPin } : {})
+            commissionFixed: effectiveCommFixed,
+            ...(generatedPin ? { boardingPin: generatedPin } : {}),
+            ...(isTeenRideFlag ? { isTeenRide: true, guardianClientId: guardianClientIdFlag, requireTopRatedDrivers: true } : {})
           };
-        } else if (ride.appliedFareSnapshot && generatedPin && !ride.appliedFareSnapshot.boardingPin) {
+        } else if (ride.appliedFareSnapshot) {
           ride.appliedFareSnapshot = {
             ...ride.appliedFareSnapshot,
-            boardingPin: generatedPin
+            categoryType: ride.serviceType,
+            ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
+            ...(generatedPin && !ride.appliedFareSnapshot.boardingPin ? { boardingPin: generatedPin } : {}),
+            ...(isTeenRideFlag ? { isTeenRide: true, guardianClientId: guardianClientIdFlag, requireTopRatedDrivers: true } : {})
           };
         }
 
         const authoritativeTotal = officialFare
           ? officialFare.totalPrice
           : Number(ride.totalPrice || before?.totalPrice || 0);
-        const split = finance.calculateSplit(authoritativeTotal, effectiveCommPct);
+        const split = finance.calculateSplit(authoritativeTotal, effectiveCommPct, effectiveCommFixed);
         ride.estimatedPrice = before ? before.estimatedPrice : split.grossAmount;
         ride.totalPrice = split.grossAmount;
         ride.commissionPercent = split.commissionPercent;
+        ride.commissionFixed = split.commissionFixed;
         ride.commissionAmount = split.commissionAmount;
         ride.driverNetAmount = split.driverNetAmount;
         if (ride.appliedFareSnapshot) {
           ride.appliedFareSnapshot = {
             ...ride.appliedFareSnapshot,
-            commissionPercent: split.commissionPercent
+            categoryType: ride.serviceType,
+            ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
+            commissionPercent: split.commissionPercent,
+            commissionFixed: split.commissionFixed
           };
         }
 
@@ -3085,20 +3970,39 @@ async function handleApiRequest(req, res) {
         if (!before && !ride.isManualBooking) {
           if (ride.paymentMethod === 'pix') {
             // Regra 1: Corrida PIX pré-paga aguarda confirmação do webhook do gateway antes de confirmar!
-            const { tx } = await finance.createPixChargeForRide(ride);
-            ride.paymentTxId = tx.id;
-            ride.pixQrCode = tx.pixQrCode;
-            ride.pixCopyPaste = tx.pixCopyPaste;
-            ride.paymentStatus = 'aguardando';
-            ride.status = 'aguardando_pagamento';
+            try {
+              const { tx } = await finance.createPixChargeForRide(ride);
+              ride.paymentTxId = tx.id;
+              ride.pixQrCode = tx.pixQrCode;
+              ride.pixCopyPaste = tx.pixCopyPaste;
+              ride.paymentStatus = 'aguardando';
+              ride.status = 'aguardando_pagamento';
+            } catch (pixErr) {
+              return sendJson(res, 402, {
+                ok: false,
+                error: pixErr?.message || 'Não foi possível gerar o QR Code PIX no gateway.',
+                paymentStatus: 'falhou'
+              });
+            }
           } else if (ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') {
             // Regra 3: Pré-autoriza cartão no gateway ao solicitar a corrida
             const authResult = await finance.authorizeCardForRide(ride, {
               cardId: ride.cardId,
               cardLast4: ride.cardLast4,
               cardBrand: ride.cardBrand,
-              mpCardToken: ride.mpCardToken
+              mpCardToken: ride.mpCardToken,
+              stripePaymentIntentId: ride.stripePaymentIntentId
             });
+            if (authResult.requiresAction) {
+              return sendJson(res, 402, {
+                ok: false,
+                requiresAction: true,
+                clientSecret: authResult.clientSecret,
+                paymentIntentId: authResult.paymentIntentId,
+                error: authResult.error || 'Confirme a verificação de segurança (3DS) do cartão.',
+                paymentStatus: 'acao_necessaria'
+              });
+            }
             if (!authResult.authorized) {
               return sendJson(res, 402, {
                 ok: false,
@@ -3132,6 +4036,17 @@ async function handleApiRequest(req, res) {
             ride.paymentStatus = 'aguardando';
             ride.status = 'aguardando_confirmacao';
           }
+        }
+
+        let alsoCancelledRideIds = [];
+        if (!before && !ride.isManualBooking) {
+          alsoCancelledRideIds = await cancelAwaitingPaymentRidesForClient({
+            clientId: ride.clientId,
+            clientPhone: ride.clientPhone,
+            excludeRideId: ride.id,
+            reason: 'Substituída por nova solicitação do passageiro',
+            cancelledBy: 'passenger'
+          });
         }
 
         const savedRide = await upsertFullRide(ride);
@@ -3172,7 +4087,7 @@ async function handleApiRequest(req, res) {
           isOwnerClient: Boolean(clientSession && enrichedSavedRide.clientId === clientSession.sub),
           isDriver: Boolean(driverSession && enrichedSavedRide.driverId === driverSession.sub)
         });
-        return sendJson(res, 200, { ok: true, ride: viewerRide });
+        return sendJson(res, 200, { ok: true, ride: viewerRide, alsoCancelledRideIds });
       }
     }
 
@@ -3215,6 +4130,17 @@ async function handleApiRequest(req, res) {
           ok: false,
           error: `Seu veículo/perfil não está habilitado para aceitar corridas da categoria ${ride.categoryName || rideCatId.toUpperCase()}.`
         });
+      }
+
+      // Verifica se é uma viagem adolescente e exige motorista parceiro bem avaliado (>= 4.5)
+      if (!isAdmin && ride.appliedFareSnapshot?.requireTopRatedDrivers) {
+        const drvRating = driver.rating !== undefined && driver.rating !== null ? Number(driver.rating) : 5.0;
+        if (drvRating < 4.5) {
+          return sendJson(res, 403, {
+            ok: false,
+            error: 'Esta corrida faz parte do Perfil Familiar (Adolescentes) e requer motoristas com avaliação mínima 4.5.'
+          });
+        }
       }
 
       // Verifica se o motorista está inadimplente ao tentar aceitar corrida em dinheiro
@@ -3268,6 +4194,13 @@ async function handleApiRequest(req, res) {
 
       const [enrichedAcceptedRide] = await attachClientRatingsToRides([updatedRide]);
       await push.handleRideChange(ride, enrichedAcceptedRide);
+      if (enrichedAcceptedRide.appliedFareSnapshot?.isTeenRide) {
+        dispatchTrustedContactsForRide(
+          enrichedAcceptedRide,
+          'ride_started',
+          req.headers.host || 'localhost:5173'
+        ).catch(() => {});
+      }
       realtimeHub.publish(
         'ride:updated',
         { rideId: enrichedAcceptedRide.id, status: enrichedAcceptedRide.status, driverId: driver.id },
@@ -3480,7 +4413,10 @@ async function handleApiRequest(req, res) {
       const mappedCatCompleteId = finance.mapLegacyCategoryIdServer ? finance.mapLegacyCategoryIdServer(ride.category || 'kavro_go') : (ride.category || 'kavro_go');
       const matchedCatComplete = catsForComplete.find(c => c.id === ride.category || c.id === mappedCatCompleteId) || null;
       const effectiveCompletePct = ride.commissionPercent ?? (finance.resolveCommissionPercentForRide ? finance.resolveCommissionPercentForRide(cfgForComplete, matchedCatComplete, ride.paymentMethod) : 20);
-      const split = finance.calculateSplit(finalPrice, effectiveCompletePct);
+      const effectiveCompleteFixed = finance.resolveCommissionFixedForRide
+        ? finance.resolveCommissionFixedForRide(cfgForComplete, ride)
+        : Math.max(0, finance.round2(ride.commissionFixed ?? cfgForComplete.platformCommissionFixed ?? 0));
+      const split = finance.calculateSplit(finalPrice, effectiveCompletePct, effectiveCompleteFixed);
       const driver = await finance.getDriverById(driverId);
 
       let newPaymentStatus = ride.paymentStatus;
@@ -3488,7 +4424,7 @@ async function handleApiRequest(req, res) {
 
       if (ride.paymentMethod === 'dinheiro') {
         const cashRes = await finance.settleCashRideToLedger(
-          { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice },
+          { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice, commissionPercent: split.commissionPercent, commissionFixed: split.commissionFixed },
           body.receivedCashAmount !== undefined ? body.receivedCashAmount : finalPrice,
           body.cashResolution || 'confirmado'
         );
@@ -3525,7 +4461,7 @@ async function handleApiRequest(req, res) {
           driverNetAmount: split.driverNetAmount
         });
         await finance.settleDigitalRideToLedger(
-          { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice },
+          { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice, commissionPercent: split.commissionPercent, commissionFixed: split.commissionFixed },
           finalPrice
         );
       } else if (ride.paymentMethod === 'pix') {
@@ -3534,7 +4470,7 @@ async function handleApiRequest(req, res) {
           newPaymentStatus = 'confirmado';
           paidAmount = finalPrice;
           await finance.settleDigitalRideToLedger(
-            { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice },
+            { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice, commissionPercent: split.commissionPercent, commissionFixed: split.commissionFixed },
             finalPrice
           );
         }
@@ -3547,6 +4483,7 @@ async function handleApiRequest(req, res) {
         totalPrice: finalPrice,
         paidAmount,
         commissionPercent: split.commissionPercent,
+        commissionFixed: split.commissionFixed,
         commissionAmount: split.commissionAmount,
         driverNetAmount: split.driverNetAmount,
         paymentStatus: newPaymentStatus,
@@ -3660,6 +4597,49 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para alterar status da corrida.' });
       }
 
+      if (!isAdmin && !isDriver && isOwnerClient) {
+        if (body.status !== 'cancelada') {
+          return sendJson(res, 403, {
+            ok: false,
+            error: 'Passageiro só pode solicitar o cancelamento da própria corrida.'
+          });
+        }
+        if (before.status === 'cancelada') {
+          const alsoCancelledRideIds = isOwnerClient
+            ? await cancelAwaitingPaymentRidesForClient({
+                clientId: before.clientId,
+                clientPhone: before.clientPhone,
+                excludeRideId: id,
+                reason: String(body.cancellationReason || '').trim().slice(0, 140) || 'Cancelada juntamente com outra solicitação do passageiro',
+                cancelledBy: 'passenger'
+              })
+            : [];
+          const [enrichedCancelled] = await attachClientRatingsToRides([before]);
+          return sendJson(res, 200, {
+            ok: true,
+            id,
+            status: 'cancelada',
+            idempotent: true,
+            ride: enrichedCancelled,
+            alsoCancelledRideIds,
+            cancellationFeeApplied: Number(before.cancellationFeeApplied || 0),
+            refundAmount: 0
+          });
+        }
+        if (before.status === 'finalizada') {
+          return sendJson(res, 400, {
+            ok: false,
+            error: 'Não é possível cancelar uma viagem já finalizada.'
+          });
+        }
+        if (before.status === 'em_andamento') {
+          return sendJson(res, 400, {
+            ok: false,
+            error: 'Viagem já está em andamento. Em caso de urgência, utilize o botão SOS ou fale com o motorista.'
+          });
+        }
+      }
+
       // Validação de Código PIN de Embarque (4 dígitos estilo Uber) ao iniciar viagem
       if (!isAdmin && isDriver && body.status === 'em_andamento' && before.status !== 'em_andamento') {
         const expectedPin = String(before.appliedFareSnapshot?.boardingPin || '').trim();
@@ -3678,6 +4658,7 @@ async function handleApiRequest(req, res) {
       // Se a corrida for cancelada, aplica regra de estorno automático e multa de cancelamento (cancellationFeeAmount)
       let nextPaymentStatus = before.paymentStatus;
       let cancelFinance = null;
+      let alsoCancelledRideIds = [];
       const cancelledByRole = isDriver
         ? 'driver'
         : isAdmin && body.cancelledBy !== 'passenger'
@@ -3691,6 +4672,16 @@ async function handleApiRequest(req, res) {
         });
         nextPaymentStatus = cancelFinance.nextPaymentStatus;
 
+        if (cancelledByRole === 'passenger') {
+          alsoCancelledRideIds = await cancelAwaitingPaymentRidesForClient({
+            clientId: before.clientId,
+            clientPhone: before.clientPhone,
+            excludeRideId: id,
+            reason: String(body.cancellationReason || '').trim().slice(0, 140) || 'Cancelada juntamente com outra solicitação do passageiro',
+            cancelledBy: 'passenger'
+          });
+        }
+
         if (before.driverId) {
           const drv = await finance.getDriverById(before.driverId);
           if (drv && (drv.currentRideId === id || drv.queuedRideId === id)) {
@@ -3703,12 +4694,16 @@ async function handleApiRequest(req, res) {
         }
       }
 
+      const cancellationReasonText = String(body.cancellationReason || '').trim().slice(0, 140);
       const nextSnapshot =
-        cancelFinance && cancelFinance.appliedCancellationFee > 0
+        body.status === 'cancelada' && before.status !== 'cancelada'
           ? {
               ...(before.appliedFareSnapshot || {}),
-              cancellationFeeApplied: cancelFinance.appliedCancellationFee,
-              cancelledBy: cancelledByRole
+              cancelledBy: cancelledByRole,
+              ...(cancellationReasonText ? { cancellationReason: cancellationReasonText } : {}),
+              ...(cancelFinance && cancelFinance.appliedCancellationFee > 0
+                ? { cancellationFeeApplied: cancelFinance.appliedCancellationFee }
+                : {})
             }
           : before.appliedFareSnapshot;
 
@@ -3759,19 +4754,362 @@ async function handleApiRequest(req, res) {
       }
 
       const [enrichedUpdated] = await attachClientRatingsToRides([updated]);
-      await push.handleRideChange(before, enrichedUpdated);
+      let autoDispatches = [];
+      if (body.status === 'em_andamento' && before.status !== 'em_andamento') {
+        autoDispatches = await dispatchTrustedContactsForRide(
+          enrichedUpdated,
+          'ride_started',
+          req.headers.host || 'localhost:5173'
+        );
+      }
+      const existingDispatches = Array.isArray(enrichedUpdated.trustedContactsDispatches)
+        ? enrichedUpdated.trustedContactsDispatches
+        : [];
+      const finalDispatches = autoDispatches.length > 0
+        ? [...existingDispatches, ...autoDispatches]
+        : existingDispatches;
+      const trackToken = security.signTrackingToken('ride', enrichedUpdated.id);
+      const trackUrl = `/track/${encodeURIComponent(enrichedUpdated.id)}?t=${encodeURIComponent(trackToken)}`;
+      const responseRide = {
+        ...enrichedUpdated,
+        trustedContactsDispatches: finalDispatches,
+        trackingUrl: trackUrl
+      };
+
+      await push.handleRideChange(before, responseRide);
       realtimeHub.publish(
         'ride:updated',
-        { rideId: enrichedUpdated.id, status: enrichedUpdated.status },
-        { rideId: enrichedUpdated.id }
+        { rideId: responseRide.id, status: responseRide.status },
+        { rideId: responseRide.id, clientId: responseRide.clientId || null, driverId: responseRide.driverId || null }
       );
       return sendJson(res, 200, {
         ok: true,
         id,
-        status: enrichedUpdated.status,
-        ride: enrichedUpdated,
+        status: responseRide.status,
+        ride: responseRide,
+        alsoCancelledRideIds,
+        trustedContactsDispatches: autoDispatches,
         cancellationFeeApplied: cancelFinance?.appliedCancellationFee || 0,
         refundAmount: cancelFinance?.refundAmount || 0
+      });
+    }
+
+    // ALTERAÇÃO DE ROTA (ORIGEM / DESTINO) ANTES DO INÍCIO DA VIAGEM (ESTILO UBER)
+    const rideRouteMatch = pathname.match(/^\/api\/rides\/([^/]+)\/route$/);
+    if (rideRouteMatch && method === 'PATCH') {
+      const id = normalizeRideId(decodeURIComponent(rideRouteMatch[1]));
+      const body = await parseBody(req);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão de passageiro não autorizada para alterar a rota.' });
+      }
+
+      const prev = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!prev.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const before = formatRideFromDb(prev.rows[0]);
+      const clientPhoneDigits = clientSession ? normalizePhoneDigitsServer(clientSession.phone) : '';
+      const ridePhoneDigits = normalizePhoneDigitsServer(before.clientPhone);
+      const isOwnerClient = Boolean(
+        clientSession && (
+          (before.clientId && clientSession.sub === before.clientId) ||
+          (!before.clientId && clientPhoneDigits.length >= 8 && ridePhoneDigits === clientPhoneDigits)
+        )
+      );
+      if (!isAdmin && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Sem permissão para alterar a rota desta corrida.' });
+      }
+
+      const editableStatuses = [
+        'aguardando_pagamento',
+        'aguardando_confirmacao',
+        'na_fila',
+        'confirmada',
+        'a_caminho',
+        'no_local'
+      ];
+      if (!editableStatuses.includes(before.status)) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: before.status === 'em_andamento'
+            ? 'A viagem já foi iniciada; só é possível alterar a rota ou o destino antes do embarque.'
+            : 'Esta corrida já foi encerrada e não permite alteração de rota.'
+        });
+      }
+
+      const sanitizePoint = (pt, fallback) => {
+        if (!pt || typeof pt !== 'object') return fallback;
+        const addr = String(pt.address || '').trim().slice(0, 260);
+        const lat = Number(pt.lat);
+        const lng = Number(pt.lng);
+        if (!addr || !Number.isFinite(lat) || !Number.isFinite(lng) || lat === 0 || lng === 0) {
+          return fallback;
+        }
+        return {
+          ...(fallback || {}),
+          ...pt,
+          address: addr,
+          lat,
+          lng
+        };
+      };
+
+      const nextOrigin = body.origin ? sanitizePoint(body.origin, null) : before.origin;
+      const nextDestination = body.destination ? sanitizePoint(body.destination, null) : before.destination;
+      if (!nextOrigin?.address || !nextDestination?.address) {
+        return sendJson(res, 400, { ok: false, error: 'Informe um endereço válido com coordenadas de origem e destino.' });
+      }
+
+      const originChanged =
+        nextOrigin.address !== before.origin?.address ||
+        Math.abs(Number(nextOrigin.lat) - Number(before.origin?.lat || 0)) > 0.0001 ||
+        Math.abs(Number(nextOrigin.lng) - Number(before.origin?.lng || 0)) > 0.0001;
+      const destChanged =
+        nextDestination.address !== before.destination?.address ||
+        Math.abs(Number(nextDestination.lat) - Number(before.destination?.lat || 0)) > 0.0001 ||
+        Math.abs(Number(nextDestination.lng) - Number(before.destination?.lng || 0)) > 0.0001;
+
+      if (!originChanged && !destChanged) {
+        const [enrichedUnchanged] = await attachClientRatingsToRides([before]);
+        return sendJson(res, 200, {
+          ok: true,
+          id,
+          unchanged: true,
+          ride: enrichedUnchanged,
+          previousPrice: before.totalPrice,
+          newPrice: before.totalPrice,
+          priceChanged: false
+        });
+      }
+
+      const cfg = await getCachedSystemConfig();
+      const allCats = finance.normalizeCategoriesServer(cfg);
+      const mappedCatId = finance.mapLegacyCategoryIdServer(before.category || 'kavro_go');
+      const matchedCat = allCats.find(c => c.id === before.category || c.id === mappedCatId) || allCats[0];
+      const submittedDist = Number(body.distanceKm);
+      const submittedDur = Number(body.durationMin);
+
+      const officialFare = !(isAdmin && before.isManualBooking)
+        ? security.calculateOfficialRidePriceServer({
+            cfg,
+            categoryObj: matchedCat,
+            distanceKm: Number.isFinite(submittedDist) && submittedDist > 0 ? submittedDist : 0,
+            durationMin: Number.isFinite(submittedDur) && submittedDur > 0 ? submittedDur : 0,
+            origin: nextOrigin,
+            destination: nextDestination,
+            timeStr: before.time,
+            city: nextOrigin.city || before.city
+          })
+        : null;
+
+      const commPct = Number(
+        before.commissionPercent ??
+        finance.resolveCommissionPercentForRide(cfg, matchedCat, before.paymentMethod) ??
+        cfg.platformCommissionPercent ??
+        20
+      );
+      const commFixed = finance.resolveCommissionFixedForRide
+        ? finance.resolveCommissionFixedForRide(cfg, before)
+        : Math.max(0, finance.round2(before.commissionFixed ?? cfg.platformCommissionFixed ?? 0));
+
+      const nextDist = officialFare ? officialFare.effectiveDistanceKm : (submittedDist > 0 ? finance.round2(submittedDist) : before.distanceKm);
+      const nextDur = officialFare ? officialFare.effectiveDurationMin : (submittedDur > 0 ? Math.round(submittedDur) : before.durationMin);
+      const rawNextTotal = officialFare
+        ? officialFare.totalPrice
+        : (body.totalPrice !== undefined && isAdmin ? finance.round2(body.totalPrice) : before.totalPrice);
+      const split = finance.calculateSplit(rawNextTotal, commPct, commFixed);
+
+      const tx = await finance.getPaymentTxByRide(id);
+      let nextPaymentTxId = before.paymentTxId;
+      let nextPixQrCode = before.pixQrCode;
+      let nextPixCopyPaste = before.pixCopyPaste;
+      let nextPaidAmount = before.paidAmount;
+
+      if (before.paymentMethod === 'pix') {
+        if (before.status === 'aguardando_pagamento') {
+          if (tx && String(tx.gatewayTxId || '').startsWith('pi_')) {
+            await finance.refundGatewayPayment(tx, null).catch(() => {});
+          }
+          try {
+            const { tx: newPixTx } = await finance.createPixChargeForRide({
+              ...before,
+              origin: nextOrigin,
+              destination: nextDestination,
+              distanceKm: nextDist,
+              durationMin: nextDur,
+              totalPrice: split.grossAmount,
+              commissionPercent: split.commissionPercent,
+              commissionAmount: split.commissionAmount,
+              driverNetAmount: split.driverNetAmount
+            });
+            nextPaymentTxId = newPixTx.id;
+            nextPixQrCode = newPixTx.pixQrCode;
+            nextPixCopyPaste = newPixTx.pixCopyPaste;
+          } catch (pixErr) {
+            return sendJson(res, 402, {
+              ok: false,
+              error: pixErr?.message || 'Não foi possível atualizar a cobrança PIX para a nova rota.'
+            });
+          }
+        } else if (before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago') {
+          const alreadyPaid = finance.round2(before.paidAmount || before.totalPrice || 0);
+          if (split.grossAmount > alreadyPaid + 0.01) {
+            return sendJson(res, 400, {
+              ok: false,
+              error: `Esta viagem já foi paga via PIX (${audit.formatMoneyPt(alreadyPaid)}). Para um trajeto de valor maior (${audit.formatMoneyPt(split.grossAmount)}), cancele com estorno automático e solicite novamente.`
+            });
+          }
+          const refundDiff = finance.round2(Math.max(0, alreadyPaid - split.grossAmount));
+          if (refundDiff >= 0.05 && tx) {
+            const refRes = await finance.refundGatewayPayment(tx, refundDiff);
+            if (!refRes.ok) {
+              return sendJson(res, 402, {
+                ok: false,
+                error: refRes.error || 'Não foi possível estornar a diferença do PIX para a nova rota.'
+              });
+            }
+            nextPaidAmount = split.grossAmount;
+            await finance.savePaymentTransaction({
+              ...tx,
+              finalAmount: split.grossAmount,
+              paidAmount: split.grossAmount,
+              refundedAmount: finance.round2(Number(tx.refundedAmount || 0) + refundDiff),
+              commissionPercent: split.commissionPercent,
+              commissionAmount: split.commissionAmount,
+              driverNetAmount: split.driverNetAmount
+            });
+          }
+        }
+      } else if (before.paymentMethod === 'cartao_credito' || before.paymentMethod === 'cartao_debito') {
+        const authorizedMax = finance.round2(tx?.estimatedAmount || before.estimatedPrice || before.totalPrice || 0);
+        const isRealStripeHold = Boolean(tx && String(tx.gatewayTxId || '').startsWith('pi_'));
+        if (split.grossAmount > authorizedMax + 0.01 && isRealStripeHold) {
+          const reAuth = await finance.authorizeCardForRide(
+            {
+              ...before,
+              totalPrice: split.grossAmount,
+              commissionPercent: split.commissionPercent,
+              commissionFixed: split.commissionFixed
+            },
+            {
+              cardId: before.cardId,
+              cardLast4: before.cardLast4,
+              cardBrand: before.cardBrand
+            }
+          );
+          if (!reAuth.authorized) {
+            return sendJson(res, 402, {
+              ok: false,
+              error: reAuth.error || 'O novo destino excede a pré-autorização do cartão. Cancele e faça uma nova solicitação.'
+            });
+          }
+          await finance.refundGatewayPayment(tx, null).catch(() => {});
+          nextPaymentTxId = reAuth.tx.id;
+        } else if (tx) {
+          await finance.savePaymentTransaction({
+            ...tx,
+            finalAmount: split.grossAmount,
+            commissionPercent: split.commissionPercent,
+            commissionAmount: split.commissionAmount,
+            driverNetAmount: split.driverNetAmount
+          });
+        }
+      } else if (tx) {
+        await finance.savePaymentTransaction({
+          ...tx,
+          estimatedAmount: split.grossAmount,
+          finalAmount: split.grossAmount,
+          commissionPercent: split.commissionPercent,
+          commissionAmount: split.commissionAmount,
+          driverNetAmount: split.driverNetAmount
+        });
+      }
+
+      const nowIso = new Date().toISOString();
+      const nextSnapshot = {
+        ...(before.appliedFareSnapshot || {}),
+        routeAdjusted: true,
+        routeAdjustedAt: nowIso,
+        previousOriginAddress: before.origin?.address || null,
+        previousDestinationAddress: before.destination?.address || null,
+        previousTotalPrice: before.totalPrice
+      };
+
+      const updated = await upsertFullRide({
+        ...before,
+        origin: nextOrigin,
+        destination: nextDestination,
+        distanceKm: nextDist,
+        durationMin: nextDur,
+        estimatedPrice: before.estimatedPrice ?? before.totalPrice,
+        totalPrice: split.grossAmount,
+        paidAmount: nextPaidAmount,
+        commissionPercent: split.commissionPercent,
+        commissionFixed: split.commissionFixed,
+        commissionAmount: split.commissionAmount,
+        driverNetAmount: split.driverNetAmount,
+        paymentTxId: nextPaymentTxId,
+        pixQrCode: nextPixQrCode,
+        pixCopyPaste: nextPixCopyPaste,
+        appliedFareSnapshot: nextSnapshot
+      });
+
+      await audit.recordAuditEvent({
+        category: 'financeiro_corridas',
+        actionKey: 'ride_route_updated',
+        title: `Rota alterada antes do embarque (${before.rideCode || id})`,
+        summary: `Passageiro atualizou ${originChanged && destChanged ? 'origem e destino' : originChanged ? 'local de embarque' : 'destino'}. Valor ajustado de ${audit.formatMoneyPt(before.totalPrice)} para ${audit.formatMoneyPt(split.grossAmount)}.`,
+        severity: 'info',
+        actorRole: isAdmin ? 'admin_master' : 'passageiro',
+        actorId: isAdmin ? getAdminActorContext(req).actorId : (clientSession?.sub || before.clientId || null),
+        actorName: isAdmin ? 'Administrador Master' : (before.clientName || 'Passageiro'),
+        entityType: 'corrida',
+        entityId: id,
+        entityLabel: before.rideCode || id,
+        relatedIds: { rideId: id, rideCode: before.rideCode, driverId: before.driverId || null },
+        changes: [
+          ...(originChanged ? [{ field: 'origin', label: 'Origem', before: String(before.origin?.address || ''), after: nextOrigin.address, summary: `${before.origin?.address} -> ${nextOrigin.address}` }] : []),
+          ...(destChanged ? [{ field: 'destination', label: 'Destino', before: String(before.destination?.address || ''), after: nextDestination.address, summary: `${before.destination?.address} -> ${nextDestination.address}` }] : []),
+          ...(Math.abs(split.grossAmount - before.totalPrice) >= 0.01 ? [{ field: 'totalPrice', label: 'Tarifa da Viagem', before: audit.formatMoneyPt(before.totalPrice), after: audit.formatMoneyPt(split.grossAmount), summary: `${audit.formatMoneyPt(before.totalPrice)} -> ${audit.formatMoneyPt(split.grossAmount)}` }] : [])
+        ],
+        ipAddress: getRequestClientIp(req),
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+      });
+
+      if (before.driverId) {
+        await db.query(
+          `INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp)
+           VALUES ($1, $2, $3, 'ride', $4, false, NOW())`,
+          [
+            `notif-route-${Date.now()}`,
+            `🔄 Rota atualizada (${before.rideCode || id})`,
+            `${before.clientName} alterou a rota antes do embarque: ${nextOrigin.address} ➔ ${nextDestination.address} (${audit.formatMoneyPt(split.grossAmount)}).`,
+            id
+          ]
+        ).catch(() => {});
+      }
+
+      const [enrichedUpdated] = await attachClientRatingsToRides([updated]);
+      const trackToken = security.signTrackingToken('ride', enrichedUpdated.id);
+      const responseRide = {
+        ...enrichedUpdated,
+        trackingUrl: `/track/${encodeURIComponent(enrichedUpdated.id)}?t=${encodeURIComponent(trackToken)}`
+      };
+
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: responseRide.id, status: responseRide.status, routeUpdated: true },
+        { rideId: responseRide.id, clientId: responseRide.clientId || null, driverId: responseRide.driverId || null }
+      );
+      return sendJson(res, 200, {
+        ok: true,
+        id,
+        ride: responseRide,
+        previousPrice: before.totalPrice,
+        newPrice: split.grossAmount,
+        priceChanged: Math.abs(split.grossAmount - before.totalPrice) >= 0.01
       });
     }
 
@@ -3785,10 +5123,7 @@ async function handleApiRequest(req, res) {
       const trackTok = String(url.searchParams.get('t') || '').trim();
       const hasValidTracking = method === 'GET' && trackTok && security.verifyTrackingToken(trackTok, 'ride', id);
 
-      const metaRes = await db.query(
-        'SELECT id, client_id, client_phone, driver_id, status, payment_status, driver_location, client_location FROM public.rides WHERE id = $1',
-        [id]
-      );
+      const metaRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
       if (!metaRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
       const row = metaRes.rows[0];
       const isAssignedDriver = Boolean(driverSession?.sub && row.driver_id && driverSession.sub === row.driver_id);
@@ -3823,34 +5158,91 @@ async function handleApiRequest(req, res) {
         if (!loc || typeof loc.lat !== 'number' || typeof loc.lng !== 'number') {
           return sendJson(res, 400, { ok: false, error: 'Invalid location' });
         }
+        const nowMs = Date.now();
         const payload = {
           lat: Number(loc.lat),
           lng: Number(loc.lng),
           heading: Number(loc.heading || 0),
           speedKmH: Number(loc.speedKmH || 0),
-          updatedAt: new Date().toISOString()
+          updatedAt: new Date(nowMs).toISOString()
         };
-        const col = role === 'client' ? 'client_location' : 'driver_location';
-        const r = await db.query(
-          `UPDATE public.rides SET ${col} = $1, updated_at = NOW() WHERE id = $2 RETURNING id, status, payment_status, driver_location, client_location`,
-          [JSON.stringify(payload), id]
-        );
-        if (!r.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
-        const updRow = r.rows[0];
 
+        const prevDriverLoc = row.driver_location || null;
+        let evalRes = null;
+        let updRow = null;
+        let rideCheckResult = null;
+        const fullRideBefore = formatRideFromDb(row);
+
+        if (role === 'driver' && row.status === 'em_andamento') {
+          let rideCheckAllowed = true;
+          if (fullRideBefore.clientId && !body.simulateRideCheck) {
+            try {
+              await ensureClientsSchema();
+              const cliPrefRes = await db.query('SELECT safety_preferences FROM public.clients WHERE id = $1 LIMIT 1', [fullRideBefore.clientId]);
+              if (cliPrefRes.rows[0]) {
+                const cliSafety = normalizeSafetyPreferencesServer(
+                  cliPrefRes.rows[0].safety_preferences || cliPrefRes.rows[0].safetyPreferences
+                );
+                rideCheckAllowed = cliSafety.rideCheckEnabled !== false;
+              }
+            } catch {
+              rideCheckAllowed = true;
+            }
+          }
+          evalRes = rideCheckAllowed
+            ? security.evaluateRideCheckAnomaly(
+                fullRideBefore,
+                payload,
+                nowMs,
+                body.simulateRideCheck || null
+              )
+            : { triggered: false, telemetry: fullRideBefore.appliedFareSnapshot?.rideCheckTelemetry || null, rideCheck: null };
+          const curSnap = fullRideBefore.appliedFareSnapshot && typeof fullRideBefore.appliedFareSnapshot === 'object'
+            ? fullRideBefore.appliedFareSnapshot
+            : {};
+          const nextSnap = {
+            ...curSnap,
+            rideCheckTelemetry: evalRes.telemetry,
+            ...(evalRes.triggered && evalRes.rideCheck ? { rideCheck: evalRes.rideCheck } : {})
+          };
+          const r = await db.query(
+            `UPDATE public.rides
+             SET driver_location = $1, applied_fare_snapshot = $2, updated_at = NOW()
+             WHERE id = $3
+             RETURNING *`,
+            [JSON.stringify(payload), JSON.stringify(nextSnap), id]
+          );
+          if (!r.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
+          updRow = r.rows[0];
+          rideCheckResult = evalRes.rideCheck || curSnap.rideCheck || null;
+        } else {
+          const col = role === 'client' ? 'client_location' : 'driver_location';
+          const r = await db.query(
+            `UPDATE public.rides SET ${col} = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+            [JSON.stringify(payload), id]
+          );
+          if (!r.rows[0]) return sendJson(res, 404, { ok: false, error: 'Ride not found' });
+          updRow = r.rows[0];
+        }
+
+        // Grava histórico em ride_trail_points apenas a cada >= 10s OU deslocamento >= 25m (reduz ~80% de escrita no banco mantendo SSE instantâneo)
         if (role === 'driver' && (updRow.status === 'a_caminho' || updRow.status === 'em_andamento')) {
-          try {
-            await db.query(
-              `INSERT INTO public.ride_trail_points (ride_id, status, lat, lng, speed_kmh, heading, recorded_at)
-               SELECT $1::varchar, $2::varchar, $3::float8, $4::float8, $5::float8, $6::float8, NOW()
-               WHERE NOT EXISTS (
-                 SELECT 1 FROM public.ride_trail_points
-                 WHERE ride_id = $1::varchar AND recorded_at > NOW() - INTERVAL '2 seconds'
-               )`,
-              [id, updRow.status, payload.lat, payload.lng, payload.speedKmH, payload.heading]
-            );
-          } catch (err) {
-            console.error('[trail insert]', err.message);
+          const prevTsMs = prevDriverLoc?.updatedAt ? new Date(prevDriverLoc.updatedAt).getTime() : 0;
+          const elapsedSec = prevTsMs > 0 && Number.isFinite(prevTsMs) ? (nowMs - prevTsMs) / 1000 : 999;
+          const movedMeters = (prevDriverLoc && Number.isFinite(Number(prevDriverLoc.lat)) && Number.isFinite(Number(prevDriverLoc.lng)))
+            ? security.haversineDistanceKm(prevDriverLoc.lat, prevDriverLoc.lng, payload.lat, payload.lng) * 1000
+            : 999;
+
+          if (!prevDriverLoc || elapsedSec >= 10 || movedMeters >= 25) {
+            try {
+              await db.query(
+                `INSERT INTO public.ride_trail_points (ride_id, status, lat, lng, speed_kmh, heading, recorded_at)
+                 VALUES ($1::varchar, $2::varchar, $3::float8, $4::float8, $5::float8, $6::float8, NOW())`,
+                [id, updRow.status, payload.lat, payload.lng, payload.speedKmH, payload.heading]
+              );
+            } catch (err) {
+              console.error('[trail insert]', err.message);
+            }
           }
         }
 
@@ -3866,15 +5258,297 @@ async function handleApiRequest(req, res) {
           { rideId: updRow.id, driverId: row.driver_id, clientId: row.client_id }
         );
 
+        if (evalRes?.triggered && evalRes?.rideCheck) {
+          realtimeHub.publish(
+            'ride:ridecheck',
+            { rideId: updRow.id, rideCheck: evalRes.rideCheck },
+            { rideId: updRow.id, driverId: row.driver_id, clientId: row.client_id }
+          );
+          realtimeHub.publish(
+            'ride:updated',
+            { rideId: updRow.id, status: updRow.status, rideCheck: evalRes.rideCheck },
+            { rideId: updRow.id, driverId: row.driver_id, clientId: row.client_id }
+          );
+          const targets = [];
+          if (fullRideBefore.clientPhone) targets.push(push.clientExternalId(fullRideBefore.clientPhone));
+          if (fullRideBefore.driverId || fullRideBefore.driverPhone) {
+            targets.push(push.driverExternalId(fullRideBefore.driverId, fullRideBefore.driverPhone));
+          }
+          if (targets.length > 0) {
+            push.sendToExternalIds(
+              targets,
+              '🛡️ Verificação de Segurança RideCheck',
+              `${evalRes.rideCheck.reasonLabel} Confirme no app se está tudo bem.`,
+              { url: `/viagem/${encodeURIComponent(id)}` }
+            ).catch(() => {});
+          }
+        }
+
         return sendJson(res, 200, {
           ok: true,
           id: updRow.id,
           status: updRow.status,
           paymentStatus: updRow.payment_status,
           driverLocation: updRow.driver_location || null,
-          clientLocation: updRow.client_location || null
+          clientLocation: updRow.client_location || null,
+          rideCheck: rideCheckResult
         });
       }
+    }
+
+    // ROTA DE ACOMPANHAMENTO EXTERNO COM TOKEN ASSINADO (CONTATOS DE CONFIANÇA)
+    const rideTrackMatch = pathname.match(/^\/api\/rides\/([^/]+)\/track$/);
+    if (rideTrackMatch && method === 'GET') {
+      const id = normalizeRideId(decodeURIComponent(rideTrackMatch[1]));
+      const rideRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!rideRes.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const rawRide = formatRideFromDb(rideRes.rows[0]);
+      const [ride] = await attachClientRatingsToRides([rawRide]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const qTrackTok = String(url.searchParams.get('t') || '').trim();
+      const hasValidTracking = Boolean(qTrackTok && security.verifyTrackingToken(qTrackTok, 'ride', id));
+      const isAssignedDriver = Boolean(driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId);
+      const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
+      const isOwnerClient = Boolean(
+        (clientSession?.sub && ride.clientId && clientSession.sub === ride.clientId) ||
+        (clientSession?.phone && ridePhoneDigits && normalizePhoneDigitsServer(clientSession.phone) === ridePhoneDigits)
+      );
+
+      if (!isAdmin && !isAssignedDriver && !isOwnerClient && !hasValidTracking) {
+        return sendJson(res, 401, { ok: false, error: 'Link de rastreamento inválido ou expirado.' });
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        ride: security.sanitizeRideForViewer(ride, {
+          isAdmin,
+          isDriver: isAssignedDriver,
+          isOwnerClient,
+          isTrackingViewer: true
+        })
+      });
+    }
+
+    // COMPARTILHAMENTO MANUAL OU REENVIO VIA API PARA CONTATOS DE CONFIANÇA
+    const rideShareTrustedMatch = pathname.match(/^\/api\/rides\/([^/]+)\/share-trusted-contacts$/);
+    if (rideShareTrustedMatch && method === 'POST') {
+      const id = normalizeRideId(decodeURIComponent(rideShareTrustedMatch[1]));
+      const rideRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!rideRes.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const ride = formatRideFromDb(rideRes.rows[0]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
+      const isOwnerClient = Boolean(
+        (clientSession?.sub && ride.clientId && clientSession.sub === ride.clientId) ||
+        (clientSession?.phone && ridePhoneDigits && normalizePhoneDigitsServer(clientSession.phone) === ridePhoneDigits)
+      );
+      if (!isAdmin && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para compartilhar com seus contatos de confiança.' });
+      }
+      const dispatches = await dispatchTrustedContactsForRide(ride, 'manual_share', req.headers.host || 'localhost:5173');
+      const trackToken = security.signTrackingToken('ride', ride.id);
+      const trackingUrl = `/track/${encodeURIComponent(ride.id)}?t=${encodeURIComponent(trackToken)}`;
+      return sendJson(res, 200, { ok: true, dispatches, trackingUrl });
+    }
+
+    // RESPOSTA DO PASSAGEIRO / MOTORISTA AO ALERTA RIDECHECK (OK | SOS | TIMEOUT 60s)
+    const rideCheckRespondMatch = pathname.match(/^\/api\/rides\/([^/]+)\/ridecheck\/respond$/);
+    if (rideCheckRespondMatch && (method === 'POST' || method === 'PATCH')) {
+      const id = normalizeRideId(decodeURIComponent(rideCheckRespondMatch[1]));
+      const rideRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [id]);
+      if (!rideRes.rows[0]) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const ride = formatRideFromDb(rideRes.rows[0]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+      const isAssignedDriver = Boolean(driverSession?.sub && ride.driverId && driverSession.sub === ride.driverId);
+      const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
+      const isOwnerClient = Boolean(
+        (clientSession?.sub && ride.clientId && clientSession.sub === ride.clientId) ||
+        (clientSession?.phone && ridePhoneDigits && normalizePhoneDigitsServer(clientSession.phone) === ridePhoneDigits)
+      );
+      if (!isAdmin && !isAssignedDriver && !isOwnerClient) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para responder ao RideCheck.' });
+      }
+
+      const body = await parseBody(req);
+      const decision = String(body.decision || '').trim().toLowerCase();
+      if (!['ok', 'sos', 'timeout'].includes(decision)) {
+        return sendJson(res, 400, { ok: false, error: 'Decisão inválida. Envie "ok", "sos" ou "timeout".' });
+      }
+
+      const snap = ride.appliedFareSnapshot && typeof ride.appliedFareSnapshot === 'object'
+        ? { ...ride.appliedFareSnapshot }
+        : {};
+      const currentCheck = snap.rideCheck || null;
+      if (!currentCheck) {
+        return sendJson(res, 400, { ok: false, error: 'Nenhum alerta RideCheck ativo nesta corrida.' });
+      }
+      if (currentCheck.status === 'confirmado_ok' || currentCheck.status === 'escalado_sos') {
+        return sendJson(res, 200, { ok: true, idempotent: true, rideCheck: currentCheck });
+      }
+
+      const now = new Date();
+      const actorRole = isAdmin ? 'admin' : (isAssignedDriver ? 'motorista' : 'passageiro');
+      const respondedBy = decision === 'timeout' ? 'sistema_timeout' : actorRole;
+
+      if (decision === 'ok') {
+        const nextCheck = {
+          ...currentCheck,
+          status: 'confirmado_ok',
+          respondedBy,
+          respondedAt: now.toISOString()
+        };
+        const nextSnap = { ...snap, rideCheck: nextCheck };
+        await db.query(
+          'UPDATE public.rides SET applied_fare_snapshot = $1, updated_at = NOW() WHERE id = $2',
+          [JSON.stringify(nextSnap), id]
+        );
+        await audit.recordAuditEvent({
+          category: 'sistema',
+          actionKey: 'ridecheck_confirmed_ok',
+          title: `RideCheck confirmado como seguro (${ride.rideCode || id})`,
+          summary: `${actorRole === 'motorista' ? 'Motorista' : 'Passageiro'} confirmou que está tudo bem após alerta de ${currentCheck.reason}.`,
+          severity: 'info',
+          actorRole,
+          actorId: isAdmin ? 'admin-master' : (isAssignedDriver ? driverSession.sub : clientSession.sub),
+          actorName: isAssignedDriver ? (ride.driverName || 'Motorista') : (ride.clientName || 'Passageiro'),
+          entityType: 'corrida',
+          entityId: id,
+          entityLabel: ride.rideCode || id
+        }).catch(() => {});
+
+        realtimeHub.publish(
+          'ride:ridecheck',
+          { rideId: id, rideCheck: nextCheck },
+          { rideId: id, clientId: ride.clientId || null, driverId: ride.driverId || null }
+        );
+        realtimeHub.publish(
+          'ride:updated',
+          { rideId: id, status: ride.status, rideCheck: nextCheck },
+          { rideId: id, clientId: ride.clientId || null, driverId: ride.driverId || null }
+        );
+        return sendJson(res, 200, { ok: true, rideCheck: nextCheck });
+      }
+
+      // Escalonamento para Central SOS (botão "Preciso de Ajuda" ou timeout de 60s sem resposta)
+      const sosId = `sos-rc-${now.getTime()}`;
+      const lat = Number(currentCheck.lat || ride.driverLocation?.lat || ride.origin?.lat || -28.39);
+      const lng = Number(currentCheck.lng || ride.driverLocation?.lng || ride.origin?.lng || -49.39);
+      const reasonNote = decision === 'timeout'
+        ? `⚠️ RIDECHECK PREVENTIVO (Sem confirmação em 60s): ${currentCheck.reasonLabel}`
+        : `🚨 SOS ACIONADO NO RIDECHECK: ${currentCheck.reasonLabel}`;
+
+      const alertData = {
+        id: sosId,
+        role: isAssignedDriver ? 'motorista' : 'passageiro',
+        name: isAssignedDriver ? (ride.driverName || 'Motorista em Rota') : (ride.clientName || 'Passageiro em Rota'),
+        phone: isAssignedDriver ? (ride.driverPhone || '') : (ride.clientPhone || ''),
+        clientName: ride.clientName || 'Passageiro',
+        clientPhone: ride.clientPhone || '',
+        driverId: ride.driverId || null,
+        driverName: ride.driverName || null,
+        driverPhone: ride.driverPhone || '',
+        driverVehicle: ride.driverVehicle || null,
+        driverPlate: ride.driverPlate || null,
+        lat,
+        lng,
+        accuracy: 15,
+        heading: Number(ride.driverLocation?.heading || 0),
+        speedKmH: Number(ride.driverLocation?.speedKmH || 0),
+        address: ride.origin?.address || 'Em deslocamento durante corrida ativa',
+        rideId: ride.id,
+        rideCode: ride.rideCode || ride.id,
+        status: 'ativo',
+        active: true,
+        notes: reasonNote,
+        updatedAt: now.toISOString(),
+        updatedAtMs: now.getTime(),
+        createdAt: now.toISOString()
+      };
+
+      const persistedSos = await finance.upsertSosAlertDb(alertData);
+      sosMemoryStore.set(sosId, persistedSos || alertData);
+
+      db.query(
+        `INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp)
+         VALUES ($1, $2, $3, 'sos_alert', $4, false, NOW())`,
+        [
+          `notif-sos-rc-${now.getTime()}`,
+          `🚨 RIDECHECK SOS (${ride.rideCode || ride.id})`,
+          reasonNote,
+          ride.id
+        ]
+      ).catch(() => {});
+
+      push.sendToExternalIds(
+        [push.ADMIN_EXTERNAL_ID],
+        `🚨 ALERTA PREVENTIVO RIDECHECK (${ride.rideCode || ride.id})`,
+        reasonNote,
+        { url: `/sos/${encodeURIComponent(sosId)}` }
+      ).catch(() => {});
+
+      const nextCheck = {
+        ...currentCheck,
+        status: 'escalado_sos',
+        respondedBy,
+        respondedAt: now.toISOString(),
+        sosAlertId: sosId
+      };
+      const nextSnap = { ...snap, rideCheck: nextCheck };
+      await db.query(
+        'UPDATE public.rides SET applied_fare_snapshot = $1, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(nextSnap), id]
+      );
+
+      const dispatches = await dispatchTrustedContactsForRide(
+        { ...ride, appliedFareSnapshot: nextSnap },
+        'ridecheck_escalation',
+        req.headers.host || 'localhost:5173'
+      );
+
+      await audit.recordAuditEvent({
+        category: 'sistema',
+        actionKey: 'ridecheck_escalated_sos',
+        title: `RideCheck escalado para Central SOS (${ride.rideCode || ride.id})`,
+        summary: `${reasonNote}. Chamado ${sosId} aberto na Central SOS e contatos de confiança notificados.`,
+        severity: 'critico',
+        actorRole: decision === 'timeout' ? 'sistema' : actorRole,
+        actorId: sosId,
+        actorName: decision === 'timeout' ? 'Monitor RideCheck (60s)' : (ride.clientName || 'Participante'),
+        entityType: 'corrida',
+        entityId: id,
+        entityLabel: ride.rideCode || id,
+        relatedIds: { rideId: id, sosAlertId: sosId }
+      }).catch(() => {});
+
+      realtimeHub.publish('sos:updated', { sosId, status: 'ativo', active: true, rideId: id }, { sosId });
+      realtimeHub.publish(
+        'ride:ridecheck',
+        { rideId: id, rideCheck: nextCheck, sosAlertId: sosId },
+        { rideId: id, clientId: ride.clientId || null, driverId: ride.driverId || null }
+      );
+      realtimeHub.publish(
+        'ride:updated',
+        { rideId: id, status: ride.status, rideCheck: nextCheck },
+        { rideId: id, clientId: ride.clientId || null, driverId: ride.driverId || null }
+      );
+
+      return sendJson(res, 200, {
+        ok: true,
+        rideCheck: nextCheck,
+        sosAlert: persistedSos || alertData,
+        dispatches
+      });
     }
 
     // CHAT EM TEMPO REAL DA CORRIDA (Motorista <-> Passageiro — Autenticação Estrita)
@@ -4168,6 +5842,21 @@ async function handleApiRequest(req, res) {
           `Auxílio urgente solicitado! Toque para ver a localização no mapa.`,
           { url: `/sos/${encodeURIComponent(sosId)}` }
         ).catch(() => {});
+
+        if (alertData.rideId) {
+          try {
+            const sosRideRes = await db.query('SELECT * FROM public.rides WHERE id = $1 LIMIT 1', [alertData.rideId]);
+            if (sosRideRes.rows[0]) {
+              await dispatchTrustedContactsForRide(
+                formatRideFromDb(sosRideRes.rows[0]),
+                'sos_triggered',
+                req.headers.host || 'localhost:5173'
+              );
+            }
+          } catch {
+            // mantém disparo SOS principal ativo
+          }
+        }
       }
 
       realtimeHub.publish('sos:updated', {
@@ -4272,16 +5961,53 @@ async function handleApiRequest(req, res) {
     }
 
     // ============================================================
-    // 3.5 GATEWAY DE PAGAMENTOS: PIX DINÂMICO, CARTÕES E WEBHOOK IDEMPOTENTE
+    // 3.5 GATEWAY DE PAGAMENTOS: STRIPE, PIX DINÂMICO, CARTÕES E WEBHOOKS
     // ============================================================
     if (pathname === '/api/payments/config' && method === 'GET') {
       const mpPublicKey = String(process.env.MERCADOPAGO_PUBLIC_KEY || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim();
+      const stripePubKey = stripeGateway.getStripePublishableKey();
+      const stripeOn = stripeGateway.isStripeEnabled();
+      const mpOn = Boolean(env.MERCADOPAGO_ACCESS_TOKEN);
+      const gatewayProvider = stripeOn ? 'stripe' : (mpOn ? 'mercadopago' : 'sandbox');
       return sendJson(res, 200, {
         ok: true,
-        mercadopagoEnabled: Boolean(env.MERCADOPAGO_ACCESS_TOKEN),
+        gatewayProvider,
+        stripeEnabled: stripeOn,
+        stripePublishableKey: stripePubKey,
+        mercadopagoEnabled: mpOn,
         mercadopagoPublicKey: mpPublicKey,
         autoPixPayoutEnabled: Boolean(process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
       });
+    }
+
+    if (pathname === '/api/payments/stripe/setup-intent' && method === 'POST') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para cadastrar um cartão.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor (STRIPE_SECRET_KEY ausente).' });
+      }
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
+      let clientRow = null;
+      if (targetClientId) {
+        const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
+        clientRow = cRes.rows[0] || null;
+      }
+      try {
+        const setupData = await stripeGateway.createCardSetupIntent({
+          clientId: targetClientId,
+          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
+          clientEmail: clientRow?.email || body.clientEmail || clientSession?.email || '',
+          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro'
+        });
+        return sendJson(res, 200, { ok: true, ...setupData });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar tokenização segura na Stripe.' });
+      }
     }
 
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
@@ -4298,17 +6024,21 @@ async function handleApiRequest(req, res) {
       if (!isAdmin && !isOwnerClient && !isAssignedDriver) {
         return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para gerar cobrança PIX desta corrida.' });
       }
-      const { tx, split } = await finance.createPixChargeForRide(ride);
-      const updated = await upsertFullRide({
-        ...ride,
-        paymentTxId: tx.id,
-        pixQrCode: tx.pixQrCode,
-        pixCopyPaste: tx.pixCopyPaste,
-        commissionPercent: split.commissionPercent,
-        commissionAmount: split.commissionAmount,
-        driverNetAmount: split.driverNetAmount
-      });
-      return sendJson(res, 200, { ok: true, tx, ride: updated });
+      try {
+        const { tx, split } = await finance.createPixChargeForRide(ride);
+        const updated = await upsertFullRide({
+          ...ride,
+          paymentTxId: tx.id,
+          pixQrCode: tx.pixQrCode,
+          pixCopyPaste: tx.pixCopyPaste,
+          commissionPercent: split.commissionPercent,
+          commissionAmount: split.commissionAmount,
+          driverNetAmount: split.driverNetAmount
+        });
+        return sendJson(res, 200, { ok: true, tx, ride: updated });
+      } catch (err) {
+        return sendJson(res, 402, { ok: false, error: err?.message || 'Erro ao gerar cobrança PIX no gateway.' });
+      }
     }
 
     if (pathname === '/api/payments/cards') {
@@ -4345,6 +6075,114 @@ async function handleApiRequest(req, res) {
       }
     }
 
+    // WEBHOOK OFICIAL STRIPE (ASSINATURA CRIPTOGRÁFICA Stripe-Signature + RAW BODY)
+    if (pathname === '/api/webhooks/stripe' && method === 'POST') {
+      const rawBody = await readRawBodyBuffer(req);
+      const sigHeader = String(req.headers['stripe-signature'] || '').trim();
+      let event;
+      try {
+        event = stripeGateway.constructWebhookEvent(rawBody, sigHeader);
+      } catch (err) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: err?.message || 'Assinatura Stripe-Signature inválida.'
+        });
+      }
+
+      const evtType = String(event?.type || '');
+      const evtObj = event?.data?.object || {};
+
+      if (evtType === 'payment_intent.succeeded') {
+        const pi = evtObj;
+        const meta = pi.metadata || {};
+        const paidBrl = stripeGateway.toBrlFromCents(pi.amount_received || pi.amount || 0);
+
+        if (meta.purpose === 'driver_debt_pix' && meta.driverId) {
+          const result = await finance.confirmDriverDebtSettlementWebhook({
+            driverId: String(meta.driverId),
+            amount: paidBrl,
+            gatewayTxId: String(pi.id)
+          });
+          await audit.recordAuditEvent({
+            category: 'financeiro_corridas',
+            actionKey: 'driver_debt_settled',
+            title: 'Quitação de dívida de motorista via PIX (Stripe)',
+            summary: `Dívida de ${result.wallet?.driverName || meta.driverId} quitada via Stripe PIX em ${audit.formatMoneyPt(paidBrl)}. Saldo devedor atual: ${audit.formatMoneyPt(result.wallet?.debtBalance || 0)}.`,
+            severity: 'info',
+            actorRole: 'gateway',
+            actorId: String(meta.driverId),
+            actorName: 'Stripe Webhook',
+            entityType: 'motorista',
+            entityId: String(meta.driverId),
+            entityLabel: result.wallet?.driverName || String(meta.driverId),
+            relatedIds: { driverId: String(meta.driverId), gatewayTxId: String(pi.id), ledgerId: result.entry?.id || null },
+            ipAddress: getRequestClientIp(req),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+          });
+          return sendJson(res, 200, { ok: true, received: true, type: 'driver_debt_pix', ...result });
+        }
+
+        let targetRideId = meta.rideId ? normalizeRideId(meta.rideId) : '';
+        if (!targetRideId && pi.id) {
+          const matchedTx = await finance.getPaymentTxByGatewayTxId(pi.id);
+          if (matchedTx?.rideId) targetRideId = matchedTx.rideId;
+        }
+        if (targetRideId) {
+          const settlement = await confirmDigitalRidePaymentAndPublish({
+            rideId: targetRideId,
+            paidAmountBrl: paidBrl,
+            gatewayTxId: String(pi.id),
+            gatewayLabel: 'Stripe'
+          });
+          return sendJson(res, 200, { ok: true, received: true, eventType: evtType, ...settlement });
+        }
+        return sendJson(res, 200, { ok: true, received: true, eventType: evtType, ignored: true });
+      }
+
+      if (evtType === 'payment_intent.payment_failed' || evtType === 'payment_intent.canceled') {
+        const pi = evtObj;
+        const tx = pi?.id ? await finance.getPaymentTxByGatewayTxId(pi.id) : null;
+        if (tx && tx.status === 'aguardando') {
+          await finance.savePaymentTransaction({
+            ...tx,
+            status: evtType === 'payment_intent.canceled' ? 'cancelado' : 'falhou',
+            failureReason: pi.last_payment_error?.message || (evtType === 'payment_intent.canceled' ? 'PIX expirado ou cancelado na Stripe' : 'Falha no pagamento Stripe')
+          });
+        }
+        return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
+      }
+
+      if (evtType === 'charge.refunded') {
+        const ch = evtObj;
+        const piId = typeof ch.payment_intent === 'string' ? ch.payment_intent : ch.payment_intent?.id;
+        const tx = piId ? await finance.getPaymentTxByGatewayTxId(piId) : null;
+        if (tx) {
+          await finance.savePaymentTransaction({
+            ...tx,
+            status: 'reembolsado',
+            refundedAmount: stripeGateway.toBrlFromCents(ch.amount_refunded || ch.amount || 0)
+          });
+        }
+        return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
+      }
+
+      if (evtType === 'charge.dispute.created') {
+        const disp = evtObj;
+        const piId = typeof disp.payment_intent === 'string' ? disp.payment_intent : disp.payment_intent?.id;
+        const tx = piId ? await finance.getPaymentTxByGatewayTxId(piId) : null;
+        if (tx) {
+          await finance.savePaymentTransaction({
+            ...tx,
+            status: 'contestado',
+            disputeReason: disp.reason || 'Contestação aberta na Stripe'
+          });
+        }
+        return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
+      }
+
+      return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
+    }
+
     // WEBHOOK UNIFICADO DO GATEWAY (PIX, CARTÃO, QUITAÇÃO DE DÍVIDA) — COM IDEMPOTÊNCIA E AUTENTICAÇÃO
     if ((pathname === '/api/payments/webhook' || pathname === '/api/webhooks/mercadopago') && (method === 'POST' || method === 'GET')) {
       const body = method === 'POST' ? await parseBody(req) : {};
@@ -4371,55 +6209,18 @@ async function handleApiRequest(req, res) {
         if (payment.status !== 'approved' || !payment.external_reference) {
           return sendJson(res, 200, { ok: true, status: payment.status });
         }
-        const mpRideId = normalizeRideId(payment.external_reference);
-        const mpPaidAmount = payment.transaction_amount;
-        const mpPrev = await db.query('SELECT * FROM public.rides WHERE id = $1', [mpRideId]);
-        if (!mpPrev.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
-        const beforeMp = formatRideFromDb(mpPrev.rows[0]);
-        if (beforeMp.paymentStatus === 'confirmado' || beforeMp.paymentStatus === 'pago') {
-          return sendJson(res, 200, { ok: true, idempotent: true, ride: beforeMp });
-        }
-        const finalValMp = mpPaidAmount ? finance.round2(mpPaidAmount) : beforeMp.totalPrice;
-        const splitMp = finance.calculateSplit(finalValMp, beforeMp.commissionPercent ?? 20);
-        const nextStatusMp = beforeMp.status === 'aguardando_pagamento' ? 'aguardando_confirmacao' : beforeMp.status;
-        const updatedMp = await upsertFullRide({
-          ...beforeMp,
-          totalPrice: finalValMp,
-          paidAmount: finalValMp,
-          commissionPercent: splitMp.commissionPercent,
-          commissionAmount: splitMp.commissionAmount,
-          driverNetAmount: splitMp.driverNetAmount,
-          paymentStatus: 'confirmado',
-          status: nextStatusMp
+        const mpResult = await confirmDigitalRidePaymentAndPublish({
+          rideId: payment.external_reference,
+          paidAmountBrl: payment.transaction_amount,
+          gatewayTxId: String(paymentId),
+          gatewayLabel: 'Mercado Pago'
         });
-        const txMp = await finance.getPaymentTxByRide(mpRideId);
-        await finance.savePaymentTransaction({
-          ...(txMp || {}),
-          rideId: mpRideId,
-          rideCode: updatedMp.rideCode,
-          driverId: updatedMp.driverId || null,
-          driverName: updatedMp.driverName || null,
-          clientId: updatedMp.clientId || null,
-          clientName: updatedMp.clientName,
-          method: updatedMp.paymentMethod || 'pix',
-          status: 'confirmado',
-          estimatedAmount: updatedMp.estimatedPrice || updatedMp.totalPrice,
-          finalAmount: finalValMp,
-          paidAmount: finalValMp,
-          commissionPercent: splitMp.commissionPercent,
-          commissionAmount: splitMp.commissionAmount,
-          driverNetAmount: splitMp.driverNetAmount,
-          gatewayTxId: String(paymentId)
-        });
-        if (updatedMp.driverId) {
-          await finance.settleDigitalRideToLedger(updatedMp, finalValMp);
-        }
-        await push.handleRideChange(beforeMp, updatedMp, { source: 'webhook' });
-        return sendJson(res, 200, { ok: true, ride: updatedMp, split: splitMp });
+        if (!mpResult.found) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+        return sendJson(res, 200, mpResult);
       }
 
-      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem MP Live) pelo dono autenticado
-      const isSandboxMode = !env.MERCADOPAGO_ACCESS_TOKEN;
+      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem Stripe/MP Live) pelo dono autenticado
+      const isSandboxMode = !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
 
       // 1) Quitação de dívida de motorista via PIX
       if (eventType === 'debt.confirmed' && body.driverId) {
@@ -4487,71 +6288,13 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Webhook não autorizado. Utilize o endpoint oficial com assinatura válida.' });
       }
 
-      // Idempotência: se o PIX já foi confirmado anteriormente, não duplica lançamento
-      if (eventType === 'payment.confirmed' && (before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago')) {
-        return sendJson(res, 200, { ok: true, idempotent: true, ride: before });
-      }
-
-      const finalVal = paidAmount ? finance.round2(paidAmount) : before.totalPrice;
-      const split = finance.calculateSplit(finalVal, before.commissionPercent ?? 20);
-
-      // Libera a corrida pré-paga para tocar no radar dos motoristas!
-      const nextRideStatus = before.status === 'aguardando_pagamento' ? 'aguardando_confirmacao' : before.status;
-
-      const updatedRide = await upsertFullRide({
-        ...before,
-        totalPrice: finalVal,
-        paidAmount: finalVal,
-        commissionPercent: split.commissionPercent,
-        commissionAmount: split.commissionAmount,
-        driverNetAmount: split.driverNetAmount,
-        paymentStatus: 'confirmado',
-        status: nextRideStatus
-      });
-
-      const tx = await finance.getPaymentTxByRide(rideId);
-      await finance.savePaymentTransaction({
-        ...(tx || {}),
+      const settlement = await confirmDigitalRidePaymentAndPublish({
         rideId,
-        rideCode: updatedRide.rideCode,
-        driverId: updatedRide.driverId || null,
-        driverName: updatedRide.driverName || null,
-        clientId: updatedRide.clientId || null,
-        clientName: updatedRide.clientName,
-        method: updatedRide.paymentMethod || 'pix',
-        status: 'confirmado',
-        estimatedAmount: updatedRide.estimatedPrice || updatedRide.totalPrice,
-        finalAmount: finalVal,
-        paidAmount: finalVal,
-        commissionPercent: split.commissionPercent,
-        commissionAmount: split.commissionAmount,
-        driverNetAmount: split.driverNetAmount,
-        gatewayTxId: body.gatewayTxId || tx?.gatewayTxId || `gw_pix_${rideId}`
+        paidAmountBrl: paidAmount,
+        gatewayTxId: body.gatewayTxId,
+        gatewayLabel: 'PIX'
       });
-
-      // Se já houver motorista vinculado, credita imediatamente no Livro-Razão com split
-      if (updatedRide.driverId) {
-        await finance.settleDigitalRideToLedger(updatedRide, finalVal);
-      }
-
-      await db.query(
-        `INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp)
-         VALUES ($1, $2, $3, 'payment', $4, false, NOW())`,
-        [
-          `notif-pix-${Date.now()}`,
-          `💰 PIX Confirmado pelo Gateway: ${updatedRide.rideCode}`,
-          `${updatedRide.clientName} pagou R$ ${finalVal.toFixed(2)} via PIX (Líquido Motorista: R$ ${split.driverNetAmount.toFixed(2)}). Corrida liberada!`,
-          rideId
-        ]
-      ).catch(() => {});
-
-      await push.handleRideChange(before, updatedRide, { source: 'webhook' });
-      realtimeHub.publish(
-        'ride:updated',
-        { rideId: updatedRide.id, status: updatedRide.status, paymentStatus: updatedRide.paymentStatus },
-        { rideId: updatedRide.id }
-      );
-      return sendJson(res, 200, { ok: true, ride: updatedRide, split });
+      return sendJson(res, 200, settlement);
     }
 
     const ridePaymentMatch = pathname.match(/^\/api\/rides\/([^/]+)\/payment$/);
@@ -4940,7 +6683,7 @@ async function handleApiRequest(req, res) {
 
     // 5. CLIENTS & AUTHENTICATION
     if (pathname === '/api/clients/register' && method === 'POST') {
-      const regLimit = security.checkRateLimit('cli_reg', getRequestClientIp(req), 10, 10 * 60 * 1000);
+      const regLimit = await security.checkRateLimitAsync('cli_reg', getRequestClientIp(req), 10, 10 * 60 * 1000);
       if (!regLimit.allowed) {
         return sendJson(res, 429, { ok: false, error: 'Muitas tentativas de cadastro. Aguarde alguns minutos.' });
       }
@@ -4960,6 +6703,9 @@ async function handleApiRequest(req, res) {
       if (!name || cleanPhone.length < 10) {
         return sendJson(res, 400, { ok: false, error: 'Informe nome completo e WhatsApp válido com DDD.' });
       }
+      if (!isValidCpfDigits(document)) {
+        return sendJson(res, 400, { ok: false, error: 'Informe um CPF válido (11 dígitos).' });
+      }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return sendJson(res, 400, { ok: false, error: 'Informe um endereço de e-mail válido.' });
       }
@@ -4974,8 +6720,9 @@ async function handleApiRequest(req, res) {
         `SELECT * FROM public.clients
          WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
             OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+            OR ($3 <> '' AND regexp_replace(COALESCE(document, ''), '\\D', '', 'g') = $3)
          LIMIT 1`,
-        [cleanPhone, email]
+        [cleanPhone, email, document]
       );
 
       const passwordHash = hashPassword(password);
@@ -4988,8 +6735,8 @@ async function handleApiRequest(req, res) {
           ok: false,
           code: existing.password_hash ? 'ACCOUNT_EXISTS' : 'PASSWORD_SETUP_REQUIRED',
           error: existing.password_hash
-            ? 'Já existe uma conta cadastrada com este WhatsApp ou E-mail. Faça login com sua senha.'
-            : 'Este WhatsApp ou E-mail já possui pré-cadastro no sistema. Use "Esqueci minha senha / Criar senha" para definir sua senha com código OTP.'
+            ? 'Já existe uma conta cadastrada com este CPF, WhatsApp ou E-mail. Faça login com sua senha.'
+            : 'Este CPF, WhatsApp ou E-mail já possui pré-cadastro no sistema. Use "Esqueci minha senha / Criar senha" para definir sua senha com código OTP.'
         });
       } else {
         const newId = body.id || `cli-${Date.now()}`;
@@ -5023,6 +6770,54 @@ async function handleApiRequest(req, res) {
         savedClientRow = insertRes.rows[0];
       }
 
+      // Vinculação automática ao Perfil Familiar (se veio pelo link rastreável ?convite / familyInviteToken OU pelo telefone convidado)
+      let linkedFamilyMember = null;
+      try {
+        let matchedInvite = null;
+        const inviteTokenReq = String(body.familyInviteToken || '').trim();
+        if (inviteTokenReq) {
+          const invRes = await db.query(
+            'SELECT * FROM public.family_members WHERE invite_token = $1 LIMIT 1',
+            [inviteTokenReq]
+          );
+          if (invRes.rows[0] && invRes.rows[0].status !== 'revogado') {
+            matchedInvite = invRes.rows[0];
+          }
+        }
+        if (!matchedInvite) {
+          const pendingRes = await db.query(
+            "SELECT * FROM public.family_members WHERE status != 'revogado'"
+          );
+          matchedInvite = (pendingRes.rows || []).find(
+            (m) => normalizePhoneDigitsServer(m.teen_phone || '') === cleanPhone && m.status === 'convite_enviado'
+          ) || null;
+        }
+        if (matchedInvite) {
+          savedClientRow = (await activateTeenAccountLink(matchedInvite, savedClientRow)) || savedClientRow;
+          linkedFamilyMember = {
+            id: matchedInvite.id,
+            guardianId: matchedInvite.guardian_id,
+            guardianName: matchedInvite.guardian_name
+          };
+          await audit.recordAuditEvent({
+            category: 'seguranca',
+            actionKey: 'family_teen_linked',
+            title: `Conta Adolescente vinculada ao Perfil Familiar (${name})`,
+            summary: `Adolescente ${name} concluiu cadastro e vinculou-se ao responsável ${matchedInvite.guardian_name || matchedInvite.guardian_id}.`,
+            severity: 'info',
+            actorRole: 'passageiro',
+            actorId: savedClientRow.id,
+            actorName: name,
+            entityType: 'passageiro',
+            entityId: savedClientRow.id,
+            entityLabel: name,
+            relatedIds: { guardianId: matchedInvite.guardian_id, familyMemberId: matchedInvite.id }
+          }).catch(() => {});
+        }
+      } catch {
+        // segue registro padrão
+      }
+
       const sanitizedClient = sanitizeClientRow(savedClientRow, false);
       const docSummary = sanitizedClient.document ? ` • CPF: ${sanitizedClient.document}` : '';
       const termCode = sanitizedClient.termsSignature?.validationCode ? ` • Termo: ${sanitizedClient.termsSignature.validationCode}` : '';
@@ -5039,12 +6834,13 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, {
         ok: true,
         client: sanitizedClient,
+        linkedFamilyMember,
         clientToken: signUserRoleToken('client', sanitizedClient)
       });
     }
 
     if (pathname === '/api/clients/check' && (method === 'POST' || method === 'GET')) {
-      const checkLimit = security.checkRateLimit('cli_check', getRequestClientIp(req), 30, 5 * 60 * 1000);
+      const checkLimit = await security.checkRateLimitAsync('cli_check', getRequestClientIp(req), 30, 5 * 60 * 1000);
       if (!checkLimit.allowed) {
         return sendJson(res, 429, { ok: false, error: 'Muitas consultas em sequência. Aguarde alguns instantes.' });
       }
@@ -5089,7 +6885,7 @@ async function handleApiRequest(req, res) {
     }
 
     if (pathname === '/api/clients/login' && method === 'POST') {
-      const loginLimit = security.checkRateLimit('cli_login', getRequestClientIp(req), 25, 10 * 60 * 1000);
+      const loginLimit = await security.checkRateLimitAsync('cli_login', getRequestClientIp(req), 25, 10 * 60 * 1000);
       if (!loginLimit.allowed) {
         return sendJson(res, 429, { ok: false, error: 'Muitas tentativas de login. Aguarde alguns minutos.' });
       }
@@ -5190,11 +6986,12 @@ async function handleApiRequest(req, res) {
           });
         }
         const existingPhoneDigits = String(existingByEmail.phone || '').replace(/\D/g, '');
+        const existingDocDigits = String(existingByEmail.document || '').replace(/\D/g, '');
         const hasTerms = Boolean(
           existingByEmail.terms_accepted_at ||
           (existingByEmail.terms_signature && existingByEmail.terms_signature.signed)
         );
-        if (existingPhoneDigits.length >= 10 && hasTerms) {
+        if (existingPhoneDigits.length >= 10 && isValidCpfDigits(existingDocDigits) && hasTerms) {
           const existingSanitized = sanitizeClientRow(existingByEmail, false);
           return sendJson(res, 200, {
             ok: true,
@@ -5208,9 +7005,14 @@ async function handleApiRequest(req, res) {
       const finalName = String(body.name || existingByEmail?.name || googleCheck.name || '').trim();
       const rawPhone = String(body.phone || existingByEmail?.phone || '').trim();
       const cleanPhone = rawPhone.replace(/\D/g, '');
+      const rawDocument = String(body.document || existingByEmail?.document || '').replace(/\D/g, '');
       const acceptedTerms = Boolean(body.termsAcceptance && body.termsAcceptance.accepted === true);
 
-      if (!finalName || cleanPhone.length < 10 || !acceptedTerms) {
+      if (body.document !== undefined && !isValidCpfDigits(rawDocument)) {
+        return sendJson(res, 400, { ok: false, error: 'Informe um CPF válido (11 dígitos).' });
+      }
+
+      if (!finalName || cleanPhone.length < 10 || !isValidCpfDigits(rawDocument) || !acceptedTerms) {
         return sendJson(res, 200, {
           ok: true,
           needsRegistration: true,
@@ -5218,7 +7020,8 @@ async function handleApiRequest(req, res) {
             email: googleEmail,
             name: finalName || googleCheck.name,
             picture: googleCheck.picture || '',
-            existingPhone: existingByEmail?.phone || ''
+            existingPhone: existingByEmail?.phone || '',
+            existingDocument: existingByEmail?.document || ''
           }
         });
       }
@@ -5233,9 +7036,9 @@ async function handleApiRequest(req, res) {
         const phoneRes = await db.query(
           `SELECT * FROM public.clients
            WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
-              OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+              OR ($2 <> '' AND regexp_replace(COALESCE(document, ''), '\\D', '', 'g') = $2)
            LIMIT 1`,
-          [cleanPhone, '']
+          [cleanPhone, rawDocument]
         );
         const existingByPhone = phoneRes.rows[0] || null;
         if (existingByPhone) {
@@ -5249,13 +7052,13 @@ async function handleApiRequest(req, res) {
           if (existingEmailNorm && existingEmailNorm !== googleEmail) {
             return sendJson(res, 409, {
               ok: false,
-              error: 'Este WhatsApp já está vinculado a outro e-mail cadastrado. Entre com sua senha ou use outro número.'
+              error: 'Este WhatsApp ou CPF já está vinculado a outro e-mail cadastrado. Entre com sua senha ou use outro dado.'
             });
           }
           if (existingByPhone.password_hash) {
             return sendJson(res, 409, {
               ok: false,
-              error: 'Já existe uma conta cadastrada com este WhatsApp. Faça login com sua senha pelo WhatsApp.'
+              error: 'Já existe uma conta cadastrada com este WhatsApp ou CPF. Faça login com sua senha.'
             });
           }
           targetRow = existingByPhone;
@@ -5266,10 +7069,11 @@ async function handleApiRequest(req, res) {
       let savedClientRow = null;
 
       if (targetRow) {
+        const finalDoc = rawDocument || String(targetRow.document || '').replace(/\D/g, '');
         const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
           clientId: targetRow.id,
           name: finalName,
-          document: targetRow.document || '',
+          document: finalDoc,
           phone: rawPhone,
           email: googleEmail,
           ip: clientIp,
@@ -5287,7 +7091,7 @@ async function handleApiRequest(req, res) {
             finalName,
             rawPhone,
             googleEmail,
-            targetRow.document || null,
+            finalDoc || null,
             nextHash,
             termsSignature.signedAt,
             JSON.stringify(termsSignature),
@@ -5300,7 +7104,7 @@ async function handleApiRequest(req, res) {
         const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
           clientId: newId,
           name: finalName,
-          document: '',
+          document: rawDocument,
           phone: rawPhone,
           email: googleEmail,
           ip: clientIp,
@@ -5318,7 +7122,7 @@ async function handleApiRequest(req, res) {
             finalName,
             rawPhone,
             googleEmail,
-            null,
+            rawDocument || null,
             randomHash,
             JSON.stringify([]),
             termsSignature.signedAt,
@@ -5386,30 +7190,59 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Confirmação de senha inválida. Faça login novamente.' });
       }
 
+      const cleanDoc = body.document !== undefined
+        ? String(body.document || '').replace(/\D/g, '')
+        : String(currentRow.document || '').replace(/\D/g, '');
+      if (!isValidCpfDigits(cleanDoc)) {
+        return sendJson(res, 400, { ok: false, error: 'Informe um CPF válido (11 dígitos).' });
+      }
+
       const conflictRes = await db.query(
-        `SELECT id, phone, email FROM public.clients
+        `SELECT id, phone, email, document FROM public.clients
          WHERE regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = $1
             OR ($2 <> '' AND LOWER(COALESCE(email, '')) = $2)
+            OR ($3 <> '' AND regexp_replace(COALESCE(document, ''), '\\D', '', 'g') = $3)
          LIMIT 1`,
-        [cleanPhone, email]
+        [cleanPhone, email, cleanDoc]
       );
       const conflict = conflictRes.rows[0];
       if (conflict && conflict.id !== currentRow.id) {
         return sendJson(res, 409, {
           ok: false,
-          error: 'Este WhatsApp ou E-mail já está vinculado a outra conta.'
+          error: 'Este CPF, WhatsApp ou E-mail já está vinculado a outra conta.'
         });
       }
 
       const nextName = name || currentRow.name || 'Passageiro Kavro';
+      let nextTermsSignature = currentRow.terms_signature || null;
+      if (nextTermsSignature && nextTermsSignature.signed && !nextTermsSignature.passengerSnapshot?.rawCpf) {
+        const rebuilt = passengerTermsContract.buildPassengerTermsSignature({
+          clientId: currentRow.id,
+          name: nextName,
+          document: cleanDoc,
+          phone: rawPhone,
+          email,
+          ip: getRequestClientIp(req),
+          userAgent: req.headers['user-agent'],
+          host: req.headers.host,
+          clientAcceptance: {
+            acceptedAtClient: nextTermsSignature.technicalEvidence?.clientAcceptedAt,
+            affirmativeText: nextTermsSignature.affirmativeAction,
+            language: nextTermsSignature.technicalEvidence?.language,
+            timezone: nextTermsSignature.technicalEvidence?.timezone
+          }
+        });
+        nextTermsSignature = rebuilt;
+      }
+
       const updated = await db.query(
         `UPDATE public.clients
-         SET name = $1, phone = $2, email = $3
-         WHERE id = $4
+         SET name = $1, phone = $2, email = $3, document = $4, terms_signature = COALESCE($5, terms_signature)
+         WHERE id = $6
          RETURNING *`,
-        [nextName, rawPhone, email, currentRow.id]
+        [nextName, rawPhone, email, cleanDoc, nextTermsSignature ? JSON.stringify(nextTermsSignature) : null, currentRow.id]
       );
-      const savedRow = updated.rows[0] || { ...currentRow, name: nextName, phone: rawPhone, email };
+      const savedRow = updated.rows[0] || { ...currentRow, name: nextName, phone: rawPhone, email, document: cleanDoc, terms_signature: nextTermsSignature };
       const sanitizedContactClient = sanitizeClientRow(savedRow, false);
       return sendJson(res, 200, {
         ok: true,
@@ -5560,6 +7393,9 @@ async function handleApiRequest(req, res) {
         const cleanNewDoc = String(body.document).replace(/\D/g, '');
         const cleanOldDoc = String(currentRow.document || '').replace(/\D/g, '');
         if (cleanNewDoc !== cleanOldDoc) {
+          if (!isValidCpfDigits(cleanNewDoc)) {
+            return sendJson(res, 400, { ok: false, error: 'Informe um CPF válido (11 dígitos).' });
+          }
           requestedFields.document = cleanNewDoc;
           previousValues.document = currentRow.document || '';
         }
@@ -5598,6 +7434,713 @@ async function handleApiRequest(req, res) {
         ok: true,
         client: sanitizeClientRow(savedRow, isAdmin),
         profileChangeRequest
+      });
+    }
+
+    // CONTATOS DE CONFIANÇA DO PASSAGEIRO (COMPARTILHAMENTO AUTOMÁTICO VIA API)
+    const cliTrustedMatch = pathname.match(/^\/api\/clients\/([^/]+)\/trusted-contacts$/);
+    if (cliTrustedMatch && (method === 'GET' || method === 'PUT' || method === 'POST')) {
+      await ensureClientsSchema();
+      const clientId = decodeURIComponent(cliTrustedMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== clientId)) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para gerenciar seus contatos de confiança.' });
+      }
+
+      const clientRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [clientId]);
+      const clientRow = clientRes.rows[0];
+      if (!clientRow) {
+        return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+      }
+
+      if (method === 'GET') {
+        const contacts = Array.isArray(clientRow.trusted_contacts)
+          ? clientRow.trusted_contacts
+          : (Array.isArray(clientRow.trustedContacts) ? clientRow.trustedContacts : []);
+        return sendJson(res, 200, { ok: true, trustedContacts: contacts });
+      }
+
+      const body = await parseBody(req);
+      const rawList = Array.isArray(body.trustedContacts) ? body.trustedContacts : [];
+      if (rawList.length > 5) {
+        return sendJson(res, 400, { ok: false, error: 'É permitido cadastrar no máximo 5 contatos de confiança.' });
+      }
+
+      const cleanList = [];
+      for (let i = 0; i < rawList.length; i++) {
+        const item = rawList[i] || {};
+        const name = String(item.name || '').trim();
+        const phone = String(item.phone || '').trim();
+        const phoneDigits = phone.replace(/\D/g, '');
+        if (name.length < 2) {
+          return sendJson(res, 400, { ok: false, error: 'Informe um nome válido para cada contato de confiança.' });
+        }
+        if (phoneDigits.length < 10) {
+          return sendJson(res, 400, { ok: false, error: `Informe um WhatsApp válido com DDD para ${name}.` });
+        }
+        cleanList.push({
+          id: String(item.id || `tc-${Date.now()}-${i}`),
+          name,
+          relationship: String(item.relationship || 'Familiar').trim(),
+          phone,
+          autoShareAllRides: item.autoShareAllRides !== false,
+          autoShareNightOnly: Boolean(item.autoShareNightOnly),
+          notifyOnAnomalyOrSos: item.notifyOnAnomalyOrSos !== false,
+          createdAt: item.createdAt || new Date().toISOString()
+        });
+      }
+
+      const updRes = await db.query(
+        'UPDATE public.clients SET trusted_contacts = $1 WHERE id = $2 RETURNING *',
+        [JSON.stringify(cleanList), clientId]
+      );
+      const savedRow = updRes.rows[0] || { ...clientRow, trusted_contacts: cleanList };
+
+      await audit.recordAuditEvent({
+        category: 'sistema',
+        actionKey: 'trusted_contacts_updated',
+        title: `Contatos de confiança atualizados (${clientRow.name})`,
+        summary: `${cleanList.length} contato(s) configurados para compartilhamento automático de rota pela API.`,
+        severity: 'info',
+        actorRole: isAdmin ? 'admin_master' : 'passageiro',
+        actorId: isAdmin ? 'admin-master' : clientId,
+        actorName: isAdmin ? 'Administrador Master' : clientRow.name,
+        entityType: 'passageiro',
+        entityId: clientId,
+        entityLabel: clientRow.name
+      }).catch(() => {});
+
+      return sendJson(res, 200, {
+        ok: true,
+        trustedContacts: cleanList,
+        client: sanitizeClientRow(savedRow, isAdmin)
+      });
+    }
+
+    // Preferências de Segurança Completa do Passageiro (K-Código, K-Áudio, Contatos de Emergência, K-Ajuda, Perfil Familiar)
+    const clientSafetyMatch = pathname.match(/^\/api\/clients\/([^/]+)\/safety$/);
+    if (clientSafetyMatch && (method === 'GET' || method === 'PUT' || method === 'POST')) {
+      await ensureClientsSchema();
+      const clientId = decodeURIComponent(clientSafetyMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== clientId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão inválida para gerenciar segurança do passageiro.' });
+      }
+
+      const clientRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [clientId]);
+      const clientRow = clientRes.rows[0];
+      if (!clientRow) {
+        return sendJson(res, 404, { ok: false, error: 'Passageiro não encontrado.' });
+      }
+
+      const existingSafety = normalizeSafetyPreferencesServer(
+        clientRow.safety_preferences || clientRow.safetyPreferences
+      );
+      const existingEmergency = Array.isArray(clientRow.emergency_contacts)
+        ? clientRow.emergency_contacts
+        : (Array.isArray(clientRow.emergencyContacts) ? clientRow.emergencyContacts : []);
+
+      if (method === 'GET') {
+        return sendJson(res, 200, {
+          ok: true,
+          safetyPreferences: existingSafety,
+          emergencyContacts: existingEmergency,
+          trustedContacts: Array.isArray(clientRow.trusted_contacts) ? clientRow.trusted_contacts : [],
+          client: sanitizeClientRow(clientRow, isAdmin)
+        });
+      }
+
+      const body = await parseBody(req);
+      let nextEmergencyList = existingEmergency;
+      if (body.emergencyContacts !== undefined) {
+        const rawEmerg = Array.isArray(body.emergencyContacts) ? body.emergencyContacts : [];
+        if (rawEmerg.length > 5) {
+          return sendJson(res, 400, { ok: false, error: 'É permitido cadastrar no máximo 5 contatos de emergência.' });
+        }
+        nextEmergencyList = [];
+        for (let i = 0; i < rawEmerg.length; i++) {
+          const item = rawEmerg[i] || {};
+          const name = String(item.name || '').trim();
+          const phone = String(item.phone || '').trim();
+          const phoneDigits = phone.replace(/\D/g, '');
+          if (name.length < 2) {
+            return sendJson(res, 400, { ok: false, error: 'Informe um nome válido para cada contato de emergência.' });
+          }
+          if (phoneDigits.length < 10) {
+            return sendJson(res, 400, { ok: false, error: `Informe um telefone/WhatsApp válido para ${name}.` });
+          }
+          nextEmergencyList.push({
+            id: String(item.id || `ec-${Date.now()}-${i}`),
+            name,
+            phone,
+            relationship: String(item.relationship || 'Emergência').trim(),
+            createdAt: item.createdAt || new Date().toISOString()
+          });
+        }
+      }
+
+      if (body.safetyPreferences?.customBoardingPin !== undefined && body.safetyPreferences.customBoardingPin !== '') {
+        const cleanPinTest = String(body.safetyPreferences.customBoardingPin).replace(/\D/g, '');
+        if (!/^\d{4}$/.test(cleanPinTest)) {
+          return sendJson(res, 400, { ok: false, error: 'O código K-Código precisa ter exatamente 4 números.' });
+        }
+      }
+
+      const nextSafetyPrefs = normalizeSafetyPreferencesServer(body.safetyPreferences || {}, existingSafety);
+
+      const updRes = await db.query(
+        'UPDATE public.clients SET safety_preferences = $1, emergency_contacts = $2 WHERE id = $3 RETURNING *',
+        [JSON.stringify(nextSafetyPrefs), JSON.stringify(nextEmergencyList), clientId]
+      );
+      const savedRow = updRes.rows[0] || {
+        ...clientRow,
+        safety_preferences: nextSafetyPrefs,
+        emergency_contacts: nextEmergencyList
+      };
+
+      // Sincroniza corridas ainda não iniciadas (pré-embarque) para que K-Código ON/OFF/Alteração valha imediatamente
+      try {
+        const openRes = await db.query('SELECT * FROM public.rides');
+        const preBoardingStatuses = new Set([
+          'aguardando_pagamento',
+          'aguardando_confirmacao',
+          'aguardando',
+          'confirmada',
+          'a_caminho',
+          'no_local'
+        ]);
+        for (const rRow of openRes.rows) {
+          const rideObj = formatRideFromDb(rRow);
+          if (!rideObj || rideObj.isManualBooking) continue;
+          if (rideObj.clientId !== clientId) continue;
+          if (!preBoardingStatuses.has(rideObj.status)) continue;
+
+          const curSnap = rideObj.appliedFareSnapshot && typeof rideObj.appliedFareSnapshot === 'object'
+            ? { ...rideObj.appliedFareSnapshot }
+            : {};
+          const wantsPin = nextSafetyPrefs.familySafetyEnabled || nextSafetyPrefs.boardingPinEnabled !== false;
+          const targetPin = wantsPin
+            ? (nextSafetyPrefs.customBoardingPin || curSnap.boardingPin || String(crypto.randomInt(1000, 9999)))
+            : null;
+          if ((curSnap.boardingPin || null) !== targetPin) {
+            if (targetPin) {
+              curSnap.boardingPin = targetPin;
+            } else {
+              delete curSnap.boardingPin;
+            }
+            const updRideRes = await db.query(
+              'UPDATE public.rides SET applied_fare_snapshot = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+              [JSON.stringify(curSnap), rideObj.id]
+            );
+            const enrichedUpd = updRideRes.rows[0] ? formatRideFromDb(updRideRes.rows[0]) : { ...rideObj, appliedFareSnapshot: curSnap };
+            realtimeHub.publish(
+              'ride:updated',
+              {
+                ride: security.sanitizeRideForViewer(enrichedUpd, { isOwnerClient: true }),
+                driverRide: security.sanitizeRideForViewer(enrichedUpd, { isAssignedDriver: true })
+              },
+              { rideId: rideObj.id, clientId: rideObj.clientId || undefined, driverId: rideObj.driverId || undefined }
+            );
+          }
+        }
+      } catch {
+        // segue fluxo mesmo se não houver corridas abertas
+      }
+
+      await audit.recordAuditEvent({
+        category: 'sistema',
+        actionKey: 'safety_preferences_updated',
+        title: `Central de Segurança atualizada (${clientRow.name})`,
+        summary: `K-Código=${nextSafetyPrefs.boardingPinEnabled ? 'ON' : 'OFF'}, K-Áudio=${nextSafetyPrefs.audioRecordingEnabled ? 'ON' : 'OFF'}, K-Ajuda=${nextSafetyPrefs.rideCheckEnabled ? 'ON' : 'OFF'}, Emergência=${nextEmergencyList.length}.`,
+        severity: 'info',
+        actorRole: isAdmin ? 'admin_master' : 'passageiro',
+        actorId: isAdmin ? 'admin-master' : clientId,
+        actorName: isAdmin ? 'Administrador Master' : clientRow.name,
+        entityType: 'passageiro',
+        entityId: clientId,
+        entityLabel: clientRow.name
+      }).catch(() => {});
+
+      return sendJson(res, 200, {
+        ok: true,
+        safetyPreferences: nextSafetyPrefs,
+        emergencyContacts: nextEmergencyList,
+        client: sanitizeClientRow(savedRow, isAdmin)
+      });
+    }
+
+    // Registro de Gravação K-Áudio de Segurança vinculada à corrida
+    const safetyAudioMatch = pathname.match(/^\/api\/rides\/([^/]+)\/safety-audio$/);
+    if (safetyAudioMatch && method === 'POST') {
+      const id = normalizeRideId(decodeURIComponent(safetyAudioMatch[1]));
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      const driverSession = verifyDriverToken(req);
+
+      const curRes = await db.query('SELECT * FROM public.rides WHERE id = $1 LIMIT 1', [id]);
+      const row = curRes.rows[0];
+      if (!row) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const ride = formatRideFromDb(row);
+      const isOwnClient = Boolean(clientSession && ride.clientId && clientSession.sub === ride.clientId);
+      const isAssignedDriver = Boolean(driverSession && ride.driverId && driverSession.sub === ride.driverId);
+      if (!isAdmin && !isOwnClient && !isAssignedDriver) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para registrar áudio desta viagem.' });
+      }
+
+      const body = await parseBody(req);
+      const record = {
+        id: String(body.id || `aud-clip-${Date.now()}`),
+        rideId: id,
+        durationSec: Math.max(0, Number(body.durationSec || 0)),
+        mimeType: String(body.mimeType || 'audio/webm').slice(0, 64),
+        sizeBytes: Math.max(0, Number(body.sizeBytes || 0)),
+        recordedAt: body.recordedAt || new Date().toISOString(),
+        reportedBy: driverSession ? 'motorista' : 'passageiro',
+        ...(body.notes ? { notes: String(body.notes).slice(0, 280) } : {})
+      };
+
+      const curSnap = ride.appliedFareSnapshot && typeof ride.appliedFareSnapshot === 'object'
+        ? { ...ride.appliedFareSnapshot }
+        : {};
+      const prevClips = Array.isArray(curSnap.safetyAudioRecords) ? curSnap.safetyAudioRecords : [];
+      const nextClips = [...prevClips, record].slice(-20);
+      curSnap.safetyAudioRecords = nextClips;
+
+      await db.query(
+        'UPDATE public.rides SET applied_fare_snapshot = $1, updated_at = NOW() WHERE id = $2',
+        [JSON.stringify(curSnap), id]
+      );
+
+      if (body.escalateToSos) {
+        db.query(
+          `INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp)
+           VALUES ($1, $2, $3, 'safety_audio', $4, false, NOW())`,
+          [
+            `notif-kaudio-${Date.now()}`,
+            `🎙️ K-ÁUDIO ENVIADO (${ride.rideCode || id})`,
+            `${ride.clientName || 'Passageiro'} anexou gravação de segurança (${record.durationSec}s).`,
+            id
+          ]
+        ).catch(() => {});
+      }
+
+      await audit.recordAuditEvent({
+        category: 'seguranca',
+        actionKey: 'safety_audio_recorded',
+        title: `Gravação K-Áudio registrada (${ride.rideCode || id})`,
+        summary: `Áudio de segurança (${record.durationSec}s, ${Math.round(record.sizeBytes / 1024)} KB) registrado por ${record.reportedBy}.`,
+        severity: body.escalateToSos ? 'critico' : 'info',
+        actorRole: driverSession ? 'motorista' : (isAdmin ? 'admin_master' : 'passageiro'),
+        actorId: driverSession?.sub || clientSession?.sub || 'admin-master',
+        actorName: driverSession ? (ride.driverName || 'Motorista') : (ride.clientName || 'Passageiro'),
+        entityType: 'corrida',
+        entityId: id,
+        entityLabel: ride.rideCode || id,
+        relatedIds: { rideId: id }
+      }).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, record, safetyAudioRecords: nextClips });
+    }
+
+    // ── PERFIL FAMILIAR / SEGURANÇA PARA ADOLESCENTES (12 A 18 ANOS) ───────────────────────────────────────────
+    const clientFamilyInviteMatch = pathname.match(/^\/api\/clients\/([^/]+)\/family\/invite$/);
+    if (clientFamilyInviteMatch && method === 'POST') {
+      await ensureClientsSchema();
+      const guardianId = decodeURIComponent(clientFamilyInviteMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== guardianId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão inválida para convidar membro do Perfil Familiar.' });
+      }
+
+      const guardRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [guardianId]);
+      const guardianRow = guardRes.rows[0];
+      if (!guardianRow) {
+        return sendJson(res, 404, { ok: false, error: 'Conta do responsável não encontrada.' });
+      }
+
+      const body = await parseBody(req);
+      const teenName = String(body.name || body.teenName || '').trim();
+      const teenPhone = String(body.phone || body.teenPhone || '').trim();
+      const cleanTeenDigits = normalizePhoneDigitsServer(teenPhone);
+      const birthParsed = parseBirthDateAndCalculateAge(body.birthDate || body.teenBirthDate);
+
+      if (teenName.length < 2) {
+        return sendJson(res, 400, { ok: false, error: 'Informe o nome completo do adolescente.' });
+      }
+      if (cleanTeenDigits.length < 10) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'Informe um número de telefone válido com DDD (ex.: (48) 99612-3456).'
+        });
+      }
+      if (!birthParsed) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'Informe uma data de nascimento válida no formato DD/MM/AAAA.'
+        });
+      }
+      if (birthParsed.age < 12 || birthParsed.age > 18) {
+        return sendJson(res, 400, {
+          ok: false,
+          error:
+            birthParsed.age < 12
+              ? 'Permitido apenas para adolescentes a partir de 12 anos (12 a 18 anos).'
+              : 'O Perfil Familiar para adolescentes permite apenas idades entre 12 e 18 anos.'
+        });
+      }
+      if (body.termsAccepted !== true) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'O responsável legal precisa aceitar os Termos do Perfil Familiar para enviar o convite.'
+        });
+      }
+      if (normalizePhoneDigitsServer(guardianRow.phone || '') === cleanTeenDigits) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: 'Use o número de celular do adolescente, diferente do número do responsável.'
+        });
+      }
+
+      // Evita convite duplicado ativo para o mesmo adolescente
+      const existingMembersRes = await db.query(
+        'SELECT * FROM public.family_members WHERE guardian_id = $1 ORDER BY created_at DESC',
+        [guardianId]
+      );
+      const activeDup = (existingMembersRes.rows || []).find(
+        (m) => m.status !== 'revogado' && normalizePhoneDigitsServer(m.teen_phone || '') === cleanTeenDigits
+      );
+      if (activeDup) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: 'Este telefone já faz parte ou já possui um convite pendente no seu Perfil Familiar.',
+          member: activeDup
+        });
+      }
+
+      const allClientsRes = await db.query('SELECT * FROM public.clients');
+      const existingTeenClient = (allClientsRes.rows || []).find(
+        (c) => normalizePhoneDigitsServer(c.phone || '') === cleanTeenDigits && !c.blocked
+      ) || null;
+
+      const inviteToken = `FAM-${crypto.randomBytes(6).toString('hex').toUpperCase()}`;
+      const cleanHost = String(req.headers.host || 'localhost:5173').trim();
+      const protocol = cleanHost.includes('localhost') || cleanHost.startsWith('127.0.0.1') ? 'http' : 'https';
+      const invitePath = `/familia/convite/${encodeURIComponent(inviteToken)}`;
+      const fullInviteUrl = `${protocol}://${cleanHost}${invitePath}`;
+      const nowIso = new Date().toISOString();
+
+      const memberId = `fam-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const apiDispatch = await sendFamilyInviteMessageServer({
+        guardianName: guardianRow.name || 'Responsável',
+        teenName,
+        teenPhone,
+        fullInviteUrl,
+        inviteToken
+      });
+
+      const termsSignature = {
+        accepted: true,
+        acceptedAt: nowIso,
+        guardianId,
+        guardianName: guardianRow.name,
+        guardianIp: getRequestClientIp(req),
+        userAgent: String(req.headers['user-agent'] || '').slice(0, 220),
+        version: 'KAVRO-FAMILIA-2026-V1'
+      };
+
+      const initialStatus = existingTeenClient ? 'ativo' : 'convite_enviado';
+      const insertMemberRes = await db.query(
+        `INSERT INTO public.family_members (
+          id, guardian_id, guardian_name, guardian_phone, teen_client_id,
+          teen_name, teen_phone, teen_birth_date, teen_age, status,
+          invite_token, invite_url, terms_accepted, terms_accepted_at,
+          terms_signature, api_dispatch, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+        RETURNING *`,
+        [
+          memberId,
+          guardianId,
+          guardianRow.name,
+          guardianRow.phone,
+          existingTeenClient ? existingTeenClient.id : null,
+          teenName,
+          teenPhone,
+          birthParsed.brDate,
+          birthParsed.age,
+          initialStatus,
+          inviteToken,
+          invitePath,
+          true,
+          nowIso,
+          JSON.stringify(termsSignature),
+          JSON.stringify(apiDispatch),
+          nowIso,
+          nowIso
+        ]
+      );
+      const savedMemberRow = insertMemberRes.rows[0] || {
+        id: memberId,
+        guardian_id: guardianId,
+        guardian_name: guardianRow.name,
+        guardian_phone: guardianRow.phone,
+        teen_client_id: existingTeenClient ? existingTeenClient.id : null,
+        teen_name: teenName,
+        teen_phone: teenPhone,
+        teen_birth_date: birthParsed.brDate,
+        teen_age: birthParsed.age,
+        status: initialStatus,
+        invite_token: inviteToken,
+        invite_url: invitePath,
+        terms_accepted: true,
+        terms_accepted_at: nowIso,
+        api_dispatch: apiDispatch,
+        created_at: nowIso
+      };
+
+      if (existingTeenClient) {
+        await activateTeenAccountLink(savedMemberRow, existingTeenClient);
+      }
+
+      // Garante que o responsável também apareça com familySafetyEnabled nos metadados
+      const curGuardSafety = normalizeSafetyPreferencesServer(
+        guardianRow.safety_preferences || guardianRow.safetyPreferences
+      );
+      await db.query(
+        'UPDATE public.clients SET safety_preferences = $1, emergency_contacts = $2 WHERE id = $3',
+        [
+          JSON.stringify({ ...curGuardSafety, familySafetyEnabled: true }),
+          JSON.stringify(guardianRow.emergency_contacts || []),
+          guardianId
+        ]
+      ).catch(() => {});
+
+      await audit.recordAuditEvent({
+        category: 'seguranca',
+        actionKey: 'family_invite_sent',
+        title: `Convite Perfil Familiar enviado para ${teenName} (${birthParsed.age} anos)`,
+        summary: `Responsável ${guardianRow.name} aceitou os termos e gerou link rastreável ${invitePath}. Status: ${initialStatus}.`,
+        severity: 'info',
+        actorRole: isAdmin ? 'admin_master' : 'passageiro',
+        actorId: guardianId,
+        actorName: guardianRow.name,
+        entityType: 'passageiro',
+        entityId: memberId,
+        entityLabel: teenName,
+        relatedIds: { guardianId, familyMemberId: memberId }
+      }).catch(() => {});
+
+      return sendJson(res, 200, {
+        ok: true,
+        alreadyRegistered: Boolean(existingTeenClient),
+        inviteToken,
+        inviteUrl: invitePath,
+        fullInviteUrl,
+        whatsappUrl: apiDispatch.whatsappUrl,
+        member: {
+          id: savedMemberRow.id,
+          guardianId: savedMemberRow.guardian_id,
+          guardianName: savedMemberRow.guardian_name,
+          guardianPhone: savedMemberRow.guardian_phone,
+          teenClientId: savedMemberRow.teen_client_id || null,
+          teenName: savedMemberRow.teen_name,
+          teenPhone: savedMemberRow.teen_phone,
+          teenBirthDate: savedMemberRow.teen_birth_date,
+          teenAge: Number(savedMemberRow.teen_age),
+          status: savedMemberRow.status,
+          inviteToken: savedMemberRow.invite_token,
+          inviteUrl: savedMemberRow.invite_url,
+          termsAccepted: true,
+          termsAcceptedAt: savedMemberRow.terms_accepted_at,
+          apiDispatch: savedMemberRow.api_dispatch || apiDispatch,
+          activeRide: null,
+          recentRides: [],
+          totalRidesCount: 0,
+          createdAt: savedMemberRow.created_at
+        }
+      });
+    }
+
+    const clientFamilyListMatch = pathname.match(/^\/api\/clients\/([^/]+)\/family$/);
+    if (clientFamilyListMatch && method === 'GET') {
+      await ensureClientsSchema();
+      const guardianId = decodeURIComponent(clientFamilyListMatch[1]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== guardianId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão inválida para visualizar o Perfil Familiar.' });
+      }
+
+      const memRes = await db.query(
+        'SELECT * FROM public.family_members WHERE guardian_id = $1 ORDER BY created_at DESC',
+        [guardianId]
+      );
+      const rawMembers = (memRes.rows || []).filter((m) => m.status !== 'revogado');
+      const allClientsRes = await db.query('SELECT * FROM public.clients');
+      const allRidesRes = await db.query('SELECT * FROM public.rides ORDER BY created_at DESC');
+      const allRides = (allRidesRes.rows || []).map(formatRideFromDb);
+      const activeStatuses = new Set(['aguardando_confirmacao', 'aguardando_pagamento', 'aguardando', 'confirmada', 'a_caminho', 'no_local', 'na_fila', 'em_andamento']);
+
+      const members = rawMembers.map((m) => {
+        const teenDigits = normalizePhoneDigitsServer(m.teen_phone || '');
+        const matchedClient =
+          (m.teen_client_id && (allClientsRes.rows || []).find((c) => c.id === m.teen_client_id)) ||
+          (teenDigits.length >= 10 && (allClientsRes.rows || []).find((c) => normalizePhoneDigitsServer(c.phone || '') === teenDigits)) ||
+          null;
+
+        const teenClientId = matchedClient?.id || m.teen_client_id || null;
+        const effectiveStatus = matchedClient && m.status === 'convite_enviado' ? 'ativo' : m.status;
+        const teenRides = allRides.filter((r) => {
+          if (teenClientId && r.clientId === teenClientId) return true;
+          if (teenDigits.length >= 10 && normalizePhoneDigitsServer(r.clientPhone || '') === teenDigits) return true;
+          return false;
+        });
+
+        const toSummary = (r) => {
+          const tToken = security.signTrackingToken('ride', r.id);
+          return {
+            id: r.id,
+            rideCode: r.rideCode,
+            status: r.status,
+            originAddress: r.origin?.address || '',
+            destinationAddress: r.destination?.address || '',
+            totalPrice: Number(r.totalPrice || 0),
+            driverName: r.driverName || null,
+            driverPlate: r.driverPlate || null,
+            driverVehicle: r.driverVehicle || null,
+            trackingUrl: `/viagem/${encodeURIComponent(r.id)}?t=${encodeURIComponent(tToken)}`,
+            createdAt: r.createdAt
+          };
+        };
+
+        const activeRideObj = teenRides.find((r) => activeStatuses.has(r.status)) || null;
+        return {
+          id: m.id,
+          guardianId: m.guardian_id,
+          guardianName: m.guardian_name,
+          guardianPhone: m.guardian_phone,
+          teenClientId,
+          teenName: matchedClient?.name || m.teen_name,
+          teenPhone: m.teen_phone,
+          teenBirthDate: m.teen_birth_date,
+          teenAge: Number(m.teen_age),
+          status: effectiveStatus,
+          inviteToken: m.invite_token,
+          inviteUrl: m.invite_url,
+          termsAccepted: Boolean(m.terms_accepted),
+          termsAcceptedAt: m.terms_accepted_at,
+          apiDispatch: m.api_dispatch || null,
+          activeRide: activeRideObj ? toSummary(activeRideObj) : null,
+          recentRides: teenRides.slice(0, 10).map(toSummary),
+          totalRidesCount: teenRides.length,
+          createdAt: m.created_at,
+          updatedAt: m.updated_at
+        };
+      });
+
+      return sendJson(res, 200, { ok: true, members });
+    }
+
+    const clientFamilyMemberDeleteMatch = pathname.match(/^\/api\/clients\/([^/]+)\/family\/([^/]+)$/);
+    if (clientFamilyMemberDeleteMatch && method === 'DELETE') {
+      await ensureClientsSchema();
+      const guardianId = decodeURIComponent(clientFamilyMemberDeleteMatch[1]);
+      const memberId = decodeURIComponent(clientFamilyMemberDeleteMatch[2]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && (!clientSession || clientSession.sub !== guardianId)) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão inválida para remover membro familiar.' });
+      }
+
+      const memRes = await db.query(
+        'SELECT * FROM public.family_members WHERE id = $1 AND guardian_id = $2 LIMIT 1',
+        [memberId, guardianId]
+      );
+      const memRow = memRes.rows[0];
+      if (!memRow) {
+        return sendJson(res, 404, { ok: false, error: 'Membro do Perfil Familiar não encontrado.' });
+      }
+
+      await db.query("UPDATE public.family_members SET status = 'revogado', updated_at = NOW() WHERE id = $1 RETURNING *", [memberId]);
+      if (memRow.teen_client_id) {
+        await db.query("UPDATE public.clients SET account_type = 'standard', guardian_client_id = NULL WHERE id = $1 RETURNING *", [memRow.teen_client_id]).catch(() => {});
+      }
+
+      await audit.recordAuditEvent({
+        category: 'seguranca',
+        actionKey: 'family_member_revoked',
+        title: `Acesso adolescente revogado (${memRow.teen_name})`,
+        summary: `Responsável revogou vínculo do Perfil Familiar de ${memRow.teen_name}.`,
+        severity: 'atencao',
+        actorRole: isAdmin ? 'admin_master' : 'passageiro',
+        actorId: guardianId,
+        actorName: memRow.guardian_name || 'Responsável',
+        entityType: 'passageiro',
+        entityId: memberId,
+        entityLabel: memRow.teen_name
+      }).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, revokedId: memberId });
+    }
+
+    const publicFamilyInviteMatch = pathname.match(/^\/api\/family\/invite\/([^/]+)$/);
+    if (publicFamilyInviteMatch && method === 'GET') {
+      await ensureClientsSchema();
+      const token = decodeURIComponent(publicFamilyInviteMatch[1]);
+      const invRes = await db.query('SELECT * FROM public.family_members WHERE invite_token = $1 LIMIT 1', [token]);
+      const inv = invRes.rows[0];
+      if (!inv || inv.status === 'revogado') {
+        return sendJson(res, 404, { ok: false, error: 'Convite familiar inválido, expirado ou revogado pelo responsável.' });
+      }
+      const cleanTeenDigits = normalizePhoneDigitsServer(inv.teen_phone || '');
+      const allClientsRes = await db.query('SELECT * FROM public.clients');
+      const existingAcc = (allClientsRes.rows || []).find(
+        (c) => normalizePhoneDigitsServer(c.phone || '') === cleanTeenDigits && !c.blocked
+      );
+      return sendJson(res, 200, {
+        ok: true,
+        invite: {
+          id: inv.id,
+          guardianName: inv.guardian_name,
+          teenName: inv.teen_name,
+          teenPhone: inv.teen_phone,
+          teenBirthDate: inv.teen_birth_date,
+          teenAge: Number(inv.teen_age),
+          status: inv.status,
+          inviteToken: inv.invite_token,
+          accountAlreadyExists: Boolean(existingAcc),
+          createdAt: inv.created_at
+        }
+      });
+    }
+
+    const publicFamilyAcceptMatch = pathname.match(/^\/api\/family\/invite\/([^/]+)\/accept$/);
+    if (publicFamilyAcceptMatch && method === 'POST') {
+      await ensureClientsSchema();
+      const token = decodeURIComponent(publicFamilyAcceptMatch[1]);
+      const clientSession = verifyClientToken(req);
+      if (!clientSession || !clientSession.sub) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login ou finalize seu cadastro para aceitar o convite.' });
+      }
+      const invRes = await db.query('SELECT * FROM public.family_members WHERE invite_token = $1 LIMIT 1', [token]);
+      const inv = invRes.rows[0];
+      if (!inv || inv.status === 'revogado') {
+        return sendJson(res, 404, { ok: false, error: 'Convite familiar inválido ou revogado.' });
+      }
+      const cliRes = await db.query('SELECT * FROM public.clients WHERE id = $1 LIMIT 1', [clientSession.sub]);
+      const cliRow = cliRes.rows[0];
+      if (!cliRow) {
+        return sendJson(res, 404, { ok: false, error: 'Conta não encontrada.' });
+      }
+      const updatedCli = await activateTeenAccountLink(inv, cliRow);
+      return sendJson(res, 200, {
+        ok: true,
+        client: sanitizeClientRow(updatedCli, false),
+        status: 'ativo'
       });
     }
 

@@ -25,6 +25,9 @@ delete process.env.TURNSTILE_SECRET_KEY;
 delete process.env.RESEND_API_KEY;
 delete process.env.OTP_WEBHOOK_URL;
 delete process.env.ONESIGNAL_REST_API_KEY;
+delete process.env.STRIPE_SECRET_KEY;
+delete process.env.STRIPE_PUBLISHABLE_KEY;
+delete process.env.STRIPE_WEBHOOK_SECRET;
 delete process.env.VERCEL;
 
 const originalStoreSnapshot = JSON.parse(JSON.stringify(db.localStore));
@@ -255,6 +258,7 @@ test('Fluxo Auth + Recuperação de Senha via OTP + Chat Persistido + Avaliaçã
     body: {
       name: 'Lucas Passageiro',
       phone: '(48) 99222-3344',
+      document: '111.444.777-35',
       email: 'lucas.teste@kavro.test',
       password: 'senhaAntiga123',
       termsAcceptance: { accepted: true, version: '2026.1' }
@@ -422,6 +426,7 @@ test('Taxas financeiras por meio de pagamento e saque são aplicadas em corridas
     body: {
       name: 'Passageiro Taxas',
       phone: '(48) 99333-4455',
+      document: '222.555.888-46',
       email: 'taxas.passageiro@kavro.test',
       password: 'senhaSegura123',
       termsAcceptance: { accepted: true, version: '2026.1' }
@@ -441,6 +446,7 @@ test('Taxas financeiras por meio de pagamento e saque são aplicadas em corridas
       destinationAddress: 'Aeroporto',
       distanceKm: 25,
       durationMin: 24,
+      time: '14:00',
       totalPrice: 100,
       commissionPercent: 20,
       category: 'kavro_go',
@@ -709,6 +715,7 @@ test('Seguranca Critica: blindagem de preco, anti-takeover, RBAC, webhook fail-c
     body: {
       name: 'Atacante',
       phone: '(48) 99123-4567',
+      document: '99933366610',
       email: 'sem.senha@kavro.test',
       password: 'hack',
       termsAcceptance: { accepted: true }
@@ -759,6 +766,7 @@ test('Seguranca Critica: blindagem de preco, anti-takeover, RBAC, webhook fail-c
     body: {
       name: 'Passageiro Blindagem',
       phone: '(48) 99555-1212',
+      document: '33366699957',
       email: 'blindagem@kavro.test',
       password: '1234',
       termsAcceptance: { accepted: true }
@@ -860,6 +868,7 @@ test('Operacao Uber Real: trava atomica de aceite simultaneo, PIN de embarque 4 
     body: {
       name: 'Passageiro PIN',
       phone: '(48) 98333-3333',
+      document: '44477711107',
       email: `pin.${Date.now()}@kavro.test`,
       password: '1234',
       termsAcceptance: { accepted: true }
@@ -999,4 +1008,2055 @@ test('Operacao Uber Real: trava atomica de aceite simultaneo, PIN de embarque 4 
   });
   assert.equal(lgpdAllowed.status, 200);
   assert.equal(lgpdAllowed.json.anonymized, true);
+});
+
+test('Seguranca em Rota: Contatos de Confianca automaticos via API + link /track + RideCheck desvio/timeout SOS', async () => {
+  // 1) Cria passageiro e motorista aprovado
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Mariana Segura',
+      phone: '(48) 99777-8899',
+      document: '55588822200',
+      email: `mariana.segura.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliToken = cliReg.json.clientToken;
+  const cliId = cliReg.json.client.id;
+
+  // 2) Cadastra contatos de confiança (1 para todas as corridas, 1 apenas para alertas RideCheck/SOS)
+  const tcSave = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/trusted-contacts`, {
+    method: 'PUT',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      trustedContacts: [
+        {
+          id: 'tc-all-1',
+          name: 'Dona Helena (Mãe)',
+          relationship: 'Mãe',
+          phone: '(48) 99600-1122',
+          autoShareAllRides: true,
+          autoShareNightOnly: true,
+          notifyOnAnomalyOrSos: true
+        },
+        {
+          id: 'tc-sos-2',
+          name: 'Carlos (Cônjuge)',
+          relationship: 'Cônjuge',
+          phone: '(48) 99600-3344',
+          autoShareAllRides: false,
+          autoShareNightOnly: false,
+          notifyOnAnomalyOrSos: true
+        }
+      ]
+    }
+  });
+  assert.equal(tcSave.status, 200);
+  assert.equal(tcSave.json.trustedContacts.length, 2);
+
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Roberto Condutor',
+      phone: '(48) 99555-7788',
+      email: `roberto.rc.${Date.now()}@kavro.test`,
+      document: '99887766554',
+      password: '1234',
+      vehicleBrand: 'Toyota',
+      vehicleModel: 'Corolla',
+      vehicleColor: 'Prata',
+      vehiclePlate: 'KVR9A26',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvToken = drvReg.json.driverToken;
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({ ...drvObj, approvalStatus: 'aprovado', kyc: { status: 'aprovado' } });
+
+  // 3) Cria corrida entre dois pontos com coordenadas válidas (~11 km em linha reta)
+  const rideCreate = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Mariana Segura',
+      clientPhone: '(48) 99777-8899',
+      origin: { address: 'Origem Central', lat: -28.4000, lng: -49.4000 },
+      destination: { address: 'Destino Sul', lat: -28.5000, lng: -49.4000 },
+      distanceKm: 11.1,
+      durationMin: 18,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(rideCreate.status, 200);
+  const rideId = rideCreate.json.ride.id;
+  const boardingPin = rideCreate.json.ride.boardingPin;
+
+  const acceptRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(acceptRes.status, 200);
+
+  // 4) Ao iniciar viagem (em_andamento), API dispara automaticamente o link /track/:id?t=... para contatos elegíveis
+  const startRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { status: 'em_andamento', boardingPin }
+  });
+  assert.equal(startRes.status, 200);
+  assert.ok(Array.isArray(startRes.json.trustedContactsDispatches));
+  assert.ok(startRes.json.trustedContactsDispatches.length >= 1, 'Pelo menos contato de envio em todas as viagens deve ser notificado');
+  const firstDispatch = startRes.json.trustedContactsDispatches[0];
+  assert.ok(firstDispatch.apiDelivered);
+  assert.ok(firstDispatch.trackingUrl.includes(`/track/${rideId}?t=`));
+  assert.ok(firstDispatch.whatsappUrl.includes('KVR9A26'));
+
+  // 5) Familiar abre o link assinado /api/rides/:id/track?t=... sem estar logado e vê placa, motorista e rota sem vazar PIN
+  const trackUrlObj = new URL(`http://localhost${firstDispatch.trackingUrl}`);
+  const trackToken = trackUrlObj.searchParams.get('t');
+  const trackRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/track?t=${encodeURIComponent(trackToken)}`);
+  assert.equal(trackRes.status, 200);
+  assert.equal(trackRes.json.ride.driverPlate, 'KVR9A26');
+  assert.equal(trackRes.json.ride.driverName, 'Roberto Condutor');
+  assert.equal(trackRes.json.ride.boardingPin, undefined);
+
+  // 6) GPS fora do corredor da rota (> 3km lateral e mais distante do destino) dispara RideCheck automaticamente
+  const locOffRoute = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/location`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: {
+      role: 'driver',
+      location: {
+        lat: -28.3400,
+        lng: -49.3000,
+        speedKmH: 62,
+        heading: 45
+      }
+    }
+  });
+  assert.equal(locOffRoute.status, 200);
+  assert.ok(locOffRoute.json.rideCheck, 'RideCheck deve ser disparado no desvio severo de rota');
+  assert.equal(locOffRoute.json.rideCheck.reason, 'desvio_rota');
+  assert.equal(locOffRoute.json.rideCheck.status, 'aguardando_resposta');
+
+  // 7) Timeout de 60s sem resposta escala automaticamente para Central SOS e notifica todos contatos de emergência
+  const timeoutEscRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/ridecheck/respond`, {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: { decision: 'timeout', role: 'passageiro' }
+  });
+  assert.equal(timeoutEscRes.status, 200);
+  assert.equal(timeoutEscRes.json.rideCheck.status, 'escalado_sos');
+  assert.ok(timeoutEscRes.json.sosAlert?.id);
+  assert.equal(timeoutEscRes.json.dispatches.length, 2, 'Ambos os contatos configurados para SOS/anomalias devem ser alertados');
+
+  const dbAlert = await finance.getSosAlertByIdDb(timeoutEscRes.json.sosAlert.id);
+  assert.ok(dbAlert, 'Alerta preventivo do RideCheck deve estar persistido no banco SOS');
+  assert.equal(dbAlert.status, 'ativo');
+});
+
+test('Escala (100 -> 2000+ usuarios): amostragem inteligente de trilha GPS, despacho por raio e replay SSE ?since=', async () => {
+  // 1) Cria passageiro e motorista com GPS em (-28.39, -49.39)
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Passageiro Escala',
+      phone: '(48) 99111-2233',
+      document: '66699933310',
+      email: `escala.cli.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliToken = cliReg.json.clientToken;
+  const cliId = cliReg.json.client.id;
+
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Motorista Escala',
+      phone: '(48) 99222-3344',
+      email: `escala.drv.${Date.now()}@kavro.test`,
+      document: '32165498700',
+      password: '1234',
+      vehicleBrand: 'Hyundai',
+      vehicleModel: 'HB20',
+      vehicleColor: 'Branco',
+      vehiclePlate: 'SCL2E26',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvToken = drvReg.json.driverToken;
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({
+    ...drvObj,
+    approvalStatus: 'aprovado',
+    isOnline: true,
+    location: { lat: -28.3900, lng: -49.3900, updatedAt: new Date().toISOString() },
+    kyc: { status: 'aprovado' }
+  });
+
+  // 2) Despacho por raio: corrida próxima (~1.5km) aparece no radar; corrida a ~68km é filtrada fora
+  const nearRideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Escala',
+      clientPhone: '(48) 99111-2233',
+      origin: { address: 'Origem Perto', lat: -28.4000, lng: -49.4000 },
+      destination: { address: 'Destino Perto', lat: -28.4300, lng: -49.4000 },
+      distanceKm: 3.5,
+      durationMin: 8,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  const farRideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Escala',
+      clientPhone: '(48) 99111-2233',
+      origin: { address: 'Origem Muito Longe', lat: -29.0000, lng: -49.4000 },
+      destination: { address: 'Destino Longe', lat: -29.0300, lng: -49.4000 },
+      distanceKm: 4.0,
+      durationMin: 10,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(nearRideRes.status, 200);
+  assert.equal(farRideRes.status, 200);
+
+  const syncDrv = await apiJson(`/api/sync?driverId=${encodeURIComponent(drvObj.id)}`, {
+    method: 'GET',
+    headers: { 'x-driver-token': drvToken }
+  });
+  assert.equal(syncDrv.status, 200);
+  const visibleIds = syncDrv.json.rides.map(r => r.id);
+  assert.ok(visibleIds.includes(nearRideRes.json.ride.id), 'Corrida próxima (~1.5km) deve aparecer no radar');
+  assert.ok(!visibleIds.includes(farRideRes.json.ride.id), 'Corrida distante (~68km) não deve poluir o radar do motorista');
+
+  // 3) Amostragem inteligente de trilha GPS (evita gravações duplicadas no mesmo ponto em <10s)
+  const nearId = nearRideRes.json.ride.id;
+  const acc = await apiJson(`/api/rides/${encodeURIComponent(nearId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(acc.status, 200);
+
+  const startNear = await apiJson(`/api/rides/${encodeURIComponent(nearId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { status: 'em_andamento', boardingPin: nearRideRes.json.ride.boardingPin }
+  });
+  assert.equal(startNear.status, 200);
+
+  // 3 batidas rápidas na mesma coordenada (-28.4000, -49.4000): apenas a 1ª deve gravar em ride_trail_points
+  for (let i = 0; i < 3; i++) {
+    const locRes = await apiJson(`/api/rides/${encodeURIComponent(nearId)}/location`, {
+      method: 'PATCH',
+      headers: { 'x-driver-token': drvToken },
+      body: { role: 'driver', location: { lat: -28.4000, lng: -49.4000, speedKmH: 25, heading: 90 } }
+    });
+    assert.equal(locRes.status, 200);
+  }
+  // 4ª batida com deslocamento > 100m (-28.4020): deve gravar o 2º ponto na trilha
+  const movedRes = await apiJson(`/api/rides/${encodeURIComponent(nearId)}/location`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { role: 'driver', location: { lat: -28.4020, lng: -49.4000, speedKmH: 35, heading: 90 } }
+  });
+  assert.equal(movedRes.status, 200);
+
+  const trailRes = await apiJson(`/api/rides/${encodeURIComponent(nearId)}/trail`, {
+    method: 'GET',
+    headers: { 'x-driver-token': drvToken }
+  });
+  assert.equal(trailRes.status, 200);
+  assert.equal(trailRes.json.points.length, 2, 'Apenas 2 pontos devem ser gravados na trilha (1º inicial + deslocamento > 25m)');
+
+  // 4) SSE Replay (?since=): evento publicado antes da reconexão é reentregue imediatamente se tsMs > since
+  const beforeReplayTs = Date.now() - 50;
+  realtimeHub.publish(
+    'chat:message',
+    { rideId: nearId, message: { id: 'm-replay-1', text: 'Mensagem recuperada apos queda!' } },
+    { rideId: nearId, clientId: cliId, driverId: drvObj.id }
+  );
+  const trackTok = security.signTrackingToken('ride', nearId);
+  await new Promise((resolve, reject) => {
+    const req = http.get(
+      `${baseUrl}/api/realtime/stream?rideId=${encodeURIComponent(nearId)}&t=${encodeURIComponent(trackTok)}&since=${beforeReplayTs}`,
+      (res) => {
+        assert.equal(res.statusCode, 200);
+        let buf = '';
+        const timer = setTimeout(() => {
+          req.destroy();
+          reject(new Error(`Timeout aguardando replay SSE ?since=. Recebido: ${buf}`));
+        }, 3000);
+        res.on('data', (chunk) => {
+          buf += chunk.toString('utf8');
+          if (buf.includes('Mensagem recuperada apos queda!')) {
+            clearTimeout(timer);
+            req.destroy();
+            resolve();
+          }
+        });
+        res.on('error', (err) => {
+          if (err && err.code === 'ECONNRESET') return;
+          clearTimeout(timer);
+          reject(err);
+        });
+      }
+    );
+    activeSseRequests.add(req);
+    req.on('close', () => activeSseRequests.delete(req));
+  });
+});
+
+test('Taxa geral da plataforma com Valor Fixo + Porcentagem aplicada em PIX, Dinheiro e Auditoria', async () => {
+  // 1) Regras unitárias de calculateSplit com porcentagem + fixo e trava contra negativo
+  const splitCombo = finance.calculateSplit(100, 15, 2.5);
+  assert.equal(splitCombo.commissionPercent, 15);
+  assert.equal(splitCombo.commissionFixed, 2.5);
+  assert.equal(splitCombo.commissionAmount, 17.5);
+  assert.equal(splitCombo.driverNetAmount, 82.5);
+
+  const splitCap = finance.calculateSplit(5, 20, 10);
+  assert.equal(splitCap.commissionAmount, 5);
+  assert.equal(splitCap.driverNetAmount, 0);
+
+  const splitZero = finance.calculateSplit(0, 20, 2.5);
+  assert.equal(splitZero.commissionAmount, 0);
+  assert.equal(splitZero.driverNetAmount, 0);
+
+  // 2) Configura taxa geral única (15% + R$ 2,50 fixo por corrida) e valida diff de auditoria + overview
+  const prevConfig = db.localStore.system_config?.default?.config || {};
+  const generalConfig = {
+    ...prevConfig,
+    baseFare: 8,
+    pricePerKm: 3.2,
+    pricePerMinute: 0.5,
+    minimumFare: 15,
+    nightSurchargePercent: 0,
+    platformCommissionPercent: 15,
+    platformCommissionFixed: 2.5,
+    paymentMethodCommissionPercents: {
+      pix: 15,
+      cartao_credito: 15,
+      cartao_debito: 15,
+      dinheiro: 15
+    },
+    activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro']
+  };
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify(generalConfig)]
+  );
+
+  const diffs = audit.buildConfigChangesDiff(prevConfig, generalConfig);
+  assert.ok(diffs.some(d => d.field === 'platformCommissionFixed' && d.after.includes('2,50')));
+
+  const overview = await finance.getPlatformFinancialOverview();
+  assert.equal(overview.commissionPercent, 15);
+  assert.equal(overview.commissionFixed, 2.5);
+
+  // 3) Solicita corrida PIX (R$ 100,00) e Dinheiro (R$ 100,00) -> ambos aplicam 15% + R$ 2,50 = R$ 17,50 / R$ 82,50
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    body: {
+      name: 'Passageiro Taxa Geral',
+      phone: '(48) 99555-7788',
+      document: '77711144407',
+      email: `taxageral.cli.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliToken = cliReg.json.clientToken;
+  const cliId = cliReg.json.client.id;
+
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Motorista Taxa Geral',
+      phone: '(48) 99666-7788',
+      email: `taxageral.drv.${Date.now()}@kavro.test`,
+      document: '98765432100',
+      password: '1234',
+      vehicleBrand: 'VW',
+      vehicleModel: 'Polo',
+      vehicleColor: 'Prata',
+      vehiclePlate: 'TXG1A26',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvToken = drvReg.json.driverToken;
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({
+    ...drvObj,
+    approvalStatus: 'aprovado',
+    isOnline: true,
+    kyc: { status: 'aprovado' }
+  });
+
+  const pixRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Taxa Geral',
+      clientPhone: '(48) 99555-7788',
+      originAddress: 'Ponto A',
+      destinationAddress: 'Ponto B',
+      distanceKm: 25,
+      durationMin: 24,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'pix'
+    }
+  });
+  assert.equal(pixRide.status, 200);
+  assert.equal(pixRide.json.ride.totalPrice, 100);
+  assert.equal(pixRide.json.ride.commissionPercent, 15);
+  assert.equal(pixRide.json.ride.commissionFixed, 2.5);
+  assert.equal(pixRide.json.ride.commissionAmount, 17.5);
+  assert.equal(pixRide.json.ride.driverNetAmount, 82.5);
+
+  const txPix = await finance.getPaymentTxByRide(pixRide.json.ride.id);
+  assert.equal(txPix.commissionAmount, 17.5);
+  assert.equal(txPix.driverNetAmount, 82.5);
+
+  const cashRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Taxa Geral',
+      clientPhone: '(48) 99555-7788',
+      originAddress: 'Ponto C',
+      destinationAddress: 'Ponto D',
+      distanceKm: 25,
+      durationMin: 24,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(cashRide.status, 200);
+  const cashId = cashRide.json.ride.id;
+  assert.equal(cashRide.json.ride.commissionFixed, 2.5);
+  assert.equal(cashRide.json.ride.commissionAmount, 17.5);
+  assert.equal(cashRide.json.ride.driverNetAmount, 82.5);
+
+  const accCash = await apiJson(`/api/rides/${encodeURIComponent(cashId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(accCash.status, 200);
+
+  const startCash = await apiJson(`/api/rides/${encodeURIComponent(cashId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { status: 'em_andamento', boardingPin: cashRide.json.ride.boardingPin }
+  });
+  assert.equal(startCash.status, 200);
+
+  const completeCash = await apiJson(`/api/rides/${encodeURIComponent(cashId)}/complete`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id, receivedCashAmount: 100 }
+  });
+  assert.equal(completeCash.status, 200);
+  assert.equal(completeCash.json.ride.commissionFixed, 2.5);
+  assert.equal(completeCash.json.ride.commissionAmount, 17.5);
+  assert.equal(completeCash.json.ride.driverNetAmount, 82.5);
+});
+
+test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual capture, PIX BRL e webhook Stripe-Signature', async () => {
+  const StripeSdk = require('stripe');
+  const stripeGateway = require('../server/stripeGateway.cjs');
+  const prevSecret = process.env.STRIPE_SECRET_KEY;
+  const prevPub = process.env.STRIPE_PUBLISHABLE_KEY;
+  const prevWh = process.env.STRIPE_WEBHOOK_SECRET;
+
+  const webhookSecret = 'whsec_test_kavro_stripe_secret_123456';
+  process.env.STRIPE_SECRET_KEY = 'sk_test_mock_kavro_123';
+  process.env.STRIPE_PUBLISHABLE_KEY = 'pk_test_mock_kavro_123';
+  process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
+
+  const piStore = new Map();
+  const capturedCalls = [];
+  const canceledCalls = [];
+  let seq = 1;
+  const realStripeForWebhook = new StripeSdk(process.env.STRIPE_SECRET_KEY);
+
+  stripeGateway._setStripeClientFactoryForTest(() => ({
+    customers: {
+      create: async (params) => ({ id: `cus_test_${seq++}`, ...params })
+    },
+    setupIntents: {
+      create: async (params) => ({
+        id: `seti_test_${seq++}`,
+        client_secret: `seti_test_secret_${seq}`,
+        customer: params.customer,
+        status: 'requires_payment_method'
+      }),
+      retrieve: async (id) => ({
+        id,
+        status: 'succeeded',
+        customer: 'cus_test_1',
+        payment_method: 'pm_test_visa_4242'
+      })
+    },
+    paymentMethods: {
+      retrieve: async (id) => ({
+        id,
+        customer: 'cus_test_1',
+        card: {
+          brand: 'visa',
+          last4: '4242',
+          exp_month: 12,
+          exp_year: 2030,
+          funding: 'credit'
+        }
+      }),
+      attach: async (id, { customer }) => ({ id, customer })
+    },
+    paymentIntents: {
+      create: async (params) => {
+        const id = `pi_test_${seq++}`;
+        const isPix = params?.payment_method_data?.type === 'pix';
+        const pi = {
+          id,
+          amount: params.amount,
+          amount_capturable: isPix ? 0 : params.amount,
+          amount_received: 0,
+          currency: params.currency,
+          status: isPix ? 'requires_action' : 'requires_capture',
+          metadata: params.metadata || {},
+          latest_charge: isPix ? null : `ch_test_${seq}`,
+          next_action: isPix
+            ? {
+                type: 'pix_display_qr_code',
+                pix_display_qr_code: {
+                  data: `000201010212STRIPEPIX${id}`,
+                  image_url_png: `https://stripe.test/qr/${id}.png`,
+                  expires_at: Math.floor(Date.now() / 1000) + 900
+                }
+              }
+            : null
+        };
+        piStore.set(id, pi);
+        return pi;
+      },
+      retrieve: async (id) => piStore.get(id),
+      capture: async (id, { amount_to_capture }) => {
+        const pi = piStore.get(id);
+        pi.status = 'succeeded';
+        pi.amount_received = amount_to_capture;
+        capturedCalls.push({ id, amount_to_capture });
+        return pi;
+      },
+      cancel: async (id) => {
+        const pi = piStore.get(id);
+        pi.status = 'canceled';
+        canceledCalls.push(id);
+        return pi;
+      }
+    },
+    refunds: {
+      create: async ({ payment_intent, amount }) => ({ id: `re_test_${seq++}`, payment_intent, amount })
+    },
+    webhooks: {
+      constructEvent: (raw, sig, sec) => realStripeForWebhook.webhooks.constructEvent(raw, sig, sec)
+    }
+  }));
+
+  try {
+    // garante taxa limpa padrão (20%)
+    const prevCfg = db.localStore.system_config?.default?.config || {};
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({
+        ...prevCfg,
+        platformCommissionPercent: 20,
+        platformCommissionFixed: 0,
+        paymentMethodCommissionPercents: { pix: 20, cartao_credito: 20, cartao_debito: 20, dinheiro: 20 },
+        activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro']
+      })]
+    );
+
+    // 1) /api/payments/config expõe Stripe ativo + publishableKey
+    const cfgRes = await apiJson('/api/payments/config');
+    assert.equal(cfgRes.status, 200);
+    assert.equal(cfgRes.json.gatewayProvider, 'stripe');
+    assert.equal(cfgRes.json.stripeEnabled, true);
+    assert.equal(cfgRes.json.stripePublishableKey, 'pk_test_mock_kavro_123');
+
+    // 2) Registra passageiro e motorista
+    const cliReg = await apiJson('/api/clients/register', {
+      method: 'POST',
+      body: {
+        name: 'Passageiro Stripe',
+        phone: '(48) 99444-5566',
+        document: '88822255500',
+        email: `stripe.cli.${Date.now()}@kavro.test`,
+        password: '1234',
+        termsAcceptance: { accepted: true }
+      }
+    });
+    assert.equal(cliReg.status, 200);
+    const cliToken = cliReg.json.clientToken;
+    const cliId = cliReg.json.client.id;
+
+    const drvReg = await apiJson('/api/drivers/register', {
+      method: 'POST',
+      body: {
+        name: 'Motorista Stripe',
+        phone: '(48) 99444-6677',
+        email: `stripe.drv.${Date.now()}@kavro.test`,
+        document: '44556677889',
+        password: '1234',
+        vehicleBrand: 'Toyota',
+        vehicleModel: 'Corolla',
+        vehicleColor: 'Preto',
+        vehiclePlate: 'STP2B26',
+        termsAcceptance: { accepted: true }
+      }
+    });
+    assert.equal(drvReg.status, 200);
+    const drvToken = drvReg.json.driverToken;
+    const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+    await finance.saveDriverRecord({
+      ...drvObj,
+      approvalStatus: 'aprovado',
+      isOnline: true,
+      kyc: { status: 'aprovado' }
+    });
+
+    // 3) SetupIntent + salvar cartão Stripe Elements
+    const siRes = await apiJson('/api/payments/stripe/setup-intent', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { clientId: cliId }
+    });
+    assert.equal(siRes.status, 200);
+    assert.ok(siRes.json.clientSecret.startsWith('seti_test_secret_'));
+
+    const cardSaveRes = await apiJson('/api/payments/cards', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        holderName: 'PASSAGEIRO STRIPE',
+        cardType: 'cartao_credito',
+        stripeSetupIntentId: siRes.json.setupIntentId,
+        stripePaymentMethodId: 'pm_test_visa_4242'
+      }
+    });
+    assert.equal(cardSaveRes.status, 200);
+    assert.equal(cardSaveRes.json.card.brand, 'Visa');
+    assert.equal(cardSaveRes.json.card.last4, '4242');
+    assert.match(cardSaveRes.json.card.gatewayToken, /^stripe_pm_cus_test_1:pm_test_visa_4242$/);
+
+    // 4) Corrida no Cartão: pré-autoriza R$ 100,00 -> motorista aceita, inicia e finaliza -> captura via Stripe
+    const cardRide = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Stripe',
+        clientPhone: '(48) 99444-5566',
+        originAddress: 'Origem Card',
+        destinationAddress: 'Destino Card',
+        distanceKm: 25,
+        durationMin: 24,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: cardSaveRes.json.card.id
+      }
+    });
+    assert.equal(cardRide.status, 200);
+    assert.equal(cardRide.json.ride.paymentStatus, 'autorizado');
+    const cardRideId = cardRide.json.ride.id;
+
+    const accCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/accept`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { driverId: drvObj.id }
+    });
+    assert.equal(accCard.status, 200);
+
+    const startCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/status`, {
+      method: 'PATCH',
+      headers: { 'x-driver-token': drvToken },
+      body: { status: 'em_andamento', boardingPin: cardRide.json.ride.boardingPin }
+    });
+    assert.equal(startCard.status, 200);
+
+    const completeCard = await apiJson(`/api/rides/${encodeURIComponent(cardRideId)}/complete`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { driverId: drvObj.id }
+    });
+    assert.equal(completeCard.status, 200);
+    assert.equal(completeCard.json.ride.paymentStatus, 'confirmado');
+    assert.equal(capturedCalls.length, 1);
+    assert.equal(capturedCalls[0].amount_to_capture, 10000);
+
+    // 5) Cancelamento de pré-autorização antes de capturar libera o hold na Stripe
+    const cancelHoldRide = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Stripe',
+        clientPhone: '(48) 99444-5566',
+        originAddress: 'Origem Hold',
+        destinationAddress: 'Destino Hold',
+        distanceKm: 25,
+        durationMin: 24,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: cardSaveRes.json.card.id
+      }
+    });
+    assert.equal(cancelHoldRide.status, 200);
+    const holdTxBefore = await finance.getPaymentTxByRide(cancelHoldRide.json.ride.id);
+    const cancelHoldRes = await apiJson(`/api/rides/${encodeURIComponent(cancelHoldRide.json.ride.id)}/status`, {
+      method: 'PATCH',
+      headers: { 'x-client-token': cliToken },
+      body: { status: 'cancelada', cancelledBy: 'passenger' }
+    });
+    assert.equal(cancelHoldRes.status, 200);
+    assert.ok(canceledCalls.includes(holdTxBefore.gatewayTxId));
+
+    // 6) Corrida PIX via Stripe + Webhook Stripe-Signature
+    const pixRide = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Stripe',
+        clientPhone: '(48) 99444-5566',
+        originAddress: 'Origem Pix',
+        destinationAddress: 'Destino Pix',
+        distanceKm: 25,
+        durationMin: 24,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'pix'
+      }
+    });
+    assert.equal(pixRide.status, 200);
+    assert.equal(pixRide.json.ride.status, 'aguardando_pagamento');
+    assert.match(pixRide.json.ride.pixCopyPaste, /^000201010212STRIPEPIXpi_test_/);
+    const pixTx = await finance.getPaymentTxByRide(pixRide.json.ride.id);
+
+    // Assinatura falsa deve ser rejeitada
+    const badWhRes = await fetch(`${baseUrl}/api/webhooks/stripe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'stripe-signature': 't=1,v1=deadbeef' },
+      body: JSON.stringify({ id: 'evt_bad', type: 'payment_intent.succeeded', data: { object: { id: pixTx.gatewayTxId } } })
+    });
+    assert.equal(badWhRes.status, 400);
+
+    // Webhook autenticado via HMAC Stripe-Signature confirma pagamento e libera corrida
+    const evtPayload = JSON.stringify({
+      id: 'evt_pix_ok_1',
+      object: 'event',
+      type: 'payment_intent.succeeded',
+      data: {
+        object: {
+          id: pixTx.gatewayTxId,
+          object: 'payment_intent',
+          amount: 10000,
+          amount_received: 10000,
+          metadata: { purpose: 'ride_pix', rideId: pixRide.json.ride.id }
+        }
+      }
+    });
+    const validSig = realStripeForWebhook.webhooks.generateTestHeaderString({
+      payload: evtPayload,
+      secret: webhookSecret
+    });
+    const goodWhRes = await fetch(`${baseUrl}/api/webhooks/stripe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'stripe-signature': validSig },
+      body: evtPayload
+    });
+    const goodWhJson = await goodWhRes.json();
+    assert.equal(goodWhRes.status, 200);
+    assert.equal(goodWhJson.ok, true);
+    assert.equal(goodWhJson.ride.paymentStatus, 'confirmado');
+    assert.equal(goodWhJson.ride.status, 'aguardando_confirmacao');
+
+    // 7) Quitação de dívida de motorista via PIX Stripe + webhook
+    await finance.recordLedgerEntry({
+      idempotencyKey: `debt_seed_st_${Date.now()}`,
+      driverId: drvObj.id,
+      driverName: drvObj.name,
+      entryType: 'cash_commission_debit',
+      paymentMethod: 'dinheiro',
+      grossAmount: 50,
+      commissionPercent: 20,
+      commissionAmount: 10,
+      driverNetAmount: 40,
+      balanceDelta: -10,
+      balanceBucket: 'cash_debt',
+      status: 'confirmado',
+      description: 'Dívida dinheiro teste Stripe'
+    });
+    const debtPixRes = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}/debt/pix`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { amount: 10 }
+    });
+    assert.equal(debtPixRes.status, 200);
+    assert.equal(debtPixRes.json.provider, 'stripe');
+
+    const debtEvtPayload = JSON.stringify({
+      id: 'evt_debt_ok_1',
+      object: 'event',
+      type: 'payment_intent.succeeded',
+      data: {
+        object: {
+          id: debtPixRes.json.gatewayTxId,
+          object: 'payment_intent',
+          amount: 1000,
+          amount_received: 1000,
+          metadata: { purpose: 'driver_debt_pix', driverId: drvObj.id }
+        }
+      }
+    });
+    const debtSig = realStripeForWebhook.webhooks.generateTestHeaderString({
+      payload: debtEvtPayload,
+      secret: webhookSecret
+    });
+    const debtWhRes = await fetch(`${baseUrl}/api/webhooks/stripe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'stripe-signature': debtSig },
+      body: debtEvtPayload
+    });
+    const debtWhJson = await debtWhRes.json();
+    assert.equal(debtWhRes.status, 200);
+    assert.equal(debtWhJson.wallet.debtBalance, 0);
+  } finally {
+    stripeGateway._setStripeClientFactoryForTest(null);
+    if (prevSecret === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = prevSecret;
+    if (prevPub === undefined) delete process.env.STRIPE_PUBLISHABLE_KEY; else process.env.STRIPE_PUBLISHABLE_KEY = prevPub;
+    if (prevWh === undefined) delete process.env.STRIPE_WEBHOOK_SECRET; else process.env.STRIPE_WEBHOOK_SECRET = prevWh;
+  }
+});
+
+test('Cadastro de Passageiro: exige CPF valido, bloqueia CPF invalido/duplicado e preenche Termo Digital', async () => {
+  const ipHeaders = { 'x-forwarded-for': '203.0.113.42' };
+
+  // 1) Rejeita cadastro sem CPF ou com CPF inválido
+  const missingCpfRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipHeaders,
+    body: {
+      name: 'Passageiro Sem CPF',
+      phone: '(48) 99101-1010',
+      email: `semcpf.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(missingCpfRes.status, 400);
+
+  const invalidCpfRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipHeaders,
+    body: {
+      name: 'Passageiro CPF Falso',
+      phone: '(48) 99101-2020',
+      document: '111.111.111-11',
+      email: `falso.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(invalidCpfRes.status, 400);
+
+  // 2) Registra com CPF válido e verifica gravação no perfil + assinatura dos termos
+  const validRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipHeaders,
+    body: {
+      name: 'Lucas CPF Verificado',
+      phone: '(48) 99101-3030',
+      document: '123.456.789-09',
+      email: `cpfok.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(validRes.status, 200);
+  assert.equal(validRes.json.client.document, '12345678909');
+  assert.equal(validRes.json.client.termsSignature?.passengerSnapshot?.cpf, '123.456.789-09');
+  assert.equal(validRes.json.client.termsSignature?.passengerSnapshot?.rawCpf, '12345678909');
+
+  // 3) Rejeita duplicidade pelo mesmo CPF mesmo com novo telefone/e-mail
+  const dupCpfRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipHeaders,
+    body: {
+      name: 'Outro Usuario Mesmo CPF',
+      phone: '(48) 99101-4040',
+      document: '12345678909',
+      email: `dup.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(dupCpfRes.status, 409);
+
+  // 4) Conta legada sem CPF completa via /api/clients/complete-contact e atualiza assinatura digital
+  const legacyId = `cli-legacy-cpf-${Date.now()}`;
+  const legacyPassHash = scryptHash('1234');
+  const legacySig = {
+    signed: true,
+    validationCode: 'KAVRO-PSG-OLD1-0000-0000',
+    affirmativeAction: 'Li e concordo integralmente.',
+    passengerSnapshot: { clientId: legacyId, name: 'Lucas Legado', cpf: 'Não informado', rawCpf: '' },
+    technicalEvidence: { language: 'pt-BR', timezone: 'America/Sao_Paulo' }
+  };
+  await db.query(
+    `INSERT INTO public.clients (id, name, phone, email, document, password_hash, saved_addresses, terms_accepted_at, terms_signature, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+    [legacyId, 'Lucas Legado', '(48) 99101-5050', `legacy.${Date.now()}@kavro.test`, null, legacyPassHash, '[]', new Date().toISOString(), JSON.stringify(legacySig)]
+  );
+
+  // Tenta completar com outro CPF válido não duplicado (precisa de um distinto válido; calculado mod-11)
+  const completeBad = await apiJson('/api/clients/complete-contact', {
+    method: 'POST',
+    body: {
+      clientId: legacyId,
+      password: '1234',
+      name: 'Lucas Legado',
+      phone: '(48) 99101-5050',
+      email: `legacy.upd.${Date.now()}@kavro.test`,
+      document: '000.000.000-00'
+    }
+  });
+  assert.equal(completeBad.status, 400);
+
+  const completeOk = await apiJson('/api/clients/complete-contact', {
+    method: 'POST',
+    body: {
+      clientId: legacyId,
+      password: '1234',
+      name: 'Lucas Legado',
+      phone: '(48) 99101-5050',
+      email: `legacy.upd.${Date.now()}@kavro.test`,
+      document: '529.982.247-25'
+    }
+  });
+  assert.equal(completeOk.status, 200);
+  assert.equal(completeOk.json.client.document, '52998224725');
+  assert.equal(completeOk.json.client.termsSignature?.passengerSnapshot?.cpf, '529.982.247-25');
+});
+
+test('Cancelamento pelo passageiro: zera multa antes do aceite, garante idempotência e bloqueia acessos indevidos', async () => {
+  const ipHeaders1 = { 'x-forwarded-for': '198.51.100.88' };
+  const ipHeaders2 = { 'x-forwarded-for': '198.51.100.89' };
+
+  // Registra passageiro dono e outro passageiro distinto (CPFs mod-11 válidos não utilizados antes)
+  const cli1Res = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipHeaders1,
+    body: {
+      name: 'Passageiro Cancel 1',
+      phone: '(48) 99202-1010',
+      document: '98765432100',
+      email: `cancel1.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cli1Res.status, 200);
+  const cli1Token = cli1Res.json.clientToken;
+  const cli1Id = cli1Res.json.client.id;
+
+  const cli2Res = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipHeaders2,
+    body: {
+      name: 'Passageiro Intruso 2',
+      phone: '(48) 99202-2020',
+      document: '01234567890',
+      email: `cancel2.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cli2Res.status, 200);
+  const cli2Token = cli2Res.json.clientToken;
+
+  // Configura taxa de cancelamento pós-aceite > 0 para comprovar que antes do aceite é R$ 0,00
+  const cfgBefore = db.localStore.system_config?.default?.config || {};
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify({ ...cfgBefore, cancellationFeeAmount: 12.5 })]
+  );
+
+  // 1) Corrida em busca de motorista (aguardando_confirmacao) cancelada sem multa
+  const searchRideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cli1Token },
+    body: {
+      clientId: cli1Id,
+      clientName: 'Passageiro Cancel 1',
+      clientPhone: '(48) 99202-1010',
+      originAddress: 'Rua Origem Cancelamento, 10',
+      destinationAddress: 'Rua Destino Cancelamento, 90',
+      distanceKm: 12,
+      durationMin: 18,
+      time: '15:00',
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(searchRideRes.status, 200);
+  const searchRideId = searchRideRes.json.ride.id;
+  assert.equal(searchRideRes.json.ride.status, 'aguardando_confirmacao');
+
+  const cancelSearchRes = await apiJson(`/api/rides/${encodeURIComponent(searchRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cli1Token },
+    body: {
+      status: 'cancelada',
+      cancelledBy: 'passenger',
+      cancellationReason: 'Demorando para encontrar motorista'
+    }
+  });
+  assert.equal(cancelSearchRes.status, 200);
+  assert.equal(cancelSearchRes.json.ride.status, 'cancelada');
+  assert.equal(cancelSearchRes.json.cancellationFeeApplied, 0);
+  assert.equal(cancelSearchRes.json.ride.cancelledBy, 'passenger');
+  assert.equal(cancelSearchRes.json.ride.appliedFareSnapshot?.cancellationReason, 'Demorando para encontrar motorista');
+
+  // Reenvio repetido pelo mesmo passageiro é idempotente
+  const cancelRepeatRes = await apiJson(`/api/rides/${encodeURIComponent(searchRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cli1Token },
+    body: { status: 'cancelada', cancelledBy: 'passenger' }
+  });
+  assert.equal(cancelRepeatRes.status, 200);
+  assert.equal(cancelRepeatRes.json.idempotent, true);
+
+  // 2) Solicitação PIX pendente (aguardando_pagamento) cancelada sem multa
+  const pixWaitRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cli1Token },
+    body: {
+      clientId: cli1Id,
+      clientName: 'Passageiro Cancel 1',
+      clientPhone: '(48) 99202-1010',
+      originAddress: 'Rua PIX Origem, 15',
+      destinationAddress: 'Rua PIX Destino, 85',
+      distanceKm: 8,
+      durationMin: 12,
+      time: '16:00',
+      category: 'kavro_go',
+      paymentMethod: 'pix'
+    }
+  });
+  assert.equal(pixWaitRes.status, 200);
+  const pixWaitId = pixWaitRes.json.ride.id;
+  assert.equal(pixWaitRes.json.ride.status, 'aguardando_pagamento');
+
+  const cancelPixWaitRes = await apiJson(`/api/rides/${encodeURIComponent(pixWaitId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cli1Token },
+    body: { status: 'cancelada', cancelledBy: 'passenger' }
+  });
+  assert.equal(cancelPixWaitRes.status, 200);
+  assert.equal(cancelPixWaitRes.json.ride.status, 'cancelada');
+  assert.equal(cancelPixWaitRes.json.cancellationFeeApplied, 0);
+  assert.equal(cancelPixWaitRes.json.ride.cancelledBy, 'passenger');
+
+  // 3) Regras de autorização e transição do passageiro
+  const guardRideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cli1Token },
+    body: {
+      clientId: cli1Id,
+      clientName: 'Passageiro Cancel 1',
+      clientPhone: '(48) 99202-1010',
+      originAddress: 'Origem Protegida',
+      destinationAddress: 'Destino Protegido',
+      distanceKm: 10,
+      durationMin: 14,
+      time: '17:00',
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(guardRideRes.status, 200);
+  const guardRideId = guardRideRes.json.ride.id;
+
+  // Terceiro não pode cancelar corrida de outro passageiro
+  const intruderRes = await apiJson(`/api/rides/${encodeURIComponent(guardRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cli2Token },
+    body: { status: 'cancelada', cancelledBy: 'passenger' }
+  });
+  assert.equal(intruderRes.status, 401);
+
+  // Anônimo não pode cancelar
+  const anonRes = await apiJson(`/api/rides/${encodeURIComponent(guardRideId)}/status`, {
+    method: 'PATCH',
+    body: { status: 'cancelada', cancelledBy: 'passenger' }
+  });
+  assert.equal(anonRes.status, 401);
+
+  // Passageiro não pode forjar transição para finalizada
+  const forgeStatusRes = await apiJson(`/api/rides/${encodeURIComponent(guardRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cli1Token },
+    body: { status: 'finalizada' }
+  });
+  assert.equal(forgeStatusRes.status, 403);
+
+  // Passageiro não pode cancelar viagem que já está em_andamento
+  await db.query(`UPDATE public.rides SET status = $1 WHERE id = $2`, ['em_andamento', guardRideId]);
+  const inProgressCancelRes = await apiJson(`/api/rides/${encodeURIComponent(guardRideId)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cli1Token },
+    body: { status: 'cancelada', cancelledBy: 'passenger' }
+  });
+  assert.equal(inProgressCancelRes.status, 400);
+
+  // Restaura configuração anterior
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify(cfgBefore)]
+  );
+});
+
+test('Alteração de rota (origem/destino) antes do início recalcula tarifa oficial, valida PIX/permissões e bloqueia pós-embarque', async () => {
+  const ip1 = { 'x-forwarded-for': '198.51.100.91' };
+  const ip2 = { 'x-forwarded-for': '198.51.100.92' };
+
+  const ownerRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ip1,
+    body: {
+      name: 'Passageiro Rota 1',
+      phone: '(48) 99303-1111',
+      document: '24681357928',
+      email: `rota1.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(ownerRes.status, 200);
+  const ownerToken = ownerRes.json.clientToken;
+  const ownerId = ownerRes.json.client.id;
+
+  const otherRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ip2,
+    body: {
+      name: 'Passageiro Terceiro',
+      phone: '(48) 99303-2222',
+      document: '71428593691',
+      email: `rota2.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(otherRes.status, 200);
+  const otherToken = otherRes.json.clientToken;
+
+  // 1) Corrida em dinheiro aguardando_confirmacao -> altera destino mais distante -> tarifa sobe autoritativamente no backend
+  const cashCreate = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      clientId: ownerId,
+      clientName: 'Passageiro Rota 1',
+      clientPhone: '(48) 99303-1111',
+      origin: { address: 'Lauro Muller Centro', lat: -28.3912, lng: -49.3935 },
+      destination: { address: 'Guatá', lat: -28.3740, lng: -49.3650 },
+      distanceKm: 5,
+      durationMin: 8,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(cashCreate.status, 200);
+  const rideId = cashCreate.json.ride.id;
+  const oldPrice = cashCreate.json.ride.totalPrice;
+
+  const updateRouteRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/route`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      destination: { address: 'Orleans Centro', lat: -28.3586, lng: -49.2914 },
+      distanceKm: 18,
+      durationMin: 24
+    }
+  });
+  assert.equal(updateRouteRes.status, 200);
+  assert.equal(updateRouteRes.json.ride.destination.address, 'Orleans Centro');
+  assert.ok(updateRouteRes.json.ride.totalPrice > oldPrice);
+  assert.equal(updateRouteRes.json.ride.estimatedPrice, oldPrice);
+  assert.equal(updateRouteRes.json.ride.appliedFareSnapshot?.routeAdjusted, true);
+
+  // Terceiro não pode alterar rota de outra pessoa
+  const intruderRouteRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/route`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': otherToken },
+    body: { destination: { address: 'Destino Invasor', lat: -28.41, lng: -49.31 } }
+  });
+  assert.equal(intruderRouteRes.status, 401);
+
+  // Depois que viagem inicia (em_andamento), não permite alterar via pré-embarque
+  await db.query(`UPDATE public.rides SET status = $1 WHERE id = $2`, ['em_andamento', rideId]);
+  const startedRouteRes = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/route`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': ownerToken },
+    body: { destination: { address: 'Criciuma Centro', lat: -28.6775, lng: -49.3697 } }
+  });
+  assert.equal(startedRouteRes.status, 400);
+
+  // 2) Solicitação PIX aguardando_pagamento permite alterar destino e atualiza valor do PIX
+  const pixCreate = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      clientId: ownerId,
+      clientName: 'Passageiro Rota 1',
+      clientPhone: '(48) 99303-1111',
+      origin: { address: 'Orleans Rodoviaria', lat: -28.3586, lng: -49.2914 },
+      destination: { address: 'Braço do Norte', lat: -28.2738, lng: -49.1665 },
+      distanceKm: 18,
+      durationMin: 22,
+      time: '15:00',
+      category: 'kavro_go',
+      paymentMethod: 'pix'
+    }
+  });
+  assert.equal(pixCreate.status, 200);
+  const pixRideId = pixCreate.json.ride.id;
+  const oldPixPrice = pixCreate.json.ride.totalPrice;
+
+  const pixUpdateRes = await apiJson(`/api/rides/${encodeURIComponent(pixRideId)}/route`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      destination: { address: 'Criciuma Shopping', lat: -28.6820, lng: -49.3730 },
+      distanceKm: 42,
+      durationMin: 48
+    }
+  });
+  assert.equal(pixUpdateRes.status, 200);
+  assert.ok(pixUpdateRes.json.ride.totalPrice > oldPixPrice);
+  assert.equal(pixUpdateRes.json.ride.status, 'aguardando_pagamento');
+
+  // 3) PIX já pago não permite aumentar trajeto sem novo pagamento, mas permite destino mais curto com estorno parcial
+  const pixPayConfirm = await apiJson('/api/payments/webhook', {
+    method: 'POST',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      event: 'payment.confirmed',
+      rideId: pixRideId,
+      amount: pixUpdateRes.json.ride.totalPrice,
+      gatewayTxId: `gw_pix_route_${Date.now()}`
+    }
+  });
+  assert.equal(pixPayConfirm.status, 200);
+  assert.equal(pixPayConfirm.json.ride.paymentStatus, 'confirmado');
+
+  const paidPixHigher = await apiJson(`/api/rides/${encodeURIComponent(pixRideId)}/route`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      destination: { address: 'Florianópolis', lat: -27.5954, lng: -48.5480 },
+      distanceKm: 190,
+      durationMin: 160
+    }
+  });
+  assert.equal(paidPixHigher.status, 400);
+
+  const paidPixShorter = await apiJson(`/api/rides/${encodeURIComponent(pixRideId)}/route`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': ownerToken },
+    body: {
+      destination: { address: 'Lauro Muller Praça', lat: -28.3912, lng: -49.3935 },
+      distanceKm: 15,
+      durationMin: 18
+    }
+  });
+  assert.equal(paidPixShorter.status, 200);
+  assert.ok(paidPixShorter.json.ride.totalPrice < pixUpdateRes.json.ride.totalPrice);
+});
+
+test('Central de Segurança completa: K-Código personalizado/toggle, K-Áudio, K-Ajuda toggle, Contatos de Emergência e Perfil Familiar', async () => {
+  const ipSafetyCli = { 'x-forwarded-for': '198.51.100.120' };
+  const ipSafetyDrv = { 'x-forwarded-for': '198.51.100.121' };
+  const ipOtherCli = { 'x-forwarded-for': '198.51.100.122' };
+
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '5').slice(-9).split('').map(Number);
+    if (new Set(base).size === 1) base[8] = (base[8] + 1) % 10;
+    const calc = (arr) => {
+      let s = 0;
+      for (let i = 0; i < arr.length; i++) s += arr[i] * (arr.length + 1 - i);
+      return ((s * 10) % 11) % 10;
+    };
+    const d1 = calc(base);
+    const d2 = calc([...base, d1]);
+    return [...base, d1, d2].join('');
+  };
+  const uniqueSeed = Math.floor((Date.now() % 800000000) + 100000000);
+
+  const regCli = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipSafetyCli,
+    body: {
+      name: 'Passageiro Central Seg',
+      phone: '(48) 99444-1122',
+      document: makeTestCpf(uniqueSeed),
+      email: `safety.cli.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(regCli.status, 200);
+  const cliId = regCli.json.client.id;
+  const cliToken = regCli.json.clientToken;
+
+  const regOther = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ipOtherCli,
+    body: {
+      name: 'Invasor Seguranca',
+      phone: '(48) 99444-3344',
+      document: makeTestCpf(uniqueSeed + 17),
+      email: `safety.other.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(regOther.status, 200);
+  const otherToken = regOther.json.clientToken;
+
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    headers: ipSafetyDrv,
+    body: {
+      name: 'Motorista Seguranca',
+      phone: '(48) 99555-2211',
+      email: `safety.drv.${Date.now()}@kavro.test`,
+      document: makeTestCpf(uniqueSeed + 31),
+      password: '1234',
+      vehicleBrand: 'Hyundai',
+      vehicleModel: 'HB20',
+      vehicleColor: 'Branco',
+      vehiclePlate: 'KVR4B88',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvToken = drvReg.json.driverToken;
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({ ...drvObj, approvalStatus: 'aprovado', kyc: { status: 'aprovado' } });
+
+  // 1) Outro usuário ou anônimo não acessa /api/clients/:id/safety
+  const unauthSafety = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/safety`);
+  assert.equal(unauthSafety.status, 401);
+  const wrongUserSafety = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/safety`, {
+    method: 'PUT',
+    headers: { 'x-client-token': otherToken },
+    body: { safetyPreferences: { boardingPinEnabled: false } }
+  });
+  assert.equal(wrongUserSafety.status, 401);
+
+  // 2) Define K-Código personalizado ("9130"), K-Áudio ativo, K-Ajuda desligado temporariamente e Contato de Emergência
+  const badPinSave = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/safety`, {
+    method: 'PUT',
+    headers: { 'x-client-token': cliToken },
+    body: { safetyPreferences: { customBoardingPin: '12' } }
+  });
+  assert.equal(badPinSave.status, 400);
+
+  const saveSafetyRes = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/safety`, {
+    method: 'PUT',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      safetyPreferences: {
+        boardingPinEnabled: true,
+        customBoardingPin: '9130',
+        audioRecordingEnabled: true,
+        audioAutoRecord: true,
+        rideCheckEnabled: false,
+        familySafetyEnabled: false
+      },
+      emergencyContacts: [
+        {
+          id: 'ec-test-1',
+          name: 'Maria Emergência',
+          phone: '(48) 99888-7766',
+          relationship: 'Mãe'
+        }
+      ]
+    }
+  });
+  assert.equal(saveSafetyRes.status, 200);
+  assert.equal(saveSafetyRes.json.safetyPreferences.customBoardingPin, '9130');
+  assert.equal(saveSafetyRes.json.safetyPreferences.audioRecordingEnabled, true);
+  assert.equal(saveSafetyRes.json.safetyPreferences.rideCheckEnabled, false);
+  assert.equal(saveSafetyRes.json.emergencyContacts.length, 1);
+
+  // 3) Corrida criada recebe o K-Código personalizado ("9130")
+  const ride1Res = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Central Seg',
+      clientPhone: '(48) 99444-1122',
+      origin: { address: 'Origem Seg', lat: -28.4000, lng: -49.4000 },
+      destination: { address: 'Destino Seg', lat: -28.5000, lng: -49.4000 },
+      distanceKm: 11.1,
+      durationMin: 18,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(ride1Res.status, 200);
+  const ride1Id = ride1Res.json.ride.id;
+  assert.equal(ride1Res.json.ride.boardingPin, '9130');
+  assert.equal(ride1Res.json.ride.requiresBoardingPin, true);
+
+  // 4) Desligar K-Código remove exigência de PIN inclusive na corrida pré-embarque e em novas corridas
+  const disablePinRes = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/safety`, {
+    method: 'PUT',
+    headers: { 'x-client-token': cliToken },
+    body: { safetyPreferences: { boardingPinEnabled: false } }
+  });
+  assert.equal(disablePinRes.status, 200);
+  assert.equal(disablePinRes.json.safetyPreferences.boardingPinEnabled, false);
+
+  const acceptRide1 = await apiJson(`/api/rides/${encodeURIComponent(ride1Id)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(acceptRide1.status, 200);
+  assert.equal(acceptRide1.json.ride.requiresBoardingPin, false);
+
+  // Motorista inicia viagem sem PIN porque o passageiro desativou K-Código
+  const startNoPinRes = await apiJson(`/api/rides/${encodeURIComponent(ride1Id)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { status: 'em_andamento' }
+  });
+  assert.equal(startNoPinRes.status, 200);
+  assert.equal(startNoPinRes.json.ride.status, 'em_andamento');
+
+  // 5) K-Ajuda desligado não dispara RideCheck automático mesmo em coordenada fora de rota
+  const offRouteNoRc = await apiJson(`/api/rides/${encodeURIComponent(ride1Id)}/location`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: {
+      role: 'driver',
+      location: { lat: -28.3400, lng: -49.3000, speedKmH: 55, heading: 45 }
+    }
+  });
+  assert.equal(offRouteNoRc.status, 200);
+  assert.equal(offRouteNoRc.json.rideCheck, null);
+
+  // 6) Passageiro registra K-Áudio vinculado à corrida e reativa Perfil Familiar (força K-Código obrigatório novamente)
+  const audioPost = await apiJson(`/api/rides/${encodeURIComponent(ride1Id)}/safety-audio`, {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      durationSec: 18,
+      mimeType: 'audio/webm',
+      sizeBytes: 32768,
+      notes: 'Gravação de teste da Central',
+      escalateToSos: true
+    }
+  });
+  assert.equal(audioPost.status, 200);
+  assert.equal(audioPost.json.record.durationSec, 18);
+  assert.equal(audioPost.json.safetyAudioRecords.length, 1);
+
+  const enableFamilyRes = await apiJson(`/api/clients/${encodeURIComponent(cliId)}/safety`, {
+    method: 'PUT',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      safetyPreferences: {
+        boardingPinEnabled: false,
+        familySafetyEnabled: true,
+        familyGuardianName: 'Pai Responsável',
+        familyGuardianPhone: '(48) 99700-1122',
+        rideCheckEnabled: true
+      }
+    }
+  });
+  assert.equal(enableFamilyRes.status, 200);
+  assert.equal(enableFamilyRes.json.safetyPreferences.boardingPinEnabled, true);
+
+  // Reatribuindo driver offline antes de nova corrida de teste e disparando SOS verifica notificação a contato de emergência
+  const sosTrigger = await apiJson('/api/sos/location', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      id: `sos-safety-${Date.now()}`,
+      lat: -28.45,
+      lng: -49.38,
+      rideId: ride1Id,
+      address: 'SC-390, Lauro Müller/SC'
+    }
+  });
+  assert.equal(sosTrigger.status, 200);
+
+  const listAfterSos = await apiJson('/api/rides', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(listAfterSos.status, 200);
+  const rideAfterSos = Array.isArray(listAfterSos.json)
+    ? listAfterSos.json.find((r) => r.id === ride1Id)
+    : null;
+  assert.ok(rideAfterSos);
+  assert.ok(
+    (rideAfterSos.trustedContactsDispatches || []).some((d) =>
+      String(d.contactName || '').includes('Maria Emergência')
+    ),
+    'Contato de emergência deve ser notificado automaticamente quando SOS é disparado na corrida'
+  );
+});
+
+test('Perfil Familiar (Adolescentes 12-18 anos): trava idade/termos, gera link rastreavel API, vincula cadastro, rastreia viagem e revoga acesso', async () => {
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '5').slice(-9).split('').map(Number);
+    if (new Set(base).size === 1) base[8] = (base[8] + 1) % 10;
+    const calc = (arr) => {
+      let s = 0;
+      for (let i = 0; i < arr.length; i++) s += arr[i] * (arr.length + 1 - i);
+      return ((s * 10) % 11) % 10;
+    };
+    const d1 = calc(base);
+    const d2 = calc([...base, d1]);
+    return [...base, d1, d2].join('');
+  };
+  const seedBase = Math.floor((Date.now() % 700000000) + 200000000);
+  const currentYear = new Date().getFullYear();
+
+  const guardReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.150' },
+    body: {
+      name: 'Lucas Responsável Legal',
+      phone: '(48) 99199-8877',
+      document: makeTestCpf(seedBase),
+      email: `guard.${Date.now()}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(guardReg.status, 200);
+  const guardId = guardReg.json.client.id;
+  const guardToken = guardReg.json.clientToken;
+
+  // 1) Bloqueia menor de 12 anos e maior de 18 anos
+  const under12Res = await apiJson(`/api/clients/${encodeURIComponent(guardId)}/family/invite`, {
+    method: 'POST',
+    headers: { 'x-client-token': guardToken },
+    body: {
+      name: 'Joao Criança',
+      phone: '(48) 99199-4455',
+      birthDate: `01/01/${currentYear - 10}`,
+      termsAccepted: true
+    }
+  });
+  assert.equal(under12Res.status, 400);
+
+  const over18Res = await apiJson(`/api/clients/${encodeURIComponent(guardId)}/family/invite`, {
+    method: 'POST',
+    headers: { 'x-client-token': guardToken },
+    body: {
+      name: 'Carlos Adulto',
+      phone: '(48) 99199-4455',
+      birthDate: `01/01/${currentYear - 21}`,
+      termsAccepted: true
+    }
+  });
+  assert.equal(over18Res.status, 400);
+
+  // 2) Exige aceite dos Termos do Perfil Familiar
+  const noTermsRes = await apiJson(`/api/clients/${encodeURIComponent(guardId)}/family/invite`, {
+    method: 'POST',
+    headers: { 'x-client-token': guardToken },
+    body: {
+      name: 'Gabriel Adolescente',
+      phone: '(48) 99199-5566',
+      birthDate: `01/01/${currentYear - 15}`,
+      termsAccepted: false
+    }
+  });
+  assert.equal(noTermsRes.status, 400);
+
+  // 3) Convite válido para adolescente de 15 anos gera link rastreável e dispara mensagem WhatsApp pela API
+  const inviteRes = await apiJson(`/api/clients/${encodeURIComponent(guardId)}/family/invite`, {
+    method: 'POST',
+    headers: { 'x-client-token': guardToken },
+    body: {
+      name: 'Gabriel Adolescente',
+      phone: '(48) 99199-5566',
+      birthDate: `01/01/${currentYear - 15}`,
+      termsAccepted: true
+    }
+  });
+  assert.equal(inviteRes.status, 200);
+  const inviteToken = inviteRes.json.inviteToken;
+  assert.ok(inviteToken.startsWith('FAM-'));
+  assert.ok(inviteRes.json.inviteUrl.includes(`/familia/convite/${inviteToken}`));
+  assert.ok(inviteRes.json.whatsappUrl.includes('wa.me/'));
+  assert.equal(inviteRes.json.member.status, 'convite_enviado');
+  assert.equal(inviteRes.json.member.teenAge >= 14 && inviteRes.json.member.teenAge <= 15, true);
+
+  // 4) Link público do convite retorna dados seguros para o adolescente completar o cadastro
+  const publicInviteRes = await apiJson(`/api/family/invite/${encodeURIComponent(inviteToken)}`);
+  assert.equal(publicInviteRes.status, 200);
+  assert.equal(publicInviteRes.json.invite.guardianName, 'Lucas Responsável Legal');
+  assert.equal(publicInviteRes.json.invite.accountAlreadyExists, false);
+
+  // 5) Adolescente abre o link e se cadastra -> conta fica automaticamente vinculada ('teen' + status 'ativo')
+  const teenRegRes = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.151' },
+    body: {
+      name: 'Gabriel Adolescente',
+      phone: '(48) 99199-5566',
+      document: makeTestCpf(seedBase + 13),
+      email: `teen.${Date.now()}@kavro.test`,
+      password: '1234',
+      birthDate: `01/01/${currentYear - 15}`,
+      familyInviteToken: inviteToken,
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(teenRegRes.status, 200);
+  assert.equal(teenRegRes.json.client.accountType, 'teen');
+  assert.equal(teenRegRes.json.client.guardianClientId, guardId);
+  assert.equal(teenRegRes.json.client.safetyPreferences.boardingPinEnabled, true);
+  assert.equal(teenRegRes.json.client.safetyPreferences.rideCheckEnabled, true);
+  const teenToken = teenRegRes.json.clientToken;
+
+  // 6) Motorista bem avaliado aceita viagem do adolescente (motorista nota < 4.5 é bloqueado)
+  const lowDrvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.152' },
+    body: {
+      name: 'Motorista Baixa Nota',
+      phone: '(48) 99222-1111',
+      email: `lowdrv.${Date.now()}@kavro.test`,
+      document: makeTestCpf(seedBase + 29),
+      password: '1234',
+      vehicleBrand: 'Fiat',
+      vehicleModel: 'Argo',
+      vehicleColor: 'Preto',
+      vehiclePlate: 'KVR1C11',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  const lowDrvObj = await finance.getDriverById(lowDrvReg.json.driver.id);
+  await finance.saveDriverRecord({ ...lowDrvObj, approvalStatus: 'aprovado', kyc: { status: 'aprovado' }, rating: 4.1 });
+
+  const topDrvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.153' },
+    body: {
+      name: 'Motorista 5 Estrelas',
+      phone: '(48) 99222-2222',
+      email: `topdrv.${Date.now()}@kavro.test`,
+      document: makeTestCpf(seedBase + 43),
+      password: '1234',
+      vehicleBrand: 'Toyota',
+      vehicleModel: 'Yaris',
+      vehicleColor: 'Branco',
+      vehiclePlate: 'KVR5S99',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  const topDrvObj = await finance.getDriverById(topDrvReg.json.driver.id);
+  await finance.saveDriverRecord({ ...topDrvObj, approvalStatus: 'aprovado', kyc: { status: 'aprovado' }, rating: 4.9 });
+
+  const teenRideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': teenToken },
+    body: {
+      clientId: teenRegRes.json.client.id,
+      clientName: 'Gabriel Adolescente',
+      clientPhone: '(48) 99199-5566',
+      origin: { address: 'Colégio Centro', lat: -28.3912, lng: -49.3935 },
+      destination: { address: 'Casa Família', lat: -28.4100, lng: -49.4050 },
+      distanceKm: 5,
+      durationMin: 10,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(teenRideRes.status, 200);
+  const teenRideId = teenRideRes.json.ride.id;
+  assert.equal(teenRideRes.json.ride.isTeenRide, true);
+  assert.match(String(teenRideRes.json.ride.boardingPin || ''), /^\d{4}$/);
+
+  const lowAcceptRes = await apiJson(`/api/rides/${encodeURIComponent(teenRideId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': lowDrvReg.json.driverToken },
+    body: { driverId: lowDrvObj.id }
+  });
+  assert.equal(lowAcceptRes.status, 403);
+
+  const topAcceptRes = await apiJson(`/api/rides/${encodeURIComponent(teenRideId)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': topDrvReg.json.driverToken },
+    body: { driverId: topDrvObj.id }
+  });
+  assert.equal(topAcceptRes.status, 200);
+
+  // 7) Área do Perfil Familiar mostra conta ativa, corrida ativa e link assinado de rastreamento ao vivo para o responsável
+  const famHubRes = await apiJson(`/api/clients/${encodeURIComponent(guardId)}/family`, {
+    headers: { 'x-client-token': guardToken }
+  });
+  assert.equal(famHubRes.status, 200);
+  assert.equal(famHubRes.json.members.length, 1);
+  const mem = famHubRes.json.members[0];
+  assert.equal(mem.status, 'ativo');
+  assert.ok(mem.activeRide);
+  assert.equal(mem.activeRide.id, teenRideId);
+  assert.equal(mem.activeRide.driverPlate, 'KVR5S99');
+  assert.ok(mem.activeRide.trackingUrl.includes(`/viagem/${teenRideId}?t=`));
+
+  // Responsável abre /api/rides/:id/track?t=... usando token do link gerado
+  const trkToken = new URL(`http://localhost${mem.activeRide.trackingUrl}`).searchParams.get('t');
+  const trkRes = await apiJson(`/api/rides/${encodeURIComponent(teenRideId)}/track?t=${encodeURIComponent(trkToken)}`);
+  assert.equal(trkRes.status, 200);
+  assert.equal(trkRes.json.ride.driverName, 'Motorista 5 Estrelas');
+  assert.equal(trkRes.json.ride.boardingPin, undefined);
+
+  // 8) Responsável revoga membro -> remove do Perfil Familiar e volta adolescente para conta padrão
+  const revokeRes = await apiJson(
+    `/api/clients/${encodeURIComponent(guardId)}/family/${encodeURIComponent(mem.id)}`,
+    {
+      method: 'DELETE',
+      headers: { 'x-client-token': guardToken }
+    }
+  );
+  assert.equal(revokeRes.status, 200);
+  const famAfterRevoke = await apiJson(`/api/clients/${encodeURIComponent(guardId)}/family`, {
+    headers: { 'x-client-token': guardToken }
+  });
+  assert.equal(famAfterRevoke.status, 200);
+  assert.equal(famAfterRevoke.json.members.length, 0);
+});
+
+test('2 Tipos de Categoria (Padrao vs Entregas): somente 2 opcoes, validacao de entrega, tarifa, preferencias do motorista e rastreio', async () => {
+  // 1) Normalização consolida categorias legadas (KAVRO GO / PLUS / EXEC) para estritamente 2 opções: Padrão e Entregas
+  const legacyOnlyPadrao = finance.normalizeCategoriesServer({
+    rideCategories: [
+      { id: 'kavro_go', name: 'KAVRO GO' },
+      { id: 'kavro_plus', name: 'KAVRO PLUS' },
+      { id: 'kavro_exec', name: 'KAVRO EXEC' }
+    ]
+  });
+  assert.equal(legacyOnlyPadrao.length, 2);
+  assert.equal(legacyOnlyPadrao[0].name, 'Padrão');
+  assert.equal(legacyOnlyPadrao[1].name, 'Entregas');
+  assert.equal(finance.resolveCategoryTypeServer(legacyOnlyPadrao.find(c => c.id === 'kavro_go')), 'padrao');
+  assert.equal(finance.resolveCategoryTypeServer(legacyOnlyPadrao.find(c => c.id === 'kavro_entregas')), 'entregas');
+
+  // 2) Cadastra cliente e motorista para fluxo de Entregas
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '5').slice(-9).split('').map(Number);
+    if (new Set(base).size === 1) base[8] = (base[8] + 1) % 10;
+    const calc = (arr) => {
+      let s = 0;
+      for (let i = 0; i < arr.length; i++) s += arr[i] * (arr.length + 1 - i);
+      return ((s * 10) % 11) % 10;
+    };
+    const d1 = calc(base);
+    const d2 = calc([...base, d1]);
+    return [...base, d1, d2].join('');
+  };
+  const seed = Math.floor((Date.now() % 700000000) + 300000000);
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.161' },
+    body: {
+      name: 'Mariana Lojista',
+      phone: '(48) 99161-0001',
+      email: `loja.${Date.now()}@kavro.test`,
+      document: makeTestCpf(seed + 71),
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliToken = cliReg.json.clientToken;
+
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.162' },
+    body: {
+      name: 'Carlos Entregador',
+      phone: '(48) 99161-0002',
+      email: `drv.entregas.${Date.now()}@kavro.test`,
+      document: makeTestCpf(seed + 72),
+      password: '1234',
+      vehicleBrand: 'Fiat',
+      vehicleModel: 'Argo',
+      vehicleColor: 'Prata',
+      vehiclePlate: 'KVR9E91',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({ ...drvObj, approvalStatus: 'aprovado', kyc: { status: 'aprovado' }, isOnline: true });
+
+  // 3) Preferências do motorista: desmarcar KAVRO ENTREGAS via disabledCategoryIds persiste e pode ser reativado
+  const prefOff = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: {
+      enabledCategories: ['kavro_go'],
+      disabledCategoryIds: ['kavro_entregas']
+    }
+  });
+  assert.equal(prefOff.status, 200);
+  assert.equal(prefOff.json.driver.enabledCategories.includes('kavro_entregas'), false);
+
+  const prefOn = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: {
+      enabledCategories: ['kavro_go', 'kavro_entregas'],
+      disabledCategoryIds: []
+    }
+  });
+  assert.equal(prefOn.status, 200);
+  assert.equal(prefOn.json.driver.enabledCategories.includes('kavro_entregas'), true);
+  assert.deepEqual(prefOn.json.driver.disabledCategoryIds, []);
+
+  // Motorista também pode desmarcar Padrão mantendo somente Entregas ativa
+  const onlyDeliveries = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: {
+      enabledCategories: ['kavro_entregas'],
+      disabledCategoryIds: ['kavro_go']
+    }
+  });
+  assert.equal(onlyDeliveries.status, 200);
+  assert.deepEqual(onlyDeliveries.json.driver.enabledCategories, ['kavro_entregas']);
+
+  // E reativar ambas novamente
+  const bothAgain = await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: {
+      enabledCategories: ['kavro_go', 'kavro_entregas'],
+      disabledCategoryIds: []
+    }
+  });
+  assert.equal(bothAgain.status, 200);
+  assert.deepEqual(bothAgain.json.driver.enabledCategories, ['kavro_go', 'kavro_entregas']);
+
+  // 4) Pedido na modalidade Entregas sem destinatario/produto deve ser bloqueado (HTTP 400)
+  const invalidDelRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliReg.json.client.id,
+      clientName: 'Mariana Lojista',
+      clientPhone: '(48) 99123-4567',
+      origin: { address: 'Loja Centro, 100', lat: -28.3910, lng: -49.3930 },
+      destination: { address: 'Rua das Palmeiras, 450', lat: -28.4050, lng: -49.4010 },
+      distanceKm: 4,
+      durationMin: 10,
+      time: '14:00',
+      category: 'kavro_entregas',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(invalidDelRes.status, 400);
+
+  // 5) Pedido completo de Entrega com destinatário, produto, porte e instruções cria corrida de entrega com PIN
+  const validDelRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliReg.json.client.id,
+      clientName: 'Mariana Lojista',
+      clientPhone: '(48) 99123-4567',
+      origin: { address: 'Loja Centro, 100', lat: -28.3910, lng: -49.3930 },
+      destination: { address: 'Rua das Palmeiras, 450', lat: -28.4050, lng: -49.4010 },
+      distanceKm: 4,
+      durationMin: 10,
+      time: '14:00',
+      category: 'kavro_entregas',
+      paymentMethod: 'dinheiro',
+      deliveryDetails: {
+        role: 'sender',
+        recipientName: 'Pedro Souza',
+        recipientPhone: '(48) 99911-2233',
+        itemDescription: 'Caixa com 2 tênis esportivos',
+        packageSize: 'medio',
+        dropoffMode: 'portaria',
+        instructions: 'Deixar com o porteiro Marcos no bloco B'
+      }
+    }
+  });
+  assert.equal(validDelRes.status, 200);
+  const delRide = validDelRes.json.ride;
+  assert.equal(delRide.category, 'kavro_entregas');
+  assert.equal(delRide.serviceType, 'entregas');
+  assert.equal(delRide.passengers, 0);
+  assert.equal(delRide.deliveryDetails?.recipientName, 'Pedro Souza');
+  assert.equal(delRide.deliveryDetails?.itemDescription, 'Caixa com 2 tênis esportivos');
+  assert.equal(delRide.deliveryDetails?.dropoffMode, 'portaria');
+  assert.match(String(delRide.boardingPin || ''), /^\d{4}$/);
+
+  // 6) Motorista aceita a entrega e recebe os dados completos do destinatário e produto
+  const acceptDelRes = await apiJson(`/api/rides/${encodeURIComponent(delRide.id)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(acceptDelRes.status, 200);
+  assert.equal(acceptDelRes.json.ride.serviceType, 'entregas');
+  assert.equal(acceptDelRes.json.ride.deliveryDetails?.recipientPhone, '(48) 99911-2233');
+  assert.equal(acceptDelRes.json.ride.boardingPin, undefined);
+
+  // 7) Link de rastreamento público (/api/rides/:id/track) mascara telefone e sobrenome do destinatário
+  const trkToken = new URL(`http://localhost${delRide.trackingUrl}`).searchParams.get('t');
+  const trkRes = await apiJson(`/api/rides/${encodeURIComponent(delRide.id)}/track?t=${encodeURIComponent(trkToken)}`);
+  assert.equal(trkRes.status, 200);
+  assert.equal(trkRes.json.ride.serviceType, 'entregas');
+  assert.equal(trkRes.json.ride.deliveryDetails?.itemDescription, 'Caixa com 2 tênis esportivos');
+  assert.notEqual(trkRes.json.ride.deliveryDetails?.recipientPhone, '(48) 99911-2233');
+});
+
+test('Cancelar corrida ou enviar nova solicitação encerra PIX pendentes anteriores (cancelar tudo)', async () => {
+  const ip = { 'x-forwarded-for': '198.51.100.145' };
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '5').slice(-9).split('').map(Number);
+    if (new Set(base).size === 1) base[8] = (base[8] + 1) % 10;
+    const calc = (arr) => {
+      let s = 0;
+      for (let i = 0; i < arr.length; i++) s += arr[i] * (arr.length + 1 - i);
+      return ((s * 10) % 11) % 10;
+    };
+    const d1 = calc(base);
+    const d2 = calc([...base, d1]);
+    return [...base, d1, d2].join('');
+  };
+  const phone = `(48) 99448-${String(Date.now()).slice(-4)}`;
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ip,
+    body: {
+      name: 'Lucas CancelAll',
+      phone,
+      email: `cancelall.${Date.now()}@kavro.test`,
+      document: makeTestCpf(Math.floor((Date.now() % 700000000) + 300000083)),
+      password: 'CancelAllPass123!',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliId = cliReg.json.client.id;
+  const cliToken = cliReg.json.clientToken;
+
+  // 1) Cria solicitação PIX #1 em aguardando_pagamento
+  const pix1Res = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Lucas CancelAll',
+      clientPhone: phone,
+      originAddress: 'Av. Centenário, 500',
+      destinationAddress: 'Travessa Padre Pedro Baldoncini, 10',
+      distanceKm: 7,
+      durationMin: 14,
+      time: '21:20',
+      category: 'kavro_go',
+      paymentMethod: 'pix'
+    }
+  });
+  assert.equal(pix1Res.status, 200);
+  const pix1Id = pix1Res.json.ride.id;
+  assert.equal(pix1Res.json.ride.status, 'aguardando_pagamento');
+
+  // 2) Ao criar nova corrida (#2 em dinheiro), solicitação PIX anterior (#1) é cancelada automaticamente
+  const ride2Res = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Lucas CancelAll',
+      clientPhone: phone,
+      originAddress: 'Av. Centenário, 500',
+      destinationAddress: 'Shopping Nações, 200',
+      distanceKm: 6,
+      durationMin: 12,
+      time: '21:25',
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(ride2Res.status, 200);
+  assert.ok(Array.isArray(ride2Res.json.alsoCancelledRideIds));
+  assert.ok(ride2Res.json.alsoCancelledRideIds.includes(pix1Id));
+
+  // 3) Mesmo se existir um PIX pendente legado em aguardando_pagamento no banco, cancelar a corrida ativa cancela tudo
+  await db.query('UPDATE public.rides SET status = $1 WHERE id = $2', ['aguardando_pagamento', pix1Id]);
+  await db.query('UPDATE public.rides SET payment_status = $1 WHERE id = $2', ['aguardando', pix1Id]);
+  const cancelAllRes = await apiJson(`/api/rides/${encodeURIComponent(ride2Res.json.ride.id)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cliToken },
+    body: { status: 'cancelada', cancelledBy: 'passenger', cancellationReason: 'Desisti da viagem' }
+  });
+  assert.equal(cancelAllRes.status, 200);
+  assert.equal(cancelAllRes.json.ride.status, 'cancelada');
+  assert.ok(Array.isArray(cancelAllRes.json.alsoCancelledRideIds));
+  assert.ok(cancelAllRes.json.alsoCancelledRideIds.includes(pix1Id));
+
+  const checkPix1 = await db.query('SELECT status, payment_status FROM public.rides WHERE id = $1', [pix1Id]);
+  assert.equal(checkPix1.rows[0].status, 'cancelada');
+  assert.equal(checkPix1.rows[0].payment_status, 'cancelado');
 });

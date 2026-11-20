@@ -1,5 +1,6 @@
 import {
   Ride,
+  RideStatus,
   SystemConfig,
   Expense,
   ClientProfile,
@@ -15,14 +16,20 @@ import {
   RideChatMessage,
   PaymentMethod,
   AuditLogsResponse,
-  AuditLogRecord
+  AuditLogRecord,
+  PassengerSafetyPreferences,
+  EmergencyContact,
+  TrustedContact,
+  SafetyAudioIncidentRecord,
+  FamilyMemberRecord
 } from '../types';
 import { formatRideCode, getNextSequentialRideId } from '../utils/format';
 import {
   DEFAULT_RIDE_CATEGORIES,
   normalizeCategoriesFromConfig,
   getCategoryById,
-  getEffectiveCategoryPricing
+  getEffectiveCategoryPricing,
+  resolveCategoryType
 } from '../utils/categoryEngine';
 
 const STORAGE_KEYS = {
@@ -37,6 +44,95 @@ const STORAGE_KEYS = {
   ADMIN_AUTH: 'up_mobilidade_admin_auth',
   RECENT_DESTINATIONS: 'up_mobilidade_recent_destinations',
 };
+
+export const ACTIVE_PASSENGER_RIDE_STATUSES: RideStatus[] = [
+  'aguardando_pagamento',
+  'aguardando_confirmacao',
+  'na_fila',
+  'confirmada',
+  'a_caminho',
+  'no_local',
+  'em_andamento'
+];
+
+/** Finds the latest non-terminal ride belonging to the current passenger. */
+export function findActivePassengerRide(
+  rides: Ride[],
+  currentUser?: ClientProfile | null
+): Ride | null {
+  if (!Array.isArray(rides) || rides.length === 0) return null;
+  const uPhoneClean = (currentUser?.phone || '').replace(/\D/g, '');
+  const uNameClean = (currentUser?.name || '').trim().toLowerCase();
+
+  const matches = rides.filter((r) => {
+    if (!ACTIVE_PASSENGER_RIDE_STATUSES.includes(r.status)) return false;
+    if (!currentUser) return true;
+    const rPhoneClean = (r.clientPhone || '').replace(/\D/g, '');
+    const rNameClean = (r.clientName || '').trim().toLowerCase();
+    return Boolean(
+      (currentUser.id && r.clientId === currentUser.id) ||
+      (uPhoneClean && rPhoneClean && uPhoneClean === rPhoneClean) ||
+      (uNameClean && rNameClean && uNameClean === rNameClean)
+    );
+  });
+
+  if (matches.length === 0) return null;
+  return [...matches].sort((a, b) => {
+    const tA = new Date(a.updatedAt || a.createdAt || 0).getTime();
+    const tB = new Date(b.updatedAt || b.createdAt || 0).getTime();
+    return tB - tA;
+  })[0];
+}
+
+const PASSENGER_CANCELLABLE_STATUSES: RideStatus[] = [
+  'aguardando_pagamento',
+  'aguardando_confirmacao',
+  'na_fila',
+  'confirmada',
+  'a_caminho',
+  'no_local'
+];
+
+const POST_ACCEPT_CANCEL_FEE_STATUSES: RideStatus[] = [
+  'na_fila',
+  'confirmada',
+  'a_caminho',
+  'no_local'
+];
+
+export const PASSENGER_EDITABLE_ROUTE_STATUSES: RideStatus[] = [
+  'aguardando_pagamento',
+  'aguardando_confirmacao',
+  'na_fila',
+  'confirmada',
+  'a_caminho',
+  'no_local'
+];
+
+/** Returns true when a passenger can alter origin/destination before the trip starts. */
+export function canPassengerEditRoute(ride?: Ride | null): boolean {
+  if (!ride) return false;
+  return PASSENGER_EDITABLE_ROUTE_STATUSES.includes(ride.status);
+}
+
+/** Returns true when a passenger can cancel this ride or request before trip start. */
+export function canPassengerCancelRide(ride?: Ride | null): boolean {
+  if (!ride) return false;
+  return PASSENGER_CANCELLABLE_STATUSES.includes(ride.status);
+}
+
+/** Computes estimated cancellation fee matching backend policy before driver acceptance vs after. */
+export function getEstimatedPassengerCancelFee(
+  ride?: Ride | null,
+  config?: SystemConfig | null
+): number {
+  if (!ride || !canPassengerCancelRide(ride)) return 0;
+  const wasAccepted = Boolean(ride.driverId && POST_ACCEPT_CANCEL_FEE_STATUSES.includes(ride.status));
+  if (!wasAccepted) return 0;
+  const configured = Number(config?.cancellationFeeAmount || 0);
+  if (!(configured > 0)) return 0;
+  return ride.totalPrice > 0 ? Math.min(ride.totalPrice, configured) : configured;
+}
 
 export const DEFAULT_CONFIG: SystemConfig = {
   companyName: 'Kavro Drive',
@@ -66,6 +162,7 @@ export const DEFAULT_CONFIG: SystemConfig = {
   advanceNoticeHours: 0,
   bufferBetweenRidesMin: 0,
   platformCommissionPercent: 20,
+  platformCommissionFixed: 0,
   paymentMethodCommissionPercents: {
     pix: 20,
     cartao_credito: 20,
@@ -189,6 +286,21 @@ export const StorageService = {
     }
   },
 
+  markRidesCancelledInList(rides: Ride[], ids: string[]): Ride[] {
+    if (!ids.length) return rides;
+    const idSet = new Set(ids);
+    return rides.map((r) =>
+      idSet.has(r.id)
+        ? {
+            ...r,
+            status: 'cancelada' as const,
+            cancelledBy: 'passenger' as const,
+            paymentStatus: r.paymentStatus === 'aguardando' ? ('cancelado' as const) : r.paymentStatus
+          }
+        : r
+    );
+  },
+
   getRides(): Ride[] {
     const data = localStorage.getItem(STORAGE_KEYS.RIDES);
     if (!data) return [];
@@ -204,11 +316,14 @@ export const StorageService = {
   },
 
   // Solicitação de corrida sob demanda (Uber style) com retorno da resposta do gateway (Pix / Cartão / Dinheiro)
-  async requestRideOnDemand(ridePayload: Partial<Ride>): Promise<{
+  async requestRideOnDemand(ridePayload: Partial<Ride> & { stripePaymentIntentId?: string }): Promise<{
     ok: boolean;
     ride?: Ride;
     error?: string;
     paymentStatus?: string;
+    requiresAction?: boolean;
+    clientSecret?: string;
+    paymentIntentId?: string;
   }> {
     try {
       const res = await fetch('/api/rides', {
@@ -221,16 +336,24 @@ export const StorageService = {
         return {
           ok: false,
           error: data.error || 'Não foi possível solicitar a corrida.',
-          paymentStatus: data.paymentStatus
+          paymentStatus: data.paymentStatus,
+          requiresAction: Boolean(data.requiresAction),
+          clientSecret: data.clientSecret,
+          paymentIntentId: data.paymentIntentId
         };
       }
       const savedRide: Ride = data.ride;
-      const rides = this.getRides();
+      const alsoCancelledIds: string[] = Array.isArray(data.alsoCancelledRideIds) ? data.alsoCancelledRideIds : [];
+      const rides = this.markRidesCancelledInList(this.getRides(), alsoCancelledIds);
       const idx = rides.findIndex(r => r.id === savedRide.id);
       if (idx >= 0) rides[idx] = savedRide;
       else rides.unshift(savedRide);
       localStorage.setItem(STORAGE_KEYS.RIDES, JSON.stringify(rides));
-      window.dispatchEvent(new CustomEvent('up_rides_updated', { detail: { rideId: savedRide.id } }));
+      window.dispatchEvent(
+        new CustomEvent('up_rides_updated', {
+          detail: { rideId: savedRide.id, alsoCancelledRideIds: alsoCancelledIds }
+        })
+      );
       return { ok: true, ride: savedRide };
     } catch {
       return { ok: false, error: 'Erro de conexão ao solicitar corrida.' };
@@ -264,12 +387,17 @@ export const StorageService = {
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
         if (data?.ok && data.ride) {
-          const current = this.getRides();
+          const alsoCancelledIds: string[] = Array.isArray(data.alsoCancelledRideIds) ? data.alsoCancelledRideIds : [];
+          const current = this.markRidesCancelledInList(this.getRides(), alsoCancelledIds);
           const idx = current.findIndex(r => r.id === toSave.id || r.id === data.ride.id);
           if (idx >= 0) {
             current[idx] = { ...current[idx], ...data.ride };
             localStorage.setItem(STORAGE_KEYS.RIDES, JSON.stringify(current));
-            window.dispatchEvent(new CustomEvent('up_rides_updated', { detail: { rideId: data.ride.id } }));
+            window.dispatchEvent(
+              new CustomEvent('up_rides_updated', {
+                detail: { rideId: data.ride.id, alsoCancelledRideIds: alsoCancelledIds }
+              })
+            );
           }
         }
       })
@@ -352,6 +480,110 @@ export const StorageService = {
     }
   },
 
+  async cancelRide(
+    rideId: string,
+    cancellationReason?: string
+  ): Promise<{
+    ok: boolean;
+    ride?: Ride;
+    cancellationFeeApplied?: number;
+    refundAmount?: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({
+          status: 'cancelada',
+          cancelledBy: 'passenger',
+          ...(cancellationReason ? { cancellationReason } : {})
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível cancelar a corrida.' };
+      }
+      // Atualiza imediatamente o cache local para a corrida cancelada e eventuais PIX pendentes sumirem de todas as telas
+      const alsoCancelledIds: string[] = Array.isArray(data.alsoCancelledRideIds) ? data.alsoCancelledRideIds : [];
+      try {
+        const cachedRides = this.markRidesCancelledInList(this.getRides(), alsoCancelledIds);
+        const cancelledRide: Ride | undefined = data.ride;
+        const nextRides = cachedRides.map((r) =>
+          r.id === rideId
+            ? { ...r, ...(cancelledRide || {}), status: 'cancelada' as const, cancelledBy: 'passenger' as const }
+            : r
+        );
+        localStorage.setItem(STORAGE_KEYS.RIDES, JSON.stringify(nextRides));
+      } catch {
+        // segue com a sincronização remota
+      }
+      await this.syncFromDatabase();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('up_rides_updated'));
+        window.dispatchEvent(
+          new CustomEvent('up_rides_updated', {
+            detail: { rideId, status: 'cancelada', cancelledBy: 'passenger', alsoCancelledRideIds: alsoCancelledIds }
+          })
+        );
+      }
+      return {
+        ok: true,
+        ride: data.ride,
+        cancellationFeeApplied: Number(data.cancellationFeeApplied || 0),
+        refundAmount: Number(data.refundAmount || 0)
+      };
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao cancelar a corrida.' };
+    }
+  },
+
+  async updateRideRoute(
+    rideId: string,
+    payload: {
+      origin?: LocationPoint;
+      destination?: LocationPoint;
+      distanceKm?: number;
+      durationMin?: number;
+    }
+  ): Promise<{
+    ok: boolean;
+    ride?: Ride;
+    previousPrice?: number;
+    newPrice?: number;
+    priceChanged?: boolean;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/route`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível alterar a rota agora.' };
+      }
+      await this.syncFromDatabase();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('up_rides_updated', {
+            detail: { rideId, status: data.ride?.status, routeUpdated: true }
+          })
+        );
+      }
+      return {
+        ok: true,
+        ride: data.ride,
+        previousPrice: Number(data.previousPrice ?? data.ride?.totalPrice ?? 0),
+        newPrice: Number(data.newPrice ?? data.ride?.totalPrice ?? 0),
+        priceChanged: Boolean(data.priceChanged)
+      };
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao atualizar a rota.' };
+    }
+  },
+
   // Simular ou processar Webhook do Gateway (para testar PIX no ambiente de desenvolvimento)
   async triggerGatewayWebhook(payload: {
     event?: 'payment.confirmed' | 'debt.confirmed';
@@ -393,6 +625,9 @@ export const StorageService = {
   },
 
   async fetchPaymentsConfig(): Promise<{
+    gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
+    stripeEnabled: boolean;
+    stripePublishableKey: string;
     mercadopagoEnabled: boolean;
     mercadopagoPublicKey: string;
     autoPixPayoutEnabled: boolean;
@@ -402,29 +637,56 @@ export const StorageService = {
       if (res.ok) {
         const d = await res.json();
         return {
+          gatewayProvider: d.gatewayProvider === 'stripe' ? 'stripe' : (d.gatewayProvider === 'mercadopago' ? 'mercadopago' : 'sandbox'),
+          stripeEnabled: Boolean(d.stripeEnabled),
+          stripePublishableKey: String(d.stripePublishableKey || '').trim(),
           mercadopagoEnabled: Boolean(d.mercadopagoEnabled),
           mercadopagoPublicKey: String(d.mercadopagoPublicKey || '').trim(),
           autoPixPayoutEnabled: Boolean(d.autoPixPayoutEnabled)
         };
       }
     } catch {}
+    const localStripePub = String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim();
     return {
+      gatewayProvider: localStripePub ? 'stripe' : 'sandbox',
+      stripeEnabled: false,
+      stripePublishableKey: localStripePub,
       mercadopagoEnabled: false,
       mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
       autoPixPayoutEnabled: false
     };
   },
 
+  async createStripeSetupIntent(payload?: {
+    clientId?: string;
+    clientPhone?: string;
+    clientEmail?: string;
+    clientName?: string;
+  }): Promise<{ ok: boolean; clientSecret?: string; setupIntentId?: string; customerId?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/payments/stripe/setup-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload || {})
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao iniciar verificação segura com a Stripe.' };
+    }
+  },
+
   async saveTokenizedCard(payload: {
     clientId?: string;
     clientPhone?: string;
-    cardNumber: string;
+    cardNumber?: string;
     holderName: string;
-    expMonth: string;
-    expYear: string;
-    cvv: string;
+    expMonth?: string;
+    expYear?: string;
+    cvv?: string;
     cardType: 'cartao_credito' | 'cartao_debito';
     mpCardToken?: string;
+    stripeSetupIntentId?: string;
+    stripePaymentMethodId?: string;
     holderDocument?: string;
   }): Promise<{ ok: boolean; card?: SavedCard; error?: string }> {
     try {
@@ -665,13 +927,17 @@ export const StorageService = {
         headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
         body: JSON.stringify(updates)
       });
-      const data = await res.json();
-      if (data?.driver) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.driver) {
         this.setCurrentDriver(data.driver);
+        return { ok: true, driver: data.driver };
       }
-      return data;
+      return {
+        ok: false,
+        error: data?.error || (res.status === 401 ? 'Sessão de motorista expirada. Entre novamente com sua senha.' : 'Erro ao atualizar perfil do motorista.')
+      };
     } catch {
-      return { ok: false };
+      return { ok: false, error: 'Erro de conexão ao atualizar preferência.' };
     }
   },
 
@@ -848,8 +1114,10 @@ export const StorageService = {
     ok: boolean;
     amount?: number;
     txid?: string;
+    gatewayTxId?: string;
     pixCopyPaste?: string;
     pixQrCode?: string;
+    provider?: string;
     error?: string;
   }> {
     try {
@@ -870,6 +1138,7 @@ export const StorageService = {
   async fetchAdminFinanceOverview(): Promise<{
     ok: boolean;
     commissionPercent: number;
+    commissionFixed?: number;
     paymentMethodCommissionPercents?: {
       pix?: number;
       cartao_credito?: number;
@@ -1321,7 +1590,7 @@ export const StorageService = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-admin-pin': this.getAdminPin()
+        ...this.getAuthHeaders()
       },
       body: JSON.stringify(client)
     }).catch(err => console.warn('Client sync error:', err));
@@ -1419,6 +1688,8 @@ export const StorageService = {
     document: string;
     email: string;
     password: string;
+    birthDate?: string;
+    familyInviteToken?: string;
     termsAcceptedAt?: string;
     termsAcceptance?: {
       accepted: boolean;
@@ -1430,7 +1701,7 @@ export const StorageService = {
       timezone?: string;
     };
     turnstileToken?: string;
-  }): Promise<{ ok: boolean; client?: ClientProfile; error?: string }> {
+  }): Promise<{ ok: boolean; client?: ClientProfile; linkedFamilyMember?: { id: string; guardianId: string; guardianName?: string } | null; error?: string }> {
     try {
       const res = await fetch('/api/clients/register', {
         method: 'POST',
@@ -1445,7 +1716,7 @@ export const StorageService = {
         this.setClientToken(data.clientToken);
       }
       this.setCurrentUser(data.client);
-      return { ok: true, client: data.client };
+      return { ok: true, client: data.client, linkedFamilyMember: data.linkedFamilyMember || null };
     } catch {
       return { ok: false, error: 'Erro de conexão com o servidor. Verifique sua internet.' };
     }
@@ -1509,6 +1780,7 @@ export const StorageService = {
     idToken?: string;
     name?: string;
     phone?: string;
+    document?: string;
     termsAcceptance?: {
       accepted: boolean;
       contractId?: string;
@@ -1527,6 +1799,7 @@ export const StorageService = {
       name: string;
       picture?: string;
       existingPhone?: string;
+      existingDocument?: string;
     };
     client?: ClientProfile;
     error?: string;
@@ -1564,6 +1837,7 @@ export const StorageService = {
     name?: string;
     phone: string;
     email: string;
+    document?: string;
   }): Promise<{ ok: boolean; client?: ClientProfile; error?: string }> {
     try {
       const res = await fetch('/api/clients/complete-contact', {
@@ -2110,6 +2384,248 @@ export const StorageService = {
     } catch {
       return { ok: false, error: 'Erro de conexão ao redefinir a senha.' };
     }
+  },
+
+  async getClientSafety(clientId: string): Promise<{
+    ok: boolean;
+    safetyPreferences?: PassengerSafetyPreferences;
+    emergencyContacts?: EmergencyContact[];
+    trustedContacts?: TrustedContact[];
+    client?: ClientProfile;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/safety?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível carregar configurações de segurança.' };
+      }
+      if (data.client) {
+        this.setCurrentUser(data.client);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao buscar segurança do passageiro.' };
+    }
+  },
+
+  async updateClientSafety(
+    clientId: string,
+    payload: {
+      safetyPreferences?: Partial<PassengerSafetyPreferences>;
+      emergencyContacts?: EmergencyContact[];
+    }
+  ): Promise<{
+    ok: boolean;
+    safetyPreferences?: PassengerSafetyPreferences;
+    emergencyContacts?: EmergencyContact[];
+    client?: ClientProfile;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/safety`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível salvar preferências de segurança.' };
+      }
+      if (data.client) {
+        this.setCurrentUser(data.client);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao salvar configurações de segurança.' };
+    }
+  },
+
+  async updateTrustedContacts(
+    clientId: string,
+    trustedContacts: TrustedContact[]
+  ): Promise<{
+    ok: boolean;
+    trustedContacts?: TrustedContact[];
+    client?: ClientProfile;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(clientId)}/trusted-contacts`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ trustedContacts })
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível salvar contatos.' };
+      }
+      if (data.client) {
+        this.setCurrentUser(data.client);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao salvar contatos de confiança.' };
+    }
+  },
+
+  async reportSafetyAudioIncident(
+    rideId: string,
+    payload: {
+      durationSec: number;
+      mimeType: string;
+      sizeBytes: number;
+      recordedAt?: string;
+      notes?: string;
+      escalateToSos?: boolean;
+    }
+  ): Promise<{ ok: boolean; record?: SafetyAudioIncidentRecord; error?: string }> {
+    try {
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/safety-audio`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível anexar gravação à corrida.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao registrar gravação K-Áudio.' };
+    }
+  },
+
+  async getFamilyMembers(guardianClientId: string): Promise<{
+    ok: boolean;
+    members?: FamilyMemberRecord[];
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(guardianClientId)}/family?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível carregar o Perfil Familiar.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao consultar Perfil Familiar.' };
+    }
+  },
+
+  async inviteFamilyTeen(
+    guardianClientId: string,
+    payload: {
+      name: string;
+      phone: string;
+      birthDate: string;
+      termsAccepted: boolean;
+    }
+  ): Promise<{
+    ok: boolean;
+    member?: FamilyMemberRecord;
+    alreadyRegistered?: boolean;
+    inviteToken?: string;
+    inviteUrl?: string;
+    fullInviteUrl?: string;
+    whatsappUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/clients/${encodeURIComponent(guardianClientId)}/family/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível enviar convite ao adolescente.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao enviar convite familiar.' };
+    }
+  },
+
+  async removeFamilyMember(
+    guardianClientId: string,
+    memberId: string
+  ): Promise<{ ok: boolean; revokedId?: string; error?: string }> {
+    try {
+      const res = await fetch(
+        `/api/clients/${encodeURIComponent(guardianClientId)}/family/${encodeURIComponent(memberId)}`,
+        {
+          method: 'DELETE',
+          headers: this.getAuthHeaders()
+        }
+      );
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível remover membro familiar.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao remover membro.' };
+    }
+  },
+
+  async getFamilyInviteByToken(token: string): Promise<{
+    ok: boolean;
+    invite?: {
+      id: string;
+      guardianName: string;
+      teenName: string;
+      teenPhone: string;
+      teenBirthDate: string;
+      teenAge: number;
+      status: string;
+      inviteToken: string;
+      accountAlreadyExists: boolean;
+      createdAt: string;
+    };
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/family/invite/${encodeURIComponent(token)}?_t=${Date.now()}`, {
+        cache: 'no-store'
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Convite inválido ou expirado.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao verificar convite.' };
+    }
+  },
+
+  async acceptFamilyInvite(token: string): Promise<{
+    ok: boolean;
+    client?: ClientProfile;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch(`/api/family/invite/${encodeURIComponent(token)}/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() }
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível aceitar o convite.' };
+      }
+      if (data.client) {
+        this.setCurrentUser(data.client);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao aceitar convite.' };
+    }
   }
 };
 
@@ -2150,18 +2666,21 @@ export function calculateRidePrice(
 ): {
   totalPrice: number;
   commissionPercent: number;
+  commissionFixed: number;
   commissionAmount: number;
   driverNetAmount: number;
   categoryName: string;
   appliedFareSnapshot: {
     categoryId: string;
     categoryName: string;
+    categoryType?: import('../types').ServiceCategoryType;
     baseFare: number;
     pricePerKm: number;
     pricePerMinute: number;
     minimumFare: number;
     multiplier: number;
     commissionPercent: number;
+    commissionFixed: number;
     nightSurchargePercent?: number;
     city?: string;
   };
@@ -2195,24 +2714,29 @@ export function calculateRidePrice(
 
   const finalPrice = Math.max(pricing.minimumFare, Math.round(subtotal * 10) / 10);
   const commPct = resolveCommissionPercentForMethod(config, pricing.commissionPercent, paymentMethod);
-  const commAmt = Math.round(finalPrice * (commPct / 100) * 100) / 100;
-  const netAmt = Math.round((finalPrice - commAmt) * 100) / 100;
+  const commFixed = Math.max(0, Math.round((Number(config.platformCommissionFixed ?? 0) || 0) * 100) / 100);
+  const rawCommAmt = Math.round(((finalPrice * (commPct / 100)) + (finalPrice > 0 ? commFixed : 0)) * 100) / 100;
+  const commAmt = Math.min(finalPrice, rawCommAmt);
+  const netAmt = Math.round(Math.max(0, finalPrice - commAmt) * 100) / 100;
 
   return {
     totalPrice: finalPrice,
     commissionPercent: commPct,
+    commissionFixed: commFixed,
     commissionAmount: commAmt,
     driverNetAmount: netAmt,
     categoryName: category.name,
     appliedFareSnapshot: {
       categoryId: category.id,
       categoryName: category.name,
+      categoryType: resolveCategoryType(category),
       baseFare: pricing.baseFare,
       pricePerKm: pricing.pricePerKm,
       pricePerMinute: pricing.pricePerMinute,
       minimumFare: pricing.minimumFare,
       multiplier: pricing.multiplier,
       commissionPercent: commPct,
+      commissionFixed: commFixed,
       nightSurchargePercent: config.nightSurchargePercent,
       city
     },

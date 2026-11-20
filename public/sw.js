@@ -1,11 +1,12 @@
 // Service Worker do PWA + OneSignal Web Push (um único SW no escopo "/")
 importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
 
-const CACHE_NAME = 'up-mobilidade-v5';
+const CACHE_NAME = 'up-mobilidade-v6';
 const urlsToCache = [
   '/logo-horizontal.png',
   '/logo-icon.png',
-  '/logo-card.png'
+  '/logo-card.png',
+  '/sounds/new-ride-toq3.mp3'
 ];
 
 self.addEventListener('install', (event) => {
@@ -34,6 +35,7 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
+  if (event.request.headers.get('range')) return;
   // Não interceptar chamadas de API nem manifests dinâmicos
   if (
     event.request.url.includes('/api/') ||

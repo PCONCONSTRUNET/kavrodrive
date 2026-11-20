@@ -133,7 +133,7 @@ export const SosEmergencyModal: React.FC<SosEmergencyModalProps> = ({
       try {
         await fetch('/api/sos/location', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
           body: JSON.stringify({
             id: activeSosId,
             name: userName,
@@ -247,7 +247,7 @@ export const SosEmergencyModal: React.FC<SosEmergencyModalProps> = ({
     try {
       await fetch('/api/sos/location', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
         body: JSON.stringify({
           id: sosId,
           name: userName,
@@ -570,6 +570,81 @@ export const SosEmergencyModal: React.FC<SosEmergencyModalProps> = ({
               );
             })}
           </div>
+
+          {/* CONTATOS DE EMERGÊNCIA CONFIGURADOS PELO PASSAGEIRO */}
+          {currentUser?.emergencyContacts && currentUser.emergencyContacts.length > 0 && (
+            <div style={{
+              backgroundColor: '#FEF2F2',
+              border: '1px solid #FECACA',
+              borderRadius: 14,
+              padding: '10px 12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8
+            }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 900, color: '#991B1B', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                Seus Contatos de Emergência ({currentUser.emergencyContacts.length})
+              </div>
+              {currentUser.emergencyContacts.map((ec) => {
+                const digits = ec.phone.replace(/\D/g, '');
+                const waDigits = digits.startsWith('55') ? digits : `55${digits}`;
+                const msg = encodeURIComponent(
+                  `🚨 *EMERGÊNCIA SOS - KAVRO DRIVE*\nPreciso de ajuda urgente!\n📍 Local: ${effectiveAddress}\n🗺️ ${coords ? `https://maps.google.com/?q=${coords.lat.toFixed(5)},${coords.lng.toFixed(5)}` : ''}`
+                );
+                return (
+                  <div key={ec.id} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    backgroundColor: '#FFFFFF',
+                    borderRadius: 10,
+                    padding: '7px 10px',
+                    border: '1px solid #FEE2E2'
+                  }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0F172A' }}>
+                        {ec.name} • {ec.relationship || 'Emergência'}
+                      </div>
+                      <div style={{ fontSize: '0.72rem', color: '#64748B' }}>{formatPhone(ec.phone)}</div>
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                      <a
+                        href={`tel:${digits}`}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          backgroundColor: '#DC2626',
+                          color: '#FFFFFF',
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          textDecoration: 'none'
+                        }}
+                      >
+                        Ligar
+                      </a>
+                      <a
+                        href={`https://wa.me/${waDigits}?text=${msg}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          backgroundColor: '#16A34A',
+                          color: '#FFFFFF',
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          textDecoration: 'none'
+                        }}
+                      >
+                        WhatsApp
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           {/* BOTÃO RÁPIDO PARA ALERTA VIA WHATSAPP COM RASTREAMENTO AO VIVO E ÚLTIMA LOCALIZAÇÃO */}
           <div style={{ marginTop: 4, display: 'flex', flexDirection: 'column', gap: 8 }}>

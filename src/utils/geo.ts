@@ -90,9 +90,249 @@ function normalizeText(text: string): string {
     .trim();
 }
 
+export interface ViaCepResult {
+  cep: string;
+  logradouro: string;
+  complemento?: string;
+  bairro: string;
+  localidade: string;
+  uf: string;
+  ibge?: string;
+  ddd?: string;
+  formattedCity: string;
+  formattedAddress: string;
+}
+
+export interface CityOrCepSuggestion {
+  id: string;
+  cityLabel: string;
+  subtitle: string;
+  uf: string;
+  cep?: string;
+  streetAddress?: string;
+  source: 'viacep' | 'ibge' | 'local';
+}
+
+const REGIONAL_CITIES_FALLBACK: Array<{ nome: string; uf: string; regiao: string }> = [
+  { nome: 'Lauro Müller', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Criciúma', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Orleans', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Tubarão', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Urussanga', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Braço do Norte', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Içara', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Araranguá', uf: 'SC', regiao: 'Sul Catarinense' },
+  { nome: 'Florianópolis', uf: 'SC', regiao: 'Grande Florianópolis' },
+  { nome: 'São José', uf: 'SC', regiao: 'Grande Florianópolis' },
+  { nome: 'Joinville', uf: 'SC', regiao: 'Norte Catarinense' },
+  { nome: 'Blumenau', uf: 'SC', regiao: 'Vale do Itajaí' },
+  { nome: 'Balneário Camboriú', uf: 'SC', regiao: 'Litoral Norte SC' },
+  { nome: 'Itajaí', uf: 'SC', regiao: 'Litoral Norte SC' },
+  { nome: 'Chapecó', uf: 'SC', regiao: 'Oeste Catarinense' },
+  { nome: 'Lages', uf: 'SC', regiao: 'Serra Catarinense' },
+  { nome: 'Porto Alegre', uf: 'RS', regiao: 'Rio Grande do Sul' },
+  { nome: 'Curitiba', uf: 'PR', regiao: 'Paraná' },
+  { nome: 'São Paulo', uf: 'SP', regiao: 'São Paulo' },
+  { nome: 'Rio de Janeiro', uf: 'RJ', regiao: 'Rio de Janeiro' },
+];
+
+let ibgeCitiesCache: Array<{ id: number; nome: string; uf: string }> | null = null;
+let ibgeCitiesInflight: Promise<Array<{ id: number; nome: string; uf: string }>> | null = null;
+
+async function getIbgeMunicipalities(): Promise<Array<{ id: number; nome: string; uf: string }>> {
+  if (ibgeCitiesCache) return ibgeCitiesCache;
+  if (ibgeCitiesInflight) return ibgeCitiesInflight;
+
+  ibgeCitiesInflight = (async () => {
+    try {
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 4500);
+      const res = await fetch(
+        'https://servicodados.ibge.gov.br/api/v1/localidades/municipios?orderBy=nome',
+        { signal: controller.signal }
+      );
+      clearTimeout(tid);
+      if (!res.ok) return [];
+      const raw = await res.json();
+      if (!Array.isArray(raw)) return [];
+      const mapped = raw
+        .map((m: any) => {
+          const uf =
+            m?.microrregiao?.mesorregiao?.UF?.sigla ||
+            m?.['regiao-imediata']?.['regiao-intermediaria']?.UF?.sigla ||
+            '';
+          return {
+            id: Number(m?.id || 0),
+            nome: String(m?.nome || '').trim(),
+            uf: String(uf).trim()
+          };
+        })
+        .filter((m) => m.nome && m.uf);
+      ibgeCitiesCache = mapped;
+      return mapped;
+    } catch {
+      return [];
+    } finally {
+      ibgeCitiesInflight = null;
+    }
+  })();
+
+  return ibgeCitiesInflight;
+}
+
+/**
+ * Consulta oficial de CEP brasileiro via ViaCEP com fallback automático para BrasilAPI v2.
+ */
+export async function lookupViaCep(rawCep: string): Promise<ViaCepResult | null> {
+  const digits = String(rawCep || '').replace(/\D/g, '');
+  if (digits.length !== 8) return null;
+
+  const formattedCep = `${digits.slice(0, 5)}-${digits.slice(5)}`;
+
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`https://viacep.com.br/ws/${digits}/json/`, {
+      signal: controller.signal
+    });
+    clearTimeout(tid);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && !data.erro && data.localidade && data.uf) {
+        const logradouro = String(data.logradouro || '').trim();
+        const bairro = String(data.bairro || '').trim();
+        const localidade = String(data.localidade || '').trim();
+        const uf = String(data.uf || '').trim().toUpperCase();
+        return {
+          cep: String(data.cep || formattedCep),
+          logradouro,
+          complemento: String(data.complemento || '').trim() || undefined,
+          bairro,
+          localidade,
+          uf,
+          ibge: data.ibge ? String(data.ibge) : undefined,
+          ddd: data.ddd ? String(data.ddd) : undefined,
+          formattedCity: `${localidade} - ${uf}, BR`,
+          formattedAddress: [logradouro, bairro, `${localidade} - ${uf}`].filter(Boolean).join(', ')
+        };
+      }
+    }
+  } catch {
+    // Fallback secundário abaixo
+  }
+
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(`https://brasilapi.com.br/api/cep/v2/${digits}`, {
+      signal: controller.signal
+    });
+    clearTimeout(tid);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.city && data.state) {
+        const logradouro = String(data.street || '').trim();
+        const bairro = String(data.neighborhood || '').trim();
+        const localidade = String(data.city || '').trim();
+        const uf = String(data.state || '').trim().toUpperCase();
+        return {
+          cep: formattedCep,
+          logradouro,
+          bairro,
+          localidade,
+          uf,
+          formattedCity: `${localidade} - ${uf}, BR`,
+          formattedAddress: [logradouro, bairro, `${localidade} - ${uf}`].filter(Boolean).join(', ')
+        };
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
+/**
+ * Busca inteligente para "Alterar cidade de embarque":
+ * - CEP completo (8 dígitos): consulta ViaCEP / BrasilAPI e devolve cidade, bairro e rua
+ * - Texto (nome de município): consulta cache regional + API oficial de Municípios do IBGE
+ */
+export async function searchCitiesAndViaCep(query: string): Promise<CityOrCepSuggestion[]> {
+  const raw = String(query || '').trim();
+  if (raw.length < 2) return [];
+
+  const digits = raw.replace(/\D/g, '');
+  const looksLikeCep = /^[\d.\-\s]+$/.test(raw) && digits.length >= 5;
+
+  if (looksLikeCep) {
+    if (digits.length === 8) {
+      const cepData = await lookupViaCep(digits);
+      if (!cepData) return [];
+      return [
+        {
+          id: `cep-${cepData.cep}`,
+          cityLabel: cepData.formattedCity,
+          subtitle: [
+            `CEP ${cepData.cep}`,
+            cepData.logradouro || null,
+            cepData.bairro || null
+          ].filter(Boolean).join(' • '),
+          uf: cepData.uf,
+          cep: cepData.cep,
+          streetAddress: cepData.formattedAddress,
+          source: 'viacep'
+        }
+      ];
+    }
+    return [];
+  }
+
+  const normQuery = normalizeText(raw);
+  const regionalMatches: CityOrCepSuggestion[] = REGIONAL_CITIES_FALLBACK
+    .filter((c) => normalizeText(c.nome).includes(normQuery))
+    .map((c) => ({
+      id: `local-${normalizeText(c.nome)}-${c.uf}`,
+      cityLabel: `${c.nome} - ${c.uf}, BR`,
+      subtitle: `${c.regiao} • Estado ${c.uf}`,
+      uf: c.uf,
+      source: 'local'
+    }));
+
+  const ibgeList = await getIbgeMunicipalities();
+  const ibgeMatches: CityOrCepSuggestion[] = ibgeList
+    .filter((m) => normalizeText(m.nome).includes(normQuery))
+    .sort((a, b) => {
+      const aStarts = normalizeText(a.nome).startsWith(normQuery) ? 0 : 1;
+      const bStarts = normalizeText(b.nome).startsWith(normQuery) ? 0 : 1;
+      if (aStarts !== bStarts) return aStarts - bStarts;
+      return a.nome.localeCompare(b.nome, 'pt-BR');
+    })
+    .slice(0, 10)
+    .map((m) => ({
+      id: `ibge-${m.id}-${m.uf}`,
+      cityLabel: `${m.nome} - ${m.uf}, BR`,
+      subtitle: `Município IBGE • ${m.uf}`,
+      uf: m.uf,
+      source: 'ibge'
+    }));
+
+  const merged: CityOrCepSuggestion[] = [];
+  const seen = new Set<string>();
+  for (const item of [...regionalMatches, ...ibgeMatches]) {
+    const key = normalizeText(item.cityLabel);
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push(item);
+    }
+    if (merged.length >= 8) break;
+  }
+  return merged;
+}
+
 /**
  * Busca de endereço ultra-rápida e tolerante a erros de digitação (ex: "laura muller" -> Lauro Müller)
- * Prioriza base local + Photon Geocoder com viés na região + Fallback Nominatim
+ * Suporta CEP direto via ViaCEP + base local + Photon Geocoder + Fallback Nominatim
  */
 export async function searchAddressGeocode(
   query: string,
@@ -106,6 +346,35 @@ export async function searchAddressGeocode(
   if (!query || query.trim().length < 2) return [];
 
   const rawClean = query.trim();
+  const cepDigits = rawClean.replace(/\D/g, '');
+  if (/^[\d.\-\s]+$/.test(rawClean) && cepDigits.length === 8) {
+    const viaCep = await lookupViaCep(cepDigits);
+    if (viaCep) {
+      let resolvedLat = userLat;
+      let resolvedLng = userLng;
+      try {
+        const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(viaCep.formattedAddress)}&limit=1&countrycodes=br`;
+        const resp = await fetch(nomUrl, { headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' } });
+        if (resp.ok) {
+          const nomData = await resp.json();
+          if (Array.isArray(nomData) && nomData[0]) {
+            resolvedLat = parseFloat(nomData[0].lat);
+            resolvedLng = parseFloat(nomData[0].lon);
+          }
+        }
+      } catch {
+        // fallback para centro da região/mapa atual
+      }
+      return [
+        {
+          display_name: `${viaCep.formattedAddress} (CEP ${viaCep.cep})`,
+          lat: resolvedLat,
+          lng: resolvedLng
+        }
+      ];
+    }
+  }
+
   const normQ = normalizeText(rawClean).replace(/\blaura\b/g, 'lauro');
   const tokens = normQ.split(/\s+/).filter(Boolean);
 

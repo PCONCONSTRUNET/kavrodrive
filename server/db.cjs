@@ -9,17 +9,30 @@ const connectionString = (process.env.DATABASE_URL || '').trim();
 let pool = null;
 
 if (connectionString) {
-  pool = new Pool({
-    connectionString,
-    ssl: { rejectUnauthorized: false },
-    max: process.env.VERCEL ? 3 : 10,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
-  });
+  // Adiciona ?pgbouncer=true automaticamente quando conectado via PgBouncer (porta 6543 Supabase / host -pooler Neon)
+  const normalizedConn =
+    (connectionString.includes(':6543') || connectionString.includes('-pooler.')) &&
+    !connectionString.includes('pgbouncer=')
+      ? `${connectionString}${connectionString.includes('?') ? '&' : '?'}pgbouncer=true`
+      : connectionString;
 
-  pool.on('error', (err) => {
-    console.error('Unexpected error on idle PostgreSQL client', err);
-  });
+  if (!globalThis.__kavroPgPool) {
+    globalThis.__kavroPgPool = new Pool({
+      connectionString: normalizedConn,
+      ssl: { rejectUnauthorized: false },
+      max: process.env.VERCEL ? 3 : 12,
+      maxUses: 7500,
+      allowExitOnIdle: true,
+      idleTimeoutMillis: 20000,
+      connectionTimeoutMillis: 5000,
+    });
+
+    globalThis.__kavroPgPool.on('error', (err) => {
+      console.error('Unexpected error on idle PostgreSQL client', err);
+    });
+  }
+
+  pool = globalThis.__kavroPgPool;
 } else {
   console.log('[db] Nenhum DATABASE_URL configurado. Usando armazenamento local em memória/arquivo (modo desenvolvimento).');
 }
@@ -54,6 +67,7 @@ function getInitialStore() {
           advanceNoticeHours: 0,
           bufferBetweenRidesMin: 0,
           platformCommissionPercent: 20,
+      platformCommissionFixed: 0,
           paymentMethodCommissionPercents: {
             pix: 20,
             cartao_credito: 20,
@@ -156,6 +170,7 @@ function getInitialStore() {
     ride_chat_messages: [],
     password_reset_codes: [],
     audit_logs: [],
+    family_members: [],
     sos_alerts: {}
   };
 }
@@ -176,6 +191,7 @@ function loadLocalStore() {
       if (!Array.isArray(merged.ride_chat_messages)) merged.ride_chat_messages = [];
       if (!Array.isArray(merged.password_reset_codes)) merged.password_reset_codes = [];
       if (!Array.isArray(merged.audit_logs)) merged.audit_logs = [];
+      if (!Array.isArray(merged.family_members)) merged.family_members = [];
       return merged;
     }
   } catch {
@@ -275,6 +291,26 @@ async function localQuery(text, params = []) {
       });
       return { rows: rows.slice(0, 1), rowCount: Math.min(1, rows.length) };
     }
+    if (upper.includes("STATUS = 'AGUARDANDO_CONFIRMACAO'") && upper.includes('DRIVER_ID = $1')) {
+      const drvId = params[0];
+      const rows = [...localStore.rides]
+        .filter(r => r.driver_id === drvId || (r.status === 'aguardando_confirmacao' && !r.driver_id))
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .slice(0, 100);
+      return { rows, rowCount: rows.length };
+    }
+    if (upper.includes('CLIENT_ID = $1') && upper.includes('CLIENT_PHONE')) {
+      const pClientId = String(params[0] || '');
+      const pPhone = String(params[1] || '').replace(/\D/g, '');
+      const rows = [...localStore.rides]
+        .filter(r => {
+          const rPhone = String(r.client_phone || '').replace(/\D/g, '');
+          return (pClientId && r.client_id === pClientId) || (pPhone.length >= 8 && rPhone === pPhone);
+        })
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .slice(0, 80);
+      return { rows, rowCount: rows.length };
+    }
     const sorted = [...localStore.rides].sort((a, b) => {
       const cmpCreated = String(b.created_at || '').localeCompare(String(a.created_at || ''));
       if (cmpCreated !== 0) return cmpCreated;
@@ -332,6 +368,16 @@ async function localQuery(text, params = []) {
       if (r) { r.status = params[0]; r.updated_at = now; saveLocalStore(); }
       return { rows: r ? [r] : [], rowCount: r ? 1 : 0 };
     }
+    if (upper.includes('SET DRIVER_LOCATION = $1, APPLIED_FARE_SNAPSHOT = $2')) {
+      const r = localStore.rides.find(item => item.id === params[2]);
+      if (r) {
+        r.driver_location = parseJsonSafe(params[0], null);
+        r.applied_fare_snapshot = parseJsonSafe(params[1], r.applied_fare_snapshot || {});
+        r.updated_at = now;
+        saveLocalStore();
+      }
+      return { rows: r ? [r] : [], rowCount: r ? 1 : 0 };
+    }
     if (upper.includes('CLIENT_LOCATION = $1') || upper.includes('DRIVER_LOCATION = $1')) {
       const col = upper.includes('CLIENT_LOCATION = $1') ? 'client_location' : 'driver_location';
       const r = localStore.rides.find(item => item.id === params[1]);
@@ -355,6 +401,15 @@ async function localQuery(text, params = []) {
     if (upper.includes("SET PAYMENT_STATUS = 'PAGO'") || upper.includes("SET PAYMENT_STATUS = 'CONFIRMADO'")) {
       const r = localStore.rides.find(item => item.id === params[0]);
       if (r) { r.payment_status = 'confirmado'; r.payment_method = 'pix'; r.updated_at = now; saveLocalStore(); }
+      return { rows: r ? [r] : [], rowCount: r ? 1 : 0 };
+    }
+    if (upper.includes('SET APPLIED_FARE_SNAPSHOT = $1')) {
+      const r = localStore.rides.find(item => item.id === params[1]);
+      if (r) {
+        r.applied_fare_snapshot = parseJsonSafe(params[0], r.applied_fare_snapshot || {});
+        r.updated_at = now;
+        saveLocalStore();
+      }
       return { rows: r ? [r] : [], rowCount: r ? 1 : 0 };
     }
     return { rows: [], rowCount: 0 };
@@ -449,14 +504,31 @@ async function localQuery(text, params = []) {
       const found = localStore.clients.find(c => c.phone === params[0]);
       return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
     }
+    if (upper.includes('WHERE ID = ANY($1') || upper.includes('ANY($1')) {
+      const ids = Array.isArray(params[0]) ? params[0].map(String) : [];
+      const phones = Array.isArray(params[1]) ? params[1].map(String) : [];
+      const rows = localStore.clients.filter(c => {
+        const digits = String(c.phone || '').replace(/\D/g, '');
+        return (c.id && ids.includes(String(c.id))) || (digits.length >= 8 && phones.includes(digits));
+      });
+      return { rows, rowCount: rows.length };
+    }
     if (upper.includes('REGEXP_REPLACE')) {
       const p1 = String(params[0] || '');
       const p2 = String(params[1] || '');
+      const p3 = String(params[2] || '');
       const found = localStore.clients.find(c => {
         const digits = String(c.phone || '').replace(/\D/g, '');
         const email = String(c.email || '').toLowerCase();
+        const docDigits = String(c.document || '').replace(/\D/g, '');
         if (upper.includes('WHERE ($1 <> \'\' AND ID = $1)')) {
           return (p1 && c.id === p1) || (p2 && digits === p2);
+        }
+        if (upper.includes('COALESCE(DOCUMENT')) {
+          if (upper.includes('LOWER(COALESCE(EMAIL')) {
+            return (p1 && digits === p1) || (p2 && email === p2) || (p3 && docDigits === p3);
+          }
+          return (p1 && digits === p1) || (p2 && docDigits === p2);
         }
         if (upper.includes('LOWER(COALESCE(EMAIL')) {
           return (p1 && (digits === p1 || email === p1)) || (p2 && (digits === p2 || email === p2));
@@ -538,6 +610,20 @@ async function localQuery(text, params = []) {
       if (c) { c.rating = Number(params[0]); saveLocalStore(); }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
     }
+    if (upper.includes('SET NAME = $1, PHONE = $2, EMAIL = $3, DOCUMENT = $4, TERMS_SIGNATURE = COALESCE($5')) {
+      const c = localStore.clients.find(item => item.id === params[5]);
+      if (c) {
+        c.name = params[0];
+        c.phone = params[1];
+        c.email = params[2];
+        c.document = params[3];
+        if (params[4]) {
+          c.terms_signature = parseJsonSafe(params[4], c.terms_signature || null);
+        }
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
     if (upper.includes('SET NAME = $1, PHONE = $2, EMAIL = $3 WHERE ID = $4')) {
       const c = localStore.clients.find(item => item.id === params[3]);
       if (c) {
@@ -560,6 +646,55 @@ async function localQuery(text, params = []) {
       const c = localStore.clients.find(item => item.id === params[1]);
       if (c) {
         c.profile_change_request = parseJsonSafe(params[0], params[0]);
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET TRUSTED_CONTACTS = $1 WHERE ID = $2')) {
+      const c = localStore.clients.find(item => item.id === params[1]);
+      if (c) {
+        c.trusted_contacts = parseJsonSafe(params[0], []);
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET SAFETY_PREFERENCES = $1, EMERGENCY_CONTACTS = $2 WHERE ID = $3')) {
+      const c = localStore.clients.find(item => item.id === params[2]);
+      if (c) {
+        c.safety_preferences = parseJsonSafe(params[0], {});
+        c.emergency_contacts = parseJsonSafe(params[1], []);
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET ACCOUNT_TYPE = $1, GUARDIAN_CLIENT_ID = $2')) {
+      const c = localStore.clients.find(item => item.id === params[4]);
+      if (c) {
+        c.account_type = params[0];
+        c.guardian_client_id = params[1];
+        if (params[2]) c.birth_date = params[2];
+        c.safety_preferences = parseJsonSafe(params[3], c.safety_preferences || {});
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes("SET ACCOUNT_TYPE = 'STANDARD', GUARDIAN_CLIENT_ID = NULL WHERE ID = $1")) {
+      const c = localStore.clients.find(item => item.id === params[0]);
+      if (c) {
+        c.account_type = 'standard';
+        c.guardian_client_id = null;
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('SET SAVED_ADDRESSES = COALESCE($1')) {
+      const c = localStore.clients.find(item => item.id === params[3]);
+      if (c) {
+        if (params[0] !== null && params[0] !== undefined) {
+          c.saved_addresses = parseJsonSafe(params[0], c.saved_addresses || []);
+        }
+        if (params[1]) c.terms_accepted_at = params[1];
+        if (params[2]) c.terms_signature = parseJsonSafe(params[2], c.terms_signature || null);
         saveLocalStore();
       }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
@@ -751,6 +886,74 @@ async function localQuery(text, params = []) {
       saveLocalStore();
     }
     return { rows: entry ? [entry] : [], rowCount: entry ? 1 : 0 };
+  }
+
+  // 12. family_members (Perfil Familiar / Segurança para adolescentes)
+  if (upper.startsWith('SELECT') && upper.includes('FROM PUBLIC.FAMILY_MEMBERS')) {
+    const list = Array.isArray(localStore.family_members) ? localStore.family_members : [];
+    let rows = list;
+    if (upper.includes('WHERE INVITE_TOKEN = $1')) {
+      rows = list.filter(m => m.invite_token === params[0]);
+    } else if (upper.includes('WHERE ID = $1 AND GUARDIAN_ID = $2')) {
+      rows = list.filter(m => m.id === params[0] && m.guardian_id === params[1]);
+    } else if (upper.includes('WHERE GUARDIAN_ID = $1')) {
+      rows = list
+        .filter(m => m.guardian_id === params[0])
+        .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+    } else if (upper.includes("WHERE STATUS != 'REVOGADO'")) {
+      rows = list.filter(m => m.status !== 'revogado');
+    }
+    return { rows, rowCount: rows.length };
+  }
+  if (upper.startsWith('INSERT INTO PUBLIC.FAMILY_MEMBERS')) {
+    if (!Array.isArray(localStore.family_members)) localStore.family_members = [];
+    const now = new Date().toISOString();
+    const row = {
+      id: params[0],
+      guardian_id: params[1],
+      guardian_name: params[2],
+      guardian_phone: params[3],
+      teen_client_id: params[4] || null,
+      teen_name: params[5],
+      teen_phone: params[6],
+      teen_birth_date: params[7],
+      teen_age: Number(params[8] || 0),
+      status: params[9] || 'convite_enviado',
+      invite_token: params[10],
+      invite_url: params[11],
+      terms_accepted: Boolean(params[12]),
+      terms_accepted_at: params[13] || now,
+      terms_signature: parseJsonSafe(params[14], {}),
+      api_dispatch: parseJsonSafe(params[15], {}),
+      created_at: params[16] || now,
+      updated_at: params[17] || now
+    };
+    const idx = localStore.family_members.findIndex(m => m.id === row.id);
+    if (idx >= 0) localStore.family_members[idx] = row;
+    else localStore.family_members.unshift(row);
+    saveLocalStore();
+    return { rows: [row], rowCount: 1 };
+  }
+  if (upper.startsWith('UPDATE PUBLIC.FAMILY_MEMBERS')) {
+    if (!Array.isArray(localStore.family_members)) localStore.family_members = [];
+    const now = new Date().toISOString();
+    if (upper.includes("SET STATUS = 'REVOGADO'")) {
+      const m = localStore.family_members.find(item => item.id === params[0]);
+      if (m) {
+        m.status = 'revogado';
+        m.updated_at = now;
+        saveLocalStore();
+      }
+      return { rows: m ? [m] : [], rowCount: m ? 1 : 0 };
+    }
+    const m = localStore.family_members.find(item => item.id === params[2]);
+    if (m) {
+      m.status = params[0];
+      if (params[1]) m.teen_client_id = params[1];
+      m.updated_at = now;
+      saveLocalStore();
+    }
+    return { rows: m ? [m] : [], rowCount: m ? 1 : 0 };
   }
 
   return { rows: [], rowCount: 0 };

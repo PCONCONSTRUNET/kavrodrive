@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { ClientProfile } from '../types';
 import { StorageService } from '../services/storage';
-import { formatPhone, formatCPF } from '../utils/format';
+import { formatPhone, formatCPF, isValidCPF } from '../utils/format';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
 import {
   PASSENGER_TERMS_AFFIRMATIVE_TEXT,
@@ -113,7 +113,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
 
     if (step === 2) {
-      if (!cpfOrDoc.trim() || cpfOrDoc.replace(/\D/g, '').length < 11) {
+      if (!isValidCPF(cpfOrDoc)) {
         setErrorMsg('Por favor, informe um CPF válido com 11 dígitos.');
         return;
       }

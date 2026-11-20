@@ -17,25 +17,43 @@ interface PassengerLiveMapProps {
   driverPos?: { lat: number; lng: number; heading?: number } | null;
   nearbyDrivers?: OnlineDriverMapDot[];
   height?: string;
+  searchingPulse?: boolean;
 }
 
 const DEFAULT_CENTER: [number, number] = [-28.39123, -49.39354];
 
-const createOriginDotIcon = () =>
+const createOriginDotIcon = (isSearching = false) =>
   L.divIcon({
     className: 'kavro-pax-origin',
-    html: `
-      <div style="
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: #111111;
-        border: 4px solid #FFFFFF;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.45);
-      "></div>
-    `,
-    iconSize: [18, 18],
-    iconAnchor: [9, 9],
+    html: isSearching
+      ? `
+        <div style="position: relative; width: 72px; height: 72px; display: flex; align-items: center; justify-content: center;">
+          <div class="kavro-map-sonar"></div>
+          <div class="kavro-map-sonar-delay"></div>
+          <div style="
+            position: relative;
+            z-index: 2;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #111111;
+            border: 4px solid #FFFFFF;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+          "></div>
+        </div>
+      `
+      : `
+        <div style="
+          width: 18px;
+          height: 18px;
+          border-radius: 50%;
+          background: #111111;
+          border: 4px solid #FFFFFF;
+          box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+        "></div>
+      `,
+    iconSize: isSearching ? [72, 72] : [18, 18],
+    iconAnchor: isSearching ? [36, 36] : [9, 9],
   });
 
 const createDestinationSquareIcon = () =>
@@ -55,11 +73,11 @@ const createDestinationSquareIcon = () =>
     iconAnchor: [9, 9],
   });
 
-const createNearbyCarIcon = (heading = 0, isAssignedDriver = false) =>
+const createNearbyCarIcon = (heading = 0, isAssignedDriver = false, pulse = false) =>
   L.divIcon({
     className: 'kavro-nearby-car',
     html: `
-      <div style="
+      <div class="${pulse ? 'kavro-car-beacon' : ''}" style="
         width: ${isAssignedDriver ? 36 : 26}px;
         height: ${isAssignedDriver ? 36 : 26}px;
         border-radius: 50%;
@@ -69,9 +87,8 @@ const createNearbyCarIcon = (heading = 0, isAssignedDriver = false) =>
         display: flex;
         align-items: center;
         justify-content: center;
-        transform: rotate(${Math.round(heading)}deg);
       ">
-        <svg width="${isAssignedDriver ? 18 : 13}" height="${isAssignedDriver ? 18 : 13}" viewBox="0 0 24 24" fill="${isAssignedDriver ? '#76D800' : '#111111'}">
+        <svg width="${isAssignedDriver ? 18 : 13}" height="${isAssignedDriver ? 18 : 13}" viewBox="0 0 24 24" fill="${isAssignedDriver ? '#76D800' : '#111111'}" style="transform: rotate(${Math.round(heading)}deg);">
           <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" />
         </svg>
       </div>
@@ -116,6 +133,7 @@ export const PassengerLiveMap: React.FC<PassengerLiveMapProps> = ({
   driverPos,
   nearbyDrivers = [],
   height = '100%',
+  searchingPulse = false,
 }) => {
   const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
 
@@ -168,7 +186,9 @@ export const PassengerLiveMap: React.FC<PassengerLiveMapProps> = ({
     if (pts.length === 0) {
       if (origin?.lat && origin?.lng) pts.push([origin.lat, origin.lng]);
       if (destination?.lat && destination?.lng) pts.push([destination.lat, destination.lng]);
-      if (driverPos?.lat && driverPos?.lng) pts.push([driverPos.lat, driverPos.lng]);
+    }
+    if (driverPos?.lat && driverPos?.lng) {
+      pts.push([driverPos.lat, driverPos.lng]);
     }
     if (pts.length >= 2) {
       return L.latLngBounds(pts);
@@ -176,10 +196,10 @@ export const PassengerLiveMap: React.FC<PassengerLiveMapProps> = ({
     return null;
   }, [routeCoords, origin?.lat, origin?.lng, destination?.lat, destination?.lng, driverPos?.lat, driverPos?.lng]);
 
-  const originIcon = useMemo(() => createOriginDotIcon(), []);
+  const originIcon = useMemo(() => createOriginDotIcon(Boolean(searchingPulse)), [searchingPulse]);
   const destIcon = useMemo(() => createDestinationSquareIcon(), []);
   const assignedCarIcon = useMemo(
-    () => createNearbyCarIcon(driverPos?.heading || 0, true),
+    () => createNearbyCarIcon(driverPos?.heading || 0, true, false),
     [driverPos?.heading]
   );
 
@@ -221,7 +241,7 @@ export const PassengerLiveMap: React.FC<PassengerLiveMapProps> = ({
           <Marker
             key={drv.id}
             position={[drv.lat, drv.lng]}
-            icon={createNearbyCarIcon(drv.heading || 35, false)}
+            icon={createNearbyCarIcon(drv.heading || 35, false, Boolean(searchingPulse))}
           />
         ))}
 

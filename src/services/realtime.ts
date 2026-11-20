@@ -11,6 +11,7 @@ class RealtimeClient {
   private reconnectAttempt = 0;
   private state: ConnectionState = 'disconnected';
   private refCount = 0;
+  private lastEventTs = 0;
 
   getConnectionState(): ConnectionState {
     return this.state;
@@ -55,9 +56,10 @@ class RealtimeClient {
               ? localStorage.getItem('up_client_token') || localStorage.getItem('up_admin_token')
               : localStorage.getItem('up_admin_token') || localStorage.getItem('up_driver_token') || localStorage.getItem('up_client_token'))
       : null;
-    const url = token
+    const baseUrl = token
       ? `/api/realtime/stream?role=${encodeURIComponent(role)}&token=${encodeURIComponent(token)}`
       : `/api/realtime/stream?role=${encodeURIComponent(role)}`;
+    const url = this.lastEventTs > 0 ? `${baseUrl}&since=${this.lastEventTs}` : baseUrl;
 
     try {
       const es = new EventSource(url);
@@ -65,7 +67,13 @@ class RealtimeClient {
 
       const parseDetail = (evt: MessageEvent) => {
         try {
-          return JSON.parse(evt.data);
+          const parsed = JSON.parse(evt.data);
+          if (parsed?.tsMs && Number(parsed.tsMs) > this.lastEventTs) {
+            this.lastEventTs = Number(parsed.tsMs);
+          } else {
+            this.lastEventTs = Date.now();
+          }
+          return parsed;
         } catch {
           return {};
         }
@@ -84,6 +92,8 @@ class RealtimeClient {
       es.addEventListener('ride:created', handleRideEvent);
       es.addEventListener('ride:updated', handleRideEvent);
       es.addEventListener('ride:deleted', handleRideEvent);
+      es.addEventListener('ride:ridecheck', handleRideEvent);
+      es.addEventListener('ride:trusted_contacts_notified', handleRideEvent);
 
       es.addEventListener('chat:message', (evt: MessageEvent) => {
         const detail = parseDetail(evt);

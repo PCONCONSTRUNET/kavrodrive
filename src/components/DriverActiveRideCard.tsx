@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import {
-  MessageSquare, Phone, Navigation, Sliders, List, Shield,
+  MessageSquare, Phone, Navigation, Sliders, List, Shield, Package,
   Check, ArrowRight, ArrowUp, CornerUpRight, CornerUpLeft, User, Compass, ExternalLink
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
-import { getCategoryById } from '../utils/categoryEngine';
+import { getCategoryById, resolveCategoryType } from '../utils/categoryEngine';
 import { getCleanWhatsappNumber } from '../utils/format';
 import { getGoogleMapsRouteUrl } from '../utils/geo';
 import { RouteStepSummary } from './DriverHomeMap';
@@ -49,6 +49,17 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
   const [pinInput, setPinInput] = useState('');
   const [localPinError, setLocalPinError] = useState('');
   const category = getCategoryById(ride.category, config);
+  const isDelivery =
+    ride.serviceType === 'entregas' ||
+    Boolean(ride.deliveryDetails) ||
+    resolveCategoryType(category) === 'entregas';
+  const del = ride.deliveryDetails;
+  const dropoffText = del?.dropoffMode === 'portaria'
+    ? 'Deixar na portaria'
+    : del?.dropoffMode === 'recepcao'
+      ? 'Recepção / Loja'
+      : 'Entregar em mãos';
+  const cleanRecipientPhone = getCleanWhatsappNumber(del?.recipientPhone || '');
   const cleanPhone = getCleanWhatsappNumber(ride.clientPhone || '');
   const isTripInProgress = ride.status === 'em_andamento';
   const isAtPickup = ride.status === 'no_local';
@@ -72,7 +83,11 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
   };
 
   const clientFirstName = (ride.clientName || 'Passageiro').split(' ')[0];
-  const netEarnings = ride.driverNetAmount || ride.totalPrice * (1 - (ride.commissionPercent || 20) / 100);
+  const fallbackCommAmt = Math.min(
+    ride.totalPrice,
+    (ride.totalPrice * (ride.commissionPercent ?? 20)) / 100 + (ride.totalPrice > 0 ? Number(ride.commissionFixed ?? 0) : 0)
+  );
+  const netEarnings = ride.driverNetAmount ?? Math.max(0, ride.totalPrice - fallbackCommAmt);
 
   return (
     <>
@@ -245,7 +260,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
               <div style={{ fontSize: '0.52rem', fontWeight: 800, letterSpacing: '0.03em', marginTop: 1 }}>LIMITE</div>
             </div>
 
-            {onOpenSos && (
+            {onOpenSos && isTripInProgress && (
               <button
                 type="button"
                 onClick={onOpenSos}
@@ -398,7 +413,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                   alignItems: 'center',
                   justifyContent: 'center'
                 }}>
-                  <User size={12} fill="#FFFFFF" color="#FFFFFF" />
+                  {isDelivery ? <Package size={12} color="#FFFFFF" /> : <User size={12} fill="#FFFFFF" color="#FFFFFF" />}
                 </span>
                 <span>{distKm.toFixed(1).replace('.', ',')} km</span>
               </div>
@@ -411,11 +426,17 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis'
               }}>
-                {isTripInProgress
-                  ? `Viagem com ${clientFirstName} • R$ ${netEarnings.toFixed(2).replace('.', ',')}`
-                  : isAtPickup
-                    ? `Aguardando ${clientFirstName} no embarque`
-                    : `Encontro com ${clientFirstName}`}
+                {isDelivery
+                  ? isTripInProgress
+                    ? `Entregando: ${del?.itemDescription || 'Pacote'} p/ ${del?.recipientName || clientFirstName}`
+                    : isAtPickup
+                      ? `Coletar entrega com ${clientFirstName}`
+                      : `Coleta de entrega • ${clientFirstName}`
+                  : isTripInProgress
+                    ? `Viagem com ${clientFirstName} • R$ ${netEarnings.toFixed(2).replace('.', ',')}`
+                    : isAtPickup
+                      ? `Aguardando ${clientFirstName} no embarque`
+                      : `Encontro com ${clientFirstName}`}
               </div>
             </div>
 
@@ -444,6 +465,53 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
           {/* Drawer expansível com Chat, Ligação/WhatsApp e CTA Iniciar/Finalizar */}
           {isDetailsExpanded && (
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #F3F4F6' }}>
+              {isDelivery && del && (
+                <div style={{
+                  marginBottom: 10,
+                  padding: '9px 11px',
+                  borderRadius: 12,
+                  backgroundColor: '#F0FDF4',
+                  border: '1px solid #BBF7D0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#14532D' }}>
+                      📦 {del.itemDescription} ({del.packageSize || 'pequeno'})
+                    </span>
+                    <span style={{ fontSize: '0.68rem', fontWeight: 800, color: '#15803D', backgroundColor: '#DCFCE7', padding: '2px 7px', borderRadius: 999 }}>
+                      {dropoffText}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, fontSize: '0.75rem', color: '#166534', fontWeight: 600 }}>
+                    <span>
+                      {del.role === 'sender' ? 'Entregar para:' : 'Retirar com:'} <strong>{del.recipientName}</strong>
+                    </span>
+                    {cleanRecipientPhone && (
+                      <a
+                        href={`https://wa.me/${cleanRecipientPhone}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: '#15803D',
+                          fontWeight: 800,
+                          textDecoration: 'underline',
+                          flexShrink: 0
+                        }}
+                      >
+                        WhatsApp contato
+                      </a>
+                    )}
+                  </div>
+                  {del.instructions && (
+                    <div style={{ fontSize: '0.72rem', color: '#15803D', fontWeight: 600 }}>
+                      Instruções: {del.instructions}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -507,7 +575,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                         justifyContent: 'center',
                         textDecoration: 'none'
                       }}
-                      title="Chamar passageiro"
+                      title={isDelivery ? 'Chamar remetente/solicitante' : 'Chamar passageiro'}
                     >
                       <Phone size={15} />
                     </a>
@@ -579,7 +647,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                           type="button"
                           onClick={() => {
                             if (pinInput.length !== 4) {
-                              setLocalPinError('Digite o PIN de 4 dígitos informado pelo passageiro.');
+                              setLocalPinError('Digite o PIN de 4 dígitos informado.');
                               return;
                             }
                             setLocalPinError('');
@@ -597,7 +665,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                             cursor: 'pointer'
                           }}
                         >
-                          Confirmar Embarque
+                          {isDelivery ? 'Confirmar Coleta' : 'Confirmar Embarque'}
                         </button>
                       </div>
                       {(localPinError || startTripError) && (
@@ -635,7 +703,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                       }}
                     >
                       <ArrowRight size={19} strokeWidth={2.8} />
-                      <span>Iniciar {category.name}</span>
+                      <span>{isDelivery ? 'Iniciar entrega' : `Iniciar ${category.name}`}</span>
                     </button>
                   )
                 ) : (
@@ -659,7 +727,7 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                     }}
                   >
                     <Check size={20} strokeWidth={3} />
-                    <span>Finalizar corrida</span>
+                    <span>{isDelivery ? 'Finalizar entrega' : 'Finalizar corrida'}</span>
                   </button>
                 )}
               </div>

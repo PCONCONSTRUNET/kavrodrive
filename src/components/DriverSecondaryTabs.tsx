@@ -1255,13 +1255,14 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
               {(() => {
                 const liveCfg = propConfig || StorageService.getConfig();
                 const basePct = Number(liveCfg.platformCommissionPercent ?? 20);
-                const pixPct = Number(liveCfg.paymentMethodCommissionPercents?.pix ?? basePct);
-                const credPct = Number(liveCfg.paymentMethodCommissionPercents?.cartao_credito ?? basePct);
-                const debPct = Number(liveCfg.paymentMethodCommissionPercents?.cartao_debito ?? basePct);
-                const cashPct = Number(liveCfg.paymentMethodCommissionPercents?.dinheiro ?? basePct);
+                const commFixed = Math.max(0, Number(liveCfg.platformCommissionFixed ?? 0) || 0);
                 const wdFixed = Number(liveCfg.withdrawalFeeFixed ?? 0);
                 const wdPct = Number(liveCfg.withdrawalFeePercent ?? 0);
                 const wdMin = Number(liveCfg.minWithdrawalAmount ?? 20);
+                const platformFeeLabel =
+                  commFixed > 0
+                    ? `${basePct}% + R$ ${commFixed.toFixed(2).replace('.', ',')} fixo/corrida`
+                    : `${basePct}% por corrida`;
                 const wdFeeLabel =
                   wdFixed === 0 && wdPct === 0
                     ? 'Grátis'
@@ -1283,7 +1284,7 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                     gap: '4px 12px'
                   }}>
                     <span>
-                      <strong style={{ color: '#0F172A' }}>Taxas vigentes:</strong> PIX {pixPct}% • Crédito {credPct}% • Débito {debPct}% • Dinheiro {cashPct}%
+                      <strong style={{ color: '#0F172A' }}>Taxa geral:</strong> {platformFeeLabel}
                     </span>
                     <span>
                       Saque mín. <strong style={{ color: '#0F172A' }}>R$ {wdMin.toFixed(2).replace('.', ',')}</strong> • Taxa saque: <strong style={{ color: '#0F172A' }}>{wdFeeLabel}</strong>

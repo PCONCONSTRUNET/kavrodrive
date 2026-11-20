@@ -1,14 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
   MapPin, Users, Luggage, CreditCard,
   ArrowLeft, ShieldCheck, Check, Car, Navigation,
   Copy, QrCode, Plus, RefreshCw, AlertCircle, Lock, Sparkles, Banknote, Clock,
-  Phone, MessageSquare, ChevronDown, Sliders
+  Phone, MessageSquare, ChevronDown, Sliders, Maximize2, Minimize2, Share2, Pencil, Package
 } from 'lucide-react';
-import { LocationPoint, PaymentMethod, Ride, SystemConfig, SavedCard } from '../types';
+import { LocationPoint, PaymentMethod, Ride, RideDeliveryDetails, SavedCard, ServiceCategoryType, SystemConfig } from '../types';
 import { calculateHaversineDistance, estimateDurationMinutes, reverseGeocode } from '../utils/geo';
-import { calculateRidePrice, StorageService } from '../services/storage';
+import {
+  calculateRidePrice,
+  StorageService,
+  findActivePassengerRide,
+  canPassengerCancelRide,
+  canPassengerEditRoute
+} from '../services/storage';
 import { RealtimeService } from '../services/realtime';
 import { AddressPickerModal } from '../components/AddressPickerModal';
 import { PassengerLiveMap, OnlineDriverMapDot } from '../components/PassengerLiveMap';
@@ -18,10 +23,21 @@ import { formatRideCode, getCleanWhatsappNumber } from '../utils/format';
 import {
   normalizeCategoriesFromConfig,
   isDriverAvailableForCategory,
-  getCategoryById
+  getCategoryById,
+  resolveCategoryType,
+  mapLegacyCategoryId
 } from '../utils/categoryEngine';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
+import { TrustedContactsModal } from '../components/TrustedContactsModal';
+import { SafetyCenterModal } from '../components/SafetyCenterModal';
+import { RideCheckAlertModal } from '../components/RideCheckAlertModal';
+import { SosEmergencyModal } from '../components/SosEmergencyModal';
+import { StripeCardForm, confirmStripe3dsPaymentIntent } from '../components/StripeCardForm';
+import { RideSearchingStageCard } from '../components/RideSearchingStageCard';
+import { PixQrCode } from '../components/PixQrCode';
+import { RideCancelModal } from '../components/RideCancelModal';
+import { RideEditRouteModal } from '../components/RideEditRouteModal';
 import confetti from 'canvas-confetti';
 
 interface ClientBookingScreenProps {
@@ -31,6 +47,8 @@ interface ClientBookingScreenProps {
   onBackToHome: () => void;
   initialOrigin?: LocationPoint | null;
   initialDestination?: LocationPoint | null;
+  initialCategoryId?: string | null;
+  initialRide?: Ride | null;
 }
 
 export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
@@ -40,8 +58,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   onBackToHome,
   initialOrigin,
   initialDestination,
+  initialCategoryId,
+  initialRide,
 }) => {
-  const navigate = useNavigate();
   const currentUser = propUser !== undefined ? propUser : StorageService.getCurrentUser();
 
   const [origin, setOrigin] = useState<LocationPoint | null>(initialOrigin || null);
@@ -62,7 +81,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
 
   const [passengers, setPassengers] = useState<number>(1);
   const [hasLuggage, setHasLuggage] = useState<boolean>(false);
-  const [selectedCategory, setSelectedCategory] = useState<string>('kavro_go');
+  const [serviceMode, setServiceMode] = useState<ServiceCategoryType>(() =>
+    resolveCategoryType(initialCategoryId || 'kavro_go')
+  );
+  const [selectedCategory, setSelectedCategory] = useState<string>(() =>
+    mapLegacyCategoryId(initialCategoryId || 'kavro_go')
+  );
+  const [deliveryRole, setDeliveryRole] = useState<'sender' | 'receiver'>('sender');
+  const [deliveryRecipientName, setDeliveryRecipientName] = useState<string>('');
+  const [deliveryRecipientPhone, setDeliveryRecipientPhone] = useState<string>('');
+  const [deliveryItemDesc, setDeliveryItemDesc] = useState<string>('');
+  const [deliveryPackageSize, setDeliveryPackageSize] = useState<'pequeno' | 'medio' | 'grande'>('pequeno');
+  const [deliveryDropoffMode, setDeliveryDropoffMode] = useState<'porta_mao' | 'portaria' | 'recepcao'>('porta_mao');
+  const [deliveryInstructions, setDeliveryInstructions] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() =>
     allowPix ? 'pix' : allowCreditCard ? 'cartao_credito' : allowDebitCard ? 'cartao_debito' : 'dinheiro'
   );
@@ -94,11 +125,31 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [cardType, setCardType] = useState<'cartao_credito' | 'cartao_debito'>('cartao_credito');
   const [cardError, setCardError] = useState('');
   const [isSavingCard, setIsSavingCard] = useState(false);
+  const [paymentsConfig, setPaymentsConfig] = useState<{
+    gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
+    stripeEnabled: boolean;
+    stripePublishableKey: string;
+    mercadopagoEnabled: boolean;
+    mercadopagoPublicKey: string;
+    autoPixPayoutEnabled: boolean;
+  }>({
+    gatewayProvider: 'sandbox',
+    stripeEnabled: false,
+    stripePublishableKey: String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim(),
+    mercadopagoEnabled: false,
+    mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
+    autoPixPayoutEnabled: false
+  });
 
-  // Estado da solicitação em tempo real
+  // Estado da solicitação em tempo real (restaura corrida ativa do passageiro automaticamente igual à Uber)
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [requestError, setRequestError] = useState('');
-  const [activeRide, setActiveRide] = useState<Ride | null>(null);
+  const [activeRide, setActiveRide] = useState<Ride | null>(() => {
+    if (initialRide) return initialRide;
+    if (initialDestination) return null;
+    return findActivePassengerRide(StorageService.getRides(), currentUser);
+  });
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [isRatingSheetOpen, setIsRatingSheetOpen] = useState(false);
@@ -106,6 +157,16 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [copiedPix, setCopiedPix] = useState(false);
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
   const [locatingOriginGps, setLocatingOriginGps] = useState(false);
+  const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
+  const [isSafetyCenterOpen, setIsSafetyCenterOpen] = useState(false);
+  const [isSosOpen, setIsSosOpen] = useState(false);
+  const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
+  const [isEditRouteModalOpen, setIsEditRouteModalOpen] = useState(false);
+  const [trustedCount, setTrustedCount] = useState<number>(currentUser?.trustedContacts?.length || 0);
+
+  useEffect(() => {
+    setTrustedCount(currentUser?.trustedContacts?.length || 0);
+  }, [currentUser?.trustedContacts?.length]);
 
   const handleUseCurrentGpsForOrigin = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -153,6 +214,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   }, [origin]);
 
+  // Carrega configuração ativa do gateway de pagamento (Stripe / Mercado Pago / Sandbox)
+  useEffect(() => {
+    StorageService.fetchPaymentsConfig().then(setPaymentsConfig).catch(() => {});
+  }, []);
+
   // Carrega cartões tokenizados salvos
   useEffect(() => {
     if (currentUser?.id || currentUser?.phone) {
@@ -165,14 +231,33 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   }, [currentUser?.id, currentUser?.phone]);
 
-  // Atualiza em tempo real o status da corrida solicitada (SSE + fallback leve)
+  // Sincroniza quando um initialRide é selecionado externamente
+  useEffect(() => {
+    if (initialRide) {
+      setActiveRide(initialRide);
+    }
+  }, [initialRide]);
+
+  // Restaura automaticamente a corrida ativa do passageiro caso exista em curso no banco
+  useEffect(() => {
+    if (initialRide || initialDestination || activeRide) return;
+    let alive = true;
+    StorageService.syncFromDatabase().then(() => {
+      if (!alive) return;
+      const resumed = findActivePassengerRide(StorageService.getRides(), currentUser);
+      if (resumed) setActiveRide(resumed);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [initialRide, initialDestination, activeRide, currentUser]);
+
+  // Atualiza em tempo real o status e posição GPS do motorista na Tela Ao Vivo Unificada
   useEffect(() => {
     if (!activeRide) return;
     setUnreadChatCount(0);
     const syncActive = () => {
       const latest = StorageService.getRides().find(r => r.id === activeRide.id);
       if (latest) {
-        setActiveRide(latest);
+        setActiveRide(prev => prev && latest.driverLocation ? latest : latest || prev);
       }
     };
     const handleRealtimeChat = (evt: Event) => {
@@ -186,18 +271,36 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     window.addEventListener('up_database_synced', syncActive);
     window.addEventListener('up_realtime_ride', syncActive);
     window.addEventListener('up_realtime_chat', handleRealtimeChat);
-    const intervalMs = RealtimeService.isConnected() ? 10000 : 2000;
+    const intervalMs = RealtimeService.isConnected() ? 8000 : 2500;
     const interval = setInterval(() => {
       StorageService.syncFromDatabase().then(syncActive);
     }, intervalMs);
+
+    const gpsInterval =
+      activeRide.driverId &&
+      activeRide.status !== 'aguardando_pagamento' &&
+      activeRide.status !== 'aguardando_confirmacao' &&
+      activeRide.status !== 'finalizada' &&
+      activeRide.status !== 'cancelada'
+        ? setInterval(async () => {
+            const live = await StorageService.fetchRideLiveLocation(activeRide.id);
+            if (live?.driverLocation?.lat && live?.driverLocation?.lng) {
+              setActiveRide((prev) =>
+                prev ? { ...prev, driverLocation: live.driverLocation, status: live.status || prev.status } : prev
+              );
+            }
+          }, 2500)
+        : null;
+
     return () => {
       clearInterval(interval);
+      if (gpsInterval) clearInterval(gpsInterval);
       window.removeEventListener('up_rides_updated', syncActive);
       window.removeEventListener('up_database_synced', syncActive);
       window.removeEventListener('up_realtime_ride', syncActive);
       window.removeEventListener('up_realtime_chat', handleRealtimeChat);
     };
-  }, [activeRide?.id, isChatOpen]);
+  }, [activeRide?.id, activeRide?.driverId, activeRide?.status, isChatOpen]);
 
   // Abre automaticamente o bottom sheet estilo Uber assim que a corrida finaliza
   useEffect(() => {
@@ -228,12 +331,41 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     () => normalizeCategoriesFromConfig(config).filter(c => c.active),
     [config]
   );
+  const padraoCategories = React.useMemo(
+    () => activeCategories.filter(c => resolveCategoryType(c) !== 'entregas'),
+    [activeCategories]
+  );
+  const entregasCategories = React.useMemo(
+    () => activeCategories.filter(c => resolveCategoryType(c) === 'entregas'),
+    [activeCategories]
+  );
+  const visibleModeCategories = React.useMemo(() => {
+    const bucket = serviceMode === 'entregas' ? entregasCategories : padraoCategories;
+    return bucket.length > 0 ? bucket : activeCategories;
+  }, [serviceMode, entregasCategories, padraoCategories, activeCategories]);
 
   useEffect(() => {
-    if (activeCategories.length > 0 && !activeCategories.some(c => c.id === selectedCategory)) {
-      setSelectedCategory(activeCategories[0].id);
+    if (visibleModeCategories.length > 0 && !visibleModeCategories.some(c => c.id === selectedCategory)) {
+      setSelectedCategory(visibleModeCategories[0].id);
     }
-  }, [activeCategories, selectedCategory]);
+  }, [visibleModeCategories, selectedCategory]);
+
+  useEffect(() => {
+    if (initialCategoryId) {
+      const mapped = mapLegacyCategoryId(initialCategoryId);
+      setServiceMode(resolveCategoryType(mapped));
+      setSelectedCategory(mapped);
+    }
+  }, [initialCategoryId]);
+
+  const handleSwitchServiceMode = (mode: ServiceCategoryType) => {
+    setServiceMode(mode);
+    setRequestError('');
+    const list = mode === 'entregas' ? entregasCategories : padraoCategories;
+    if (list.length > 0) {
+      setSelectedCategory(list[0].id);
+    }
+  };
 
   const pricing = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, selectedCategory, undefined, paymentMethod);
   const onlineDrivers = StorageService.getOnlineDrivers();
@@ -253,7 +385,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       const eligibleOnline = onlineDrivers.filter(drv =>
         isDriverAvailableForCategory(drv, cat.id, activeCategories)
       );
-      let etaMin = cat.id === 'kavro_go' ? 3 : cat.id === 'kavro_plus' ? 4 : 5;
+      let etaMin = resolveCategoryType(cat) === 'entregas' ? 5 : 3;
       if (origin && eligibleOnline.length > 0) {
         const distances = eligibleOnline
           .filter(d => d.location && typeof d.location.lat === 'number' && typeof d.location.lng === 'number')
@@ -352,6 +484,40 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       return;
     }
 
+    const isDeliveryOrder =
+      serviceMode === 'entregas' || resolveCategoryType(selectedCatObj) === 'entregas';
+
+    let normalizedDeliveryPayload: RideDeliveryDetails | undefined;
+    if (isDeliveryOrder) {
+      const cleanName = deliveryRecipientName.trim();
+      const cleanPhone = deliveryRecipientPhone.trim();
+      const phoneDigits = cleanPhone.replace(/\D/g, '');
+      const cleanItem = deliveryItemDesc.trim();
+      if (cleanName.length < 2) {
+        setRequestError(
+          `Informe o nome completo de quem vai ${deliveryRole === 'sender' ? 'receber' : 'entregar'} o pacote.`
+        );
+        return;
+      }
+      if (phoneDigits.length < 10) {
+        setRequestError('Informe um WhatsApp ou telefone válido com DDD para a entrega.');
+        return;
+      }
+      if (cleanItem.length < 2) {
+        setRequestError('Descreva o produto ou item que será enviado na entrega.');
+        return;
+      }
+      normalizedDeliveryPayload = {
+        role: deliveryRole,
+        recipientName: cleanName,
+        recipientPhone: cleanPhone,
+        itemDescription: cleanItem,
+        packageSize: deliveryPackageSize,
+        dropoffMode: deliveryDropoffMode,
+        ...(deliveryInstructions.trim() ? { instructions: deliveryInstructions.trim() } : {})
+      };
+    }
+
     const isCard = paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito';
     const chosenCard = savedCards.find(c => c.id === selectedCardId);
     if (isCard && !chosenCard) {
@@ -371,7 +537,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
-    const res = await StorageService.requestRideOnDemand({
+    const baseRequestPayload = {
       clientId: currentUser?.id,
       clientName: currentUser?.name || 'Passageiro',
       clientPhone: currentUser?.phone || '',
@@ -379,13 +545,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       destination,
       date: todayStr,
       time: nowTimeStr,
-      passengers,
-      hasLuggage,
+      passengers: isDeliveryOrder ? 0 : passengers,
+      hasLuggage: isDeliveryOrder ? deliveryPackageSize === 'grande' : hasLuggage,
       distanceKm,
       durationMin,
       category: selectedCategory,
       categoryName: pricing.categoryName,
-      appliedFareSnapshot: pricing.appliedFareSnapshot,
+      serviceType: (isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
+      deliveryDetails: normalizedDeliveryPayload || null,
+      appliedFareSnapshot: {
+        ...pricing.appliedFareSnapshot,
+        categoryType: (isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
+        ...(normalizedDeliveryPayload ? { deliveryDetails: normalizedDeliveryPayload } : {})
+      },
       baseFare: pricing.appliedFareSnapshot.baseFare,
       commissionPercent: pricing.commissionPercent,
       totalPrice: pricing.totalPrice,
@@ -393,9 +565,35 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       cardId: isCard ? chosenCard?.id : undefined,
       cardLast4: isCard ? chosenCard?.last4 : undefined,
       cardBrand: isCard ? chosenCard?.brand : undefined,
-      notes,
+      notes: isDeliveryOrder
+        ? (deliveryInstructions.trim() || `Entrega: ${normalizedDeliveryPayload?.itemDescription || ''}`)
+        : notes,
       isManualBooking: false
-    });
+    };
+
+    let res = await StorageService.requestRideOnDemand(baseRequestPayload);
+
+    if (
+      !res.ok &&
+      res.requiresAction &&
+      res.clientSecret &&
+      res.paymentIntentId &&
+      paymentsConfig.stripePublishableKey
+    ) {
+      const actionRes = await confirmStripe3dsPaymentIntent(
+        paymentsConfig.stripePublishableKey,
+        res.clientSecret
+      );
+      if (!actionRes.ok) {
+        setIsSubmitting(false);
+        setRequestError(actionRes.error || 'Autenticação 3DS do cartão não concluída.');
+        return;
+      }
+      res = await StorageService.requestRideOnDemand({
+        ...baseRequestPayload,
+        stripePaymentIntentId: actionRes.paymentIntentId || res.paymentIntentId
+      });
+    }
 
     setIsSubmitting(false);
 
@@ -444,11 +642,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const copyPaste = activeRide.pixCopyPaste || '';
 
     return (
-      <div className="animate-fade-in" style={{ padding: '16px 16px 100px 16px', maxWidth: 480, margin: '0 auto' }}>
+      <div className="animate-fade-in" style={{ padding: '12px 14px 124px 14px', maxWidth: 480, margin: '0 auto' }}>
         <div style={{
           backgroundColor: '#FFFFFF',
           borderRadius: 22,
-          padding: '20px 18px',
+          padding: '16px 16px',
           border: '1.5px solid #E2E8F0',
           boxShadow: '0 10px 30px rgba(15, 23, 42, 0.06)',
           textAlign: 'center'
@@ -461,50 +659,55 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             color: '#B45309',
             padding: '5px 12px',
             borderRadius: 999,
-            fontSize: '0.74rem',
+            fontSize: '0.72rem',
             fontWeight: 800,
-            marginBottom: 10
+            marginBottom: 8
           }}>
             <Clock size={14} />
-            <span>AGUARDANDO CONFIRMAÇÃO DO GATEWAY PIX</span>
+            <span>
+              {paymentsConfig.stripeEnabled
+                ? 'AGUARDANDO CONFIRMAÇÃO VIA STRIPE PIX'
+                : 'AGUARDANDO CONFIRMAÇÃO DO GATEWAY PIX'}
+            </span>
           </div>
 
-          <h2 style={{ fontSize: '1.2rem', fontWeight: 900, color: '#0F172A', margin: '0 0 4px 0' }}>
+          <h2 style={{ fontSize: '1.15rem', fontWeight: 900, color: '#0F172A', margin: '0 0 4px 0' }}>
             Pague com PIX para chamar seu motorista
           </h2>
-          <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '0 0 14px 0', lineHeight: 1.4 }}>
+          <p style={{ fontSize: '0.78rem', color: '#64748B', margin: '0 0 10px 0', lineHeight: 1.35 }}>
             Assim que o banco confirmar o pagamento via webhook, seu motorista é acionado automaticamente na hora.
           </p>
 
           <div style={{
             backgroundColor: '#F8FAFC',
-            borderRadius: 16,
-            padding: '12px',
+            borderRadius: 14,
+            padding: '10px 12px',
             border: '1px solid #E2E8F0',
-            marginBottom: 14
+            marginBottom: 12
           }}>
-            <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
+            <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
               Valor da Corrida ({formatRideCode(activeRide)})
             </div>
-            <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#15803D' }}>
+            <div style={{ fontSize: '1.55rem', fontWeight: 900, color: '#15803D' }}>
               R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
             </div>
           </div>
 
-          {qrUrl && (
+          {(copyPaste || qrUrl) && (
             <div style={{
-              width: 200,
-              height: 200,
-              margin: '0 auto 14px auto',
-              padding: 10,
+              width: 184,
+              height: 184,
+              margin: '0 auto 12px auto',
+              padding: 8,
               backgroundColor: '#FFFFFF',
-              borderRadius: 18,
+              borderRadius: 16,
               border: '2px solid #76D800',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center'
+              justifyContent: 'center',
+              boxSizing: 'border-box'
             }}>
-              <img src={qrUrl} alt="QR Code PIX Dinâmico" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+              <PixQrCode payload={copyPaste} fallbackUrl={qrUrl} size={184} />
             </div>
           )}
 
@@ -552,8 +755,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             🔒 <strong>Segurança Automática:</strong> Não é necessário enviar comprovante. O sistema libera a corrida automaticamente assim que o gateway confirma a liquidação.
           </div>
 
-          {/* Botão de Simulação do Webhook apenas em ambiente de desenvolvimento */}
-          {import.meta.env.DEV && (
+          {/* Botão de Simulação do Webhook apenas em desenvolvimento sem Stripe ativa */}
+          {import.meta.env.DEV && !paymentsConfig.stripeEnabled && (
             <button
               type="button"
               onClick={handleSimulatePixWebhook}
@@ -582,21 +785,70 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             </button>
           )}
 
+          {canPassengerEditRoute(activeRide) && (
+            <button
+              type="button"
+              onClick={() => setIsEditRouteModalOpen(true)}
+              style={{
+                backgroundColor: '#EFF6FF',
+                border: '1px solid #BFDBFE',
+                borderRadius: 10,
+                color: '#1D4ED8',
+                fontSize: '0.8rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                padding: '8px 14px',
+                marginBottom: 8,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6
+              }}
+            >
+              <Pencil size={13} />
+              <span>Alterar origem ou destino</span>
+            </button>
+          )}
+
           <button
             type="button"
-            onClick={() => setActiveRide(null)}
+            onClick={() => setIsCancelModalOpen(true)}
             style={{
-              background: 'none',
-              border: 'none',
-              color: '#64748B',
-              fontSize: '0.8rem',
-              fontWeight: 700,
+              width: '100%',
+              marginTop: 6,
+              backgroundColor: '#FEF2F2',
+              border: '1px solid #FECACA',
+              borderRadius: 12,
+              color: '#DC2626',
+              fontSize: '0.82rem',
+              fontWeight: 800,
               cursor: 'pointer',
-              padding: '6px'
+              padding: '11px 14px'
             }}
           >
-            Alterar forma de pagamento ou cancelar
+            Cancelar solicitação ou alterar pagamento
           </button>
+
+          <RideEditRouteModal
+            isOpen={isEditRouteModalOpen}
+            ride={activeRide}
+            config={config}
+            onClose={() => setIsEditRouteModalOpen(false)}
+            onUpdated={(updated) => {
+              setIsEditRouteModalOpen(false);
+              setActiveRide(updated);
+            }}
+          />
+
+          <RideCancelModal
+            isOpen={isCancelModalOpen}
+            ride={activeRide}
+            config={config}
+            onClose={() => setIsCancelModalOpen(false)}
+            onCancelled={() => {
+              setIsCancelModalOpen(false);
+              setActiveRide(null);
+            }}
+          />
         </div>
       </div>
     );
@@ -614,27 +866,45 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const isCompleted = activeRide.status === 'finalizada';
     const isCancelled = activeRide.status === 'cancelada';
     const cleanDriverPhone = getCleanWhatsappNumber(activeRide.driverPhone || '');
+    const isDeliveryActiveRide =
+      activeRide.serviceType === 'entregas' ||
+      Boolean(activeRide.deliveryDetails) ||
+      resolveCategoryType(activeRide.category || '') === 'entregas';
+    const del = activeRide.deliveryDetails;
+    const dropoffText = del?.dropoffMode === 'portaria'
+      ? 'Deixar na portaria'
+      : del?.dropoffMode === 'recepcao'
+        ? 'Recepção / Loja'
+        : 'Entregar em mãos';
 
     return (
       <div className="animate-fade-in" style={{
-        minHeight: 'calc(100dvh - 58px)',
+        height: 'calc(100dvh - 60px)',
         backgroundColor: '#E8EDF3',
         display: 'flex',
         flexDirection: 'column',
         maxWidth: 480,
         margin: '0 auto',
-        position: 'relative'
+        position: 'relative',
+        overflow: 'hidden'
       }}>
-        {/* Mapa Ao Vivo Superior em Tela Cheia estilo Uber Passageiro */}
-        <div style={{ position: 'relative', height: '46dvh', minHeight: 260, width: '100%' }}>
+        {/* Mapa Ao Vivo Superior ocupando a maior parte da tela igual à Uber */}
+        <div style={{
+          position: 'relative',
+          flex: 1,
+          minHeight: isMapExpanded ? '66%' : '42%',
+          width: '100%'
+        }}>
           <PassengerLiveMap
             origin={activeRide.origin}
             destination={activeRide.destination}
             driverPos={activeRide.driverLocation || null}
             nearbyDrivers={isSearching ? nearbyMapDrivers : []}
+            searchingPulse={isSearching}
+            height="100%"
           />
 
-          {/* Controles Flutuantes no Mapa */}
+          {/* Controles Flutuantes no Mapa (Topo) */}
           <div style={{
             position: 'absolute',
             top: 'calc(12px + env(safe-area-inset-top, 0px))',
@@ -644,15 +914,16 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
+            gap: 8,
             pointerEvents: 'none'
           }}>
             <button
               type="button"
               onClick={onBackToHome}
-              aria-label="Voltar"
+              aria-label="Voltar ao Início"
               style={{
-                width: 42,
-                height: 42,
+                width: 40,
+                height: 40,
                 borderRadius: '50%',
                 backgroundColor: '#FFFFFF',
                 border: '1px solid #E5E7EB',
@@ -662,207 +933,292 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 justifyContent: 'center',
                 boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
                 cursor: 'pointer',
-                pointerEvents: 'auto'
+                pointerEvents: 'auto',
+                flexShrink: 0
               }}
             >
-              <ArrowLeft size={20} />
+              <ArrowLeft size={19} />
             </button>
 
-            <div style={{
-              backgroundColor: '#111111',
-              color: '#FFFFFF',
-              padding: '7px 14px',
-              borderRadius: 999,
-              fontSize: '0.78rem',
-              fontWeight: 800,
-              boxShadow: '0 4px 14px rgba(0,0,0,0.22)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              pointerEvents: 'auto'
-            }}>
-              <span style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                backgroundColor: isSearching ? '#F59E0B' : '#22C55E'
-              }} />
-              <span>
-                {isCompleted
-                  ? 'Viagem concluída'
-                  : isCancelled
-                    ? 'Corrida cancelada'
-                    : isSearching
-                      ? 'Conectando motorista...'
-                      : isInProgress
-                        ? `~${activeRide.durationMin || 8} min ao destino`
-                        : isAtPickup
-                          ? 'Motorista chegou!'
-                          : `Chegada em ~${activeRide.durationMin ? Math.min(8, activeRide.durationMin) : 4} min`}
-              </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'auto' }}>
+              <button
+                type="button"
+                onClick={() => setIsMapExpanded((v) => !v)}
+                aria-label={isMapExpanded ? 'Recolher mapa' : 'Expandir mapa'}
+                title={isMapExpanded ? 'Recolher mapa' : 'Expandir mapa'}
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: '50%',
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #E5E7EB',
+                  color: '#111111',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+              >
+                {isMapExpanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
             </div>
           </div>
+
+          {/* Botões Flutuantes de Segurança sobre o canto inferior do Mapa (Estilo Escudo Uber) */}
+          {!isCompleted && !isCancelled && (
+            <div style={{
+              position: 'absolute',
+              bottom: 24,
+              right: 12,
+              zIndex: 400,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6
+            }}>
+              <button
+                type="button"
+                onClick={() => setIsSafetyCenterOpen(true)}
+                style={{
+                  height: 32,
+                  padding: '0 10px',
+                  borderRadius: 999,
+                  backgroundColor: '#FFFFFF',
+                  color: '#111111',
+                  border: '1px solid #E5E7EB',
+                  boxShadow: '0 3px 10px rgba(0,0,0,0.16)',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  cursor: 'pointer'
+                }}
+              >
+                <ShieldCheck size={14} color="#2563EB" />
+                <span>Segurança</span>
+              </button>
+              {isInProgress && (
+                <button
+                  type="button"
+                  onClick={() => setIsSosOpen(true)}
+                  style={{
+                    height: 32,
+                    padding: '0 10px',
+                    borderRadius: 999,
+                    backgroundColor: '#DC2626',
+                    color: '#FFFFFF',
+                    border: 'none',
+                    boxShadow: '0 3px 10px rgba(220,38,38,0.35)',
+                    fontSize: '0.72rem',
+                    fontWeight: 900,
+                    cursor: 'pointer'
+                  }}
+                >
+                  SOS
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Bottom Sheet Branca Estilo Uber Passageiro */}
+        {/* Bottom Sheet Enxuta Estilo Uber Passageiro */}
         <div style={{
-          flex: 1,
+          flexShrink: 0,
+          maxHeight: isMapExpanded ? '28dvh' : isSearching ? '42dvh' : '54dvh',
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
           backgroundColor: '#FFFFFF',
-          borderRadius: '24px 24px 0 0',
-          marginTop: -22,
+          borderRadius: '20px 20px 0 0',
+          marginTop: -16,
           zIndex: 10,
           position: 'relative',
-          padding: '12px 18px 96px 18px',
-          boxShadow: '0 -8px 28px rgba(0,0,0,0.12)'
+          padding: '8px 16px 12px 16px',
+          boxShadow: '0 -8px 28px rgba(0,0,0,0.14)'
         }}>
           <div style={{
-            width: 38,
+            width: 34,
             height: 4,
             borderRadius: 999,
             backgroundColor: '#D1D5DB',
-            margin: '0 auto 14px auto'
+            margin: '0 auto 8px auto'
           }} />
 
-          {/* Status Principal */}
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <h2 style={{ margin: 0, fontSize: '1.22rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
-                {isCompleted
-                  ? 'Você chegou ao seu destino!'
-                  : isCancelled
-                    ? 'Corrida cancelada'
-                    : isSearching
-                      ? 'Procurando motorista...'
-                      : isQueued
-                        ? 'Motorista confirmado na fila'
-                        : isAtPickup
-                          ? 'Seu motorista chegou!'
-                          : isInProgress
-                            ? 'Em viagem rumo ao destino'
-                            : 'Motorista a caminho'}
-              </h2>
-              {isSearching && <RefreshCw size={18} color="#276EF1" className="animate-spin" />}
-            </div>
-            <p style={{ margin: '4px 0 0 0', fontSize: '0.8rem', color: '#6B7280', fontWeight: 500 }}>
-              {isCompleted
-                ? `Viagem finalizada • Total R$ ${(activeRide.totalPrice || 0).toFixed(2).replace('.', ',')}`
-                : isCancelled
-                  ? 'Você pode solicitar uma nova viagem quando quiser.'
-                  : isSearching
-                    ? `${onlineDriversCount} motorista(s) online na região recebendo seu chamado`
-                    : isQueued
-                      ? `${activeRide.driverName || 'Seu motorista'} está concluindo um desembarque próximo.`
-                      : isInProgress
-                        ? 'Acompanhe o trajeto em tempo real pelo mapa acima.'
-                        : 'Confira a placa e o veículo ao embarcar.'}
-            </p>
-          </div>
-
-          {/* Card do Motorista estilo Uber Passageiro */}
-          {activeRide.driverName && (
-            <div style={{
-              backgroundColor: '#F9FAFB',
-              borderRadius: 16,
-              padding: '14px',
-              border: '1px solid #E5E7EB',
-              marginBottom: 14
-            }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 12
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                  <div style={{
-                    width: 50,
-                    height: 50,
-                    borderRadius: '50%',
-                    backgroundColor: '#111111',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontWeight: 900,
-                    fontSize: '1.15rem',
-                    overflow: 'hidden',
-                    flexShrink: 0,
-                    border: '2px solid #FFFFFF',
-                    boxShadow: '0 2px 8px rgba(0,0,0,0.12)'
-                  }}>
-                    {activeRide.driverPhoto ? (
-                      <img src={activeRide.driverPhoto} alt={activeRide.driverName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                    ) : (
-                      activeRide.driverName.charAt(0).toUpperCase()
-                    )}
+          {/* Status Principal Compacto */}
+          <div style={{ marginBottom: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                    <h2 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
+                      {isDeliveryActiveRide
+                        ? isCompleted
+                          ? 'Entrega finalizada!'
+                          : isCancelled
+                            ? 'Entrega cancelada'
+                            : isSearching
+                              ? 'Procurando entregador...'
+                              : isQueued
+                                ? 'Motorista confirmado na fila'
+                                : isAtPickup
+                                  ? 'Motorista chegou na coleta!'
+                                  : isInProgress
+                                    ? 'Entrega em rota até o destino'
+                                    : 'Motorista a caminho da coleta'
+                        : isCompleted
+                          ? 'Você chegou ao seu destino!'
+                          : isCancelled
+                            ? 'Corrida cancelada'
+                            : isSearching
+                              ? 'Procurando motorista...'
+                              : isQueued
+                                ? 'Motorista confirmado na fila'
+                                : isAtPickup
+                                  ? 'Seu motorista chegou!'
+                                  : isInProgress
+                                    ? 'Em viagem até o destino'
+                                    : 'Motorista a caminho'}
+                    </h2>
+                    {isSearching && <RefreshCw size={16} color="#276EF1" className="animate-spin" />}
                   </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#111111' }}>
-                      {activeRide.driverName} • ★ {Number(activeRide.driverRating || 4.98).toFixed(2)}
-                    </div>
-                    <div style={{ fontSize: '0.78rem', color: '#4B5563', fontWeight: 600, marginTop: 2 }}>
-                      {activeRide.driverVehicle || 'Veículo Parceiro'} {activeRide.driverCarColor ? `(${activeRide.driverCarColor})` : ''}
-                    </div>
+
+                  {!isSearching && (
+                    <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: '#6B7280', fontWeight: 500 }}>
+                      {isCompleted
+                        ? `${isDeliveryActiveRide ? 'Entrega finalizada' : 'Viagem finalizada'} • Total R$ ${(activeRide.totalPrice || 0).toFixed(2).replace('.', ',')}`
+                        : isCancelled
+                          ? 'Você pode solicitar uma nova solicitação quando quiser.'
+                          : isQueued
+                            ? `${activeRide.driverName || 'Seu motorista'} está concluindo um atendimento próximo.`
+                            : isInProgress
+                              ? 'Acompanhe o trajeto em tempo real pelo mapa.'
+                              : isDeliveryActiveRide
+                                ? 'Confira o veículo e o PIN para liberar a coleta do pacote.'
+                                : 'Confira o veículo e o PIN antes de embarcar.'}
+                    </p>
+                  )}
+
+                  {isDeliveryActiveRide && del && !isMapExpanded && (
                     <div style={{
-                      display: 'inline-flex',
+                      marginTop: 7,
+                      padding: '8px 10px',
+                      borderRadius: 11,
+                      backgroundColor: '#F0FDF4',
+                      border: '1px solid #BBF7D0',
+                      display: 'flex',
                       alignItems: 'center',
-                      gap: 4,
-                      marginTop: 4,
-                      padding: '2px 8px',
-                      borderRadius: 999,
-                      backgroundColor: '#DCFCE7',
-                      color: '#15803D',
-                      fontSize: '0.67rem',
-                      fontWeight: 800
+                      justifyContent: 'space-between',
+                      gap: 8
                     }}>
-                      <span>✓ Veículo &amp; CRLV Aprovado</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                        <Package size={16} color="#15803D" style={{ flexShrink: 0 }} />
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '0.77rem', fontWeight: 800, color: '#14532D', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {del.itemDescription} ({del.packageSize || 'pequeno'})
+                          </div>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 600, color: '#166534', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {del.role === 'sender' ? 'Para:' : 'Retirar com:'} {del.recipientName} • {dropoffText}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                </div>
-                {activeRide.driverPlate && (
-                  <MercosulPlateBadge plate={activeRide.driverPlate} size="sm" />
-                )}
-              </div>
+                  )}
 
-              {activeRide.boardingPin && (activeRide.status === 'confirmada' || activeRide.status === 'a_caminho' || activeRide.status === 'no_local') && (
-                <div style={{
-                  marginTop: 10,
-                  padding: '10px 14px',
-                  borderRadius: 12,
-                  backgroundColor: '#EFF6FF',
-                  border: '1px solid #BFDBFE',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12
-                }}>
-                  <div>
-                    <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#1E40AF', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                      Código de Embarque (PIN)
-                    </div>
-                    <div style={{ fontSize: '0.72rem', color: '#3B82F6', fontWeight: 600 }}>
-                      Informe ao motorista para iniciar a viagem
-                    </div>
-                  </div>
-                  <div style={{
-                    fontSize: '1.25rem',
-                    fontWeight: 900,
-                    letterSpacing: '0.2em',
-                    color: '#1E3A8A',
-                    backgroundColor: '#FFFFFF',
-                    padding: '6px 12px',
-                    borderRadius: 10,
-                    border: '1px solid #93C5FD',
-                    fontVariantNumeric: 'tabular-nums'
-                  }}>
-                    {activeRide.boardingPin}
-                  </div>
+                  {!isCompleted && !isCancelled && !isMapExpanded && (
+                    <RideSearchingStageCard
+                      status={activeRide.status}
+                      onlineDriversCount={onlineDriversCount}
+                      driverName={activeRide.driverName}
+                      isQueued={isQueued}
+                      compact
+                    />
+                  )}
                 </div>
-              )}
+
+                {/* Card do Motorista compacto estilo Uber Passageiro */}
+                {!isMapExpanded && activeRide.driverName && (
+                  <div style={{
+                    backgroundColor: '#F8FAFC',
+                    borderRadius: 14,
+                    padding: '10px 12px',
+                    border: '1px solid #E5E7EB',
+                    marginBottom: 8
+                  }}>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <div style={{
+                          width: 42,
+                          height: 42,
+                          borderRadius: '50%',
+                          backgroundColor: '#111111',
+                          color: '#FFFFFF',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontWeight: 900,
+                          fontSize: '1rem',
+                          overflow: 'hidden',
+                          flexShrink: 0,
+                          border: '1.5px solid #FFFFFF',
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.12)'
+                        }}>
+                          {activeRide.driverPhoto ? (
+                            <img src={activeRide.driverPhoto} alt={activeRide.driverName} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            activeRide.driverName.charAt(0).toUpperCase()
+                          )}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#111111', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {activeRide.driverName} • ★ {Number(activeRide.driverRating || 4.98).toFixed(2)}
+                          </div>
+                          <div style={{ fontSize: '0.74rem', color: '#4B5563', fontWeight: 600, marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {activeRide.driverVehicle || 'Veículo Parceiro'} {activeRide.driverCarColor ? `(${activeRide.driverCarColor})` : ''}
+                          </div>
+                        </div>
+                      </div>
+                      {activeRide.driverPlate && (
+                        <MercosulPlateBadge plate={activeRide.driverPlate} size="sm" />
+                      )}
+                    </div>
+
+                    {activeRide.boardingPin && (activeRide.status === 'confirmada' || activeRide.status === 'a_caminho' || activeRide.status === 'no_local') && (
+                      <div style={{
+                        marginTop: 8,
+                        padding: '6px 10px',
+                        borderRadius: 10,
+                        backgroundColor: '#EFF6FF',
+                        border: '1px solid #BFDBFE',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 10
+                      }}>
+                        <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#1E40AF' }}>
+                          {isDeliveryActiveRide ? 'PIN de coleta / entrega' : 'PIN de embarque'}
+                        </span>
+                        <span style={{
+                          fontSize: '1rem',
+                          fontWeight: 900,
+                          letterSpacing: '0.18em',
+                          color: '#1E3A8A',
+                          backgroundColor: '#FFFFFF',
+                          padding: '2px 9px',
+                          borderRadius: 8,
+                          border: '1px solid #93C5FD',
+                          fontVariantNumeric: 'tabular-nums'
+                        }}>
+                          {activeRide.boardingPin}
+                        </span>
+                      </div>
+                    )}
 
               {/* Ações rápidas com o motorista (Chat ao vivo no app + Ligar) */}
               {activeRide.driverId && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
                   <button
                     type="button"
                     onClick={() => {
@@ -871,23 +1227,23 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                     }}
                     style={{
                       flex: 1,
-                      height: 40,
+                      height: 36,
                       borderRadius: 999,
                       backgroundColor: '#FFFFFF',
                       border: '1px solid #D1D5DB',
                       color: '#111111',
-                      fontSize: '0.82rem',
+                      fontSize: '0.78rem',
                       fontWeight: 700,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      padding: '0 14px',
+                      padding: '0 12px',
                       cursor: 'pointer'
                     }}
                   >
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                      <MessageSquare size={15} color="#2563EB" />
-                      <span>Mensagem em tempo real...</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+                      <MessageSquare size={14} color="#2563EB" />
+                      <span>Enviar mensagem...</span>
                     </span>
                     {unreadChatCount > 0 && (
                       <span style={{
@@ -897,7 +1253,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                         borderRadius: 999,
                         backgroundColor: '#2563EB',
                         color: '#FFFFFF',
-                        fontSize: '0.7rem',
+                        fontSize: '0.68rem',
                         fontWeight: 900,
                         display: 'inline-flex',
                         alignItems: 'center',
@@ -913,8 +1269,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                       href={`tel:${cleanDriverPhone}`}
                       aria-label="Ligar para motorista"
                       style={{
-                        width: 40,
-                        height: 40,
+                        width: 36,
+                        height: 36,
                         borderRadius: '50%',
                         backgroundColor: '#FFFFFF',
                         border: '1px solid #D1D5DB',
@@ -926,7 +1282,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                         flexShrink: 0
                       }}
                     >
-                      <Phone size={16} />
+                      <Phone size={15} />
                     </a>
                   )}
                 </div>
@@ -934,39 +1290,78 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             </div>
           )}
 
-          {/* Resumo Compacto Origem/Destino & Pagamento */}
-          <div style={{
-            backgroundColor: '#FFFFFF',
-            border: '1px solid #E5E7EB',
-            borderRadius: 16,
-            padding: '12px 14px',
-            marginBottom: 14
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-              <span style={{ width: 9, height: 9, borderRadius: '50%', border: '2.5px solid #111111', flexShrink: 0 }} />
-              <span style={{ fontSize: '0.8rem', color: '#111111', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {activeRide.origin.address}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, paddingBottom: 10, borderBottom: '1px solid #F3F4F6' }}>
-              <span style={{ width: 9, height: 9, borderRadius: 2, backgroundColor: '#111111', flexShrink: 0 }} />
-              <span style={{ fontSize: '0.8rem', color: '#111111', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {activeRide.destination.address}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 10 }}>
-              <span style={{ fontSize: '0.78rem', color: '#6B7280', fontWeight: 700 }}>
-                {activeRide.paymentMethod === 'pix'
-                  ? 'PIX Confirmado'
-                  : activeRide.paymentMethod === 'dinheiro'
-                    ? 'Dinheiro ao motorista'
-                    : `Cartão •••• ${activeRide.cardLast4 || 'App'}`}
-              </span>
-              <span style={{ fontSize: '1.08rem', fontWeight: 900, color: '#111111' }}>
-                R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
-              </span>
-            </div>
-          </div>
+          {/* Resumo Compacto Origem/Destino & Pagamento em linha enxuta (tocável para alterar antes do embarque) */}
+          {!isMapExpanded && (() => {
+            const routeEditable = canPassengerEditRoute(activeRide);
+            return (
+              <div
+                role={routeEditable ? 'button' : undefined}
+                tabIndex={routeEditable ? 0 : undefined}
+                onClick={routeEditable ? () => setIsEditRouteModalOpen(true) : undefined}
+                onKeyDown={routeEditable ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setIsEditRouteModalOpen(true);
+                  }
+                } : undefined}
+                style={{
+                  padding: '8px 0',
+                  borderTop: '1px solid #F1F5F9',
+                  borderBottom: '1px solid #F1F5F9',
+                  marginBottom: 10,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  cursor: routeEditable ? 'pointer' : 'default'
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: '50%', border: '2px solid #111111', flexShrink: 0 }} />
+                    <span style={{ fontSize: '0.75rem', color: '#4B5563', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {activeRide.origin.address}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ width: 7, height: 7, borderRadius: 2, backgroundColor: '#111111', flexShrink: 0 }} />
+                    <span style={{ fontSize: '0.78rem', color: '#111111', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {activeRide.destination.address}
+                    </span>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                  <div style={{ fontSize: '0.96rem', fontWeight: 900, color: '#111111' }}>
+                    R$ {activeRide.totalPrice.toFixed(2).replace('.', ',')}
+                  </div>
+                  {routeEditable ? (
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      fontSize: '0.67rem',
+                      fontWeight: 800,
+                      color: '#276EF1',
+                      backgroundColor: '#EFF6FF',
+                      padding: '2px 7px',
+                      borderRadius: 999
+                    }}>
+                      <Pencil size={10} />
+                      <span>Alterar rota</span>
+                    </span>
+                  ) : (
+                    <div style={{ fontSize: '0.67rem', color: '#6B7280', fontWeight: 700 }}>
+                      {activeRide.paymentMethod === 'pix'
+                        ? 'PIX'
+                        : activeRide.paymentMethod === 'dinheiro'
+                          ? 'Dinheiro'
+                          : `Cartão •••• ${activeRide.cardLast4 || 'App'}`}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {isCompleted ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -1030,28 +1425,57 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               Voltar e pedir nova corrida
             </button>
           ) : (
-            <button
-              type="button"
-              onClick={() => navigate(`/viagem/${encodeURIComponent(activeRide.id)}`)}
-              style={{
-                width: '100%',
-                height: 50,
-                borderRadius: 12,
-                backgroundColor: '#111111',
-                color: '#FFFFFF',
-                border: 'none',
-                fontSize: '0.94rem',
-                fontWeight: 800,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-                cursor: 'pointer'
-              }}
-            >
-              <Navigation size={17} />
-              <span>Acompanhar GPS em Tela Cheia</span>
-            </button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: canPassengerCancelRide(activeRide) ? '1fr 1fr' : '1fr', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sharePath = activeRide.trackingUrl
+                      ? activeRide.trackingUrl.replace(/^\/track\//, '/viagem/')
+                      : `/viagem/${encodeURIComponent(activeRide.id)}`;
+                    const shareUrl = `${window.location.origin}${sharePath}`;
+                    const msg = `Acompanhe minha viagem Kavro Drive (${activeRide.origin.address} -> ${activeRide.destination.address}): ${shareUrl}`;
+                    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, '_blank', 'noopener,noreferrer');
+                  }}
+                  style={{
+                    height: 40,
+                    borderRadius: 11,
+                    backgroundColor: '#F3F4F6',
+                    color: '#111111',
+                    border: 'none',
+                    fontSize: '0.82rem',
+                    fontWeight: 800,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    cursor: 'pointer'
+                  }}
+                >
+                  <Share2 size={14} />
+                  <span>Compartilhar</span>
+                </button>
+
+                {canPassengerCancelRide(activeRide) && (
+                  <button
+                    type="button"
+                    onClick={() => setIsCancelModalOpen(true)}
+                    style={{
+                      height: 40,
+                      borderRadius: 11,
+                      backgroundColor: '#FEF2F2',
+                      color: '#DC2626',
+                      border: '1px solid #FECACA',
+                      fontSize: '0.82rem',
+                      fontWeight: 800,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {isSearching ? 'Cancelar solicitação' : 'Cancelar viagem'}
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
@@ -1071,6 +1495,66 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           ride={activeRide}
           viewerRole="client"
           onClose={() => setIsChatOpen(false)}
+        />
+
+        <TrustedContactsModal
+          isOpen={isTrustedContactsOpen}
+          onClose={() => setIsTrustedContactsOpen(false)}
+          currentUser={currentUser || null}
+          activeRide={activeRide}
+          onUpdated={(list) => setTrustedCount(list.length)}
+        />
+
+        <SafetyCenterModal
+          isOpen={isSafetyCenterOpen}
+          onClose={() => setIsSafetyCenterOpen(false)}
+          config={config}
+          currentUser={currentUser || null}
+          activeRide={activeRide}
+          onUserChange={(updatedClient) => {
+            setTrustedCount(updatedClient.trustedContacts?.length || 0);
+            StorageService.setCurrentUser(updatedClient);
+          }}
+          onOpenSos={() => setIsSosOpen(true)}
+        />
+
+        <RideEditRouteModal
+          isOpen={isEditRouteModalOpen}
+          ride={activeRide}
+          config={config}
+          onClose={() => setIsEditRouteModalOpen(false)}
+          onUpdated={(updated) => {
+            setIsEditRouteModalOpen(false);
+            setActiveRide(updated);
+          }}
+        />
+
+        <RideCheckAlertModal
+          ride={activeRide}
+          viewerRole="passageiro"
+          onOpenSos={() => setIsSosOpen(true)}
+          onResponded={() => {
+            StorageService.syncFromDatabase();
+          }}
+        />
+
+        <SosEmergencyModal
+          isOpen={isSosOpen}
+          onClose={() => setIsSosOpen(false)}
+          currentLocationText={`${activeRide.origin.address} -> ${activeRide.destination.address}`}
+          rideId={activeRide.id}
+          driverPhone={activeRide.driverPhone || config?.driverPhone || config?.companyWhatsapp}
+        />
+
+        <RideCancelModal
+          isOpen={isCancelModalOpen}
+          ride={activeRide}
+          config={config}
+          onClose={() => setIsCancelModalOpen(false)}
+          onCancelled={(result) => {
+            setIsCancelModalOpen(false);
+            setActiveRide(result.ride || { ...activeRide, status: 'cancelada', cancelledBy: 'passenger' });
+          }}
         />
       </div>
     );
@@ -1143,9 +1627,29 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             </div>
 
             <p style={{ fontSize: '0.75rem', color: '#64748B', margin: '0 0 12px 0', lineHeight: 1.35 }}>
-              Seus dados são criptografados e tokenizados diretamente pelo gateway. A Kavro Drive não armazena o número completo nem o CVV do cartão.
+              {paymentsConfig.stripePublishableKey
+                ? 'Seus dados são criptografados e tokenizados diretamente pela Stripe. A Kavro Drive não armazena número nem CVV.'
+                : 'Seus dados são criptografados e tokenizados diretamente pelo gateway. A Kavro Drive não armazena o número completo nem o CVV do cartão.'}
             </p>
 
+            {paymentsConfig.stripePublishableKey ? (
+              <StripeCardForm
+                publishableKey={paymentsConfig.stripePublishableKey}
+                clientId={currentUser?.id}
+                clientPhone={currentUser?.phone}
+                clientEmail={currentUser?.email}
+                defaultHolderName={currentUser?.name || cardHolder}
+                cardType={cardType}
+                onChangeCardType={setCardType}
+                onCardSaved={(savedCard) => {
+                  const nextCards = [savedCard, ...savedCards];
+                  setSavedCards(nextCards);
+                  setSelectedCardId(savedCard.id);
+                  setPaymentMethod(savedCard.cardType);
+                  setIsAddingCardModal(false);
+                }}
+              />
+            ) : (
             <form onSubmit={handleSaveNewCard} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                 <button
@@ -1243,6 +1747,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 {isSavingCard ? 'Tokenizando no Gateway...' : 'Salvar e Usar Cartão'}
               </button>
             </form>
+            )}
           </div>
         </div>
       )}
@@ -1359,19 +1864,41 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
               {origin && destination ? 'Escolha uma viagem' : 'Para onde vamos?'}
             </h2>
-            <div style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
-              backgroundColor: '#F3F4F6',
-              color: '#111111',
-              borderRadius: 999,
-              padding: '5px 11px',
-              fontSize: '0.74rem',
-              fontWeight: 700
-            }}>
-              <Clock size={13} strokeWidth={2.3} />
-              <span>Agora</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <button
+                type="button"
+                onClick={() => setIsTrustedContactsOpen(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  backgroundColor: '#DCFCE7',
+                  color: '#15803D',
+                  border: '1px solid #BBF7D0',
+                  borderRadius: 999,
+                  padding: '5px 10px',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                <ShieldCheck size={13} />
+                <span>Contatos ({trustedCount})</span>
+              </button>
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                backgroundColor: '#F3F4F6',
+                color: '#111111',
+                borderRadius: 999,
+                padding: '5px 11px',
+                fontSize: '0.74rem',
+                fontWeight: 700
+              }}>
+                <Clock size={13} strokeWidth={2.3} />
+                <span>Agora</span>
+              </div>
             </div>
           </div>
 
@@ -1500,19 +2027,83 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 overflow: 'hidden',
                 textOverflow: 'ellipsis'
               }}>
-                {destination ? destination.address : 'Para onde você vai?'}
+                {destination
+                  ? destination.address
+                  : serviceMode === 'entregas'
+                    ? 'Endereço de entrega (destino)?'
+                    : 'Para onde você vai?'}
               </span>
             </button>
           </div>
         </div>
 
+        {/* 2 Modalidades do Sistema: Viagem Padrão vs Entregas */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: 6,
+          backgroundColor: '#F3F4F6',
+          padding: 4,
+          borderRadius: 14,
+          marginBottom: 12
+        }}>
+          <button
+            type="button"
+            onClick={() => handleSwitchServiceMode('padrao')}
+            style={{
+              height: 40,
+              borderRadius: 10,
+              border: 'none',
+              backgroundColor: serviceMode === 'padrao' ? '#111111' : 'transparent',
+              color: serviceMode === 'padrao' ? '#FFFFFF' : '#4B5563',
+              fontSize: '0.82rem',
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              boxShadow: serviceMode === 'padrao' ? '0 2px 8px rgba(0,0,0,0.14)' : 'none'
+            }}
+          >
+            <Car size={15} />
+            <span>Padrão</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => handleSwitchServiceMode('entregas')}
+            style={{
+              height: 40,
+              borderRadius: 10,
+              border: 'none',
+              backgroundColor: serviceMode === 'entregas' ? '#15803D' : 'transparent',
+              color: serviceMode === 'entregas' ? '#FFFFFF' : '#4B5563',
+              fontSize: '0.82rem',
+              fontWeight: 800,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              boxShadow: serviceMode === 'entregas' ? '0 2px 8px rgba(21,128,61,0.22)' : 'none'
+            }}
+          >
+            <Package size={15} />
+            <span>Entregas</span>
+          </button>
+        </div>
+
         {/* Categorias estilo Uber Passageiro */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-          {activeCategories.map((cat) => {
+          {visibleModeCategories.map((cat) => {
             const catPrice = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, cat.id);
             const isSelected = selectedCategory === cat.id;
             const stats = categoryStats[cat.id] || { availableDriversCount: 0, etaMin: 4 };
             const hasNoDriverInCat = onlineDrivers.length > 0 && stats.availableDriversCount === 0;
+            const isCatDelivery = resolveCategoryType(cat) === 'entregas';
 
             return (
               <button
@@ -1520,14 +2111,17 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 type="button"
                 onClick={() => {
                   setSelectedCategory(cat.id);
+                  setServiceMode(isCatDelivery ? 'entregas' : 'padrao');
                   setRequestError('');
                 }}
                 style={{
                   width: '100%',
                   padding: '12px 14px',
                   borderRadius: 14,
-                  border: isSelected ? '2px solid #111111' : '1px solid #E5E7EB',
-                  backgroundColor: isSelected ? '#F9FAFB' : '#FFFFFF',
+                  border: isSelected
+                    ? `2px solid ${isCatDelivery ? '#15803D' : '#111111'}`
+                    : '1px solid #E5E7EB',
+                  backgroundColor: isSelected ? (isCatDelivery ? '#F0FDF4' : '#F9FAFB') : '#FFFFFF',
                   opacity: hasNoDriverInCat && !isSelected ? 0.65 : 1,
                   display: 'flex',
                   alignItems: 'center',
@@ -1543,30 +2137,48 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                     width: 46,
                     height: 36,
                     borderRadius: 10,
-                    backgroundColor: isSelected ? '#111111' : '#F3F4F6',
-                    color: isSelected ? '#FFFFFF' : '#111111',
+                    backgroundColor: isSelected
+                      ? (isCatDelivery ? '#15803D' : '#111111')
+                      : (isCatDelivery ? '#DCFCE7' : '#F3F4F6'),
+                    color: isSelected ? '#FFFFFF' : (isCatDelivery ? '#15803D' : '#111111'),
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0
                   }}>
-                    <Car size={20} />
+                    {isCatDelivery ? <Package size={20} /> : <Car size={20} />}
                   </div>
                   <div style={{ minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#111111' }}>
                         {cat.name}
                       </span>
-                      <span style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 2,
-                        fontSize: '0.72rem',
-                        color: '#4B5563',
-                        fontWeight: 700
-                      }}>
-                        <Users size={11} />4
-                      </span>
+                      {isCatDelivery ? (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 3,
+                          fontSize: '0.68rem',
+                          color: '#166534',
+                          backgroundColor: '#DCFCE7',
+                          padding: '1px 7px',
+                          borderRadius: 999,
+                          fontWeight: 800
+                        }}>
+                          Encomenda
+                        </span>
+                      ) : (
+                        <span style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 2,
+                          fontSize: '0.72rem',
+                          color: '#4B5563',
+                          fontWeight: 700
+                        }}>
+                          <Users size={11} />{cat.maxPassengers || 4}
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: '0.74rem', color: hasNoDriverInCat ? '#DC2626' : '#4B5563', fontWeight: 600, marginTop: 1 }}>
                       {hasNoDriverInCat
@@ -1610,6 +2222,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                       type="button"
                       onClick={() => {
                         setSelectedCategory(alt.id);
+                        setServiceMode(resolveCategoryType(alt));
                         setRequestError('');
                       }}
                       style={{
@@ -1776,105 +2389,304 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             </div>
           )}
 
-          {/* Toggle compacto para Passageiros, Malas e Observação */}
-          <button
-            type="button"
-            onClick={() => setShowExtraOptions(v => !v)}
-            style={{
-              width: '100%',
-              background: 'none',
-              border: 'none',
-              padding: '6px 2px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              color: '#4B5563',
-              fontSize: '0.78rem',
-              fontWeight: 700,
-              cursor: 'pointer'
-            }}
-          >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <Sliders size={13} />
-              <span>{passengers} passageiro(s){hasLuggage ? ' • Com malas' : ''}{notes ? ' • Obs. adicionada' : ''}</span>
-            </span>
-            <ChevronDown size={15} style={{ transform: showExtraOptions ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
-          </button>
-
-          {showExtraOptions && (
+          {serviceMode === 'entregas' ? (
+            /* Formulário Completo de Entrega (Destinatário, Produto/Pacote e Instruções) */
             <div style={{
-              backgroundColor: '#F9FAFB',
-              borderRadius: 12,
-              padding: 10,
-              border: '1px solid #E5E7EB',
-              marginTop: 6,
+              backgroundColor: '#F0FDF4',
+              borderRadius: 14,
+              padding: 12,
+              border: '1px solid #BBF7D0',
+              marginTop: 8,
               display: 'flex',
               flexDirection: 'column',
-              gap: 8
+              gap: 10
             }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Users size={15} color="#4B5563" />
-                  {[1, 2, 3, 4].map(n => (
-                    <button
-                      key={n}
-                      type="button"
-                      onClick={() => setPassengers(n)}
-                      style={{
-                        width: 28,
-                        height: 28,
-                        borderRadius: 8,
-                        border: passengers === n ? '2px solid #111111' : '1px solid #D1D5DB',
-                        backgroundColor: passengers === n ? '#111111' : '#FFFFFF',
-                        color: passengers === n ? '#FFFFFF' : '#4B5563',
-                        fontWeight: 800,
-                        fontSize: '0.78rem',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {n}
-                    </button>
-                  ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <Package size={16} color="#15803D" />
+                  <span style={{ fontSize: '0.84rem', fontWeight: 800, color: '#14532D' }}>
+                    Detalhes da Entrega
+                  </span>
                 </div>
+                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#15803D' }}>
+                  Obrigatório
+                </span>
+              </div>
 
+              {/* Enviar vs Receber */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
                 <button
                   type="button"
-                  onClick={() => setHasLuggage(!hasLuggage)}
+                  onClick={() => setDeliveryRole('sender')}
                   style={{
-                    padding: '5px 10px',
-                    borderRadius: 8,
-                    border: hasLuggage ? '1.5px solid #111111' : '1px solid #D1D5DB',
-                    backgroundColor: hasLuggage ? '#111111' : '#FFFFFF',
-                    color: hasLuggage ? '#FFFFFF' : '#4B5563',
-                    fontSize: '0.74rem',
-                    fontWeight: 700,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: deliveryRole === 'sender' ? '2px solid #15803D' : '1px solid #D1FAE5',
+                    backgroundColor: deliveryRole === 'sender' ? '#15803D' : '#FFFFFF',
+                    color: deliveryRole === 'sender' ? '#FFFFFF' : '#166534',
+                    fontSize: '0.75rem',
+                    fontWeight: 800,
                     cursor: 'pointer'
                   }}
                 >
-                  <Luggage size={14} />
-                  <span>Malas</span>
+                  Estou enviando
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setDeliveryRole('receiver')}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: deliveryRole === 'receiver' ? '2px solid #15803D' : '1px solid #D1FAE5',
+                    backgroundColor: deliveryRole === 'receiver' ? '#15803D' : '#FFFFFF',
+                    color: deliveryRole === 'receiver' ? '#FFFFFF' : '#166534',
+                    fontSize: '0.75rem',
+                    fontWeight: 800,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Vou receber
+                </button>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <input
+                  type="text"
+                  placeholder={deliveryRole === 'sender' ? 'Nome de quem recebe *' : 'Nome de quem envia *'}
+                  value={deliveryRecipientName}
+                  onChange={(e) => setDeliveryRecipientName(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '9px 10px',
+                    borderRadius: 10,
+                    border: '1px solid #A7F3D0',
+                    backgroundColor: '#FFFFFF',
+                    fontSize: '0.79rem',
+                    fontWeight: 600,
+                    color: '#0F172A',
+                    boxSizing: 'border-box'
+                  }}
+                />
+                <input
+                  type="tel"
+                  placeholder="WhatsApp c/ DDD *"
+                  value={deliveryRecipientPhone}
+                  onChange={(e) => setDeliveryRecipientPhone(e.target.value)}
+                  style={{
+                    width: '100%',
+                    padding: '9px 10px',
+                    borderRadius: 10,
+                    border: '1px solid #A7F3D0',
+                    backgroundColor: '#FFFFFF',
+                    fontSize: '0.79rem',
+                    fontWeight: 600,
+                    color: '#0F172A',
+                    boxSizing: 'border-box'
+                  }}
+                />
               </div>
 
               <input
                 type="text"
-                placeholder="Observação para o motorista (ex: portão branco, com pet...)"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
+                placeholder="O que está sendo enviado? (ex: Caixa de produtos, chave, compra...) *"
+                value={deliveryItemDesc}
+                onChange={(e) => setDeliveryItemDesc(e.target.value)}
                 style={{
                   width: '100%',
                   padding: '9px 11px',
                   borderRadius: 10,
-                  border: '1px solid #D1D5DB',
+                  border: '1px solid #A7F3D0',
                   backgroundColor: '#FFFFFF',
                   fontSize: '0.8rem',
+                  fontWeight: 600,
+                  color: '#0F172A',
+                  boxSizing: 'border-box'
+                }}
+              />
+
+              {/* Porte + Modo de Entrega */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#166534' }}>
+                  Porte do pacote
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                  {([
+                    { id: 'pequeno', label: 'Pequeno' },
+                    { id: 'medio', label: 'Médio (Caixa)' },
+                    { id: 'grande', label: 'Grande' }
+                  ] as const).map((sz) => (
+                    <button
+                      key={sz.id}
+                      type="button"
+                      onClick={() => setDeliveryPackageSize(sz.id)}
+                      style={{
+                        padding: '6px 6px',
+                        borderRadius: 8,
+                        border: deliveryPackageSize === sz.id ? '1.5px solid #15803D' : '1px solid #D1FAE5',
+                        backgroundColor: deliveryPackageSize === sz.id ? '#DCFCE7' : '#FFFFFF',
+                        color: '#14532D',
+                        fontSize: '0.71rem',
+                        fontWeight: 800,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {sz.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#166534' }}>
+                  Como entregar no endereço
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                  {([
+                    { id: 'porta_mao', label: 'Em mãos' },
+                    { id: 'portaria', label: 'Na portaria' },
+                    { id: 'recepcao', label: 'Recepção/Loja' }
+                  ] as const).map((dm) => (
+                    <button
+                      key={dm.id}
+                      type="button"
+                      onClick={() => setDeliveryDropoffMode(dm.id)}
+                      style={{
+                        padding: '6px 6px',
+                        borderRadius: 8,
+                        border: deliveryDropoffMode === dm.id ? '1.5px solid #15803D' : '1px solid #D1FAE5',
+                        backgroundColor: deliveryDropoffMode === dm.id ? '#DCFCE7' : '#FFFFFF',
+                        color: '#14532D',
+                        fontSize: '0.71rem',
+                        fontWeight: 800,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {dm.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <input
+                type="text"
+                placeholder="Instruções de retirada ou entrega (bloco, apto, contato na loja...)"
+                value={deliveryInstructions}
+                onChange={(e) => setDeliveryInstructions(e.target.value)}
+                style={{
+                  width: '100%',
+                  padding: '8px 11px',
+                  borderRadius: 10,
+                  border: '1px solid #A7F3D0',
+                  backgroundColor: '#FFFFFF',
+                  fontSize: '0.78rem',
+                  color: '#0F172A',
                   boxSizing: 'border-box'
                 }}
               />
             </div>
+          ) : (
+            <>
+              {/* Toggle compacto para Passageiros, Malas e Observação */}
+              <button
+                type="button"
+                onClick={() => setShowExtraOptions(v => !v)}
+                style={{
+                  width: '100%',
+                  background: 'none',
+                  border: 'none',
+                  padding: '6px 2px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  color: '#4B5563',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Sliders size={13} />
+                  <span>{passengers} passageiro(s){hasLuggage ? ' • Com malas' : ''}{notes ? ' • Obs. adicionada' : ''}</span>
+                </span>
+                <ChevronDown size={15} style={{ transform: showExtraOptions ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+              </button>
+
+              {showExtraOptions && (
+                <div style={{
+                  backgroundColor: '#F9FAFB',
+                  borderRadius: 12,
+                  padding: 10,
+                  border: '1px solid #E5E7EB',
+                  marginTop: 6,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Users size={15} color="#4B5563" />
+                      {[1, 2, 3, 4].map(n => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setPassengers(n)}
+                          style={{
+                            width: 28,
+                            height: 28,
+                            borderRadius: 8,
+                            border: passengers === n ? '2px solid #111111' : '1px solid #D1D5DB',
+                            backgroundColor: passengers === n ? '#111111' : '#FFFFFF',
+                            color: passengers === n ? '#FFFFFF' : '#4B5563',
+                            fontWeight: 800,
+                            fontSize: '0.78rem',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          {n}
+                        </button>
+                      ))}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setHasLuggage(!hasLuggage)}
+                      style={{
+                        padding: '5px 10px',
+                        borderRadius: 8,
+                        border: hasLuggage ? '1.5px solid #111111' : '1px solid #D1D5DB',
+                        backgroundColor: hasLuggage ? '#111111' : '#FFFFFF',
+                        color: hasLuggage ? '#FFFFFF' : '#4B5563',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <Luggage size={14} />
+                      <span>Malas</span>
+                    </button>
+                  </div>
+
+                  <input
+                    type="text"
+                    placeholder="Observação para o motorista (ex: portão branco, com pet...)"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    style={{
+                      width: '100%',
+                      padding: '9px 11px',
+                      borderRadius: 10,
+                      border: '1px solid #D1D5DB',
+                      backgroundColor: '#FFFFFF',
+                      fontSize: '0.8rem',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </div>
+              )}
+            </>
           )}
         </div>
 
@@ -1920,7 +2732,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             width: '100%',
             height: 50,
             borderRadius: 12,
-            backgroundColor: '#000000',
+            backgroundColor: serviceMode === 'entregas' ? '#15803D' : '#000000',
             color: '#FFFFFF',
             border: 'none',
             fontSize: '1rem',
@@ -1933,10 +2745,15 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             letterSpacing: '-0.01em'
           }}
         >
-          <span>
-            {isSubmitting
-              ? 'Solicitando...'
-              : `Escolher ${selectedCatObj.name || 'KAVRO GO'}`}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {isSubmitting && <RefreshCw size={17} className="animate-spin" />}
+            <span>
+              {isSubmitting
+                ? 'Conectando motorista...'
+                : serviceMode === 'entregas'
+                  ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
+                  : `Escolher ${selectedCatObj.name || 'Padrão'}`}
+            </span>
           </span>
           <span style={{
             backgroundColor: 'rgba(255, 255, 255, 0.16)',
@@ -1949,6 +2766,13 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           </span>
         </button>
       </div>
+
+      <TrustedContactsModal
+        isOpen={isTrustedContactsOpen}
+        onClose={() => setIsTrustedContactsOpen(false)}
+        currentUser={currentUser || null}
+        onUpdated={(list) => setTrustedCount(list.length)}
+      />
     </div>
   );
 };

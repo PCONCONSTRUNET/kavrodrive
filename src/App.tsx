@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { Home, Calendar, Clock, User, MapPin, PhoneCall, ArrowRight, Sparkles, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { SystemConfig, Ride, LocationPoint, ClientProfile } from './types';
-import { StorageService } from './services/storage';
+import { StorageService, ACTIVE_PASSENGER_RIDE_STATUSES } from './services/storage';
 import { RealtimeService } from './services/realtime';
 import { ClientHomeScreen } from './views/ClientHomeScreen';
 import { ClientBookingScreen } from './views/ClientBookingScreen';
@@ -15,6 +15,8 @@ import { PassengerTrackingScreen } from './views/PassengerTrackingScreen';
 import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
 import { PublicAuditScreen } from './views/PublicAuditScreen';
 import { HelpCenterScreen } from './views/HelpCenterScreen';
+import { FamilyInviteScreen } from './views/FamilyInviteScreen';
+import { KavroSecurityGuideModal } from './components/KavroSecurityGuideModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
 import { PushPermissionPrompt } from './components/PushNotifications';
@@ -176,6 +178,8 @@ const ClientApp: React.FC<{
   );
   const [initialBookingOrigin, setInitialBookingOrigin] = useState<LocationPoint | null>(null);
   const [initialBookingDestination, setInitialBookingDestination] = useState<LocationPoint | null>(null);
+  const [initialBookingCategoryId, setInitialBookingCategoryId] = useState<string | null>(null);
+  const [resumedBookingRide, setResumedBookingRide] = useState<Ride | null>(null);
 
   // Controle do modal de Autenticação (Login / Cadastro)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -184,11 +188,46 @@ const ClientApp: React.FC<{
   const [isTermsOpen, setIsTermsOpen] = useState(false);
 
   // Handler ao tentar agendar a partir da home
-  const handleStartBookingFromHome = (origin?: LocationPoint, destination?: LocationPoint) => {
+  const handleStartBookingFromHome = (origin?: LocationPoint, destination?: LocationPoint, categoryId?: string) => {
+    setResumedBookingRide(null);
     setInitialBookingOrigin(origin || null);
     setInitialBookingDestination(destination || null);
+    setInitialBookingCategoryId(categoryId || null);
     setCurrentTab('agendar');
   };
+
+  // Handler para retomar a corrida ativa diretamente na Tela Ao Vivo Unificada da Uber
+  const handleResumeActiveRide = (ride: Ride) => {
+    setInitialBookingOrigin(null);
+    setInitialBookingDestination(null);
+    setInitialBookingCategoryId(null);
+    setResumedBookingRide(ride);
+    setCurrentTab('agendar');
+  };
+
+  // Limpa o estado de corrida retomada caso seja cancelada ou finalizada em qualquer fluxo
+  useEffect(() => {
+    if (!resumedBookingRide) return;
+    const handleRideChange = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      const cancelledIds: string[] = Array.isArray(detail?.alsoCancelledRideIds)
+        ? detail.alsoCancelledRideIds
+        : [];
+      if (
+        (detail?.rideId === resumedBookingRide.id && (detail?.status === 'cancelada' || detail?.status === 'finalizada')) ||
+        cancelledIds.includes(resumedBookingRide.id)
+      ) {
+        setResumedBookingRide(null);
+        return;
+      }
+      const latest = StorageService.getRides().find(r => r.id === resumedBookingRide.id);
+      if (latest && (latest.status === 'cancelada' || latest.status === 'finalizada')) {
+        setResumedBookingRide(null);
+      }
+    };
+    window.addEventListener('up_rides_updated', handleRideChange);
+    return () => window.removeEventListener('up_rides_updated', handleRideChange);
+  }, [resumedBookingRide]);
 
   // Garante que o aparelho do cliente seja identificado no OneSignal com o telefone (cli-DDDNUMERO)
   useEffect(() => {
@@ -261,6 +300,7 @@ const ClientApp: React.FC<{
             config={config}
             currentUser={currentUser}
             onStartBooking={handleStartBookingFromHome}
+            onOpenActiveRide={handleResumeActiveRide}
             onGoToMyRides={() => setCurrentTab('minhas_corridas')}
             onGoToProfile={() => setCurrentTab('perfil')}
             onUserChange={(user) => {
@@ -276,10 +316,15 @@ const ClientApp: React.FC<{
             currentUser={currentUser}
             initialOrigin={initialBookingOrigin}
             initialDestination={initialBookingDestination}
+            initialCategoryId={initialBookingCategoryId}
+            initialRide={resumedBookingRide}
             onRideBooked={() => {
               refreshData();
             }}
-            onBackToHome={() => setCurrentTab('inicio')}
+            onBackToHome={() => {
+              setResumedBookingRide(null);
+              setCurrentTab('inicio');
+            }}
           />
         )}
 
@@ -287,9 +332,12 @@ const ClientApp: React.FC<{
           <ClientMyRidesScreen
             rides={userRides}
             config={config}
-            onBookNewRide={() => {
-              setInitialBookingOrigin(null);
-              setInitialBookingDestination(null);
+            onOpenActiveRide={handleResumeActiveRide}
+            onBookNewRide={(prefill) => {
+              setResumedBookingRide(null);
+              setInitialBookingOrigin(prefill?.origin || null);
+              setInitialBookingDestination(prefill?.destination || null);
+              setInitialBookingCategoryId(prefill?.categoryId || null);
               setCurrentTab('agendar');
             }}
           />
@@ -350,8 +398,10 @@ const ClientApp: React.FC<{
 
         <button
           onClick={() => {
+            setResumedBookingRide(null);
             setInitialBookingOrigin(null);
             setInitialBookingDestination(null);
+            setInitialBookingCategoryId(null);
             setCurrentTab('agendar');
           }}
           style={{
@@ -391,7 +441,7 @@ const ClientApp: React.FC<{
           <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'minhas_corridas' ? 800 : 600 }}>
             Atividade
           </span>
-          {userRides.some(r => r.status === 'aguardando_pagamento' || r.status === 'aguardando_confirmacao' || r.status === 'na_fila' || r.status === 'confirmada' || r.status === 'a_caminho' || r.status === 'no_local' || r.status === 'em_andamento') && (
+          {userRides.some(r => ACTIVE_PASSENGER_RIDE_STATUSES.includes(r.status)) && (
             <div style={{
               position: 'absolute',
               top: 0,
@@ -806,6 +856,34 @@ const DriverRoute: React.FC<{
   );
 };
 
+const SecurityGuideRoute: React.FC<{ config: SystemConfig }> = ({ config }) => {
+  const navigate = useNavigate();
+  const [termsOpen, setTermsOpen] = useState(false);
+  const currentUser = StorageService.getCurrentUser();
+  return (
+    <>
+      <KavroSecurityGuideModal
+        isOpen
+        asPage
+        config={config}
+        currentUser={currentUser}
+        onClose={() => {
+          if (window.history.length > 1) {
+            navigate(-1);
+          } else {
+            navigate('/cliente');
+          }
+        }}
+        onSelectFeature={() => navigate('/cliente')}
+        onOpenSos={() => navigate('/cliente')}
+        onOpenTerms={() => setTermsOpen(true)}
+        onNavigateToDriverPortal={() => navigate('/kavro-drive')}
+      />
+      <TermsPrivacyModal isOpen={termsOpen} onClose={() => setTermsOpen(false)} config={config} />
+    </>
+  );
+};
+
 export const App: React.FC = () => {
   const [config, setConfig] = useState<SystemConfig>(StorageService.getConfig());
   const [rides, setRides] = useState<Ride[]>(StorageService.getRides());
@@ -933,6 +1011,10 @@ export const App: React.FC = () => {
         path="/corrida/:rideId"
         element={<PassengerTrackingScreen config={config} rides={rides} refreshData={refreshData} />}
       />
+      <Route
+        path="/track/:rideId"
+        element={<PassengerTrackingScreen config={config} rides={rides} refreshData={refreshData} />}
+      />
 
       {/* Rota pública de Transparência & Auditoria Multi-Motoristas */}
       <Route
@@ -940,10 +1022,22 @@ export const App: React.FC = () => {
         element={<PublicAuditScreen config={config} rides={rides} />}
       />
 
-      {/* Rota pública da Central de Ajuda Clean */}
+      {/* Rota pública da Central de Ajuda Clean e Guia de Segurança no PWA */}
       <Route
         path="/ajuda"
         element={<HelpCenterScreen config={config} />}
+      />
+      <Route
+        path="/seguranca"
+        element={<SecurityGuideRoute config={config} />}
+      />
+      <Route
+        path="/sobre-seguranca"
+        element={<Navigate to="/seguranca" replace />}
+      />
+      <Route
+        path="/familia/convite/:token"
+        element={<FamilyInviteScreen config={config} />}
       />
       <Route
         path="/central-de-ajuda"

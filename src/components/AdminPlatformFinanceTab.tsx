@@ -87,6 +87,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   const [drivers, setDrivers] = useState<DriverProfile[]>([]);
   const [overview, setOverview] = useState<{
     commissionPercent: number;
+    commissionFixed?: number;
     maxDriverDebtLimit: number;
     autoBlockDelinquentDrivers: boolean;
     minWithdrawalAmount: number;
@@ -231,6 +232,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   };
 
   const currentCommPct = Number(overview?.commissionPercent ?? config.platformCommissionPercent ?? 20);
+  const currentCommFixed = Math.max(0, Number(overview?.commissionFixed ?? config.platformCommissionFixed ?? 0) || 0);
   const currentDebtLimit = Number(overview?.maxDriverDebtLimit ?? config.maxDriverDebtLimit ?? 100);
 
   const mergedTransactions: PaymentTransaction[] = React.useMemo(() => {
@@ -243,8 +245,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     for (const r of rides) {
       if (!byRideId.has(r.id)) {
         const gross = Number(r.totalPrice || 0);
-        const commAmt = Number(r.commissionAmount ?? ((gross * currentCommPct) / 100));
-        const netAmt = Number(r.driverNetAmount ?? (gross - commAmt));
+        const fallbackComm = Math.min(gross, ((gross * currentCommPct) / 100) + (gross > 0 ? currentCommFixed : 0));
+        const commAmt = Number(r.commissionAmount ?? fallbackComm);
+        const netAmt = Number(r.driverNetAmount ?? Math.max(0, gross - commAmt));
         const method = (r.paymentMethod || 'pix') as PaymentTransaction['method'];
         const status: PaymentTransaction['status'] =
           r.status === 'cancelada'
@@ -539,9 +542,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const completedRides = driverRides.filter(r => r.status === 'finalizada');
     const cancelledRides = driverRides.filter(r => r.status === 'cancelada');
 
+    const calcFallbackFee = (grossVal: number) =>
+      Math.min(grossVal, ((grossVal * currentCommPct) / 100) + (grossVal > 0 ? currentCommFixed : 0));
     const totalGross = validRides.reduce((acc, r) => acc + Number(r.totalPrice || 0), 0);
-    const totalFee = validRides.reduce((acc, r) => acc + Number(r.commissionAmount ?? ((Number(r.totalPrice || 0) * currentCommPct) / 100)), 0);
-    const totalNet = validRides.reduce((acc, r) => acc + Number(r.driverNetAmount ?? (Number(r.totalPrice || 0) - ((Number(r.totalPrice || 0) * currentCommPct) / 100))), 0);
+    const totalFee = validRides.reduce((acc, r) => acc + Number(r.commissionAmount ?? calcFallbackFee(Number(r.totalPrice || 0))), 0);
+    const totalNet = validRides.reduce((acc, r) => acc + Number(r.driverNetAmount ?? Math.max(0, Number(r.totalPrice || 0) - calcFallbackFee(Number(r.totalPrice || 0)))), 0);
     const totalWithdrawn = driverWithdrawals.filter(w => w.status === 'pago').reduce((acc, w) => acc + Number(w.amount || 0), 0);
 
     const autoScore = computeDriverAutoScore(selectedDriver, driverRides, wallet);
@@ -865,8 +870,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Categorias Habilitadas</div>
                         <div style={{ fontWeight: 700, color: '#15803D', fontSize: '0.72rem' }}>
                           {Array.isArray(selectedDriver.eligibleCategories) && selectedDriver.eligibleCategories.length > 0
-                            ? selectedDriver.eligibleCategories.map((c: string) => c.toUpperCase().replace('KAVRO_', 'KAVRO ')).join(', ')
-                            : 'KAVRO GO'}
+                            ? Array.from(new Set(selectedDriver.eligibleCategories.map((c: string) =>
+                                c === 'kavro_entregas' || String(c).toLowerCase().includes('entrega') ? 'Entregas' : 'Padrão'
+                              ))).join(', ')
+                            : 'Padrão'}
                         </div>
                       </div>
                       <div>

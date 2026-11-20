@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Menu, Search, Power, Navigation, Phone, MessageSquare,
-  Shield, DollarSign, Wallet, Star, Clock, Car, ChevronRight,
+  DollarSign, Wallet, Star, Clock, Car, ChevronRight,
   TrendingUp, ArrowUpRight, Check, X, AlertTriangle, User,
   Calendar, Award, Banknote, QrCode, Copy, RefreshCw, LogOut,
   Sliders, Zap, ShieldCheck, Camera, CheckCircle2, XCircle, FileText, Eye,
@@ -15,7 +15,7 @@ import { PushPermissionPrompt } from '../components/PushNotifications';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
-import { playNewRideSound } from '../utils/soundAndVoice';
+import { playNewRideSound, stopNewRideSound, unlockNewRideAudio } from '../utils/soundAndVoice';
 import { formatRideCode, getCleanWhatsappNumber, formatPhone, formatCPF, formatMercosulPlate, formatCNH } from '../utils/format';
 import {
   normalizeCategoriesFromConfig,
@@ -41,6 +41,7 @@ import { DriverDrawerMenu } from '../components/DriverDrawerMenu';
 import { DriverSecondaryTabs } from '../components/DriverSecondaryTabs';
 import { DriverHomeMap, RouteStepSummary } from '../components/DriverHomeMap';
 import { SosEmergencyModal } from '../components/SosEmergencyModal';
+import { RideCheckAlertModal } from '../components/RideCheckAlertModal';
 import { DriverKycVerificationModal } from '../components/DriverKycVerificationModal';
 import { DriverTermsContractModal } from '../components/DriverTermsContractModal';
 import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
@@ -106,6 +107,9 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   // Modais estilo Uber
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(false);
+  const [togglingCategoryId, setTogglingCategoryId] = useState<string | null>(null);
+  const [preferencesError, setPreferencesError] = useState('');
+  const isSavingPrefRef = useRef(false);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
   const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
@@ -264,6 +268,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     amount: number;
     pixCopyPaste: string;
     pixQrCode: string;
+    provider?: string;
   } | null>(null);
   const [copiedDebtPix, setCopiedDebtPix] = useState(false);
   const [isSimulatingDebtWebhook, setIsSimulatingDebtWebhook] = useState(false);
@@ -316,7 +321,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       const w = await StorageService.fetchDriverWallet(drvId);
       if (w) setWallet(w);
     }
-    if (selfRes?.driver) {
+    if (selfRes?.driver && !isSavingPrefRef.current) {
       setCurrentDriver(selfRes.driver);
       StorageService.setCurrentDriver(selfRes.driver);
     }
@@ -352,7 +357,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     const ids = new Set(incoming.map(r => r.id));
     const hasNew = incoming.some(r => !prevRadarIdsRef.current.has(r.id));
     if (hasNew && prevRadarIdsRef.current.size >= 0) {
-      playNewRideSound();
+      playNewRideSound({ repeatCount: 3 });
     }
     prevRadarIdsRef.current = ids;
   }, [rides, currentDriver?.isOnline, currentDriver?.id, currentDriver?.approvalStatus, currentDriver?.enabledCategories]);
@@ -384,6 +389,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
 
   // Handlers de Autenticação
   const handleLogoutDriver = () => {
+    stopNewRideSound();
     StorageService.setCurrentDriver(null);
     setCurrentDriver(null);
     setIsLookupOnlySession(false);
@@ -534,7 +540,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       hasAirConditioning: regHasAc,
       hasLargeTrunk: regHasLargeTrunk,
       hasLeatherSeats: regHasLeatherSeats,
-      vehicleCategory: previewEval.eligibleCategoryIds[previewEval.eligibleCategoryIds.length - 1] || regCategory,
+      vehicleCategory: previewEval.eligibleCategoryIds[0] || regCategory,
       eligibleCategories: previewEval.eligibleCategoryIds,
       enabledCategories: previewEval.eligibleCategoryIds,
       pixType: 'cpf',
@@ -597,6 +603,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   // Handlers Operacionais
   const handleToggleOnline = async () => {
     if (!currentDriver) return;
+    unlockNewRideAudio();
     setStatusError('');
     if (currentDriver.approvalStatus !== 'aprovado') {
       setStatusError(
@@ -627,11 +634,13 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       setStatusError(res.error || 'Não foi possível alterar status.');
       return;
     }
+    stopNewRideSound();
     setCurrentDriver(res.driver);
   };
 
   const handleConfirmStartOnline = async () => {
     if (!currentDriver) return;
+    unlockNewRideAudio();
     setStartModalError('');
     const vehicles = getDriverVehiclesList(currentDriver);
     const chosen = vehicles.find(v => v.id === selectedStartVehicleId);
@@ -770,33 +779,69 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     }
   };
 
-  const handleToggleAcceptCash = async (enabled: boolean) => {
-    if (!currentDriver) return;
-    const res = await StorageService.updateDriverProfile(currentDriver.id, {
-      acceptsCash: enabled
-    });
-    if (res.ok && res.driver) {
-      setCurrentDriver(res.driver);
+  const persistDriverPreference = async (
+    prevDriver: DriverProfile,
+    updates: Partial<DriverProfile>,
+    fallbackErrorMsg: string
+  ): Promise<boolean> => {
+    const optimisticDriver: DriverProfile = { ...prevDriver, ...updates };
+    isSavingPrefRef.current = true;
+    setCurrentDriver(optimisticDriver);
+    StorageService.setCurrentDriver(optimisticDriver);
+    try {
+      const res = await StorageService.updateDriverProfile(prevDriver.id, updates);
+      if (res.ok && res.driver) {
+        setCurrentDriver(res.driver);
+        return true;
+      }
+      setCurrentDriver(prevDriver);
+      StorageService.setCurrentDriver(prevDriver);
+      setPreferencesError(res.error || fallbackErrorMsg);
+      return false;
+    } finally {
+      isSavingPrefRef.current = false;
     }
   };
 
+  const handleToggleAcceptCash = async (enabled: boolean) => {
+    if (!currentDriver || isSavingPrefRef.current) return;
+    setPreferencesError('');
+    await persistDriverPreference(
+      currentDriver,
+      { acceptsCash: enabled },
+      'Não foi possível salvar a preferência de dinheiro. Faça login novamente se necessário.'
+    );
+  };
+
   const handleToggleCategoryReceive = async (categoryId: string) => {
-    if (!currentDriver) return;
+    if (!currentDriver || isSavingPrefRef.current) return;
+    setPreferencesError('');
     const { eligibleCategoryIds, enabledCategoryIds } = evaluateAllDriverCategories(currentDriver, platformCategories);
-    if (!eligibleCategoryIds.includes(categoryId)) return;
+    if (!eligibleCategoryIds.includes(categoryId)) {
+      setPreferencesError('Esta categoria não está liberada para o seu veículo no momento.');
+      return;
+    }
 
     const isCurrentlyEnabled = enabledCategoryIds.includes(categoryId);
     const nextEnabled = isCurrentlyEnabled
       ? enabledCategoryIds.filter(id => id !== categoryId)
       : [...enabledCategoryIds, categoryId];
 
-    if (nextEnabled.length === 0) return;
+    if (nextEnabled.length === 0) {
+      setPreferencesError('Mantenha pelo menos 1 categoria ativa (Padrão ou Entregas) para continuar recebendo solicitações.');
+      return;
+    }
 
-    const res = await StorageService.updateDriverProfile(currentDriver.id, {
-      enabledCategories: nextEnabled
-    });
-    if (res.ok && res.driver) {
-      setCurrentDriver(res.driver);
+    const disabledCategoryIds = eligibleCategoryIds.filter(id => !nextEnabled.includes(id));
+    setTogglingCategoryId(categoryId);
+    try {
+      await persistDriverPreference(
+        currentDriver,
+        { enabledCategories: nextEnabled, disabledCategoryIds },
+        'Não foi possível salvar sua preferência no servidor. Saia e entre novamente com sua senha para atualizar a sessão.'
+      );
+    } finally {
+      setTogglingCategoryId(null);
     }
   };
 
@@ -862,7 +907,8 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       setDebtPixModalData({
         amount: res.amount,
         pixCopyPaste: res.pixCopyPaste,
-        pixQrCode: res.pixQrCode
+        pixQrCode: res.pixQrCode,
+        provider: res.provider
       });
     } else {
       setStatusError(res.error || 'Erro ao gerar QR Code de quitação.');
@@ -2084,27 +2130,8 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             padding: '0 16px 14px 16px',
             pointerEvents: 'none'
           }}>
-            {/* Escudo Azul SOS à esquerda */}
-            <button
-              type="button"
-              onClick={() => setIsSosOpen(true)}
-              title="Central de Segurança SOS"
-              style={{
-                width: 46,
-                height: 46,
-                borderRadius: '50%',
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #E5E7EB',
-                boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'pointer',
-                pointerEvents: 'auto'
-              }}
-            >
-              <Shield size={22} color="#276EF1" fill="#DBEAFE" strokeWidth={2.2} />
-            </button>
+            {/* Espaçador à esquerda para manter botão centralizado (SOS só aparece após embarque) */}
+            <div style={{ width: 46 }} />
 
             {/* Botão Central INICIAR / PARAR Azul Uber (#276EF1) */}
             {!currentDriver.isOnline ? (
@@ -2378,16 +2405,21 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         onClose={() => setIsDrawerOpen(false)}
         onSelectTab={(tab) => setActiveTab(tab)}
         onOpenPreferences={() => setIsPreferencesOpen(true)}
-        onOpenSos={() => setIsSosOpen(true)}
+        onOpenSos={activeRide?.status === 'em_andamento' ? () => setIsSosOpen(true) : undefined}
         onLogout={handleLogoutDriver}
       />
 
-      {/* 2. Preferências da Viagem (Print 1 do usuário) */}
+      {/* 2. Preferências da Viagem (Padrão e Entregas) */}
       <DriverPreferencesModal
         isOpen={isPreferencesOpen}
         currentDriver={currentDriver}
         config={config}
-        onClose={() => setIsPreferencesOpen(false)}
+        togglingCategoryId={togglingCategoryId}
+        errorMessage={preferencesError}
+        onClose={() => {
+          setPreferencesError('');
+          setIsPreferencesOpen(false);
+        }}
         onToggleAcceptCash={handleToggleAcceptCash}
         onToggleCategory={handleToggleCategoryReceive}
       />
@@ -2693,7 +2725,11 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             >
               {copiedDebtPix ? 'Copiado!' : 'Copiar Código PIX'}
             </button>
-            {import.meta.env.DEV && (
+            {debtPixModalData.provider === 'stripe' ? (
+              <div style={{ fontSize: '0.74rem', color: '#15803D', fontWeight: 700, padding: '8px 10px', borderRadius: 8, backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', marginBottom: 8 }}>
+                PIX oficial gerado via Stripe. Seu saldo será liberado automaticamente após a confirmação do pagamento.
+              </div>
+            ) : import.meta.env.DEV && (
               <button
                 type="button"
                 onClick={handleSimulateDebtPixWebhook}
@@ -2746,6 +2782,17 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           onClose={() => setIsSosOpen(false)}
           rideId={activeRide?.id}
           driverPhone={currentDriver.phone}
+        />
+      )}
+
+      {currentDriver && activeRide && (
+        <RideCheckAlertModal
+          ride={activeRide}
+          viewerRole="motorista"
+          onOpenSos={() => setIsSosOpen(true)}
+          onResponded={() => {
+            StorageService.syncFromDatabase().then(refreshData);
+          }}
         />
       )}
 

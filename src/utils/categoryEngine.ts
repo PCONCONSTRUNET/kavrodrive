@@ -2,16 +2,18 @@ import {
   RideCategoryConfig,
   CategoryEligibilityEvaluation,
   DriverProfile,
+  ServiceCategoryType,
   SystemConfig
 } from '../types';
 
 export const DEFAULT_RIDE_CATEGORIES: RideCategoryConfig[] = [
   {
     id: 'kavro_go',
-    code: 'GO',
-    name: 'KAVRO GO',
-    subtitle: 'Econômico • Dia a Dia',
-    description: 'Viagens econômicas em veículos 4 portas com ar-condicionado e documentação regular.',
+    code: 'PADRAO',
+    name: 'Padrão',
+    subtitle: 'Viagem de passageiros',
+    description: 'Transporte padrão de passageiros em veículos 4 portas com ar-condicionado e documentação regular.',
+    categoryType: 'padrao',
     active: true,
     sortOrder: 1,
     multiplier: 1.0,
@@ -35,87 +37,114 @@ export const DEFAULT_RIDE_CATEGORIES: RideCategoryConfig[] = [
     cityOverrides: []
   },
   {
-    id: 'kavro_plus',
-    code: 'PLUS',
-    name: 'KAVRO PLUS',
-    subtitle: 'Conforto • Espaço Amplo',
-    description: 'Veículos mais novos, espaçosos e confortáveis com motoristas bem avaliados.',
+    id: 'kavro_entregas',
+    code: 'ENTREGAS',
+    name: 'Entregas',
+    subtitle: 'Produtos e encomendas',
+    description: 'Envie ou receba produtos, pacotes, compras e documentos direto até o endereço informado.',
+    categoryType: 'entregas',
     active: true,
     sortOrder: 2,
-    multiplier: 1.25,
-    baseFare: 10.0,
-    pricePerKm: 4.0,
-    pricePerMinute: 0.62,
-    minimumFare: 18.75,
+    multiplier: 0.95,
+    baseFare: 7.5,
+    pricePerKm: 3.0,
+    pricePerMinute: 0.45,
+    minimumFare: 14.0,
     commissionPercent: 20,
-    maxPassengers: 4,
-    minVehicleYear: 2018,
-    minDriverRating: 4.7,
+    maxPassengers: 0,
+    minVehicleYear: 2012,
+    minDriverRating: 4.5,
     minCompletedRides: 0,
-    requireFourDoors: true,
-    requireAirConditioning: true,
+    requireFourDoors: false,
+    requireAirConditioning: false,
     requireRegularDoc: true,
     requireEar: true,
-    requireLargeTrunk: true,
+    requireLargeTrunk: false,
     requireLeatherSeats: false,
-    allowedModels: [
-      'Onix Plus', 'Prisma', 'Cobalt', 'Cruze', 'Spin', 'Tracker',
-      'HB20S', 'Creta', 'Virtus', 'Voyage', 'Jetta', 'Nivus', 'T-Cross', 'Taos',
-      'Cronos', 'Fastback', 'Pulse', 'Toros',
-      'City', 'Civic', 'HR-V', 'WR-V',
-      'Etios Sedan', 'Yaris Sedan', 'Corolla', 'Corolla Cross',
-      'Versa', 'Sentra', 'Kicks',
-      'Logan', 'Duster', 'Oroch', 'Captur',
-      'Renegade', 'Compass', 'Tiggo', 'Arrizo', 'BYD Dolphin', 'BYD Dolphin Plus', 'BYD King', 'BYD Song'
-    ],
-    allowedCities: [],
-    cityOverrides: []
-  },
-  {
-    id: 'kavro_exec',
-    code: 'EXEC',
-    name: 'KAVRO EXEC',
-    subtitle: 'Executivo • Premium',
-    description: 'Experiência executiva em sedans médios/grandes e SUVs selecionados com padrão superior.',
-    active: true,
-    sortOrder: 3,
-    multiplier: 1.5,
-    baseFare: 12.0,
-    pricePerKm: 4.8,
-    pricePerMinute: 0.75,
-    minimumFare: 22.5,
-    commissionPercent: 18,
-    maxPassengers: 4,
-    minVehicleYear: 2020,
-    minDriverRating: 4.85,
-    minCompletedRides: 0,
-    requireFourDoors: true,
-    requireAirConditioning: true,
-    requireRegularDoc: true,
-    requireEar: true,
-    requireLargeTrunk: true,
-    requireLeatherSeats: true,
-    allowedModels: [
-      'Corolla', 'Corolla XEi', 'Corolla Altis', 'Corolla GR-S', 'Corolla Cross',
-      'Civic', 'Civic Touring', 'HR-V Touring', 'Accord',
-      'Sentra', 'Jetta', 'Passat', 'Taos', 'Tiguan',
-      'Cruze', 'Cruze Premier', 'Equinox',
-      'Compass', 'Commander',
-      'Tiggo 7', 'Tiggo 8', 'Arrizo 6',
-      'Haval H6', 'BYD King', 'BYD Song Plus', 'BYD Seal', 'BYD Yuan Plus',
-      'BMW 320i', 'Audi A3', 'Audi A4', 'Mercedes C180', 'Mercedes C200'
-    ],
+    allowedModels: [],
     allowedCities: [],
     cityOverrides: []
   }
 ];
 
+const DEPRECATED_LEGACY_TIER_IDS = new Set([
+  'kavro_plus', 'kavro_exec', 'comfort', 'plus', 'aeroporto', 'exec', 'executivo', 'bagagem'
+]);
+
 export function mapLegacyCategoryId(categoryId?: string | null): string {
   const raw = String(categoryId || '').trim().toLowerCase();
-  if (!raw || raw === 'standard' || raw === 'upx' || raw === 'go') return 'kavro_go';
-  if (raw === 'comfort' || raw === 'plus') return 'kavro_plus';
-  if (raw === 'aeroporto' || raw === 'exec' || raw === 'executivo' || raw === 'bagagem') return 'kavro_exec';
+  if (
+    !raw ||
+    raw === 'standard' ||
+    raw === 'upx' ||
+    raw === 'go' ||
+    raw === 'padrao' ||
+    raw === 'padrão' ||
+    raw === 'comfort' ||
+    raw === 'plus' ||
+    raw === 'kavro_plus' ||
+    raw === 'aeroporto' ||
+    raw === 'exec' ||
+    raw === 'executivo' ||
+    raw === 'bagagem' ||
+    raw === 'kavro_exec'
+  ) {
+    return 'kavro_go';
+  }
+  if (
+    raw === 'entregas' ||
+    raw === 'entrega' ||
+    raw === 'envios' ||
+    raw === 'envio' ||
+    raw === 'flash' ||
+    raw === 'delivery' ||
+    raw === 'kavro_flash' ||
+    raw === 'kavro_entregas'
+  ) {
+    return 'kavro_entregas';
+  }
   return raw;
+}
+
+export function resolveCategoryType(categoryOrId?: Partial<RideCategoryConfig> | string | null): ServiceCategoryType {
+  if (typeof categoryOrId === 'string') {
+    const mapped = mapLegacyCategoryId(categoryOrId);
+    if (
+      mapped === 'kavro_entregas' ||
+      /entrega|envio|flash|delivery|pacote|encomenda/.test(String(categoryOrId).toLowerCase())
+    ) {
+      return 'entregas';
+    }
+    return 'padrao';
+  }
+  if (!categoryOrId || typeof categoryOrId !== 'object') return 'padrao';
+  if (categoryOrId.categoryType === 'entregas' || categoryOrId.categoryType === 'padrao') {
+    return categoryOrId.categoryType;
+  }
+  const text = `${categoryOrId.id || ''} ${categoryOrId.code || ''} ${categoryOrId.name || ''}`.toLowerCase();
+  if (
+    mapLegacyCategoryId(categoryOrId.id) === 'kavro_entregas' ||
+    /entrega|envio|flash|delivery|pacote|encomenda/.test(text)
+  ) {
+    return 'entregas';
+  }
+  return 'padrao';
+}
+
+export function isDeliveryCategory(
+  categoryOrId?: Partial<RideCategoryConfig> | string | null,
+  config?: Partial<SystemConfig> | null
+): boolean {
+  if (typeof categoryOrId === 'string') {
+    if (config) {
+      const cat = getCategoryById(categoryOrId, config);
+      if (cat && (cat.id === categoryOrId || mapLegacyCategoryId(cat.id) === mapLegacyCategoryId(categoryOrId))) {
+        return resolveCategoryType(cat) === 'entregas';
+      }
+    }
+    return resolveCategoryType(categoryOrId) === 'entregas';
+  }
+  return resolveCategoryType(categoryOrId) === 'entregas';
 }
 
 export function normalizeCategoriesFromConfig(config?: Partial<SystemConfig> | null): RideCategoryConfig[] {
@@ -125,11 +154,11 @@ export function normalizeCategoriesFromConfig(config?: Partial<SystemConfig> | n
       ? config!.serviceCategories!
       : [];
 
-  // Se a configuração salva ainda é a antiga (standard, comfort, aeroporto) sem as categorias KAVRO,
-  // migramos para o padrão oficial KAVRO GO, KAVRO PLUS e KAVRO EXEC preservando multiplicadores se alterados
+  // Mantém estritamente as 2 opções oficiais da plataforma: Padrão e Entregas
   const hasKavroIds = rawList.some(c =>
-    c.id === 'kavro_go' || c.id === 'kavro_plus' || c.id === 'kavro_exec' ||
-    String(c.name || '').toUpperCase().includes('KAVRO GO')
+    c.id === 'kavro_go' || c.id === 'kavro_plus' || c.id === 'kavro_exec' || c.id === 'kavro_entregas' ||
+    String(c.name || '').toUpperCase().includes('KAVRO GO') ||
+    String(c.name || '').toUpperCase() === 'PADRÃO'
   );
 
   if (rawList.length === 0 || !hasKavroIds) {
@@ -140,20 +169,30 @@ export function normalizeCategoriesFromConfig(config?: Partial<SystemConfig> | n
     const commCfg = Number(config?.platformCommissionPercent ?? 20);
 
     return DEFAULT_RIDE_CATEGORIES.map(def => {
-      const mult = def.multiplier;
+      if (def.id === 'kavro_entregas') {
+        return { ...def, commissionPercent: commCfg };
+      }
       return {
         ...def,
-        baseFare: Math.round(baseFareCfg * mult * 100) / 100,
-        pricePerKm: Math.round(kmCfg * mult * 100) / 100,
-        pricePerMinute: Math.round(minCfg * mult * 100) / 100,
-        minimumFare: Math.round(floorCfg * mult * 100) / 100,
-        commissionPercent: def.id === 'kavro_exec' ? Math.min(commCfg, 18) : commCfg
+        baseFare: Math.round(baseFareCfg * 100) / 100,
+        pricePerKm: Math.round(kmCfg * 100) / 100,
+        pricePerMinute: Math.round(minCfg * 100) / 100,
+        minimumFare: Math.round(floorCfg * 100) / 100,
+        commissionPercent: commCfg
       };
     });
   }
 
-  return rawList.map((item: any, idx: number) => {
+  const filteredList = rawList.filter((item: any) => !DEPRECATED_LEGACY_TIER_IDS.has(String(item?.id || '').trim().toLowerCase()));
+  const seenIds = new Set<string>();
+  const mappedList: RideCategoryConfig[] = [];
+
+  for (let idx = 0; idx < filteredList.length; idx++) {
+    const item: any = filteredList[idx];
     const mappedId = mapLegacyCategoryId(item.id);
+    if (seenIds.has(mappedId)) continue;
+    seenIds.add(mappedId);
+
     const def = DEFAULT_RIDE_CATEGORIES.find(d => d.id === mappedId) || DEFAULT_RIDE_CATEGORIES[0];
     const mult = Number(item.multiplier ?? def.multiplier ?? 1.0);
     const baseFareCfg = Number(config?.baseFare ?? 8.0);
@@ -161,12 +200,20 @@ export function normalizeCategoriesFromConfig(config?: Partial<SystemConfig> | n
     const minCfg = Number(config?.pricePerMinute ?? 0.5);
     const floorCfg = Number(config?.minimumFare ?? 15.0);
 
-    return {
-      id: item.id || def.id,
-      code: item.code || def.code || String(item.name || 'CAT').slice(0, 4).toUpperCase(),
-      name: item.name || def.name,
-      subtitle: item.subtitle ?? def.subtitle ?? '',
+    const rawName = String(item.name || '').trim();
+    const isLegacyDefaultName =
+      (mappedId === 'kavro_go' && (!rawName || rawName.toUpperCase() === 'KAVRO GO')) ||
+      (mappedId === 'kavro_entregas' && (!rawName || rawName.toUpperCase() === 'KAVRO ENTREGAS'));
+
+    mappedList.push({
+      id: mappedId === 'kavro_go' || mappedId === 'kavro_entregas' ? mappedId : (item.id || def.id),
+      code: isLegacyDefaultName ? def.code : (item.code || def.code || String(item.name || 'CAT').slice(0, 4).toUpperCase()),
+      name: isLegacyDefaultName ? def.name : rawName,
+      subtitle: isLegacyDefaultName ? def.subtitle : (item.subtitle ?? def.subtitle ?? ''),
       description: item.description || def.description,
+      categoryType: item.categoryType === 'entregas' || item.categoryType === 'padrao'
+        ? item.categoryType
+        : resolveCategoryType(item),
       active: item.active !== false,
       sortOrder: Number(item.sortOrder ?? idx + 1),
       multiplier: mult,
@@ -188,8 +235,29 @@ export function normalizeCategoriesFromConfig(config?: Partial<SystemConfig> | n
       allowedModels: Array.isArray(item.allowedModels) ? item.allowedModels : def.allowedModels,
       allowedCities: Array.isArray(item.allowedCities) ? item.allowedCities : def.allowedCities,
       cityOverrides: Array.isArray(item.cityOverrides) ? item.cityOverrides : []
-    };
-  });
+    });
+  }
+
+  if (!mappedList.some(c => c.id === 'kavro_go' || resolveCategoryType(c) === 'padrao')) {
+    const padraoDef = DEFAULT_RIDE_CATEGORIES[0];
+    mappedList.unshift({
+      ...padraoDef,
+      commissionPercent: Number(config?.platformCommissionPercent ?? padraoDef.commissionPercent ?? 20)
+    });
+  }
+
+  if (!mappedList.some(c => c.id === 'kavro_entregas' || resolveCategoryType(c) === 'entregas')) {
+    const entregasDef = DEFAULT_RIDE_CATEGORIES.find(d => d.id === 'kavro_entregas');
+    if (entregasDef) {
+      mappedList.push({
+        ...entregasDef,
+        sortOrder: mappedList.length + 1,
+        commissionPercent: Number(config?.platformCommissionPercent ?? entregasDef.commissionPercent ?? 20)
+      });
+    }
+  }
+
+  return mappedList;
 }
 
 export function getCategoryById(
@@ -474,16 +542,33 @@ export function evaluateAllDriverCategories(
   const existingEnabled = Array.isArray(driver.enabledCategories) && driver.enabledCategories.length > 0
     ? driver.enabledCategories.map(mapLegacyCategoryId)
     : null;
+  const disabledIds = Array.isArray(driver.disabledCategoryIds)
+    ? driver.disabledCategoryIds.map(mapLegacyCategoryId)
+    : null;
 
-  const enabledCategoryIds = existingEnabled
-    ? eligibleCategoryIds.filter(id => existingEnabled.includes(id))
-    : [...eligibleCategoryIds];
+  let enabledCategoryIds: string[];
+  if (disabledIds) {
+    enabledCategoryIds = eligibleCategoryIds.filter(id => !disabledIds.includes(id));
+  } else if (existingEnabled) {
+    enabledCategoryIds = eligibleCategoryIds.filter(id =>
+      existingEnabled.includes(id) ||
+      (resolveCategoryType(id) === 'entregas' && existingEnabled.includes('kavro_go'))
+    );
+  } else {
+    enabledCategoryIds = [...eligibleCategoryIds];
+  }
 
   // Se o motorista tinha categorias antigas e ficou com 0 ativas mas tem elegíveis, habilita as elegíveis por padrão
   const finalEnabled = enabledCategoryIds.length > 0 ? enabledCategoryIds : [...eligibleCategoryIds];
 
+  // Mantém evaluations[].isEnabledByDriver 100% sincronizado com finalEnabled
+  const syncedEvaluations = evaluations.map(ev => ({
+    ...ev,
+    isEnabledByDriver: ev.isEligible && finalEnabled.includes(ev.categoryId)
+  }));
+
   return {
-    evaluations,
+    evaluations: syncedEvaluations,
     eligibleCategoryIds,
     enabledCategoryIds: finalEnabled
   };

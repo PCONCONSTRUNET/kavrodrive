@@ -6,21 +6,23 @@ import {
   LogIn, UserPlus, Smartphone, Download,
   CheckCircle2, ShieldCheck, Car, Clock,
   Save, Check, Plus, CreditCard, ChevronRight,
-  Headphones, Sparkles, ShieldAlert, Bell,
-  Camera, Lock, Send, XCircle, HelpCircle
+  Headphones, Sparkles, Bell,
+  Camera, Lock, Send, XCircle, HelpCircle, Users
 } from 'lucide-react';
 import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { AuthModal } from '../components/AuthModal';
+import { PassengerFeatureCarousel } from '../components/PassengerFeatureCarousel';
 import { PushToggleButton } from '../components/PushNotifications';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
-import { SosEmergencyModal } from '../components/SosEmergencyModal';
+import { TrustedContactsModal } from '../components/TrustedContactsModal';
+import { FamilyProfileFlowModal } from '../components/FamilyProfileFlowModal';
 import { NotificationsModal } from '../components/NotificationsModal';
 import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from '../components/PassengerTermsContractModal';
 import { clientExternalId } from '../services/push';
-import { formatPhone, formatCPF, getCleanWhatsappNumber } from '../utils/format';
+import { formatPhone, formatCPF, isValidCPF, getCleanWhatsappNumber } from '../utils/format';
 import { searchAddressGeocode } from '../utils/geo';
 
 interface ClientProfileScreenProps {
@@ -40,7 +42,8 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   const [config] = useState<SystemConfig>(StorageService.getConfig());
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<'register' | 'login'>('register');
-  const [isSosOpen, setIsSosOpen] = useState(false);
+  const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
+  const [isFamilyFlowOpen, setIsFamilyFlowOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() => {
     return StorageService.getNotifications().filter(n => !n.read).length;
@@ -204,6 +207,10 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     e.preventDefault();
     if (!currentUser) return;
     setProfileReqError('');
+    if (!isValidCPF(document)) {
+      setProfileReqError('Informe um CPF válido com 11 dígitos.');
+      return;
+    }
     setIsSubmittingProfileReq(true);
     const res = await StorageService.requestClientProfileChange(currentUser.id, {
       name: name.trim(),
@@ -315,30 +322,6 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Botão de Emergência SOS */}
-          <button
-            type="button"
-            onClick={() => setIsSosOpen(true)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 4,
-              backgroundColor: '#DC2626',
-              color: '#FFFFFF',
-              border: 'none',
-              padding: '5px 10px',
-              borderRadius: 20,
-              fontSize: '0.74rem',
-              fontWeight: 800,
-              cursor: 'pointer',
-              boxShadow: '0 2px 8px rgba(220, 38, 38, 0.35)',
-              flexShrink: 0
-            }}
-            title="Central de Emergência SOS"
-          >
-            <span>🚨 SOS</span>
-          </button>
-
           {/* Botão de Notificações */}
           <button
             type="button"
@@ -406,61 +389,76 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
 
       {/* CASO NÃO ESTEJA LOGADO / CADASTRADO */}
       {!currentUser ? (
-        <div style={{
-          padding: '24px 20px',
-          marginBottom: 18,
-          background: 'linear-gradient(145deg, #ffffff 0%, #F8FAFC 100%)',
-          border: '1.5px solid rgba(118, 216, 0, 0.4)',
-          borderRadius: 20,
-          boxShadow: '0 10px 30px rgba(0,0,0,0.05)',
-          textAlign: 'center'
-        }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <div style={{
-            width: 58,
-            height: 58,
-            borderRadius: '50%',
-            backgroundColor: 'rgba(118, 216, 0, 0.16)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 14px auto',
-            color: '#4D9400'
+            padding: '24px 20px',
+            background: 'linear-gradient(145deg, #ffffff 0%, #F8FAFC 100%)',
+            border: '1.5px solid rgba(118, 216, 0, 0.4)',
+            borderRadius: 20,
+            boxShadow: '0 10px 30px rgba(0,0,0,0.05)',
+            textAlign: 'center'
           }}>
-            <UserPlus size={28} />
+            <div style={{
+              width: 58,
+              height: 58,
+              borderRadius: '50%',
+              backgroundColor: 'rgba(118, 216, 0, 0.16)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              margin: '0 auto 14px auto',
+              color: '#4D9400'
+            }}>
+              <UserPlus size={28} />
+            </div>
+
+            <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#121A21', marginBottom: 6 }}>
+              Acesse seu Perfil Kavro Drive
+            </h3>
+            <p style={{ fontSize: '0.82rem', color: '#64748B', marginBottom: 20, lineHeight: 1.4 }}>
+              Cadastre-se para salvar seus locais favoritos, agendar corridas com 1 toque e receber recibos automáticos por e-mail.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                onClick={() => {
+                  setAuthInitialMode('register');
+                  setIsAuthModalOpen(true);
+                }}
+                className="btn-ios-primary"
+                style={{ padding: '14px 20px', fontSize: '0.95rem' }}
+              >
+                <UserPlus size={18} />
+                <span>Criar Conta em 1 Minuto</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setAuthInitialMode('login');
+                  setIsAuthModalOpen(true);
+                }}
+                className="btn-ios-secondary"
+                style={{ padding: '12px 20px', fontSize: '0.88rem' }}
+              >
+                <LogIn size={16} />
+                <span>Já tenho conta — Entrar</span>
+              </button>
+            </div>
           </div>
 
-          <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#121A21', marginBottom: 6 }}>
-            Acesse seu Perfil Kavro Drive
-          </h3>
-          <p style={{ fontSize: '0.82rem', color: '#64748B', marginBottom: 20, lineHeight: 1.4 }}>
-            Cadastre-se para salvar seus locais favoritos, agendar corridas com 1 toque e receber recibos automáticos por e-mail.
-          </p>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <button
-              onClick={() => {
-                setAuthInitialMode('register');
-                setIsAuthModalOpen(true);
-              }}
-              className="btn-ios-primary"
-              style={{ padding: '14px 20px', fontSize: '0.95rem' }}
-            >
-              <UserPlus size={18} />
-              <span>Criar Conta em 1 Minuto</span>
-            </button>
-
-            <button
-              onClick={() => {
-                setAuthInitialMode('login');
-                setIsAuthModalOpen(true);
-              }}
-              className="btn-ios-secondary"
-              style={{ padding: '12px 20px', fontSize: '0.88rem' }}
-            >
-              <LogIn size={16} />
-              <span>Já tenho conta — Entrar</span>
-            </button>
-          </div>
+          <PassengerFeatureCarousel
+            config={config}
+            currentUser={null}
+            recentDestinations={StorageService.getRecentDestinations()}
+            onUserChange={(updatedUser) => {
+              setCurrentUser(updatedUser);
+              if (onUserChange) onUserChange(updatedUser);
+            }}
+            onRequireAuth={() => {
+              setAuthInitialMode('login');
+              setIsAuthModalOpen(true);
+            }}
+          />
         </div>
       ) : (
         /* CASO ESTEJA CADASTRADO: PAINEL EXECUTIVO OTIMIZADO */
@@ -679,6 +677,178 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
             </div>
           </div>
 
+          {/* Carrossel horizontal estilo Uber (Favoritos <-> Recursos de Segurança) dentro da área do cliente */}
+          <PassengerFeatureCarousel
+            config={config}
+            currentUser={currentUser}
+            recentDestinations={StorageService.getRecentDestinations()}
+            onUserChange={(updatedUser) => {
+              setCurrentUser(updatedUser);
+              if (onUserChange) onUserChange(updatedUser);
+            }}
+            onRequireAuth={() => {
+              setAuthInitialMode('login');
+              setIsAuthModalOpen(true);
+            }}
+          />
+
+          {/* 1.5 Segurança & Contatos de Confiança (visível logo no topo do Menu/Perfil para configurar antes da corrida) */}
+          <div style={{
+            background: '#FFFFFF',
+            borderRadius: 20,
+            padding: '15px 18px',
+            border: '1px solid #E2E8F0',
+            boxShadow: '0 4px 20px -2px rgba(18, 26, 33, 0.05)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                <div style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
+                  backgroundColor: '#EFF6FF',
+                  color: '#276EF1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  <ShieldCheck size={18} />
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0F172A' }}>
+                    Contatos de Confiança
+                  </div>
+                  <div style={{ fontSize: '0.73rem', color: '#64748B', fontWeight: 600, marginTop: 1 }}>
+                    {currentUser.trustedContacts && currentUser.trustedContacts.length > 0
+                      ? `${currentUser.trustedContacts.length} contato(s) configurado(s) para envio automático`
+                      : 'Configure quem recebe sua rota ao vivo antes da corrida'}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setIsTrustedContactsOpen(true)}
+                style={{
+                  backgroundColor: '#111111',
+                  border: 'none',
+                  color: '#FFFFFF',
+                  padding: '8px 14px',
+                  borderRadius: 999,
+                  fontSize: '0.76rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  flexShrink: 0
+                }}
+              >
+                <Plus size={13} />
+                <span>{currentUser.trustedContacts && currentUser.trustedContacts.length > 0 ? 'Gerenciar' : 'Configurar'}</span>
+              </button>
+            </div>
+
+            {currentUser.trustedContacts && currentUser.trustedContacts.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
+                {currentUser.trustedContacts.map((tc) => (
+                  <div
+                    key={tc.id}
+                    onClick={() => setIsTrustedContactsOpen(true)}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setIsTrustedContactsOpen(true);
+                      }
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 11px',
+                      borderRadius: 12,
+                      backgroundColor: '#F8FAFC',
+                      border: '1px solid #E5E7EB',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0F172A' }}>
+                        {tc.name} • {tc.relationship || 'Familiar'}
+                      </div>
+                      <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
+                        {formatPhone(tc.phone)} • {tc.autoShareAllRides ? 'Automático em todas as corridas' : tc.autoShareNightOnly ? 'Automático à noite (20h-06h)' : 'Alertas SOS'}
+                      </div>
+                    </div>
+                    <Check size={15} color="#16A34A" style={{ flexShrink: 0 }} />
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Atalho Perfil Familiar / Conta para Adolescentes (12-18 anos) */}
+            <div style={{
+              marginTop: 12,
+              paddingTop: 12,
+              borderTop: '1px solid #F1F5F9',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
+                <div style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: '50%',
+                  backgroundColor: '#F3E8FF',
+                  color: '#7E22CE',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  <Users size={16} />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
+                    {currentUser.accountType === 'teen'
+                      ? 'Conta Adolescente (Perfil Familiar)'
+                      : 'Perfil Familiar (12 a 18 anos)'}
+                  </div>
+                  <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
+                    {currentUser.accountType === 'teen'
+                      ? `Supervisionado por ${currentUser.safetyPreferences?.familyGuardianName || 'Responsável Legal'}`
+                      : 'Convide adolescentes, acompanhe status e rastreie viagens'}
+                  </div>
+                </div>
+              </div>
+
+              {currentUser.accountType !== 'teen' && (
+                <button
+                  type="button"
+                  onClick={() => setIsFamilyFlowOpen(true)}
+                  style={{
+                    backgroundColor: '#F1F5F9',
+                    border: '1px solid #CBD5E1',
+                    color: '#0F172A',
+                    padding: '6px 12px',
+                    borderRadius: 999,
+                    fontSize: '0.73rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    flexShrink: 0
+                  }}
+                >
+                  Gerenciar
+                </button>
+              )}
+            </div>
+          </div>
+
           {/* 2. Formulário Otimizado de Dados Pessoais */}
           <div style={{
             background: '#FFFFFF',
@@ -862,7 +1032,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                    CPF <span style={{ color: '#94A3B8', fontWeight: 500 }}>(opcional)</span>
+                    CPF *
                   </label>
                   <div style={{ position: 'relative' }}>
                     <CreditCard size={15} color="#94A3B8" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)' }} />
@@ -1389,49 +1559,6 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
               <ChevronRight size={16} color="#64748B" />
             </button>
 
-            {/* Botão de Emergência SOS */}
-            <button
-              type="button"
-              onClick={() => setIsSosOpen(true)}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '10px 12px',
-                borderRadius: 12,
-                backgroundColor: '#FEF2F2',
-                border: '1px solid #FECACA',
-                cursor: 'pointer',
-                textAlign: 'left',
-                width: '100%'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  backgroundColor: '#DC2626',
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <ShieldAlert size={18} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#991B1B' }}>
-                    Central de Emergência SOS
-                  </div>
-                  <div style={{ fontSize: '0.70rem', color: '#B91C1C' }}>
-                    Discagem rápida: Polícia (190), SAMU (192) e Bombeiros (193)
-                  </div>
-                </div>
-              </div>
-              <ChevronRight size={16} color="#DC2626" />
-            </button>
-
             {/* Instalação do Aplicativo (PWA) */}
             <div style={{
               display: 'flex',
@@ -1553,12 +1680,33 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         config={config}
       />
 
-      {/* Central de Emergência SOS */}
-      <SosEmergencyModal
-        isOpen={isSosOpen}
-        onClose={() => setIsSosOpen(false)}
-        currentLocationText={currentUser ? `Cliente: ${currentUser.name} (${currentUser.phone})` : 'Lauro Müller e Região - SC'}
-        driverPhone={config?.driverPhone || config?.companyPhone || config?.companyWhatsapp}
+      {/* Contatos de Confiança */}
+      <TrustedContactsModal
+        isOpen={isTrustedContactsOpen}
+        onClose={() => setIsTrustedContactsOpen(false)}
+        currentUser={currentUser}
+        onUpdated={(_, updatedClient) => {
+          if (updatedClient) {
+            setCurrentUser(updatedClient);
+            if (onUserChange) onUserChange(updatedClient);
+          }
+        }}
+      />
+
+      {/* Perfil Familiar / Segurança para Adolescentes */}
+      <FamilyProfileFlowModal
+        isOpen={isFamilyFlowOpen}
+        onClose={() => setIsFamilyFlowOpen(false)}
+        currentUser={currentUser}
+        onRequireAuth={() => {
+          setIsFamilyFlowOpen(false);
+          setAuthInitialMode('login');
+          setIsAuthModalOpen(true);
+        }}
+        onUserChange={(updatedClient) => {
+          setCurrentUser(updatedClient);
+          if (onUserChange) onUserChange(updatedClient);
+        }}
       />
 
       {/* Central de Notificações */}

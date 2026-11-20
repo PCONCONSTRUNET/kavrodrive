@@ -1,6 +1,13 @@
 // Utilitário de Sons Nativos, Navegação por Voz (Turn-by-turn) e Screen Wake Lock
 
+export const NEW_RIDE_RINGTONE_URL = '/sounds/new-ride-toq3.mp3';
+
 let audioCtx: AudioContext | null = null;
+let rideRingtoneAudio: HTMLAudioElement | null = null;
+let lastRingtoneStartMs = 0;
+let audioUnlocked = false;
+let remainingRingtonePlays = 0;
+let ringtonePlaybackSessionId = 0;
 
 function getAudioContext(): AudioContext | null {
   try {
@@ -19,47 +26,160 @@ function getAudioContext(): AudioContext | null {
   }
 }
 
-/** Toca som agradável de chamada de corrida nova (estilo app de transporte executivo) */
-export function playNewRideSound(): void {
+function getRideRingtoneElement(): HTMLAudioElement | null {
+  if (typeof window === 'undefined' || typeof Audio === 'undefined') return null;
+  if (!rideRingtoneAudio) {
+    const audio = new Audio(NEW_RIDE_RINGTONE_URL);
+    audio.preload = 'auto';
+    rideRingtoneAudio = audio;
+  }
+  return rideRingtoneAudio;
+}
+
+function playSyntheticFallbackTone(): void {
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
 
     const now = ctx.currentTime;
-    
-    // Arpeggio de 3 notas ascendentes (Dó5 -> Mi5 -> Sol5 -> Dó6) com envelope suave
     const notes = [
-      { freq: 523.25, start: 0, dur: 0.12 }, // C5
-      { freq: 659.25, start: 0.10, dur: 0.12 }, // E5
-      { freq: 783.99, start: 0.20, dur: 0.16 }, // G5
-      { freq: 1046.50, start: 0.32, dur: 0.35 }, // C6
+      { freq: 523.25, start: 0, dur: 0.12 },
+      { freq: 659.25, start: 0.10, dur: 0.12 },
+      { freq: 783.99, start: 0.20, dur: 0.16 },
+      { freq: 1046.50, start: 0.32, dur: 0.35 }
     ];
 
     notes.forEach(({ freq, start, dur }) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-
       osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, now + start);
-
       gain.gain.setValueAtTime(0, now + start);
       gain.gain.linearRampToValueAtTime(0.28, now + start + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.001, now + start + dur);
-
       osc.connect(gain);
       gain.connect(ctx.destination);
-
       osc.start(now + start);
       osc.stop(now + start + dur + 0.05);
     });
+  } catch {
+    // ignore fallback error
+  }
+}
+
+/** Desbloqueia o elemento de áudio em navegadores/PWAs após o primeiro toque do usuário */
+export function unlockNewRideAudio(): void {
+  if (typeof window === 'undefined' || audioUnlocked) return;
+  try {
+    getAudioContext();
+    const audio = getRideRingtoneElement();
+    if (!audio) return;
+    audio.muted = true;
+    const p = audio.play();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.muted = false;
+        audioUnlocked = true;
+      }).catch(() => {
+        audio.muted = false;
+      });
+    } else {
+      audio.muted = false;
+      audioUnlocked = true;
+    }
+  } catch {
+    // ignore unlock error
+  }
+}
+
+/** Para imediatamente a melodia de nova corrida (ao aceitar, recusar ou encerrar o modal) */
+export function stopNewRideSound(): void {
+  try {
+    ringtonePlaybackSessionId += 1;
+    remainingRingtonePlays = 0;
+    if (!rideRingtoneAudio) return;
+    rideRingtoneAudio.onended = null;
+    rideRingtoneAudio.loop = false;
+    rideRingtoneAudio.pause();
+    rideRingtoneAudio.currentTime = 0;
+  } catch {
+    // ignore stop error
+  }
+}
+
+/** Toca a melodia personalizada de chamada de corrida nova (/sounds/new-ride-toq3.mp3) até repeatCount vezes (padrão: 3) */
+export function playNewRideSound(options?: { repeatCount?: number; loop?: boolean }): void {
+  try {
+    const targetPlays = Math.max(1, options?.repeatCount ?? 3);
+    const nowMs = Date.now();
+    const audio = getRideRingtoneElement();
+
+    if (audio) {
+      audio.muted = false;
+      audio.volume = 1.0;
+
+      // Evita reiniciar a melodia se acabou de iniciar (<800ms) no radar/modal simultaneamente
+      if (!audio.paused && nowMs - lastRingtoneStartMs < 800) {
+        return;
+      }
+
+      ringtonePlaybackSessionId += 1;
+      const sessionId = ringtonePlaybackSessionId;
+      remainingRingtonePlays = targetPlays - 1;
+      audio.loop = false;
+      audio.onended = () => {
+        if (sessionId !== ringtonePlaybackSessionId || remainingRingtonePlays <= 0) {
+          audio.onended = null;
+          audio.currentTime = 0;
+          return;
+        }
+        remainingRingtonePlays -= 1;
+        audio.currentTime = 0;
+        const replayPromise = audio.play();
+        if (replayPromise && typeof replayPromise.catch === 'function') {
+          replayPromise.catch(() => {
+            remainingRingtonePlays = 0;
+            audio.onended = null;
+          });
+        }
+      };
+
+      audio.currentTime = 0;
+      lastRingtoneStartMs = nowMs;
+
+      const playPromise = audio.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          remainingRingtonePlays = 0;
+          audio.onended = null;
+          playSyntheticFallbackTone();
+        });
+      }
+    } else {
+      playSyntheticFallbackTone();
+    }
 
     // Vibração tátil no celular se suportado
-    if ('vibrate' in navigator) {
-      navigator.vibrate([150, 80, 150, 80, 250]);
+    if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      navigator.vibrate([180, 90, 180, 90, 260]);
     }
   } catch (err) {
     console.warn('Erro ao reproduzir som de nova corrida:', err);
   }
+}
+
+if (typeof window !== 'undefined') {
+  const handleFirstGesture = () => {
+    unlockNewRideAudio();
+    if (audioUnlocked) {
+      window.removeEventListener('pointerdown', handleFirstGesture);
+      window.removeEventListener('keydown', handleFirstGesture);
+    }
+  };
+  window.addEventListener('pointerdown', handleFirstGesture, { passive: true });
+  window.addEventListener('keydown', handleFirstGesture, { passive: true });
 }
 
 /** Reproduz uma instrução de navegação por voz (Turn-by-Turn) usando a API nativa de síntese */
