@@ -1880,14 +1880,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   // ============================================================================
   return (
     <div className="animate-fade-in" style={{
-      minHeight: 'calc(100dvh - 58px)',
+      minHeight: '100dvh',
       backgroundColor: '#E8EDF3',
       display: 'flex',
       flexDirection: 'column',
       maxWidth: 480,
       margin: '0 auto',
       position: 'relative',
-      paddingBottom: 'calc(132px + env(safe-area-inset-bottom, 0px))'
+      paddingBottom: 'calc(154px + env(safe-area-inset-bottom, 0px))'
     }}>
       <AddressPickerModal
         isOpen={isPickingOrigin}
@@ -2118,15 +2118,15 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               width: 42,
               height: 42,
               borderRadius: '50%',
-              backgroundColor: 'rgba(255, 255, 255, 0.78)',
-              backdropFilter: 'blur(16px) saturate(180%)',
-              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+              backdropFilter: 'blur(24px) saturate(210%)',
+              WebkitBackdropFilter: 'blur(24px) saturate(210%)',
               border: '1px solid rgba(255, 255, 255, 0.72)',
-              color: '#111111',
+              color: '#0F172A',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 16px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
+              boxShadow: '0 6px 18px rgba(15, 23, 42, 0.16), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)',
               cursor: 'pointer',
               pointerEvents: 'auto'
             }}
@@ -2150,10 +2150,10 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             )}
 
             <div style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.78)',
-              backdropFilter: 'blur(16px) saturate(180%)',
-              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
-              color: '#111111',
+              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+              backdropFilter: 'blur(24px) saturate(210%)',
+              WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+              color: '#0F172A',
               border: '1px solid rgba(255, 255, 255, 0.72)',
               padding: '7px 12px',
               borderRadius: 999,
@@ -2162,7 +2162,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              boxShadow: '0 4px 16px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.8)'
+              boxShadow: '0 6px 18px rgba(15, 23, 42, 0.14), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)'
             }}>
               <span style={{
                 width: 8,
@@ -3247,24 +3247,20 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         )}
       </div>
 
-      {/* CTA Compacto e Elegante Fixo acima da barra inferior (Branco Glass) */}
+      {/* CTA Flutuante Elegante acima da barra inferior transparente */}
       <div style={{
         position: 'fixed',
-        bottom: 58,
+        bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))',
         left: '50%',
         transform: 'translateX(-50%)',
-        width: '100%',
-        maxWidth: 480,
-        backgroundColor: 'rgba(255, 255, 255, 0.78)',
-        backdropFilter: 'blur(18px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
-        borderTop: '1px solid rgba(15, 23, 42, 0.08)',
-        padding: '8px 16px 10px 16px',
+        width: 'calc(100% - 28px)',
+        maxWidth: 432,
+        padding: 0,
         zIndex: 45,
-        boxShadow: '0 -6px 22px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.75)',
         boxSizing: 'border-box',
         display: 'flex',
-        justifyContent: 'center'
+        justifyContent: 'center',
+        pointerEvents: 'none'
       }}>
         <button
           type="button"
@@ -3272,15 +3268,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           disabled={isSubmitting}
           style={{
             width: '100%',
-            maxWidth: 360,
-            height: 44,
+            height: 46,
             borderRadius: 999,
             backgroundColor:
               serviceMode === 'entregas'
                 ? '#15803D'
                 : '#0F172A',
             color: '#FFFFFF',
-            border: 'none',
+            border: '1px solid rgba(255, 255, 255, 0.18)',
             fontSize: '0.88rem',
             fontWeight: 800,
             display: 'flex',
@@ -3289,7 +3284,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             padding: '0 8px 0 18px',
             cursor: 'pointer',
             letterSpacing: '-0.01em',
-            boxShadow: '0 6px 16px rgba(15, 23, 42, 0.16)'
+            boxShadow: '0 10px 26px rgba(15, 23, 42, 0.24)',
+            pointerEvents: 'auto'
           }}
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>

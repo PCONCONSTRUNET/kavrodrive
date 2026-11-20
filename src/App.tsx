@@ -305,8 +305,8 @@ const ClientApp: React.FC<{
 
   return (
     <div className="app-container">
-      {/* Conteúdo da Aba Ativa */}
-      <div style={{ flex: 1, paddingBottom: 60 }}>
+      {/* Conteúdo da Aba Ativa (estende por trás da barra flutuante transparente) */}
+      <div style={{ flex: 1 }}>
         {currentTab === 'inicio' && (
           <ClientHomeScreen
             config={config}
@@ -374,42 +374,50 @@ const ClientApp: React.FC<{
         )}
       </div>
 
-      {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (Branca Glassmorphism Estilo Apple / Uber) */}
+      {/* BARRA DE NAVEGAÇÃO INFERIOR FLUTUANTE (Vidro Transparente Glassmorphism Estilo Apple / Uber) */}
       <nav style={{
         position: 'fixed',
-        bottom: 0,
+        bottom: 'calc(14px + env(safe-area-inset-bottom, 0px))',
         left: '50%',
         transform: 'translateX(-50%)',
-        width: '100%',
-        maxWidth: 480,
-        backgroundColor: 'rgba(255, 255, 255, 0.78)',
-        backdropFilter: 'blur(18px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
-        borderTop: '1px solid rgba(15, 23, 42, 0.08)',
-        padding: '7px 14px calc(9px + env(safe-area-inset-bottom, 0px)) 14px',
+        width: 'calc(100% - 28px)',
+        maxWidth: 432,
+        borderRadius: 28,
+        background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.44) 0%, rgba(255, 255, 255, 0.22) 100%)',
+        backdropFilter: 'blur(24px) saturate(210%)',
+        WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+        border: '1px solid rgba(255, 255, 255, 0.68)',
+        padding: '5px 7px',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-around',
+        justifyContent: 'space-between',
+        gap: 4,
         zIndex: 50,
-        boxShadow: '0 -6px 24px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.75)',
+        boxShadow: '0 14px 36px rgba(15, 23, 42, 0.18), 0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1.5px 1px rgba(255, 255, 255, 0.92), inset 0 -1px 1px rgba(255, 255, 255, 0.35)',
         boxSizing: 'border-box'
       }}>
         <button
           onClick={() => setCurrentTab('inicio')}
           style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: 2,
-            background: 'none',
+            backgroundColor: currentTab === 'inicio' ? 'rgba(255, 255, 255, 0.64)' : 'transparent',
+            borderRadius: 22,
+            padding: '6px 4px',
+            boxShadow: currentTab === 'inicio'
+              ? '0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9)'
+              : 'none',
             border: 'none',
-            color: currentTab === 'inicio' ? '#111111' : '#9CA3AF',
+            color: currentTab === 'inicio' ? '#0F172A' : '#334155',
             cursor: 'pointer',
-            transition: 'all 0.15s ease'
+            transition: 'all 0.18s ease'
           }}
         >
           <Home size={20} strokeWidth={currentTab === 'inicio' ? 2.5 : 2} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'inicio' ? 800 : 600 }}>
+          <span style={{ fontSize: '0.67rem', fontWeight: currentTab === 'inicio' ? 800 : 600 }}>
             Início
           </span>
         </button>
@@ -423,19 +431,25 @@ const ClientApp: React.FC<{
             setCurrentTab('agendar');
           }}
           style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: 2,
-            background: 'none',
+            backgroundColor: currentTab === 'agendar' ? 'rgba(255, 255, 255, 0.64)' : 'transparent',
+            borderRadius: 22,
+            padding: '6px 4px',
+            boxShadow: currentTab === 'agendar'
+              ? '0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9)'
+              : 'none',
             border: 'none',
-            color: currentTab === 'agendar' ? '#111111' : '#9CA3AF',
+            color: currentTab === 'agendar' ? '#0F172A' : '#334155',
             cursor: 'pointer',
-            transition: 'all 0.15s ease'
+            transition: 'all 0.18s ease'
           }}
         >
           <MapPin size={20} strokeWidth={currentTab === 'agendar' ? 2.5 : 2} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'agendar' ? 800 : 600 }}>
+          <span style={{ fontSize: '0.67rem', fontWeight: currentTab === 'agendar' ? 800 : 600 }}>
             Viagem
           </span>
         </button>
@@ -443,27 +457,33 @@ const ClientApp: React.FC<{
         <button
           onClick={() => setCurrentTab('minhas_corridas')}
           style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: 2,
-            background: 'none',
+            backgroundColor: currentTab === 'minhas_corridas' ? 'rgba(255, 255, 255, 0.64)' : 'transparent',
+            borderRadius: 22,
+            padding: '6px 4px',
+            boxShadow: currentTab === 'minhas_corridas'
+              ? '0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9)'
+              : 'none',
             border: 'none',
-            color: currentTab === 'minhas_corridas' ? '#111111' : '#9CA3AF',
+            color: currentTab === 'minhas_corridas' ? '#0F172A' : '#334155',
             position: 'relative',
             cursor: 'pointer',
-            transition: 'all 0.15s ease'
+            transition: 'all 0.18s ease'
           }}
         >
           <Clock size={20} strokeWidth={currentTab === 'minhas_corridas' ? 2.5 : 2} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'minhas_corridas' ? 800 : 600 }}>
+          <span style={{ fontSize: '0.67rem', fontWeight: currentTab === 'minhas_corridas' ? 800 : 600 }}>
             Atividade
           </span>
           {userRides.some(r => ACTIVE_PASSENGER_RIDE_STATUSES.includes(r.status)) && (
             <div style={{
               position: 'absolute',
-              top: 0,
-              right: 8,
+              top: 5,
+              right: '24%',
               width: 8,
               height: 8,
               borderRadius: '50%',
@@ -481,26 +501,32 @@ const ClientApp: React.FC<{
             }
           }}
           style={{
+            flex: 1,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             gap: 2,
-            background: 'none',
+            backgroundColor: currentTab === 'perfil' ? 'rgba(255, 255, 255, 0.64)' : 'transparent',
+            borderRadius: 22,
+            padding: '6px 4px',
+            boxShadow: currentTab === 'perfil'
+              ? '0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9)'
+              : 'none',
             border: 'none',
-            color: currentTab === 'perfil' ? '#111111' : '#9CA3AF',
+            color: currentTab === 'perfil' ? '#0F172A' : '#334155',
             cursor: 'pointer',
-            transition: 'all 0.15s ease'
+            transition: 'all 0.18s ease'
           }}
         >
           <User size={20} strokeWidth={currentTab === 'perfil' ? 2.5 : 2} />
-          <span style={{ fontSize: '0.68rem', fontWeight: currentTab === 'perfil' ? 800 : 600 }}>
+          <span style={{ fontSize: '0.67rem', fontWeight: currentTab === 'perfil' ? 800 : 600 }}>
             Conta
           </span>
         </button>
       </nav>
 
-      {/* Banner Inteligente de Instalação PWA (fixado acima da barra inferior) */}
-      <PwaInstallBanner customBottomOffset={58} />
+      {/* Banner Inteligente de Instalação PWA (fixado acima da barra flutuante) */}
+      <PwaInstallBanner customBottomOffset={92} />
 
       {/* Pop-up de notificações push do cliente (só com cadastro/telefone) */}
       <PushPermissionPrompt role="cliente" externalId={clientExternalId(currentUser?.phone)} delayMs={4000} />

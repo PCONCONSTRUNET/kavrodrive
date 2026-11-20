@@ -634,7 +634,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         />
       ) : (
         /* HUB PRINCIPAL DA ABA CONTA (ESTRUTURA OFICIAL UBER) */
-        <div className="animate-fade-in" style={{ padding: '18px 16px 96px 16px' }}>
+        <div className="animate-fade-in" style={{ padding: '18px 16px calc(112px + env(safe-area-inset-bottom, 0px)) 16px' }}>
           {/* 1. Cabeçalho Uber: Nome em destaque à esquerda + Avaliação/Verificado + Foto circular à direita */}
           <div
             style={{

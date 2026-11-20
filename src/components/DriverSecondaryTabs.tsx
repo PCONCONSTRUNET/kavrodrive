@@ -702,14 +702,16 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
         .kavro-drv-mobile-top {
           display: block;
           position: sticky;
-          top: 0;
+          top: 8px;
           z-index: 10;
-          background-color: rgba(255, 255, 255, 0.78);
-          backdrop-filter: blur(18px) saturate(180%);
-          -webkit-backdrop-filter: blur(18px) saturate(180%);
-          border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-          box-shadow: 0 4px 20px rgba(15, 23, 42, 0.05), inset 0 -1px 0 rgba(255, 255, 255, 0.7);
-          padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px 16px;
+          margin: 8px 12px 0 12px;
+          border-radius: 20px;
+          background: linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%);
+          backdrop-filter: blur(24px) saturate(210%);
+          -webkit-backdrop-filter: blur(24px) saturate(210%);
+          border: 1px solid rgba(255, 255, 255, 0.72);
+          box-shadow: 0 10px 28px rgba(15, 23, 42, 0.1), inset 0 1.5px 1px rgba(255, 255, 255, 0.9);
+          padding: 10px 14px;
         }
         .kavro-drv-content {
           flex: 1;

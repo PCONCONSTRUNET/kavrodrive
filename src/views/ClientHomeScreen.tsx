@@ -217,7 +217,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       style={{
         backgroundColor: '#FFFFFF',
         minHeight: '100%',
-        paddingBottom: 24,
+        paddingBottom: 'calc(104px + env(safe-area-inset-bottom, 0px))',
         width: '100%',
         maxWidth: '100%',
         overflowX: 'hidden'
@@ -238,22 +238,24 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         onSelect={handleSelectLocation}
       />
 
-      {/* ── HEADER ESTILO UBER + KAVRO (BRANCO GLASSMORPHISM) ──────────────── */}
+      {/* ── HEADER FLUTUANTE TRANSPARENTE (BRANCO GLASSMORPHISM) ──────────────── */}
       <div style={{
         position: 'sticky',
-        top: 0,
+        top: 'calc(8px + env(safe-area-inset-top, 0px))',
         zIndex: 30,
-        backgroundColor: 'rgba(255, 255, 255, 0.76)',
-        backdropFilter: 'blur(18px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
-        padding: '12px 16px',
+        background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+        backdropFilter: 'blur(24px) saturate(210%)',
+        WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+        margin: '8px 12px 0 12px',
+        padding: '10px 14px',
+        borderRadius: 22,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 8,
-        borderBottom: '1px solid rgba(15, 23, 42, 0.08)',
-        boxShadow: '0 4px 20px rgba(15, 23, 42, 0.05), inset 0 -1px 0 rgba(255, 255, 255, 0.65)',
-        width: '100%',
+        border: '1px solid rgba(255, 255, 255, 0.72)',
+        boxShadow: '0 10px 28px rgba(15, 23, 42, 0.1), inset 0 1.5px 1px rgba(255, 255, 255, 0.9), inset 0 -1px 1px rgba(255, 255, 255, 0.32)',
+        width: 'calc(100% - 24px)',
         boxSizing: 'border-box'
       }}>
         <img

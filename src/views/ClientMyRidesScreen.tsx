@@ -286,7 +286,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
   );
 
   return (
-    <div className="animate-fade-in" style={{ backgroundColor: '#FFFFFF', minHeight: '100%', padding: '18px 16px 90px 16px' }}>
+    <div className="animate-fade-in" style={{ backgroundColor: '#FFFFFF', minHeight: '100%', padding: '18px 16px calc(108px + env(safe-area-inset-bottom, 0px)) 16px' }}>
       {/* ── CABEÇALHO ESTILO UBER ("Atividade") ── */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
         <h1 style={{ margin: 0, fontSize: '1.85rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.03em' }}>

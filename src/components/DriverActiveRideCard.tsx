@@ -212,22 +212,22 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
          ===================================================================== */}
       <div style={{
         position: 'fixed',
-        bottom: 0,
+        bottom: 'calc(14px + env(safe-area-inset-bottom, 0px))',
         left: '50%',
         transform: 'translateX(-50%)',
-        width: '100%',
-        maxWidth: 480,
+        width: 'calc(100% - 24px)',
+        maxWidth: 448,
         zIndex: 70,
         pointerEvents: 'none',
         display: 'flex',
         flexDirection: 'column'
       }}>
-        {/* Controles Flutuantes em Linha Única rente ao painel inferior */}
+        {/* Controles Flutuantes em Linha Única acima do painel flutuante */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '0 12px 8px 12px',
+          padding: '0 4px 10px 4px',
           pointerEvents: 'none'
         }}>
           {/* Esquerda horizontal: Placa 30 LIMITE + Escudo Azul SOS */}
@@ -255,11 +255,11 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                   width: 36,
                   height: 36,
                   borderRadius: '50%',
-                  backgroundColor: 'rgba(255, 255, 255, 0.80)',
-                  backdropFilter: 'blur(16px) saturate(180%)',
-                  WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                  background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+                  backdropFilter: 'blur(24px) saturate(210%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(210%)',
                   border: '1px solid rgba(255, 255, 255, 0.72)',
-                  boxShadow: '0 3px 12px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
+                  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.9)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -282,15 +282,15 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                   width: 36,
                   height: 36,
                   borderRadius: '50%',
-                  backgroundColor: 'rgba(255, 255, 255, 0.80)',
-                  backdropFilter: 'blur(16px) saturate(180%)',
-                  WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                  background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+                  backdropFilter: 'blur(24px) saturate(210%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(210%)',
                   border: '1px solid rgba(255, 255, 255, 0.72)',
-                  boxShadow: '0 3px 12px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
+                  boxShadow: '0 4px 14px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.9)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#111111',
+                  color: '#0F172A',
                   cursor: 'pointer'
                 }}
               >
@@ -330,17 +330,17 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
         </div>
 
         {/* =====================================================================
-            3. DOCK INFERIOR ULTRA-COMPACTO ESTILO UBER (BRANCO GLASSMORPHISM)
+            3. DOCK INFERIOR FLUTUANTE TRANSPARENTE (BRANCO GLASSMORPHISM)
            ===================================================================== */}
         <div style={{
-          backgroundColor: 'rgba(255, 255, 255, 0.80)',
-          backdropFilter: 'blur(20px) saturate(180%)',
-          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-          borderTop: '1px solid rgba(255, 255, 255, 0.75)',
-          borderRadius: '18px 18px 0 0',
-          boxShadow: '0 -8px 26px rgba(15, 23, 42, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.85)',
-          padding: '7px 14px calc(10px + env(safe-area-inset-bottom, 0px)) 14px',
-          color: '#111111',
+          background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.44) 0%, rgba(255, 255, 255, 0.22) 100%)',
+          backdropFilter: 'blur(24px) saturate(210%)',
+          WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+          border: '1px solid rgba(255, 255, 255, 0.72)',
+          borderRadius: 24,
+          boxShadow: '0 14px 36px rgba(15, 23, 42, 0.2), 0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1.5px 1px rgba(255, 255, 255, 0.92), inset 0 -1px 1px rgba(255, 255, 255, 0.35)',
+          padding: '8px 14px 12px 14px',
+          color: '#0F172A',
           pointerEvents: 'auto'
         }}>
           {/* Handle cinza */}
