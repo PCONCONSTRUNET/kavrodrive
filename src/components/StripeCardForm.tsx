@@ -174,28 +174,28 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
   };
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+    <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14, flex: 1 }}>
       {/* Pré-visualização Personalizada do Cartão Kavro Drive */}
       <div style={{
         position: 'relative',
         overflow: 'hidden',
-        borderRadius: 16,
-        padding: '14px 16px',
-        background: 'linear-gradient(135deg, #0F172A 0%, #1E293B 68%, #14532D 145%)',
+        borderRadius: 18,
+        padding: '18px 18px',
+        background: 'linear-gradient(135deg, #0B1117 0%, #1E293B 68%, #14532D 145%)',
         color: '#FFFFFF',
-        boxShadow: '0 10px 24px rgba(15, 23, 42, 0.22)'
+        boxShadow: '0 12px 28px rgba(15, 23, 42, 0.2)'
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
           <img
             src="/logo-horizontal-white.png"
             alt="KAVRO DRIVE"
-            style={{ height: 18, objectFit: 'contain' }}
+            style={{ height: 20, objectFit: 'contain' }}
           />
           <span style={{
-            fontSize: '0.62rem',
+            fontSize: '0.64rem',
             fontWeight: 800,
             letterSpacing: '0.06em',
-            padding: '3px 9px',
+            padding: '3px 10px',
             borderRadius: 999,
             backgroundColor: 'rgba(255, 255, 255, 0.14)',
             color: '#E2E8F0',
@@ -205,16 +205,16 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
           <div style={{
-            width: 34,
-            height: 24,
-            borderRadius: 5,
+            width: 36,
+            height: 26,
+            borderRadius: 6,
             background: 'linear-gradient(135deg, #FDE68A 0%, #D97706 100%)',
             opacity: 0.92
           }} />
           <span style={{
-            fontSize: '0.78rem',
+            fontSize: '0.82rem',
             fontWeight: 900,
             letterSpacing: '0.08em',
             color: '#86EFAC'
@@ -224,12 +224,12 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
         </div>
 
         <div style={{
-          fontSize: '0.94rem',
+          fontSize: '1rem',
           fontWeight: 700,
-          letterSpacing: '0.14em',
+          letterSpacing: '0.16em',
           color: '#F8FAFC',
           fontFamily: 'monospace',
-          marginBottom: 8
+          marginBottom: 10
         }}>
           ••••  ••••  ••••  ••••
         </div>
@@ -390,12 +390,12 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
         </div>
       )}
 
-      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 2 }}>
+      <div style={{ display: 'flex', justifyContent: 'center', marginTop: 'auto', paddingTop: 10 }}>
         <button
           type="submit"
           disabled={saving || !stripe}
           style={{
-            padding: '10px 26px',
+            padding: '11px 28px',
             borderRadius: 999,
             border: 'none',
             backgroundColor: '#0F172A',
