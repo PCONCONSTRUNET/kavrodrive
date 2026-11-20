@@ -3872,4 +3872,42 @@ test('Regressao Postgres/Dinheiro: pixExpiresAt vazio nao quebra aceitar/status 
   const allTxForRide = (await finance.listPaymentTransactions()).filter(t => t.rideId === cashRideId);
   assert.equal(allTxForRide.length, 1, 'Nao deve duplicar transacao na finalizacao em dinheiro');
   assert.equal(allTxForRide[0].status, 'confirmado');
+
+  // Regressao Auditoria por motorista: filtro driverId em auditEngine retorna somente eventos do motorista alvo
+  await audit.recordAuditEvent({
+    category: 'saques_repasses',
+    actionKey: 'payout_approved_test',
+    title: 'Saque aprovado motorista alvo',
+    summary: 'Teste auditoria drv-1001',
+    severity: 'info',
+    actorRole: 'admin_master',
+    actorName: 'Master',
+    entityType: 'saque',
+    entityId: 'wd-drv1001-test',
+    relatedIds: { driverId: 'drv-1001', transactionId: createdTx.id }
+  });
+  await audit.recordAuditEvent({
+    category: 'saques_repasses',
+    actionKey: 'payout_approved_other',
+    title: 'Saque outro motorista',
+    summary: 'Teste auditoria drv-9999',
+    severity: 'info',
+    actorRole: 'admin_master',
+    actorName: 'Master',
+    entityType: 'saque',
+    entityId: 'wd-drv9999-test',
+    relatedIds: { driverId: 'drv-9999' }
+  });
+  const auditDrvRes = await audit.listAuditLogs({ driverId: 'drv-1001', limit: 50 });
+  assert.ok(Array.isArray(auditDrvRes.logs) && auditDrvRes.logs.length >= 1);
+  assert.ok(auditDrvRes.logs.some(l => l.entityId === 'wd-drv1001-test'));
+  assert.equal(auditDrvRes.logs.some(l => l.entityId === 'wd-drv9999-test'), false);
+  for (const logItem of auditDrvRes.logs) {
+    assert.ok(
+      logItem.actorId === 'drv-1001' ||
+        logItem.entityId === 'drv-1001' ||
+        logItem.relatedIds?.driverId === 'drv-1001',
+      'Audit log retornado para driverId deve pertencer ao motorista filtrado'
+    );
+  }
 });

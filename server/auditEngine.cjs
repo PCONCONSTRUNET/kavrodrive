@@ -467,6 +467,7 @@ async function listAuditLogs({
   category = '',
   search = '',
   severity = '',
+  driverId = '',
   limit = 100,
   offset = 0
 } = {}) {
@@ -475,6 +476,7 @@ async function listAuditLogs({
   const safeOffset = Math.max(0, Number(offset) || 0);
   const cleanCategory = String(category || '').trim();
   const cleanSeverity = String(severity || '').trim();
+  const cleanDriverId = String(driverId || '').trim();
   const cleanSearch = String(search || '').trim().toLowerCase();
 
   if (!db.pool) {
@@ -489,6 +491,13 @@ async function listAuditLogs({
     const filtered = all.filter((item) => {
       if (cleanCategory && cleanCategory !== 'todas' && item.category !== cleanCategory) return false;
       if (cleanSeverity && cleanSeverity !== 'todas' && item.severity !== cleanSeverity) return false;
+      if (cleanDriverId) {
+        const matchesDriver =
+          String(item.actorId || '') === cleanDriverId ||
+          String(item.entityId || '') === cleanDriverId ||
+          String(item.relatedIds?.driverId || '') === cleanDriverId;
+        if (!matchesDriver) return false;
+      }
       if (cleanSearch) {
         const haystack = [
           item.auditCode,
@@ -528,6 +537,11 @@ async function listAuditLogs({
   if (cleanSeverity && cleanSeverity !== 'todas') {
     params.push(cleanSeverity);
     whereParts.push(`severity = $${params.length}`);
+  }
+  if (cleanDriverId) {
+    params.push(cleanDriverId);
+    const d = `$${params.length}`;
+    whereParts.push(`(actor_id = ${d} OR entity_id = ${d} OR COALESCE(related_ids->>'driverId', '') = ${d})`);
   }
   if (cleanSearch) {
     params.push(`%${cleanSearch}%`);

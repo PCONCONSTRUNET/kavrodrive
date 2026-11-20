@@ -1684,6 +1684,7 @@ export const StorageService = {
     category?: string;
     search?: string;
     severity?: string;
+    driverId?: string;
     limit?: number;
     offset?: number;
   } = {}): Promise<AuditLogsResponse & { error?: string }> {
@@ -1692,6 +1693,7 @@ export const StorageService = {
       if (params.category) qs.set('category', params.category);
       if (params.search) qs.set('search', params.search);
       if (params.severity) qs.set('severity', params.severity);
+      if (params.driverId) qs.set('driverId', params.driverId);
       if (params.limit) qs.set('limit', String(params.limit));
       if (params.offset) qs.set('offset', String(params.offset));
       qs.set('_t', String(Date.now()));

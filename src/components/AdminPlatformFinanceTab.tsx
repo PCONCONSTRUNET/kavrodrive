@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   RefreshCw, Lock, Unlock, Search, Check, X, Eye, Star, Phone, Car, User, Wallet,
-  ShieldCheck, ShieldAlert, Sparkles, AlertTriangle, FileText, Download
+  ShieldCheck, ShieldAlert, Sparkles, AlertTriangle, FileText, Download, Copy, CheckCircle2, Database, KeyRound
 } from 'lucide-react';
 import {
+  AuditLogRecord,
   DriverProfile,
   DriverVehicle,
   DriverWalletSummary,
@@ -33,7 +34,9 @@ import { computeDriverAutoScore } from '../utils/scoringEngine';
 interface AdminPlatformFinanceTabProps {
   config: SystemConfig;
   rides?: Ride[];
-  initialSection?: 'visao_geral' | 'regras' | 'motoristas' | 'saques' | 'livro_razao';
+  initialSection?: 'visao_geral' | 'regras' | 'motoristas' | 'saques' | 'livro_razao' | 'corridas_split' | 'repasses_central';
+  repassesDefaultTab?: 'saques' | 'motoristas' | 'corridas_split' | 'livro_razao';
+  onNavigatePayoutsSplit?: (subTab: 'saques' | 'motoristas' | 'corridas_split' | 'livro_razao') => void;
   onConfigUpdated: (next: SystemConfig) => void;
 }
 
@@ -59,15 +62,23 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   config,
   rides = [],
   initialSection = 'visao_geral',
+  repassesDefaultTab = 'saques',
+  onNavigatePayoutsSplit,
   onConfigUpdated
 }) => {
   const isFleetStandaloneView = initialSection === 'motoristas';
-  const [subTab, setSubTab] = useState<'visao_geral' | 'corridas_split' | 'regras' | 'motoristas' | 'saques' | 'livro_razao'>(initialSection);
+  const isPayoutsSplitView = initialSection === 'repasses_central';
+  const [subTab, setSubTab] = useState<'visao_geral' | 'corridas_split' | 'regras' | 'motoristas' | 'saques' | 'livro_razao'>(
+    initialSection === 'repasses_central' ? repassesDefaultTab : initialSection
+  );
   const [expenses, setExpenses] = useState<Expense[]>(() => StorageService.getExpenses());
   const [periodFilter, setPeriodFilter] = useState<'diario' | 'semanal' | 'mensal' | 'todos'>('todos');
   const [methodFilter, setMethodFilter] = useState<string>('todos');
   const [statusFilter, setStatusFilter] = useState<string>('todos');
   const [searchQuery, setSearchQuery] = useState('');
+  const [withdrawalSearch, setWithdrawalSearch] = useState('');
+  const [withdrawalStatusFilter, setWithdrawalStatusFilter] = useState<'todos' | 'solicitado' | 'pago' | 'rejeitado'>('todos');
+  const [ledgerSearch, setLedgerSearch] = useState('');
   const [driverSearch, setDriverSearch] = useState('');
   const [driverStatusFilter, setDriverStatusFilter] = useState<'todos' | 'em_analise' | 'correcao_solicitada' | 'pendente_aprovacao' | 'aprovado' | 'rejeitado' | 'inadimplentes'>('todos');
   const [reviewingKycDriver, setReviewingKycDriver] = useState<DriverProfile | null>(null);
@@ -77,13 +88,19 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     vehicle: DriverVehicle;
   } | null>(null);
 
-  // Estado do Modal de Histórico Completo (Avaliação, Corridas, Saques, Extrato e Cadastro)
+  // Estado do Modal de Histórico Completo (Avaliação, Corridas, Saques, Extrato, Cadastro e Auditoria)
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
-  const [driverModalTab, setDriverModalTab] = useState<'resumo' | 'corridas' | 'saques' | 'extrato'>('resumo');
+  const [driverModalTab, setDriverModalTab] = useState<'resumo' | 'corridas' | 'saques' | 'extrato' | 'auditoria'>('resumo');
+  const [driverAuditLogs, setDriverAuditLogs] = useState<AuditLogRecord[]>([]);
+  const [driverAuditLoading, setDriverAuditLoading] = useState(false);
+  const [driverAuditError, setDriverAuditError] = useState<string | null>(null);
+  const [driverAuditSeverityFilter, setDriverAuditSeverityFilter] = useState<string>('todas');
+  const [driverAuditVerifyStates, setDriverAuditVerifyStates] = useState<Record<number, { loading: boolean; ok?: boolean; msg?: string }>>({});
+  const [copiedIdKey, setCopiedIdKey] = useState<string | null>(null);
 
   useEffect(() => {
-    setSubTab(initialSection);
-  }, [initialSection]);
+    setSubTab(initialSection === 'repasses_central' ? repassesDefaultTab : initialSection);
+  }, [initialSection, repassesDefaultTab]);
 
   const [drivers, setDrivers] = useState<DriverProfile[]>([]);
   const [overview, setOverview] = useState<{
@@ -145,6 +162,123 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     window.addEventListener('up_database_synced', handleDbSync);
     return () => window.removeEventListener('up_database_synced', handleDbSync);
   }, []);
+
+  const handleCopyId = (key: string, value?: string | null) => {
+    const str = String(value || '').trim();
+    if (!str) return;
+    navigator.clipboard?.writeText(str).catch(() => {});
+    setCopiedIdKey(key);
+    window.setTimeout(() => setCopiedIdKey(prev => (prev === key ? null : prev)), 1500);
+  };
+
+  const renderIdChip = (keyPrefix: string, label: string, value?: string | null) => {
+    const cleanVal = String(value || '').trim();
+    if (!cleanVal) return null;
+    const fullKey = `${keyPrefix}:${label}:${cleanVal}`;
+    const copied = copiedIdKey === fullKey;
+    return (
+      <button
+        key={fullKey}
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleCopyId(fullKey, cleanVal);
+        }}
+        title={`Clique para copiar ${label}: ${cleanVal}`}
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '2px 6px',
+          borderRadius: 5,
+          border: copied ? '1px solid #86EFAC' : '1px solid #E2E8F0',
+          backgroundColor: copied ? '#F0FDF4' : '#F8FAFC',
+          color: copied ? '#15803D' : '#334155',
+          fontSize: '0.65rem',
+          fontFamily: 'monospace',
+          cursor: 'pointer',
+          maxWidth: 210,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap'
+        }}
+      >
+        <span style={{ fontWeight: 700, color: copied ? '#15803D' : '#64748B', fontFamily: 'sans-serif' }}>{label}:</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{cleanVal}</span>
+        {copied ? <Check size={10} /> : <Copy size={10} />}
+      </button>
+    );
+  };
+
+  const openDriverDossier = (
+    driverId?: string | null,
+    driverName?: string | null,
+    tab: 'resumo' | 'corridas' | 'saques' | 'extrato' | 'auditoria' = 'resumo'
+  ) => {
+    const cleanId = String(driverId || '').trim();
+    const cleanName = String(driverName || '').trim().toLowerCase();
+    let target =
+      (cleanId && cleanId !== 'drv-default' ? drivers.find(d => d.id === cleanId) : undefined) ||
+      (cleanName ? drivers.find(d => d.name.trim().toLowerCase() === cleanName) : undefined) ||
+      (cleanId === 'drv-default' ? drivers[0] : undefined);
+    if (!target) {
+      window.alert('Perfil deste motorista não localizado na base atual.');
+      return;
+    }
+    setDriverModalTab(tab);
+    setSelectedDriverId(target.id);
+  };
+
+  const loadDriverAudit = useCallback(async (driverId: string) => {
+    if (!driverId) return;
+    setDriverAuditLoading(true);
+    setDriverAuditError(null);
+    const res = await StorageService.fetchAdminAuditLogs({ driverId, limit: 150 });
+    setDriverAuditLoading(false);
+    if (!res.ok) {
+      setDriverAuditError(res.error || 'Não foi possível consultar a auditoria deste motorista.');
+      setDriverAuditLogs([]);
+      return;
+    }
+    setDriverAuditLogs(Array.isArray(res.logs) ? res.logs : []);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedDriverId) {
+      setDriverAuditLogs([]);
+      setDriverAuditError(null);
+      setDriverAuditSeverityFilter('todas');
+      return;
+    }
+    void loadDriverAudit(selectedDriverId);
+    const onRtAudit = () => {
+      void loadDriverAudit(selectedDriverId);
+    };
+    window.addEventListener('up_realtime_audit', onRtAudit);
+    return () => window.removeEventListener('up_realtime_audit', onRtAudit);
+  }, [selectedDriverId, loadDriverAudit]);
+
+  const handleVerifyDriverAuditRecord = async (rec: AuditLogRecord) => {
+    setDriverAuditVerifyStates(prev => ({ ...prev, [rec.id]: { loading: true } }));
+    const res = await StorageService.verifyAdminAuditRecord(rec.auditCode);
+    if (!res.ok) {
+      setDriverAuditVerifyStates(prev => ({
+        ...prev,
+        [rec.id]: { loading: false, ok: false, msg: res.error || 'Falha ao verificar registro no banco.' }
+      }));
+      return;
+    }
+    setDriverAuditVerifyStates(prev => ({
+      ...prev,
+      [rec.id]: {
+        loading: false,
+        ok: Boolean(res.integrityOk),
+        msg: res.integrityOk
+          ? `Integridade confirmada no PostgreSQL (${rec.auditCode} • ID #${rec.id})`
+          : 'Divergência de assinatura detectada no registro.'
+      }
+    }));
+  };
 
   const handleDriverApproval = async (driverId: string, approvalStatus: DriverProfile['approvalStatus']) => {
     await StorageService.adminUpdateDriverStatus(driverId, { approvalStatus });
@@ -294,17 +428,44 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     if (statusFilter !== 'todos' && tx.status !== statusFilter) return false;
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
+      const matchTxId = (tx.id || '').toLowerCase().includes(q);
       const matchRide = (tx.rideCode || tx.rideId || '').toLowerCase().includes(q);
       const matchClient = (tx.clientName || '').toLowerCase().includes(q);
-      const matchDriver = (tx.driverName || '').toLowerCase().includes(q);
+      const matchDriver = (tx.driverName || '').toLowerCase().includes(q) || (tx.driverId || '').toLowerCase().includes(q);
       const matchGw = (tx.gatewayTxId || '').toLowerCase().includes(q);
-      if (!matchRide && !matchClient && !matchDriver && !matchGw) return false;
+      if (!matchTxId && !matchRide && !matchClient && !matchDriver && !matchGw) return false;
     }
     return true;
   });
 
   const periodExpenses = filterByPeriod(expenses);
-  const filteredLedger = filterByPeriod(overview?.ledger || []);
+  const periodLedger = filterByPeriod(overview?.ledger || []);
+  const filteredLedger = periodLedger.filter(entry => {
+    if (!ledgerSearch.trim()) return true;
+    const q = ledgerSearch.toLowerCase();
+    return (
+      (entry.id || '').toLowerCase().includes(q) ||
+      (entry.idempotencyKey || '').toLowerCase().includes(q) ||
+      (entry.rideCode || entry.rideId || '').toLowerCase().includes(q) ||
+      (entry.driverName || '').toLowerCase().includes(q) ||
+      (entry.driverId || '').toLowerCase().includes(q) ||
+      (entry.description || '').toLowerCase().includes(q)
+    );
+  });
+
+  const filteredWithdrawals = (overview?.withdrawals || []).filter(w => {
+    if (withdrawalStatusFilter !== 'todos' && w.status !== withdrawalStatusFilter) return false;
+    if (withdrawalSearch.trim()) {
+      const q = withdrawalSearch.toLowerCase();
+      const matchId = (w.id || '').toLowerCase().includes(q);
+      const matchPayoutTx = (w.payoutProviderTxId || '').toLowerCase().includes(q);
+      const matchLedger = (w.ledgerEntryId || '').toLowerCase().includes(q);
+      const matchDrv = (w.driverName || '').toLowerCase().includes(q) || (w.driverId || '').toLowerCase().includes(q);
+      const matchPix = (w.pixKey || '').toLowerCase().includes(q);
+      if (!matchId && !matchPayoutTx && !matchLedger && !matchDrv && !matchPix) return false;
+    }
+    return true;
+  });
 
   const periodMetrics: TreasuryMetrics = React.useMemo(() => {
     const valid = periodTransactions.filter(t => t.status !== 'reembolsado' && t.status !== 'falhou');
@@ -349,7 +510,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const pendingWithdrawals = pendingWdList.reduce((acc, w) => acc + Number(w.netPayoutAmount ?? w.amount ?? 0), 0);
     const withdrawalFeeRevenue = paidWdList.reduce((acc, w) => acc + Number(w.feeAmount || 0), 0);
 
-    const debtSettlementsReceived = filteredLedger
+    const debtSettlementsReceived = periodLedger
       .filter(e => e.entryType === 'debt_pix_settlement')
       .reduce((acc, e) => acc + Number(e.grossAmount || 0), 0);
 
@@ -415,11 +576,14 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   const handleExportFinanceCsv = () => {
     const lines = [
       ['Resumo Tesouraria', periodFilter, 'Saldo Caixa', periodMetrics.cashBalance.toFixed(2), 'Lucro Bruto', periodMetrics.grossProfit.toFixed(2), 'Lucro Liquido', periodMetrics.netProfit.toFixed(2), 'Repassado PIX', periodMetrics.paidWithdrawals.toFixed(2)].join(';'),
-      ['Corrida', 'Data', 'Passageiro', 'Motorista', 'Metodo', 'Bruto', 'Taxa %', 'Comissao Plataforma', 'Liquido Motorista', 'Status'].join(';'),
+      ['ID Transacao', 'ID Gateway / TXID', 'Corrida', 'Data', 'Passageiro', 'ID Motorista', 'Motorista', 'Metodo', 'Bruto', 'Taxa %', 'Comissao Plataforma', 'Liquido Motorista', 'Status'].join(';'),
       ...filteredTransactions.map(tx => [
+        tx.id,
+        tx.gatewayTxId || '',
         tx.rideCode || tx.rideId,
         new Date(tx.createdAt).toLocaleString('pt-BR'),
         (tx.clientName || 'Passageiro').replace(/;/g, ','),
+        tx.driverId || '',
         (tx.driverName || 'Motorista').replace(/;/g, ','),
         renderMethodLabel(tx.method),
         Number(tx.finalAmount || 0).toFixed(2),
@@ -449,10 +613,13 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     if (driverSearch.trim()) {
       const q = driverSearch.toLowerCase();
       return (
+        (drv.id || '').toLowerCase().includes(q) ||
         (drv.name || '').toLowerCase().includes(q) ||
         (drv.phone || '').toLowerCase().includes(q) ||
         (drv.vehiclePlate || '').toLowerCase().includes(q) ||
-        (drv.document || '').toLowerCase().includes(q)
+        (drv.document || '').toLowerCase().includes(q) ||
+        (drv.pixKey || '').toLowerCase().includes(q) ||
+        (drv.efiAccountId || '').toLowerCase().includes(q)
       );
     }
     return true;
@@ -666,8 +833,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     {autoScore.score} pts • {autoScore.level}
                   </span>
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 3 }}>
-                  CPF: {formatDocument(selectedDriver.document) || '—'} • CNH: {formatCNHPunctuated(selectedDriver.cnh) || '—'} • {selectedDriver.vehicleBrand} {selectedDriver.vehicleModel} ({formatPlateDisplay(selectedDriver.vehiclePlate) || '—'})
+                <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 3, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                  <span>CPF: {formatDocument(selectedDriver.document) || '—'} • CNH: {formatCNHPunctuated(selectedDriver.cnh) || '—'} • {selectedDriver.vehicleBrand} {selectedDriver.vehicleModel} ({formatPlateDisplay(selectedDriver.vehiclePlate) || '—'})</span>
+                  {renderIdChip('modal-drv', 'ID Motorista', selectedDriver.id)}
+                  {selectedDriver.efiAccountId ? renderIdChip('modal-drv-efi', 'Efí', selectedDriver.efiAccountId) : null}
                 </div>
               </div>
             </div>
@@ -732,7 +901,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
               { id: 'resumo', label: 'Cadastro, Avaliação & Carteira' },
               { id: 'corridas', label: `Histórico de Corridas (${driverRides.length})` },
               { id: 'saques', label: `Saques & Repasses PIX (${driverWithdrawals.length})` },
-              { id: 'extrato', label: `Extrato / Livro-Razão (${driverLedger.length})` }
+              { id: 'extrato', label: `Extrato / Livro-Razão (${driverLedger.length})` },
+              { id: 'auditoria', label: `Auditoria (${driverAuditLogs.length})` }
             ].map(tab => {
               const active = driverModalTab === tab.id;
               return (
@@ -886,6 +1056,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       <div>
                         <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Tipo de Chave</div>
                         <div style={{ fontWeight: 600, color: '#0F172A', textTransform: 'uppercase' }}>{selectedDriver.pixType || 'CPF/Telefone'}</div>
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <div style={{ fontSize: '0.68rem', color: '#64748B' }}>Conta Digital Efí Bank (Split Automático)</div>
+                        <div style={{ fontWeight: 600, color: selectedDriver.efiAccountId ? '#15803D' : '#64748B', fontFamily: 'monospace' }}>
+                          {selectedDriver.efiAccountId ? `Identificador #${selectedDriver.efiAccountId}` : 'Não vinculada (recebe por repasse PIX)'}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1359,7 +1535,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
                       <thead>
                         <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.68rem', textTransform: 'uppercase' }}>
-                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>Código / Data</th>
+                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>Código / IDs Transação</th>
                           <th style={{ padding: '10px 12px', fontWeight: 600 }}>Passageiro</th>
                           <th style={{ padding: '10px 12px', fontWeight: 600 }}>Trajeto</th>
                           <th style={{ padding: '10px 12px', fontWeight: 600 }}>Método</th>
@@ -1372,6 +1548,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       </thead>
                       <tbody>
                         {driverRides.map(r => {
+                          const linkedTx = driverTransactions.find(t => t.rideId === r.id) || mergedTransactions.find(t => t.rideId === r.id);
                           const gross = Number(r.totalPrice || 0);
                           const fee = Number(r.commissionAmount ?? ((gross * currentCommPct) / 100));
                           const net = Number(r.driverNetAmount ?? (gross - fee));
@@ -1382,7 +1559,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                             <tr key={r.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                               <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }}>
                                 <div style={{ fontWeight: 700, color: '#0F172A' }}>{r.rideCode || r.id}</div>
-                                <div style={{ fontSize: '0.68rem', color: '#64748B' }}>{r.date} • {r.time}</div>
+                                <div style={{ fontSize: '0.68rem', color: '#64748B', marginBottom: 4 }}>{r.date} • {r.time}</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                  {renderIdChip(`drv-r-${r.id}`, 'Tx', linkedTx?.id || r.paymentTxId)}
+                                  {linkedTx?.gatewayTxId ? renderIdChip(`drv-gw-${r.id}`, 'GW', linkedTx.gatewayTxId) : null}
+                                </div>
                               </td>
                               <td style={{ padding: '10px 12px' }}>
                                 <div style={{ fontWeight: 600, color: '#0F172A' }}>{r.clientName}</div>
@@ -1458,10 +1639,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
                         <thead>
                           <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.68rem', textTransform: 'uppercase' }}>
-                            <th style={{ padding: '10px 14px', fontWeight: 600 }}>Data Solicitação</th>
+                            <th style={{ padding: '10px 14px', fontWeight: 600 }}>ID Saque &amp; Data</th>
                             <th style={{ padding: '10px 12px', fontWeight: 600 }}>Chave PIX Destino</th>
                             <th style={{ padding: '10px 12px', fontWeight: 600 }}>Valor</th>
-                            <th style={{ padding: '10px 12px', fontWeight: 600 }}>Status</th>
+                            <th style={{ padding: '10px 12px', fontWeight: 600 }}>Status / ID Repasse</th>
                             <th style={{ padding: '10px 12px', fontWeight: 600 }}>Observações</th>
                             <th style={{ padding: '10px 14px', fontWeight: 600, textAlign: 'right' }}>Ações</th>
                           </tr>
@@ -1470,13 +1651,22 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           {driverWithdrawals.map(w => (
                             <tr key={w.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                               <td style={{ padding: '10px 14px', color: '#334155', whiteSpace: 'nowrap' }}>
-                                {new Date(w.createdAt).toLocaleString('pt-BR')}
+                                <div style={{ marginBottom: 4 }}>{new Date(w.createdAt).toLocaleString('pt-BR')}</div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                  {renderIdChip(`drv-wd-${w.id}`, 'Saque', w.id)}
+                                  {w.ledgerEntryId ? renderIdChip(`drv-wdl-${w.id}`, 'Ledger', w.ledgerEntryId) : null}
+                                </div>
                               </td>
                               <td style={{ padding: '10px 12px', fontFamily: 'monospace', color: '#0F172A' }}>
                                 {w.pixType?.toUpperCase()}: {w.pixKey}
                               </td>
                               <td style={{ padding: '10px 12px', fontWeight: 700, color: '#0F172A' }}>
                                 {formatBRL(w.amount)}
+                                {Number(w.feeAmount || 0) > 0 && (
+                                  <div style={{ fontSize: '0.65rem', color: '#64748B', fontWeight: 600 }}>
+                                    Líq: {formatBRL(w.netPayoutAmount ?? (w.amount - (w.feeAmount || 0)))}
+                                  </div>
+                                )}
                               </td>
                               <td style={{ padding: '10px 12px' }}>
                                 <span style={{
@@ -1489,9 +1679,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                 }}>
                                   {w.status.toUpperCase()}
                                 </span>
-                                {w.payoutStatus === 'processado_automaticamente' && (
-                                  <div style={{ fontSize: '0.64rem', color: '#15803D', marginTop: 3, fontWeight: 600 }}>
-                                    PIX Automático {w.payoutProviderTxId ? `(${w.payoutProviderTxId})` : ''}
+                                {w.payoutProviderTxId && (
+                                  <div style={{ marginTop: 4 }}>
+                                    {renderIdChip(`drv-wpt-${w.id}`, w.payoutProvider || 'PIX TX', w.payoutProviderTxId)}
                                   </div>
                                 )}
                               </td>
@@ -1558,7 +1748,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
                       <thead>
                         <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.68rem', textTransform: 'uppercase' }}>
-                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>Data / Hora</th>
+                          <th style={{ padding: '10px 14px', fontWeight: 600 }}>ID Ledger &amp; Data</th>
                           <th style={{ padding: '10px 12px', fontWeight: 600 }}>Tipo</th>
                           <th style={{ padding: '10px 12px', fontWeight: 600 }}>Corrida</th>
                           <th style={{ padding: '10px 12px', fontWeight: 600 }}>Bruto</th>
@@ -1571,7 +1761,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         {driverLedger.map(entry => (
                           <tr key={entry.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                             <td style={{ padding: '10px 14px', color: '#64748B', whiteSpace: 'nowrap' }}>
-                              {new Date(entry.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              <div style={{ marginBottom: 4 }}>
+                                {new Date(entry.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                              </div>
+                              {renderIdChip(`drv-ld-${entry.id}`, 'Ledger', entry.id)}
                             </td>
                             <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0F172A' }}>{entry.entryType}</td>
                             <td style={{ padding: '10px 12px', color: '#334155' }}>{entry.rideCode || entry.rideId || '—'}</td>
@@ -1593,6 +1786,242 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                 )}
               </div>
             )}
+
+            {/* ABA 5: AUDITORIA COMPLETA DO MOTORISTA (POSTGRESQL + KYC + CRLV) */}
+            {driverModalTab === 'auditoria' && (() => {
+              const filteredAudit = driverAuditLogs.filter(rec =>
+                driverAuditSeverityFilter === 'todas' ? true : rec.severity === driverAuditSeverityFilter
+              );
+              const kycAuditLogs = Array.isArray(selectedDriver.kyc?.auditLogs) ? selectedDriver.kyc!.auditLogs : [];
+              const vehicleAuditEntries = (selectedDriver.vehicles || []).flatMap(v =>
+                (v.auditLogs || []).map(h => ({ ...h, plate: v.plate, vehicleLabel: `${v.brand} ${v.model}` }))
+              );
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  {/* Barra Superior da Auditoria do Motorista */}
+                  <div style={{
+                    padding: '12px 16px',
+                    borderRadius: 10,
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <Database size={16} color="#15803D" />
+                      <div>
+                        <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
+                          Trilha de Auditoria Imutável de {selectedDriver.name}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
+                          Registros do banco para saques PIX, split de corridas, aprovações KYC/CRLV e bloqueios
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <select
+                        value={driverAuditSeverityFilter}
+                        onChange={(e) => setDriverAuditSeverityFilter(e.target.value)}
+                        style={{ height: 32, padding: '0 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.74rem', backgroundColor: '#FFFFFF', color: '#0F172A' }}
+                      >
+                        <option value="todas">Todas as Severidades</option>
+                        <option value="info">Registro Normal</option>
+                        <option value="atencao">Atenção</option>
+                        <option value="critico">Alto Impacto</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => void loadDriverAudit(selectedDriver.id)}
+                        style={{
+                          height: 32,
+                          padding: '0 12px',
+                          borderRadius: 6,
+                          border: '1px solid #CBD5E1',
+                          backgroundColor: '#FFFFFF',
+                          color: '#0F172A',
+                          fontSize: '0.74rem',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5
+                        }}
+                      >
+                        <RefreshCw size={12} className={driverAuditLoading ? 'animate-spin' : ''} />
+                        <span>Atualizar</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {driverAuditError && (
+                    <div style={{ padding: '10px 14px', borderRadius: 8, backgroundColor: '#FEF2F2', border: '1px solid #FECACA', color: '#B91C1C', fontSize: '0.78rem', fontWeight: 600 }}>
+                      {driverAuditError}
+                    </div>
+                  )}
+
+                  {driverAuditLoading && driverAuditLogs.length === 0 ? (
+                    <div style={{ padding: 28, textAlign: 'center', color: '#64748B', fontSize: '0.82rem', border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                      Carregando registros de auditoria deste motorista no banco...
+                    </div>
+                  ) : filteredAudit.length === 0 ? (
+                    <div style={{ padding: 28, textAlign: 'center', color: '#64748B', fontSize: '0.8rem', border: '1px solid #E2E8F0', borderRadius: 8 }}>
+                      Nenhum evento encontrado no log imutável para este filtro.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {filteredAudit.map(rec => {
+                        const sevStyle =
+                          rec.severity === 'critico'
+                            ? { bg: '#FEF2F2', border: '#FECACA', text: '#DC2626', label: 'Alto Impacto' }
+                            : rec.severity === 'atencao'
+                            ? { bg: '#FFFBEB', border: '#FDE68A', text: '#B45309', label: 'Atenção' }
+                            : { bg: '#F0FDF4', border: '#BBF7D0', text: '#15803D', label: 'Normal' };
+                        const verifyState = driverAuditVerifyStates[rec.id];
+                        const relEntries = Object.entries(rec.relatedIds || {}).filter(([, v]) => v !== null && v !== undefined && v !== '');
+
+                        return (
+                          <div
+                            key={`${rec.id}-${rec.auditUuid}`}
+                            style={{
+                              borderRadius: 10,
+                              border: '1px solid #E2E8F0',
+                              backgroundColor: '#FFFFFF',
+                              padding: '12px 14px',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 8
+                            }}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                {renderIdChip(`aud-code-${rec.id}`, 'Auditoria', rec.auditCode)}
+                                <span style={{
+                                  padding: '2px 7px',
+                                  borderRadius: 999,
+                                  fontSize: '0.66rem',
+                                  fontWeight: 700,
+                                  backgroundColor: sevStyle.bg,
+                                  border: `1px solid ${sevStyle.border}`,
+                                  color: sevStyle.text
+                                }}>
+                                  {sevStyle.label}
+                                </span>
+                                <span style={{
+                                  padding: '2px 7px',
+                                  borderRadius: 999,
+                                  fontSize: '0.66rem',
+                                  fontWeight: 600,
+                                  backgroundColor: '#F1F5F9',
+                                  color: '#334155'
+                                }}>
+                                  {rec.categoryLabel || rec.category}
+                                </span>
+                              </div>
+                              <div style={{ fontSize: '0.7rem', color: '#64748B' }}>
+                                {new Date(rec.createdAt).toLocaleString('pt-BR')} • Banco #{rec.id}
+                              </div>
+                            </div>
+
+                            <div>
+                              <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>{rec.title}</div>
+                              <div style={{ fontSize: '0.76rem', color: '#475569', marginTop: 2 }}>{rec.summary}</div>
+                            </div>
+
+                            {relEntries.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                                {relEntries.map(([rk, rv]) => renderIdChip(`aud-rel-${rec.id}-${rk}`, rk, String(rv)))}
+                              </div>
+                            )}
+
+                            {Array.isArray(rec.changes) && rec.changes.length > 0 && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, backgroundColor: '#F8FAFC', padding: '8px 10px', borderRadius: 6, border: '1px solid #E2E8F0', fontSize: '0.72rem' }}>
+                                {rec.changes.map((c, ci) => (
+                                  <div key={ci} style={{ color: '#334155' }}>
+                                    <strong>{c.label}:</strong>{' '}
+                                    <span style={{ color: '#DC2626', textDecoration: 'line-through' }}>{c.before || '—'}</span>{' '}
+                                    → <span style={{ color: '#15803D', fontWeight: 700 }}>{c.after || '—'}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingTop: 6, borderTop: '1px solid #F1F5F9', fontSize: '0.68rem', color: '#64748B' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                                <span>Responsável: <strong style={{ color: '#334155' }}>{rec.actorName}</strong></span>
+                                {rec.ipAddress && <span>IP: {rec.ipAddress}</span>}
+                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'monospace' }}>
+                                  <KeyRound size={11} /> SHA: {rec.checksum.slice(0, 14)}...
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => void handleVerifyDriverAuditRecord(rec)}
+                                disabled={verifyState?.loading}
+                                style={{
+                                  padding: '4px 10px',
+                                  borderRadius: 6,
+                                  border: verifyState?.ok ? '1px solid #86EFAC' : '1px solid #CBD5E1',
+                                  backgroundColor: verifyState?.ok ? '#F0FDF4' : '#FFFFFF',
+                                  color: verifyState?.ok ? '#15803D' : '#0F172A',
+                                  fontSize: '0.69rem',
+                                  fontWeight: 700,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4
+                                }}
+                              >
+                                <CheckCircle2 size={12} />
+                                <span>
+                                  {verifyState?.loading
+                                    ? 'Verificando...'
+                                    : verifyState?.msg
+                                      ? verifyState.msg
+                                      : 'Verificar Integridade'}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Logs Locais de Análise Documental (KYC & CRLV) vinculados ao perfil */}
+                  {(kycAuditLogs.length > 0 || vehicleAuditEntries.length > 0) && (
+                    <div style={{ border: '1px solid #E2E8F0', borderRadius: 10, overflow: 'hidden', backgroundColor: '#FFFFFF' }}>
+                      <div style={{ padding: '10px 14px', borderBottom: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', fontSize: '0.78rem', fontWeight: 700, color: '#0F172A' }}>
+                        Histórico Documental Anexo ao Perfil (KYC &amp; CRLV)
+                      </div>
+                      <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {kycAuditLogs.map((log, idx) => (
+                          <div key={`kyc-${log.id || idx}`} style={{ fontSize: '0.74rem', padding: '8px 10px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                            <div style={{ fontWeight: 700, color: '#0F172A' }}>
+                              KYC: {log.action} • <span style={{ fontWeight: 500, color: '#64748B' }}>{new Date(log.timestamp).toLocaleString('pt-BR')}</span>
+                            </div>
+                            <div style={{ color: '#475569', marginTop: 2 }}>{log.notes || 'Sem observações'} — por {log.performedBy || 'Sistema'}</div>
+                          </div>
+                        ))}
+                        {vehicleAuditEntries.map((log, idx) => (
+                          <div key={`veh-${log.id || idx}`} style={{ fontSize: '0.74rem', padding: '8px 10px', borderRadius: 6, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                            <div style={{ fontWeight: 700, color: '#0F172A' }}>
+                              Veículo {log.vehicleLabel} ({log.plate}): {log.action} • <span style={{ fontWeight: 500, color: '#64748B' }}>{new Date(log.timestamp).toLocaleString('pt-BR')}</span>
+                            </div>
+                            <div style={{ color: '#475569', marginTop: 2 }}>{log.notes || 'Sem observações'} — por {log.performedBy || 'Sistema'}</div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
@@ -2305,7 +2734,33 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                 }}
                               >
                                 <Eye size={12} />
-                                <span>Ver Histórico</span>
+                                <span>Perfil</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setDriverModalTab('auditoria');
+                                  setSelectedDriverId(drv.id);
+                                }}
+                                style={{
+                                  height: 28,
+                                  padding: '0 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #CBD5E1',
+                                  backgroundColor: '#FFFFFF',
+                                  color: '#0F172A',
+                                  fontSize: '0.71rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  whiteSpace: 'nowrap'
+                                }}
+                              >
+                                <Database size={12} />
+                                <span>Auditoria</span>
                               </button>
                             </div>
 
@@ -2463,10 +2918,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       }}>
         <div>
           <h2 style={{ fontSize: '1.18rem', fontWeight: 800, color: '#0F172A', margin: 0, letterSpacing: '-0.01em' }}>
-            Tesouraria, Caixa &amp; Split Financeiro
+            {isPayoutsSplitView ? 'Central de Saques, Carteiras & Split por Corrida' : 'Tesouraria, Caixa & DRE Financeiro'}
           </h2>
           <p style={{ fontSize: '0.78rem', color: '#64748B', margin: '2px 0 0 0' }}>
-            Controle do caixa da empresa, lucro bruto/líquido, repasses aos motoristas e split automático ({currentCommPct}%)
+            {isPayoutsSplitView
+              ? 'Gerencie saques PIX, carteiras dos motoristas, split por corrida com ID de transação, perfil completo e auditoria'
+              : `Controle do caixa da empresa, lucro bruto/líquido, repasses aos motoristas e split automático (${currentCommPct}%)`}
           </p>
         </div>
 
@@ -2554,78 +3011,134 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         </div>
       </div>
 
-      {/* 4 Cards Executivos Claros: Nosso Caixa, Lucro Bruto, Volume Bruto e Repasses em Geral */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
-        gap: 14
-      }}>
-        {/* 1. Nosso Caixa Real */}
-        <div style={{ backgroundColor: '#0F172A', borderRadius: 12, padding: '16px 18px', border: '1px solid #1E293B', display: 'flex', flexDirection: 'column', gap: 8, color: '#FFFFFF' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase' }}>Nosso Caixa Real (Conta)</span>
-            <span style={{ fontSize: '0.68rem', padding: '2px 7px', borderRadius: 999, backgroundColor: 'rgba(163,230,53,0.16)', color: '#A3E635', fontWeight: 700 }}>
-              Tesouraria
-            </span>
+      {/* 4 Cards Executivos Claros conforme modo */}
+      {isPayoutsSplitView ? (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 14
+        }}>
+          <div style={{ backgroundColor: '#F0FDF4', borderRadius: 12, padding: '16px 18px', border: '1px solid #BBF7D0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase' }}>
+              Saques Pagos (PIX Efí / Manual)
+            </div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#15803D', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.paidWithdrawals)}
+            </div>
+            <div style={{ fontSize: '0.71rem', color: '#166534' }}>
+              {periodMetrics.paidWithdrawalsCount} repasse(s) concluído(s)
+            </div>
           </div>
-          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: periodMetrics.cashBalance >= 0 ? '#A3E635' : '#F87171', letterSpacing: '-0.02em' }}>
-            {formatBRL(periodMetrics.cashBalance)}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.71rem', color: '#CBD5E1', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 8 }}>
-            <span>Entrou Digital: <strong>{formatBRL(periodMetrics.digitalInflow + periodMetrics.debtSettlementsReceived)}</strong></span>
-            <span>Despesas: <strong>{formatBRL(periodMetrics.operationalExpenses)}</strong></span>
-          </div>
-        </div>
 
-        {/* 2. Lucro Bruto & Líquido */}
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Lucro Bruto ({currentCommPct}%)</span>
-            <span style={{ fontSize: '0.7rem', color: '#15803D', fontWeight: 700 }}>
-              Líquido: {formatBRL(periodMetrics.netProfit)}
-            </span>
+          <div style={{ backgroundColor: periodMetrics.pendingWithdrawalsCount > 0 ? '#FFFBEB' : '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: `1px solid ${periodMetrics.pendingWithdrawalsCount > 0 ? '#FDE68A' : '#E2E8F0'}`, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: periodMetrics.pendingWithdrawalsCount > 0 ? '#92400E' : '#64748B', textTransform: 'uppercase' }}>
+              Saques Aguardando Liberação
+            </div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 900, color: periodMetrics.pendingWithdrawalsCount > 0 ? '#B45309' : '#0F172A', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.pendingWithdrawals)}
+            </div>
+            <div style={{ fontSize: '0.71rem', color: '#64748B' }}>
+              {periodMetrics.pendingWithdrawalsCount} solicitação(ões) pendente(s)
+            </div>
           </div>
-          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#15803D', letterSpacing: '-0.02em' }}>
-            {formatBRL(periodMetrics.grossProfit)}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
-            <span>Digital: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.pixFee + periodMetrics.cardFee)}</strong></span>
-            <span>Dinheiro: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.cashFee)}</strong></span>
-          </div>
-        </div>
 
-        {/* 3. Volume Bruto (GMV) */}
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Volume Bruto (GMV)</span>
-            <span style={{ fontSize: '0.7rem', color: '#0F172A', fontWeight: 700 }}>{periodMetrics.ridesCount} corrida(s)</span>
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
+              Disponível em Carteiras ({drivers.length})
+            </div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.totalAvailableForDrivers)}
+            </div>
+            <div style={{ fontSize: '0.71rem', color: periodMetrics.totalPendingDriverDebt > 0 ? '#DC2626' : '#64748B' }}>
+              Dívida a receber (Dinheiro): <strong>{formatBRL(periodMetrics.totalPendingDriverDebt)}</strong>
+            </div>
           </div>
-          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
-            {formatBRL(periodMetrics.gross)}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
-            <span>Ticket Médio: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.avgTicket)}</strong></span>
-            <span>Estornos: <strong style={{ color: periodMetrics.refundedTotal > 0 ? '#DC2626' : '#0F172A' }}>{formatBRL(periodMetrics.refundedTotal)}</strong></span>
-          </div>
-        </div>
 
-        {/* 4. Repasses em Geral (Motoristas) */}
-        <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Repasses em Geral</span>
-            <span style={{ fontSize: '0.7rem', color: periodMetrics.pendingWithdrawalsCount > 0 ? '#D97706' : '#64748B', fontWeight: 700 }}>
-              A pagar: {formatBRL(periodMetrics.pendingWithdrawals)}
-            </span>
-          </div>
-          <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
-            {formatBRL(periodMetrics.paidWithdrawals)}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
-            <span>Carteiras: <strong style={{ color: '#15803D' }}>{formatBRL(periodMetrics.totalAvailableForDrivers)}</strong></span>
-            <span>A receber: <strong style={{ color: periodMetrics.totalPendingDriverDebt > 0 ? '#DC2626' : '#0F172A' }}>{formatBRL(periodMetrics.totalPendingDriverDebt)}</strong></span>
+          <div style={{ backgroundColor: '#0F172A', borderRadius: 12, padding: '16px 18px', border: '1px solid #1E293B', display: 'flex', flexDirection: 'column', gap: 6, color: '#FFFFFF' }}>
+            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase' }}>
+              Split em {periodMetrics.ridesCount} Corrida(s) ({currentCommPct}%)
+            </div>
+            <div style={{ fontSize: '1.6rem', fontWeight: 900, color: '#A3E635', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.driverNet)}
+            </div>
+            <div style={{ fontSize: '0.71rem', color: '#CBD5E1' }}>
+              Líquido Motoristas • Taxa Plataforma: <strong>{formatBRL(periodMetrics.platformFee)}</strong>
+            </div>
           </div>
         </div>
-      </div>
+      ) : (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))',
+          gap: 14
+        }}>
+          {/* 1. Nosso Caixa Real */}
+          <div style={{ backgroundColor: '#0F172A', borderRadius: 12, padding: '16px 18px', border: '1px solid #1E293B', display: 'flex', flexDirection: 'column', gap: 8, color: '#FFFFFF' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#94A3B8', textTransform: 'uppercase' }}>Nosso Caixa Real (Conta)</span>
+              <span style={{ fontSize: '0.68rem', padding: '2px 7px', borderRadius: 999, backgroundColor: 'rgba(163,230,53,0.16)', color: '#A3E635', fontWeight: 700 }}>
+                Tesouraria
+              </span>
+            </div>
+            <div style={{ fontSize: '1.65rem', fontWeight: 900, color: periodMetrics.cashBalance >= 0 ? '#A3E635' : '#F87171', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.cashBalance)}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.71rem', color: '#CBD5E1', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: 8 }}>
+              <span>Entrou Digital: <strong>{formatBRL(periodMetrics.digitalInflow + periodMetrics.debtSettlementsReceived)}</strong></span>
+              <span>Despesas: <strong>{formatBRL(periodMetrics.operationalExpenses)}</strong></span>
+            </div>
+          </div>
+
+          {/* 2. Lucro Bruto & Líquido */}
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Lucro Bruto ({currentCommPct}%)</span>
+              <span style={{ fontSize: '0.7rem', color: '#15803D', fontWeight: 700 }}>
+                Líquido: {formatBRL(periodMetrics.netProfit)}
+              </span>
+            </div>
+            <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#15803D', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.grossProfit)}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
+              <span>Digital: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.pixFee + periodMetrics.cardFee)}</strong></span>
+              <span>Dinheiro: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.cashFee)}</strong></span>
+            </div>
+          </div>
+
+          {/* 3. Volume Bruto (GMV) */}
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Volume Bruto (GMV)</span>
+              <span style={{ fontSize: '0.7rem', color: '#0F172A', fontWeight: 700 }}>{periodMetrics.ridesCount} corrida(s)</span>
+            </div>
+            <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.gross)}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
+              <span>Ticket Médio: <strong style={{ color: '#0F172A' }}>{formatBRL(periodMetrics.avgTicket)}</strong></span>
+              <span>Estornos: <strong style={{ color: periodMetrics.refundedTotal > 0 ? '#DC2626' : '#0F172A' }}>{formatBRL(periodMetrics.refundedTotal)}</strong></span>
+            </div>
+          </div>
+
+          {/* 4. Repasses em Geral (Motoristas) */}
+          <div style={{ backgroundColor: '#FFFFFF', borderRadius: 12, padding: '16px 18px', border: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Repasses em Geral</span>
+              <span style={{ fontSize: '0.7rem', color: periodMetrics.pendingWithdrawalsCount > 0 ? '#D97706' : '#64748B', fontWeight: 700 }}>
+                A pagar: {formatBRL(periodMetrics.pendingWithdrawals)}
+              </span>
+            </div>
+            <div style={{ fontSize: '1.65rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+              {formatBRL(periodMetrics.paidWithdrawals)}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#64748B', borderTop: '1px solid #F1F5F9', paddingTop: 8 }}>
+              <span>Carteiras: <strong style={{ color: '#15803D' }}>{formatBRL(periodMetrics.totalAvailableForDrivers)}</strong></span>
+              <span>A receber: <strong style={{ color: periodMetrics.totalPendingDriverDebt > 0 ? '#DC2626' : '#0F172A' }}>{formatBRL(periodMetrics.totalPendingDriverDebt)}</strong></span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Navegação de Sub-Abas Organizada por Fluxo Contábil */}
       <div style={{
@@ -2634,14 +3147,22 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         borderBottom: '1px solid #E2E8F0',
         overflowX: 'auto'
       }}>
-        {[
-          { id: 'visao_geral', label: 'Caixa, Lucro & Movimentações' },
-          { id: 'corridas_split', label: `Corridas & Split (${filteredTransactions.length})` },
-          { id: 'saques', label: `Repasses & Saques PIX (${(overview?.withdrawals || []).length})` },
-          { id: 'motoristas', label: `Carteiras (${drivers.length})` },
-          { id: 'livro_razao', label: `Livro-Razão (${filteredLedger.length})` },
-          { id: 'regras', label: 'Taxas Financeiras' }
-        ].map(tab => {
+        {(isPayoutsSplitView
+          ? [
+              { id: 'saques', label: `Saques & Repasses PIX (${filteredWithdrawals.length})` },
+              { id: 'motoristas', label: `Carteiras (${drivers.length})` },
+              { id: 'corridas_split', label: `Split por Corrida & IDs (${filteredTransactions.length})` },
+              { id: 'livro_razao', label: `Livro-Razão (${filteredLedger.length})` }
+            ]
+          : [
+              { id: 'visao_geral', label: 'Caixa, Lucro & Movimentações' },
+              { id: 'corridas_split', label: `Corridas & Split (${filteredTransactions.length})` },
+              { id: 'saques', label: `Repasses & Saques PIX (${filteredWithdrawals.length})` },
+              { id: 'motoristas', label: `Carteiras (${drivers.length})` },
+              { id: 'livro_razao', label: `Livro-Razão (${filteredLedger.length})` },
+              { id: 'regras', label: 'Taxas Financeiras' }
+            ]
+        ).map(tab => {
           const active = subTab === tab.id;
           return (
             <button
@@ -2684,7 +3205,13 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
           expenses={periodExpenses}
           onSaveExpense={handleSaveExpenseEntry}
           onDeleteExpense={handleDeleteExpenseEntry}
-          onNavigateSubTab={(tab) => setSubTab(tab)}
+          onNavigateSubTab={(tab) => {
+            if (onNavigatePayoutsSplit) {
+              onNavigatePayoutsSplit(tab);
+            } else {
+              setSubTab(tab);
+            }
+          }}
         />
       )}
 
@@ -2704,19 +3231,19 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
             }}>
               <div>
                 <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>
-                  Demonstrativo de Entradas por Corrida
+                  Demonstrativo de Split por Corrida &amp; IDs de Transação
                 </div>
                 <div style={{ fontSize: '0.73rem', color: '#64748B' }}>
-                  Detalhamento de valor bruto, comissão retida pela plataforma e valor líquido do motorista
+                  ID completo da transação, TXID do gateway, split plataforma × motorista, perfil e trilha de auditoria
                 </div>
               </div>
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div style={{ position: 'relative', minWidth: 220 }}>
+                <div style={{ position: 'relative', minWidth: 250 }}>
                   <Search size={14} color="#94A3B8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
                   <input
                     type="text"
-                    placeholder="Buscar corrida, passageiro ou motorista..."
+                    placeholder="Buscar ID transação, TXID, corrida ou motorista..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     style={{
@@ -2766,15 +3293,15 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                 <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.78rem' }}>
                   <thead>
                     <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                      <th style={{ padding: '10px 16px', fontWeight: 600 }}>Corrida</th>
+                      <th style={{ padding: '10px 16px', fontWeight: 600 }}>Corrida &amp; IDs da Transação</th>
                       <th style={{ padding: '10px 14px', fontWeight: 600 }}>Passageiro</th>
                       <th style={{ padding: '10px 14px', fontWeight: 600 }}>Motorista</th>
                       <th style={{ padding: '10px 14px', fontWeight: 600 }}>Método</th>
                       <th style={{ padding: '10px 14px', fontWeight: 600 }}>Entrada Bruta</th>
-                      <th style={{ padding: '10px 14px', fontWeight: 600 }}>Taxa ({currentCommPct}%)</th>
+                      <th style={{ padding: '10px 14px', fontWeight: 600 }}>Taxa (%)</th>
                       <th style={{ padding: '10px 14px', fontWeight: 600 }}>Líquido Motorista</th>
                       <th style={{ padding: '10px 14px', fontWeight: 600 }}>Status</th>
-                      <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Ações</th>
+                      <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Perfil / Auditoria / Ações</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2782,15 +3309,39 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       <tr key={tx.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                         <td style={{ padding: '12px 16px', whiteSpace: 'nowrap' }}>
                           <div style={{ fontWeight: 700, color: '#0F172A' }}>{tx.rideCode || tx.rideId}</div>
-                          <div style={{ fontSize: '0.68rem', color: '#64748B' }}>
+                          <div style={{ fontSize: '0.68rem', color: '#64748B', marginBottom: 4 }}>
                             {new Date(tx.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                            {renderIdChip(`sp-tx-${tx.id}`, 'Tx', tx.id)}
+                            {tx.gatewayTxId ? renderIdChip(`sp-gw-${tx.id}`, 'GW', tx.gatewayTxId) : null}
                           </div>
                         </td>
                         <td style={{ padding: '12px 14px', fontWeight: 500, color: '#0F172A' }}>
                           {tx.clientName || 'Passageiro'}
                         </td>
                         <td style={{ padding: '12px 14px', color: '#334155' }}>
-                          {tx.driverName || 'Motorista Parceiro'}
+                          <button
+                            type="button"
+                            onClick={() => openDriverDossier(tx.driverId, tx.driverName, 'resumo')}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              padding: 0,
+                              color: '#0F172A',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              textDecoration: 'underline',
+                              textAlign: 'left'
+                            }}
+                          >
+                            {tx.driverName || 'Motorista Parceiro'}
+                          </button>
+                          {tx.driverId && (
+                            <div style={{ fontSize: '0.66rem', color: '#64748B', fontFamily: 'monospace' }}>
+                              {tx.driverId}
+                            </div>
+                          )}
                         </td>
                         <td style={{ padding: '12px 14px', color: '#334155', fontWeight: 500 }}>
                           <PaymentMethodBadge method={tx.method} compact iconSize={13} />
@@ -2799,51 +3350,92 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           {formatBRL(tx.finalAmount)}
                         </td>
                         <td style={{ padding: '12px 14px', fontWeight: 600, color: '#475569', whiteSpace: 'nowrap' }}>
-                          {formatBRL(tx.commissionAmount)}
+                          <div>{formatBRL(tx.commissionAmount)}</div>
+                          <div style={{ fontSize: '0.66rem', color: '#64748B' }}>{Number(tx.commissionPercent ?? currentCommPct).toFixed(1)}%</div>
                         </td>
-                        <td style={{ padding: '12px 14px', fontWeight: 600, color: '#15803D', whiteSpace: 'nowrap' }}>
+                        <td style={{ padding: '12px 14px', fontWeight: 700, color: '#15803D', whiteSpace: 'nowrap' }}>
                           {formatBRL(tx.driverNetAmount)}
                         </td>
                         <td style={{ padding: '12px 14px' }}>
                           {renderStatusBadge(tx.status)}
                         </td>
                         <td style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          {tx.status !== 'reembolsado' && (
-                            <div style={{ display: 'inline-flex', gap: 6 }}>
-                              <button
-                                type="button"
-                                onClick={() => handlePaymentAction(tx.id, 'refund')}
-                                style={{
-                                  padding: '4px 8px',
-                                  borderRadius: 6,
-                                  border: '1px solid #CBD5E1',
-                                  backgroundColor: '#FFFFFF',
-                                  color: '#475569',
-                                  fontSize: '0.68rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                Estornar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handlePaymentAction(tx.id, 'dispute')}
-                                style={{
-                                  padding: '4px 8px',
-                                  borderRadius: 6,
-                                  border: '1px solid #FECACA',
-                                  backgroundColor: '#FFFFFF',
-                                  color: '#DC2626',
-                                  fontSize: '0.68rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                Contestar
-                              </button>
-                            </div>
-                          )}
+                          <div style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                            <button
+                              type="button"
+                              onClick={() => openDriverDossier(tx.driverId, tx.driverName, 'resumo')}
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: 6,
+                                border: '1px solid #0F172A',
+                                backgroundColor: '#0F172A',
+                                color: '#FFFFFF',
+                                fontSize: '0.68rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3
+                              }}
+                            >
+                              <Eye size={11} /> Perfil
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openDriverDossier(tx.driverId, tx.driverName, 'auditoria')}
+                              style={{
+                                padding: '4px 8px',
+                                borderRadius: 6,
+                                border: '1px solid #CBD5E1',
+                                backgroundColor: '#FFFFFF',
+                                color: '#0F172A',
+                                fontSize: '0.68rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 3
+                              }}
+                            >
+                              <Database size={11} /> Auditoria
+                            </button>
+                            {tx.status !== 'reembolsado' && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => handlePaymentAction(tx.id, 'refund')}
+                                  style={{
+                                    padding: '4px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid #CBD5E1',
+                                    backgroundColor: '#FFFFFF',
+                                    color: '#475569',
+                                    fontSize: '0.68rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Estornar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handlePaymentAction(tx.id, 'dispute')}
+                                  style={{
+                                    padding: '4px 8px',
+                                    borderRadius: 6,
+                                    border: '1px solid #FECACA',
+                                    backgroundColor: '#FFFFFF',
+                                    color: '#DC2626',
+                                    fontSize: '0.68rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  Contestar
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -2872,8 +3464,25 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
           <div style={{ padding: '14px 18px', borderBottom: '1px solid #E2E8F0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <div>
-              <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Saldos & Carteiras Individuais</div>
-              <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Clique em qualquer motorista para ver Avaliação, Corridas, Saques PIX e Extrato Completo</div>
+              <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Saldos &amp; Carteiras Individuais</div>
+              <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Acesse o perfil completo, chave PIX, conta Efí Bank e trilha de auditoria de cada motorista</div>
+            </div>
+            <div style={{ position: 'relative', minWidth: 240 }}>
+              <Search size={14} color="#94A3B8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+              <input
+                type="text"
+                placeholder="Buscar motorista, ID, CPF, PIX ou Efí..."
+                value={driverSearch}
+                onChange={(e) => setDriverSearch(e.target.value)}
+                style={{
+                  width: '100%',
+                  height: 34,
+                  padding: '0 10px 0 30px',
+                  borderRadius: 6,
+                  border: '1px solid #CBD5E1',
+                  fontSize: '0.75rem'
+                }}
+              />
             </div>
           </div>
 
@@ -2881,18 +3490,18 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
             <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.78rem' }}>
               <thead>
                 <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.7rem', textTransform: 'uppercase' }}>
-                  <th style={{ padding: '10px 16px', fontWeight: 600 }}>Motorista</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600 }}>Motorista &amp; ID</th>
                   <th style={{ padding: '10px 14px', fontWeight: 600 }}>Avaliação</th>
-                  <th style={{ padding: '10px 14px', fontWeight: 600 }}>Chave PIX</th>
+                  <th style={{ padding: '10px 14px', fontWeight: 600 }}>Chave PIX / Conta Efí</th>
                   <th style={{ padding: '10px 14px', fontWeight: 600 }}>Saldo Disponível</th>
                   <th style={{ padding: '10px 14px', fontWeight: 600 }}>Recebido em Dinheiro</th>
                   <th style={{ padding: '10px 14px', fontWeight: 600 }}>Taxas Geradas</th>
                   <th style={{ padding: '10px 14px', fontWeight: 600 }}>Dívida Atual</th>
-                  <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Controle</th>
+                  <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Perfil / Auditoria / Controle</th>
                 </tr>
               </thead>
               <tbody>
-                {drivers.map(drv => {
+                {filteredDrivers.map(drv => {
                   const wallet = overview?.driverWallets?.find(w => w.driverId === drv.id);
                   return (
                     <tr
@@ -2904,13 +3513,21 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                       style={{ borderBottom: '1px solid #F1F5F9', cursor: 'pointer' }}
                     >
                       <td style={{ padding: '12px 16px' }}>
-                        <div style={{ fontWeight: 600, color: '#0F172A' }}>{drv.name}</div>
-                        <div style={{ fontSize: '0.7rem', color: '#64748B' }}>{drv.vehicleModel} • {drv.vehiclePlate}</div>
+                        <div style={{ fontWeight: 700, color: '#0F172A' }}>{drv.name}</div>
+                        <div style={{ fontSize: '0.7rem', color: '#64748B', marginBottom: 4 }}>{drv.vehicleModel} • {drv.vehiclePlate}</div>
+                        {renderIdChip(`wlt-drv-${drv.id}`, 'ID', drv.id)}
                       </td>
                       <td style={{ padding: '12px 14px', fontWeight: 700, color: '#B45309' }}>
                         {Number(drv.rating || 5.0).toFixed(2)} ★
                       </td>
-                      <td style={{ padding: '12px 14px', color: '#334155', fontSize: '0.74rem' }}>{drv.pixKey || '—'}</td>
+                      <td style={{ padding: '12px 14px', color: '#334155', fontSize: '0.74rem' }}>
+                        <div style={{ fontFamily: 'monospace' }}>{drv.pixKey || '—'}</div>
+                        {drv.efiAccountId && (
+                          <div style={{ fontSize: '0.67rem', color: '#15803D', fontWeight: 700, marginTop: 2 }}>
+                            Split Efí: #{drv.efiAccountId}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '12px 14px', fontWeight: 600, color: '#15803D' }}>{formatBRL(wallet?.availableBalance || 0)}</td>
                       <td style={{ padding: '12px 14px', color: '#334155' }}>{formatBRL(wallet?.totalCashReceived || 0)}</td>
                       <td style={{ padding: '12px 14px', color: '#334155' }}>{formatBRL((wallet?.totalCommissionPaid || 0) + (wallet?.totalCommissionPending || 0))}</td>
@@ -2941,7 +3558,31 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                             }}
                           >
                             <Eye size={12} />
-                            <span>Ver Histórico</span>
+                            <span>Perfil</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDriverModalTab('auditoria');
+                              setSelectedDriverId(drv.id);
+                            }}
+                            style={{
+                              padding: '5px 10px',
+                              borderRadius: 6,
+                              border: '1px solid #CBD5E1',
+                              backgroundColor: '#FFFFFF',
+                              color: '#0F172A',
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4
+                            }}
+                          >
+                            <Database size={12} />
+                            <span>Auditoria</span>
                           </button>
 
                           <button
@@ -2974,59 +3615,131 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       {/* ═══ SUB-ABA 4: SAQUES & REPASSES PIX ═══ */}
       {subTab === 'saques' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
-            <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 16px' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase' }}>Já Repassado (Pagos)</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#15803D', marginTop: 3 }}>{formatBRL(periodMetrics.paidWithdrawals)}</div>
+          {!isPayoutsSplitView && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+              <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 16px' }}>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#166534', textTransform: 'uppercase' }}>Já Repassado (Pagos)</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#15803D', marginTop: 3 }}>{formatBRL(periodMetrics.paidWithdrawals)}</div>
+              </div>
+              <div style={{ backgroundColor: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '12px 16px' }}>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#92400E', textTransform: 'uppercase' }}>Saques Aguardando PIX</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#B45309', marginTop: 3 }}>{formatBRL(periodMetrics.pendingWithdrawals)}</div>
+              </div>
+              <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 10, padding: '12px 16px' }}>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Disponível em Carteiras</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#0F172A', marginTop: 3 }}>{formatBRL(periodMetrics.totalAvailableForDrivers)}</div>
+              </div>
+              <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px' }}>
+                <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#991B1B', textTransform: 'uppercase' }}>Dívidas a Receber</div>
+                <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#DC2626', marginTop: 3 }}>{formatBRL(periodMetrics.totalPendingDriverDebt)}</div>
+              </div>
             </div>
-            <div style={{ backgroundColor: '#FFFBEB', border: '1px solid #FDE68A', borderRadius: 10, padding: '12px 16px' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#92400E', textTransform: 'uppercase' }}>Saques Aguardando PIX</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#B45309', marginTop: 3 }}>{formatBRL(periodMetrics.pendingWithdrawals)}</div>
-            </div>
-            <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 10, padding: '12px 16px' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>Disponível em Carteiras</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#0F172A', marginTop: 3 }}>{formatBRL(periodMetrics.totalAvailableForDrivers)}</div>
-            </div>
-            <div style={{ backgroundColor: '#FEF2F2', border: '1px solid #FECACA', borderRadius: 10, padding: '12px 16px' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, color: '#991B1B', textTransform: 'uppercase' }}>Dívidas a Receber</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 900, color: '#DC2626', marginTop: 3 }}>{formatBRL(periodMetrics.totalPendingDriverDebt)}</div>
-            </div>
-          </div>
+          )}
 
           <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
-          <div style={{ padding: '14px 18px', borderBottom: '1px solid #E2E8F0' }}>
-            <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Solicitações de Saque e Repasses PIX</div>
-            <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Aprove transferências ou estorne solicitações para a carteira do motorista</div>
-          </div>
+            <div style={{
+              padding: '14px 18px',
+              borderBottom: '1px solid #E2E8F0',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 12
+            }}>
+              <div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Solicitações de Saque e Repasses PIX</div>
+                <div style={{ fontSize: '0.73rem', color: '#64748B' }}>ID do saque, TXID Efí/PSP, perfil e auditoria direta do motorista recebedor</div>
+              </div>
 
-          {(overview?.withdrawals || []).length === 0 ? (
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                <div style={{ position: 'relative', minWidth: 230 }}>
+                  <Search size={14} color="#94A3B8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+                  <input
+                    type="text"
+                    placeholder="Buscar ID saque, Efí TXID, motorista ou PIX..."
+                    value={withdrawalSearch}
+                    onChange={(e) => setWithdrawalSearch(e.target.value)}
+                    style={{
+                      width: '100%',
+                      height: 34,
+                      padding: '0 10px 0 30px',
+                      borderRadius: 6,
+                      border: '1px solid #CBD5E1',
+                      fontSize: '0.75rem'
+                    }}
+                  />
+                </div>
+
+                <select
+                  value={withdrawalStatusFilter}
+                  onChange={(e) => setWithdrawalStatusFilter(e.target.value as any)}
+                  style={{ height: 34, padding: '0 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.75rem', color: '#334155', backgroundColor: '#FFFFFF' }}
+                >
+                  <option value="todos">Todos os Status</option>
+                  <option value="solicitado">Aguardando PIX</option>
+                  <option value="pago">Pagos</option>
+                  <option value="rejeitado">Recusados</option>
+                </select>
+              </div>
+            </div>
+
+          {filteredWithdrawals.length === 0 ? (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748B', fontSize: '0.82rem' }}>
-              Nenhuma solicitação de saque registrada.
+              Nenhuma solicitação de saque encontrada para os filtros aplicados.
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.78rem' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.7rem', textTransform: 'uppercase' }}>
-                    <th style={{ padding: '10px 16px', fontWeight: 600 }}>Data</th>
+                    <th style={{ padding: '10px 16px', fontWeight: 600 }}>ID Saque &amp; Data</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Motorista</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Chave PIX</th>
-                    <th style={{ padding: '10px 14px', fontWeight: 600 }}>Valor</th>
-                    <th style={{ padding: '10px 14px', fontWeight: 600 }}>Status</th>
-                    <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Ações</th>
+                    <th style={{ padding: '10px 14px', fontWeight: 600 }}>Valor / Líquido</th>
+                    <th style={{ padding: '10px 14px', fontWeight: 600 }}>Status &amp; ID Repasse Efí</th>
+                    <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Ações / Perfil / Auditoria</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(overview?.withdrawals || []).map(w => (
+                  {filteredWithdrawals.map(w => (
                     <tr key={w.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
-                      <td style={{ padding: '12px 16px', color: '#64748B', fontSize: '0.72rem' }}>
-                        {new Date(w.createdAt).toLocaleString('pt-BR')}
+                      <td style={{ padding: '12px 16px', color: '#64748B', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
+                        <div style={{ marginBottom: 4 }}>{new Date(w.createdAt).toLocaleString('pt-BR')}</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {renderIdChip(`wd-id-${w.id}`, 'Saque', w.id)}
+                          {w.ledgerEntryId ? renderIdChip(`wd-ldg-${w.id}`, 'Ledger', w.ledgerEntryId) : null}
+                        </div>
                       </td>
-                      <td style={{ padding: '12px 14px', fontWeight: 600, color: '#0F172A' }}>{w.driverName}</td>
+                      <td style={{ padding: '12px 14px' }}>
+                        <button
+                          type="button"
+                          onClick={() => openDriverDossier(w.driverId, w.driverName, 'resumo')}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            fontWeight: 700,
+                            color: '#0F172A',
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            textAlign: 'left'
+                          }}
+                        >
+                          {w.driverName}
+                        </button>
+                        <div style={{ fontSize: '0.67rem', color: '#64748B', fontFamily: 'monospace' }}>{w.driverId}</div>
+                      </td>
                       <td style={{ padding: '12px 14px', color: '#334155', fontFamily: 'monospace', fontSize: '0.74rem' }}>
                         {w.pixType?.toUpperCase()}: {w.pixKey}
                       </td>
-                      <td style={{ padding: '12px 14px', fontWeight: 700, color: '#0F172A' }}>{formatBRL(w.amount)}</td>
+                      <td style={{ padding: '12px 14px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap' }}>
+                        <div>{formatBRL(w.amount)}</div>
+                        {Number(w.feeAmount || 0) > 0 && (
+                          <div style={{ fontSize: '0.67rem', color: '#15803D', fontWeight: 600 }}>
+                            Líq: {formatBRL(w.netPayoutAmount ?? (w.amount - (w.feeAmount || 0)))}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: '12px 14px' }}>
                         <span style={{
                           padding: '3px 8px',
@@ -3039,59 +3752,95 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         }}>
                           {w.status.toUpperCase()}
                         </span>
-                        {w.payoutStatus === 'processado_automaticamente' ? (
-                          <div style={{ fontSize: '0.66rem', color: '#15803D', marginTop: 4, fontWeight: 600 }}>
-                            PIX Automático ({w.payoutProvider || 'PSP'}) {w.payoutProviderTxId ? `• ${w.payoutProviderTxId}` : ''}
-                          </div>
-                        ) : w.status === 'pago' && w.payoutProviderTxId ? (
-                          <div style={{ fontSize: '0.65rem', color: '#64748B', marginTop: 4 }}>
-                            {w.payoutProviderTxId}
-                          </div>
-                        ) : null}
-                      </td>
-                      <td style={{ padding: '12px 16px', textAlign: 'right' }}>
-                        {w.status === 'solicitado' && (
-                          <div style={{ display: 'inline-flex', gap: 6 }}>
-                            <button
-                              type="button"
-                              onClick={() => handleProcessWithdrawal(w.id, 'approve')}
-                              style={{
-                                padding: '5px 10px',
-                                borderRadius: 6,
-                                border: 'none',
-                                backgroundColor: '#16A34A',
-                                color: '#FFFFFF',
-                                fontWeight: 600,
-                                fontSize: '0.72rem',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4
-                              }}
-                            >
-                              <Check size={12} /> Confirmar PIX
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleProcessWithdrawal(w.id, 'reject')}
-                              style={{
-                                padding: '5px 10px',
-                                borderRadius: 6,
-                                border: '1px solid #FECACA',
-                                backgroundColor: '#FFFFFF',
-                                color: '#DC2626',
-                                fontWeight: 600,
-                                fontSize: '0.72rem',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4
-                              }}
-                            >
-                              <X size={12} /> Recusar
-                            </button>
+                        {w.payoutProviderTxId && (
+                          <div style={{ marginTop: 4 }}>
+                            {renderIdChip(`wd-tx-${w.id}`, w.payoutProvider || 'PIX TX', w.payoutProviderTxId)}
                           </div>
                         )}
+                      </td>
+                      <td style={{ padding: '12px 16px', textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            onClick={() => openDriverDossier(w.driverId, w.driverName, 'resumo')}
+                            style={{
+                              padding: '5px 8px',
+                              borderRadius: 6,
+                              border: '1px solid #0F172A',
+                              backgroundColor: '#0F172A',
+                              color: '#FFFFFF',
+                              fontWeight: 600,
+                              fontSize: '0.7rem',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3
+                            }}
+                          >
+                            <Eye size={11} /> Perfil
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openDriverDossier(w.driverId, w.driverName, 'auditoria')}
+                            style={{
+                              padding: '5px 8px',
+                              borderRadius: 6,
+                              border: '1px solid #CBD5E1',
+                              backgroundColor: '#FFFFFF',
+                              color: '#0F172A',
+                              fontWeight: 600,
+                              fontSize: '0.7rem',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3
+                            }}
+                          >
+                            <Database size={11} /> Auditoria
+                          </button>
+                          {w.status === 'solicitado' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => handleProcessWithdrawal(w.id, 'approve')}
+                                style={{
+                                  padding: '5px 10px',
+                                  borderRadius: 6,
+                                  border: 'none',
+                                  backgroundColor: '#16A34A',
+                                  color: '#FFFFFF',
+                                  fontWeight: 600,
+                                  fontSize: '0.72rem',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4
+                                }}
+                              >
+                                <Check size={12} /> Confirmar PIX
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleProcessWithdrawal(w.id, 'reject')}
+                                style={{
+                                  padding: '5px 10px',
+                                  borderRadius: 6,
+                                  border: '1px solid #FECACA',
+                                  backgroundColor: '#FFFFFF',
+                                  color: '#DC2626',
+                                  fontWeight: 600,
+                                  fontSize: '0.72rem',
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4
+                                }}
+                              >
+                                <X size={12} /> Recusar
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -3104,9 +3853,36 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       )}
       {subTab === 'livro_razao' && (
         <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, border: '1px solid #E2E8F0', overflow: 'hidden' }}>
-          <div style={{ padding: '14px 18px', borderBottom: '1px solid #E2E8F0' }}>
-            <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Livro-Razão Financeiro (Ledger Imutável)</div>
-            <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Histórico auditável de créditos, retenções de comissão, abatimentos e repasses</div>
+          <div style={{
+            padding: '14px 18px',
+            borderBottom: '1px solid #E2E8F0',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12
+          }}>
+            <div>
+              <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Livro-Razão Financeiro (Ledger Imutável)</div>
+              <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Histórico auditável com ID do lançamento, chave idempotente, retenções e repasses</div>
+            </div>
+            <div style={{ position: 'relative', minWidth: 230 }}>
+              <Search size={14} color="#94A3B8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
+              <input
+                type="text"
+                placeholder="Buscar ID Ledger, corrida ou motorista..."
+                value={ledgerSearch}
+                onChange={(e) => setLedgerSearch(e.target.value)}
+                style={{
+                  width: '100%',
+                  height: 34,
+                  padding: '0 10px 0 30px',
+                  borderRadius: 6,
+                  border: '1px solid #CBD5E1',
+                  fontSize: '0.75rem'
+                }}
+              />
+            </div>
           </div>
 
           {filteredLedger.length === 0 ? (
@@ -3118,7 +3894,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
               <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.76rem' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.68rem', textTransform: 'uppercase' }}>
-                    <th style={{ padding: '10px 16px', fontWeight: 600 }}>Data / Hora</th>
+                    <th style={{ padding: '10px 16px', fontWeight: 600 }}>ID Ledger &amp; Data</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Tipo</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Motorista</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Corrida</th>
@@ -3132,13 +3908,34 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   {filteredLedger.slice(0, 120).map(entry => (
                     <tr key={entry.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
                       <td style={{ padding: '10px 16px', color: '#64748B', whiteSpace: 'nowrap' }}>
-                        {new Date(entry.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        <div style={{ marginBottom: 4 }}>
+                          {new Date(entry.createdAt).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                          {renderIdChip(`ldg-id-${entry.id}`, 'Ledger', entry.id)}
+                          {entry.idempotencyKey ? renderIdChip(`ldg-key-${entry.id}`, 'Chave', entry.idempotencyKey) : null}
+                        </div>
                       </td>
                       <td style={{ padding: '10px 14px', fontWeight: 600, color: '#0F172A' }}>
                         {entry.entryType}
                       </td>
                       <td style={{ padding: '10px 14px', color: '#334155' }}>
-                        {entry.driverName || entry.driverId}
+                        <button
+                          type="button"
+                          onClick={() => openDriverDossier(entry.driverId, entry.driverName, 'auditoria')}
+                          style={{
+                            background: 'none',
+                            border: 'none',
+                            padding: 0,
+                            color: '#0F172A',
+                            fontWeight: 700,
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            textAlign: 'left'
+                          }}
+                        >
+                          {entry.driverName || entry.driverId}
+                        </button>
                       </td>
                       <td style={{ padding: '10px 14px', fontWeight: 600, color: '#0F172A' }}>
                         {entry.rideCode || entry.rideId || '—'}

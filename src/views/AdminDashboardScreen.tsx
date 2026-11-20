@@ -57,7 +57,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'taxas' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'repasses' | 'taxas' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [repassesInitialSubTab, setRepassesInitialSubTab] = useState<'saques' | 'motoristas' | 'corridas_split' | 'livro_razao'>('saques');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
 
@@ -1746,7 +1747,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'plataforma', label: 'Motoristas', icon: Car, badge: null },
               { id: 'documentacoes', label: 'Documentações', icon: FileCheck2, badge: pendingDocsCount > 0 ? String(pendingDocsCount) : null },
               { id: 'categorias', label: 'Categorias de Corridas', icon: Sliders, badge: null },
-              { id: 'financeiro', label: 'Financeiro & Split', icon: DollarSign, badge: null },
+              { id: 'financeiro', label: 'Financeiro & Caixa', icon: DollarSign, badge: null },
+              { id: 'repasses', label: 'Saques, Carteiras & Split', icon: Wallet, badge: null },
               { id: 'taxas', label: 'Taxas Financeiras', icon: Percent, badge: null },
               { id: 'efibank', label: 'Efí Bank (API & Pix)', icon: Landmark, badge: null },
               { id: 'sos', label: 'Central SOS', icon: ShieldAlert, badge: activeSosAlertsCount > 0 ? String(activeSosAlertsCount) : null, isDanger: activeSosAlertsCount > 0 },
@@ -2019,7 +2021,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'plataforma' && 'Frota de Motoristas'}
                 {activeTab === 'documentacoes' && 'Análise Documental (KYC & CRLV)'}
                 {activeTab === 'categorias' && 'Categorias de Corridas'}
-                {activeTab === 'financeiro' && 'Financeiro & Split'}
+                {activeTab === 'financeiro' && 'Financeiro & Caixa'}
+                {activeTab === 'repasses' && 'Saques, Carteiras & Split por Corrida'}
                 {activeTab === 'taxas' && 'Taxas Financeiras'}
                 {activeTab === 'efibank' && 'Efí Bank (Certificado, PIX & Split)'}
                 {activeTab === 'auditoria' && 'Auditoria & Trilha do Banco'}
@@ -4726,12 +4729,30 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           />
         )}
 
-        {/* ================= ABA 3: FINANCEIRO MASTER, TAXAS & LIVRO-RAZÃO ================= */}
+        {/* ================= ABA 3: FINANCEIRO MASTER, CAIXA & DRE ================= */}
         {activeTab === 'financeiro' && (
           <AdminPlatformFinanceTab
             config={currentConfig}
             rides={rides}
             initialSection="visao_geral"
+            onNavigatePayoutsSplit={(sub) => {
+              setRepassesInitialSubTab(sub || 'saques');
+              setActiveTab('repasses');
+            }}
+            onConfigUpdated={(next) => {
+              setCurrentConfig(next);
+              onRefreshData();
+            }}
+          />
+        )}
+
+        {/* ================= ABA DEDICADA: SAQUES PIX, CARTEIRAS & SPLIT POR CORRIDA ================= */}
+        {activeTab === 'repasses' && (
+          <AdminPlatformFinanceTab
+            config={currentConfig}
+            rides={rides}
+            initialSection="repasses_central"
+            repassesDefaultTab={repassesInitialSubTab}
             onConfigUpdated={(next) => {
               setCurrentConfig(next);
               onRefreshData();

@@ -7369,6 +7369,7 @@ async function handleApiRequest(req, res) {
         category: url.searchParams.get('category') || '',
         search: url.searchParams.get('search') || '',
         severity: url.searchParams.get('severity') || '',
+        driverId: url.searchParams.get('driverId') || '',
         limit: Number(url.searchParams.get('limit') || 150),
         offset: Number(url.searchParams.get('offset') || 0)
       });
