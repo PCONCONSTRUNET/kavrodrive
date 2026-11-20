@@ -3042,6 +3042,41 @@ test('2 Tipos de Categoria (Padrao vs Entregas): somente 2 opcoes, validacao de 
   assert.equal(bothAgain.status, 200);
   assert.deepEqual(bothAgain.json.driver.enabledCategories, ['kavro_go', 'kavro_entregas']);
 
+  // Regressão: /api/sync para passageiro deve retornar o motorista online com isOnline=true, approvalStatus='aprovado' e preferências atualizadas
+  const cliSyncBoth = await apiJson('/api/sync', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(cliSyncBoth.status, 200);
+  const syncedDrvBoth = (cliSyncBoth.json.onlineDrivers || []).find(d => d.id === drvObj.id);
+  assert.ok(syncedDrvBoth, 'Motorista online deve aparecer em onlineDrivers para o passageiro');
+  assert.equal(syncedDrvBoth.isOnline, true);
+  assert.equal(syncedDrvBoth.approvalStatus, 'aprovado');
+  assert.equal(syncedDrvBoth.hasFourDoors, true);
+  assert.equal(syncedDrvBoth.hasAirConditioning, true);
+  assert.equal(syncedDrvBoth.crlvRegular, true);
+  assert.equal(syncedDrvBoth.cnhHasEar, true);
+  assert.ok(syncedDrvBoth.enabledCategories.includes('kavro_go'));
+  assert.ok(syncedDrvBoth.enabledCategories.includes('kavro_entregas'));
+
+  // Se motorista desmarcar Padrão em Preferências, /api/sync deve refletir na hora para o passageiro
+  await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: { enabledCategories: ['kavro_entregas'], disabledCategoryIds: ['kavro_go'] }
+  });
+  const cliSyncOnlyDel = await apiJson('/api/sync', { headers: { 'x-client-token': cliToken } });
+  const syncedDrvOnlyDel = (cliSyncOnlyDel.json.onlineDrivers || []).find(d => d.id === drvObj.id);
+  assert.equal(syncedDrvOnlyDel.enabledCategories.includes('kavro_go'), false);
+  assert.equal(syncedDrvOnlyDel.enabledCategories.includes('kavro_entregas'), true);
+  assert.deepEqual(syncedDrvOnlyDel.disabledCategoryIds, ['kavro_go']);
+
+  // Restaura Padrão + Entregas ativas antes dos fluxos seguintes
+  await apiJson(`/api/drivers/${encodeURIComponent(drvObj.id)}`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvReg.json.driverToken },
+    body: { enabledCategories: ['kavro_go', 'kavro_entregas'], disabledCategoryIds: [] }
+  });
+
   // 4) Pedido na modalidade Entregas sem destinatario/produto deve ser bloqueado (HTTP 400)
   const invalidDelRes = await apiJson('/api/rides', {
     method: 'POST',

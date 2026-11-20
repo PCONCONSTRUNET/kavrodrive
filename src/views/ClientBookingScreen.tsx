@@ -221,10 +221,27 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [isEditRouteModalOpen, setIsEditRouteModalOpen] = useState(false);
   const [trustedCount, setTrustedCount] = useState<number>(currentUser?.trustedContacts?.length || 0);
+  const [driversSyncTick, setDriversSyncTick] = useState(0);
 
   useEffect(() => {
     setTrustedCount(currentUser?.trustedContacts?.length || 0);
   }, [currentUser?.trustedContacts?.length]);
+
+  useEffect(() => {
+    const refreshDriversSnapshot = () => setDriversSyncTick(t => t + 1);
+    const pullAndRefreshDrivers = () => {
+      StorageService.syncFromDatabase().then(refreshDriversSnapshot).catch(() => {});
+    };
+    pullAndRefreshDrivers();
+    window.addEventListener('up_database_synced', refreshDriversSnapshot);
+    window.addEventListener('up_realtime_driver', pullAndRefreshDrivers);
+    window.addEventListener('up_realtime_config', pullAndRefreshDrivers);
+    return () => {
+      window.removeEventListener('up_database_synced', refreshDriversSnapshot);
+      window.removeEventListener('up_realtime_driver', pullAndRefreshDrivers);
+      window.removeEventListener('up_realtime_config', pullAndRefreshDrivers);
+    };
+  }, []);
 
   const pixExpiresAtRaw =
     activeRide?.status === 'aguardando_pagamento'
@@ -503,7 +520,10 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   };
 
   const pricing = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, selectedCategory, undefined, paymentMethod);
-  const onlineDrivers = StorageService.getOnlineDrivers();
+  const onlineDrivers = React.useMemo(() => {
+    void driversSyncTick;
+    return StorageService.getOnlineDrivers();
+  }, [driversSyncTick]);
   const onlineDriversCount = StorageService.getOnlineDriversCount();
   const nearbyMapDrivers: OnlineDriverMapDot[] = React.useMemo(
     () =>

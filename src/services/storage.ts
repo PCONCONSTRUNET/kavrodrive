@@ -248,6 +248,10 @@ export const StorageService = {
       }
       if (Array.isArray(data.drivers)) {
         localStorage.setItem(STORAGE_KEYS.DRIVERS, JSON.stringify(data.drivers));
+        localStorage.setItem(
+          'up_online_drivers',
+          JSON.stringify(data.drivers.filter((d: DriverProfile) => d.approvalStatus === 'aprovado' && d.isOnline))
+        );
         if (currentDriver) {
           const updatedSelf = data.drivers.find((d: DriverProfile) => d.id === currentDriver.id);
           if (updatedSelf) {
@@ -256,6 +260,9 @@ export const StorageService = {
         }
       } else if (Array.isArray(data.onlineDrivers)) {
         localStorage.setItem('up_online_drivers', JSON.stringify(data.onlineDrivers));
+        if (!isAdmin && !currentDriver) {
+          localStorage.removeItem(STORAGE_KEYS.DRIVERS);
+        }
       }
       if (typeof data.onlineDriversCount === 'number') {
         localStorage.setItem('up_online_drivers_count', String(data.onlineDriversCount));
@@ -1115,12 +1122,21 @@ export const StorageService = {
 
   getOnlineDrivers(): DriverProfile[] {
     try {
+      const pubOnlineRaw = localStorage.getItem('up_online_drivers');
+      if (pubOnlineRaw !== null && !this.isAdminAuthenticated() && !this.getCurrentDriver()) {
+        const pubOnline = JSON.parse(pubOnlineRaw || '[]');
+        if (Array.isArray(pubOnline)) {
+          return pubOnline.filter(d => (!d.approvalStatus || d.approvalStatus === 'aprovado') && (d.isOnline !== false));
+        }
+      }
       const allDrivers = this.getDrivers();
       if (allDrivers.length > 0) {
         return allDrivers.filter(d => d.approvalStatus === 'aprovado' && d.isOnline);
       }
-      const pubOnline = JSON.parse(localStorage.getItem('up_online_drivers') || '[]');
-      return Array.isArray(pubOnline) ? pubOnline : [];
+      const pubOnline = JSON.parse(pubOnlineRaw || '[]');
+      return Array.isArray(pubOnline)
+        ? pubOnline.filter(d => (!d.approvalStatus || d.approvalStatus === 'aprovado') && (d.isOnline !== false))
+        : [];
     } catch {
       return [];
     }

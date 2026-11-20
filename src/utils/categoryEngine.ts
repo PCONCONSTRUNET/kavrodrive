@@ -583,7 +583,42 @@ export function isDriverAvailableForCategory(
   if (!driver.isOnline) return false;
 
   const targetId = mapLegacyCategoryId(categoryId);
-  const { eligibleCategoryIds, enabledCategoryIds } = evaluateAllDriverCategories(driver, categories);
-  return eligibleCategoryIds.includes(targetId) && enabledCategoryIds.includes(targetId);
+  const targetCategory = categories.find(c => mapLegacyCategoryId(c.id) === targetId);
+  if (targetCategory && targetCategory.active === false) return false;
+
+  const blockedIds = Array.isArray(driver.blockedCategoryIds)
+    ? driver.blockedCategoryIds.map(mapLegacyCategoryId)
+    : [];
+  if (blockedIds.includes(targetId)) return false;
+
+  const disabledIds = Array.isArray(driver.disabledCategoryIds)
+    ? driver.disabledCategoryIds.map(mapLegacyCategoryId)
+    : [];
+  if (disabledIds.includes(targetId)) return false;
+
+  const evalInput: Partial<DriverProfile> = driver.approvalStatus
+    ? driver
+    : { ...driver, approvalStatus: 'aprovado' };
+  const { eligibleCategoryIds, enabledCategoryIds } = evaluateAllDriverCategories(evalInput, categories);
+
+  if (eligibleCategoryIds.includes(targetId) && enabledCategoryIds.includes(targetId)) {
+    return true;
+  }
+
+  const serverEligible = Array.isArray(driver.eligibleCategories)
+    ? driver.eligibleCategories.map(mapLegacyCategoryId)
+    : [];
+  const serverEnabled =
+    Array.isArray(driver.enabledCategories) && driver.enabledCategories.length > 0
+      ? driver.enabledCategories.map(mapLegacyCategoryId)
+      : serverEligible;
+
+  return (
+    serverEligible.includes(targetId) &&
+    (serverEnabled.includes(targetId) ||
+      (disabledIds.length === 0 &&
+        resolveCategoryType(targetId) === 'entregas' &&
+        serverEnabled.includes('kavro_go')))
+  );
 }
 

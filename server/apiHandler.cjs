@@ -2193,15 +2193,28 @@ async function handleApiRequest(req, res) {
           id: d.id,
           name: (isAdmin || isAuthedDriver || Boolean(clientSession?.sub)) ? d.name : '',
           photo: (isAdmin || isAuthedDriver || Boolean(clientSession?.sub)) ? d.photo : '',
+          approvalStatus: 'aprovado',
+          isOnline: Boolean(d.isOnline),
           vehicleBrand: d.vehicleBrand,
           vehicleModel: d.vehicleModel,
           vehicleVersion: d.vehicleVersion,
-          vehicleYear: d.vehicleYear,
+          vehicleYear: d.vehicleYear || '2024',
           vehicleColor: d.vehicleColor,
           vehiclePlate: (isAdmin || isAuthedDriver) ? d.vehiclePlate : '',
           vehicleCategory: d.vehicleCategory,
-          eligibleCategories: d.eligibleCategories,
-          enabledCategories: d.enabledCategories,
+          eligibleCategories: Array.isArray(d.eligibleCategories) ? d.eligibleCategories : [],
+          enabledCategories: Array.isArray(d.enabledCategories) ? d.enabledCategories : [],
+          disabledCategoryIds: Array.isArray(d.disabledCategoryIds) ? d.disabledCategoryIds : [],
+          approvedCategoryExceptions: Array.isArray(d.approvedCategoryExceptions) ? d.approvedCategoryExceptions : [],
+          blockedCategoryIds: Array.isArray(d.blockedCategoryIds) ? d.blockedCategoryIds : [],
+          hasFourDoors: d.hasFourDoors !== false,
+          hasAirConditioning: d.hasAirConditioning !== false,
+          crlvRegular: d.crlvRegular !== false,
+          cnhHasEar: d.cnhHasEar !== false,
+          hasLargeTrunk: d.hasLargeTrunk,
+          hasLeatherSeats: d.hasLeatherSeats,
+          acceptsCash: d.acceptsCash !== false,
+          city: d.city || '',
           rating: d.rating,
           totalRides: d.totalRides,
           currentRideId: d.currentRideId,
@@ -2919,6 +2932,7 @@ async function handleApiRequest(req, res) {
           updatedAt: new Date().toISOString()
         }
       });
+      invalidateDriversCache();
       realtimeHub.publish('driver:updated', {
         driverId: updated.id,
         isOnline: updated.isOnline,
@@ -2946,6 +2960,7 @@ async function handleApiRequest(req, res) {
         updatedAt: new Date().toISOString()
       };
       const updated = await finance.saveDriverRecord({ ...driver, location: loc });
+      invalidateDriversCache();
       realtimeHub.publish('driver:updated', {
         driverId: updated.id,
         isOnline: updated.isOnline,
@@ -3022,6 +3037,13 @@ async function handleApiRequest(req, res) {
           ...nextUpdates,
           id: existing.id,
           approvalStatus: isAdmin ? (nextUpdates.approvalStatus || existing.approvalStatus) : existing.approvalStatus
+        });
+        invalidateDriversCache();
+        realtimeHub.publish('driver:updated', {
+          driverId: updated.id,
+          isOnline: updated.isOnline,
+          enabledCategories: updated.enabledCategories,
+          disabledCategoryIds: updated.disabledCategoryIds
         });
         return sendJson(res, 200, { ok: true, driver: updated });
       }
@@ -3537,6 +3559,7 @@ async function handleApiRequest(req, res) {
         isOnline: action === 'aprovado' ? driver.isOnline : false, // Desativa se recusado ou aguardando correção
         ...purgedFields
       });
+      invalidateDriversCache();
 
       const actor = getAdminActorContext(req);
       const actionPt = action === 'aprovado' ? 'Aprovado' : action === 'rejeitado' ? 'Recusado' : 'Correção Solicitada';
@@ -4261,6 +4284,7 @@ async function handleApiRequest(req, res) {
         currentRideId: isQueued ? currentActiveRide.id : updatedRide.id,
         queuedRideId: isQueued ? updatedRide.id : driver.queuedRideId
       });
+      invalidateDriversCache();
 
       // Atualiza transação com o motorista atribuído
       const existingTx = await finance.getPaymentTxByRide(updatedRide.id);
@@ -7391,6 +7415,7 @@ async function handleApiRequest(req, res) {
         financialBlockReason: body.financialBlockReason !== undefined ? body.financialBlockReason : driver.financialBlockReason,
         isOnline: body.approvalStatus && body.approvalStatus !== 'aprovado' ? false : driver.isOnline
       });
+      invalidateDriversCache();
 
       const driverStatusChanges = [];
       if (body.approvalStatus && body.approvalStatus !== driver.approvalStatus) {
@@ -9214,6 +9239,7 @@ async function handleApiRequest(req, res) {
         activeVehicleId: nextActiveId,
         vehicles: currentVehicles
       });
+      invalidateDriversCache();
 
       await audit.recordAuditEvent({
         ...getAdminActorContext(req),
