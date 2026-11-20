@@ -6021,7 +6021,7 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para cadastrar um cartão.' });
       }
       if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor (STRIPE_SECRET_KEY ausente).' });
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
       }
       await ensureClientsSchema();
       const body = await parseBody(req);
@@ -6040,7 +6040,7 @@ async function handleApiRequest(req, res) {
         });
         return sendJson(res, 200, { ok: true, ...setupData });
       } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar tokenização segura na Stripe.' });
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar tokenização segura do cartão.' });
       }
     }
 
@@ -6051,7 +6051,7 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para pagar com Apple Pay ou carteira.' });
       }
       if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor.' });
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
       }
       await ensureClientsSchema();
       const body = await parseBody(req);
@@ -6099,7 +6099,7 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para pagar com Apple Pay.' });
       }
       if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor.' });
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
       }
       await ensureClientsSchema();
       const body = await parseBody(req);
@@ -6153,7 +6153,7 @@ async function handleApiRequest(req, res) {
         });
         return sendJson(res, 200, { ok: true, ...sessionData });
       } catch (err) {
-        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao abrir checkout seguro Stripe / Apple Pay.' });
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao abrir checkout seguro Apple Pay.' });
       }
     }
 
@@ -6164,12 +6164,12 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para concluir sua corrida.' });
       }
       if (!stripeGateway.isStripeEnabled()) {
-        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor.' });
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
       }
       const body = await parseBody(req);
       const sessionId = String(body.sessionId || '').trim();
       if (!sessionId) {
-        return sendJson(res, 400, { ok: false, error: 'sessionId Stripe ausente.' });
+        return sendJson(res, 400, { ok: false, error: 'Identificador da sessão de checkout ausente.' });
       }
 
       const draft = await finance.getStripeCheckoutDraft(sessionId);
@@ -6194,7 +6194,7 @@ async function handleApiRequest(req, res) {
 
       const sessionCheck = await stripeGateway.retrieveWalletCheckoutSession(sessionId);
       if (!sessionCheck.authorized || !sessionCheck.paymentIntentId) {
-        return sendJson(res, 402, { ok: false, error: 'Pagamento no checkout Stripe ainda não foi autorizado.' });
+        return sendJson(res, 402, { ok: false, error: 'Pagamento no checkout Apple Pay ainda não foi autorizado.' });
       }
 
       const ridePayload = {
@@ -6312,12 +6312,12 @@ async function handleApiRequest(req, res) {
           await audit.recordAuditEvent({
             category: 'financeiro_corridas',
             actionKey: 'driver_debt_settled',
-            title: 'Quitação de dívida de motorista via PIX (Stripe)',
-            summary: `Dívida de ${result.wallet?.driverName || meta.driverId} quitada via Stripe PIX em ${audit.formatMoneyPt(paidBrl)}. Saldo devedor atual: ${audit.formatMoneyPt(result.wallet?.debtBalance || 0)}.`,
+            title: 'Quitação de dívida de motorista via PIX',
+            summary: `Dívida de ${result.wallet?.driverName || meta.driverId} quitada via PIX em ${audit.formatMoneyPt(paidBrl)}. Saldo devedor atual: ${audit.formatMoneyPt(result.wallet?.debtBalance || 0)}.`,
             severity: 'info',
             actorRole: 'gateway',
             actorId: String(meta.driverId),
-            actorName: 'Stripe Webhook',
+            actorName: 'Webhook Pagamentos',
             entityType: 'motorista',
             entityId: String(meta.driverId),
             entityLabel: result.wallet?.driverName || String(meta.driverId),
@@ -6352,7 +6352,7 @@ async function handleApiRequest(req, res) {
           await finance.savePaymentTransaction({
             ...tx,
             status: evtType === 'payment_intent.canceled' ? 'cancelado' : 'falhou',
-            failureReason: pi.last_payment_error?.message || (evtType === 'payment_intent.canceled' ? 'PIX expirado ou cancelado na Stripe' : 'Falha no pagamento Stripe')
+            failureReason: pi.last_payment_error?.message || (evtType === 'payment_intent.canceled' ? 'PIX expirado ou cancelado' : 'Falha no pagamento online')
           });
         }
         return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
@@ -6380,7 +6380,7 @@ async function handleApiRequest(req, res) {
           await finance.savePaymentTransaction({
             ...tx,
             status: 'contestado',
-            disputeReason: disp.reason || 'Contestação aberta na Stripe'
+            disputeReason: disp.reason || 'Contestação aberta no gateway de pagamento'
           });
         }
         return sendJson(res, 200, { ok: true, received: true, eventType: evtType });

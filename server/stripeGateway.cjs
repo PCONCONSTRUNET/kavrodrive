@@ -72,7 +72,7 @@ function formatStripeErrorPt(err) {
   if (code === 'incorrect_number') return 'Número do cartão inválido.';
   if (code === 'authentication_required') return 'O banco emissor exigiu verificação adicional (3DS).';
   if (code === 'card_declined' || decline) return 'Cartão recusado pelo banco emissor. Tente outro cartão ou PIX.';
-  return err?.message || 'Não foi possível processar o pagamento na Stripe.';
+  return err?.message || 'Não foi possível processar o pagamento.';
 }
 
 function parseStripeGatewayToken(rawToken) {
@@ -180,7 +180,7 @@ async function resolveSavedCard({ setupIntentId, paymentMethodId, clientId, clie
   if (setupIntentId) {
     const si = await stripe.setupIntents.retrieve(String(setupIntentId).trim());
     if (!si || si.status !== 'succeeded') {
-      throw new Error('Configuração do cartão na Stripe não foi concluída.');
+      throw new Error('Configuração segura do cartão não foi concluída.');
     }
     const siCustomer = typeof si.customer === 'string' ? si.customer : si.customer?.id || '';
     if (expectedCustomerId && siCustomer && siCustomer !== expectedCustomerId) {
@@ -193,7 +193,7 @@ async function resolveSavedCard({ setupIntentId, paymentMethodId, clientId, clie
   }
 
   if (!pmId) {
-    throw new Error('Método de pagamento Stripe (PaymentMethod) ausente.');
+    throw new Error('Método de pagamento ausente.');
   }
 
   const pm = await stripe.paymentMethods.retrieve(pmId);
@@ -446,7 +446,7 @@ async function retrieveWalletCheckoutSession(sessionId) {
     expand: ['payment_intent', 'payment_intent.latest_charge', 'payment_intent.payment_method']
   });
   if (!session) {
-    return { authorized: false, error: 'Sessão Stripe não encontrada.' };
+    return { authorized: false, error: 'Sessão de pagamento não encontrada.' };
   }
   const piObj = session.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
   const piId = piObj?.id || (typeof session.payment_intent === 'string' ? session.payment_intent : '');
@@ -487,7 +487,7 @@ async function captureCardHold({ paymentIntentId, finalAmountBrl }) {
   const stripe = getStripeClient();
   const pi = await stripe.paymentIntents.retrieve(String(paymentIntentId).trim());
   if (!pi) {
-    return { captured: false, error: 'PaymentIntent Stripe não encontrado.' };
+    return { captured: false, error: 'Transação de pagamento não encontrada.' };
   }
   if (pi.status === 'succeeded') {
     return {
@@ -500,7 +500,7 @@ async function captureCardHold({ paymentIntentId, finalAmountBrl }) {
   if (pi.status !== 'requires_capture') {
     return {
       captured: false,
-      error: `Pré-autorização Stripe em status inválido para captura (${pi.status}).`
+      error: `Pré-autorização em status inválido para captura (${pi.status}).`
     };
   }
   const desiredCents = toBrlCents(finalAmountBrl);
@@ -512,7 +512,7 @@ async function captureCardHold({ paymentIntentId, finalAmountBrl }) {
   if (cap.status !== 'succeeded') {
     return {
       captured: false,
-      error: `Falha ao capturar cobrança na Stripe (${cap.status}).`
+      error: `Falha ao capturar cobrança (${cap.status}).`
     };
   }
   return {
@@ -595,7 +595,7 @@ async function cancelOrRefundPayment({ paymentIntentId, refundAmountBrl = null }
   const stripe = getStripeClient();
   const id = String(paymentIntentId || '').trim();
   const pi = await stripe.paymentIntents.retrieve(id);
-  if (!pi) return { ok: false, error: 'PaymentIntent Stripe não encontrado.' };
+  if (!pi) return { ok: false, error: 'Transação de pagamento não encontrada.' };
 
   if (['requires_capture', 'requires_payment_method', 'requires_confirmation', 'requires_action'].includes(pi.status)) {
     await stripe.paymentIntents.cancel(id);

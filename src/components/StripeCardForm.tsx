@@ -29,7 +29,7 @@ export async function confirmStripe3dsPaymentIntent(
   try {
     const stripe = await getCachedStripePromise(publishableKey);
     if (!stripe) {
-      return { ok: false, error: 'Não foi possível inicializar a biblioteca segura da Stripe.' };
+      return { ok: false, error: 'Não foi possível inicializar o pagamento seguro.' };
     }
     const result = await stripe.confirmCardPayment(clientSecret);
     if (result.error) {
@@ -46,7 +46,7 @@ export async function confirmStripe3dsPaymentIntent(
       error: `Status do pagamento após autenticação: ${result.paymentIntent?.status || 'desconhecido'}`
     };
   } catch (err: any) {
-    return { ok: false, error: err?.message || 'Erro durante verificação 3DS na Stripe.' };
+    return { ok: false, error: err?.message || 'Erro durante verificação 3DS do cartão.' };
   }
 }
 
@@ -101,7 +101,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!stripe || !elements) {
-      setErrorMsg('Aguardando inicialização segura da Stripe...');
+      setErrorMsg('Aguardando inicialização segura do pagamento...');
       return;
     }
     const cleanHolder = holderName.trim();
@@ -126,7 +126,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
       });
       if (!setupRes.ok || !setupRes.clientSecret) {
         setSaving(false);
-        setErrorMsg(setupRes.error || 'Erro ao iniciar tokenização segura na Stripe.');
+        setErrorMsg(setupRes.error || 'Erro ao iniciar tokenização segura do cartão.');
         return;
       }
 
@@ -143,7 +143,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
 
       if (confirmRes.error) {
         setSaving(false);
-        setErrorMsg(confirmRes.error.message || 'Dados do cartão não aceitos pela Stripe.');
+        setErrorMsg(confirmRes.error.message || 'Dados do cartão não aceitos.');
         return;
       }
 
@@ -247,7 +247,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
             {holderName.trim() || 'SEU NOME NO CARTÃO'}
           </span>
           <span style={{ fontSize: '0.66rem', color: '#94A3B8', fontWeight: 700 }}>
-            STRIPE SECURE
+            KAVRO SECURE
           </span>
         </div>
       </div>
@@ -372,7 +372,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: '0.69rem', color: '#15803D', fontWeight: 700 }}>
         <ShieldCheck size={13} />
-        <span>Criptografia ponta a ponta Stripe — sem armazenar número ou CVV</span>
+        <span>Criptografia ponta a ponta — sem armazenar número ou CVV</span>
       </div>
 
       {errorMsg && (

@@ -275,7 +275,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     window.history.replaceState({}, '', cleanUrl);
 
     if (canceled && !sessionId) {
-      setRequestError('Pagamento no Apple Pay / Stripe cancelado antes da confirmação.');
+      setRequestError('Pagamento no Apple Pay cancelado antes da confirmação.');
       return;
     }
 
@@ -300,7 +300,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       .catch(() => {
         if (!cancelledFlag) {
           setIsSubmitting(false);
-          setRequestError('Erro ao verificar autorização do pagamento Apple Pay na Stripe.');
+          setRequestError('Erro ao verificar autorização do pagamento Apple Pay.');
         }
       });
     return () => {
@@ -684,7 +684,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const sessionRes = await StorageService.createStripeCheckoutSession(draftPayload);
     if (!sessionRes.ok || !sessionRes.checkoutUrl) {
       setIsSubmitting(false);
-      setRequestError(sessionRes.error || 'Não foi possível iniciar o pagamento via Apple Pay na Stripe.');
+      setRequestError(sessionRes.error || 'Não foi possível iniciar o pagamento via Apple Pay.');
       return;
     }
     window.location.assign(sessionRes.checkoutUrl);
@@ -844,7 +844,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               fontWeight: 800
             }}>
               <PaymentMethodIcon method="pix" size={14} />
-              <span>{paymentsConfig.stripeEnabled ? 'PIX Stripe' : 'PIX Gateway'}</span>
+              <span>{paymentsConfig.stripeEnabled ? 'PIX Instantâneo' : 'PIX Gateway'}</span>
               {pixRemainingLabel && (
                 <span style={{
                   display: 'inline-flex',
@@ -1951,7 +1951,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 Adicionar cartão Kavro Pay
               </div>
               <div style={{ fontSize: '0.73rem', color: '#94A3B8', marginTop: 2 }}>
-                Protegido pela Stripe — cobrança cobrada apenas na pré-autorização da corrida
+                Pagamento criptografado — pré-autorizado somente na corrida
               </div>
             </div>
 
@@ -2713,7 +2713,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <PaymentMethodIcon method="apple_pay" size={18} />
                   <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#0F172A' }}>
-                    Kavro × Stripe Apple Pay
+                    Kavro Pay • Apple Pay
                   </span>
                 </div>
                 <span style={{

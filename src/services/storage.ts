@@ -671,7 +671,7 @@ export const StorageService = {
       });
       return await res.json();
     } catch {
-      return { ok: false, error: 'Erro ao iniciar verificação segura com a Stripe.' };
+      return { ok: false, error: 'Erro ao iniciar verificação segura do cartão.' };
     }
   },
 
@@ -715,7 +715,7 @@ export const StorageService = {
       });
       return await res.json();
     } catch {
-      return { ok: false, error: 'Erro ao abrir sessão segura Apple Pay / Stripe.' };
+      return { ok: false, error: 'Erro ao abrir checkout Apple Pay.' };
     }
   },
 
@@ -732,7 +732,7 @@ export const StorageService = {
       });
       return await res.json();
     } catch {
-      return { ok: false, error: 'Erro ao confirmar autorização Stripe da corrida.' };
+      return { ok: false, error: 'Erro ao confirmar autorização da corrida.' };
     }
   },
 

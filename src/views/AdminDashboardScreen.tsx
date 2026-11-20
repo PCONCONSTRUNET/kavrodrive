@@ -1542,7 +1542,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           dinheiro: 'Dinheiro em Espécie',
           cartao_credito: 'Cartão de Crédito/Débito',
           cartao_debito: 'Cartão de Débito',
-          apple_pay: 'Apple Pay (Stripe)',
+          apple_pay: 'Apple Pay',
           online: 'Online',
         };
         const paymentLabel = paymentLabelMap[selectedExpenseDetail.paymentMethod || 'dinheiro'] || 'Dinheiro';

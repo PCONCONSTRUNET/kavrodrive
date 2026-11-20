@@ -2279,7 +2279,7 @@ async function createPixChargeForRide(ride) {
       qrFallbackGenerator: getQrCodeUrl
     });
     if (!stripePix.pixCopyPaste && !stripePix.pixQrCode) {
-      throw new Error('A Stripe não retornou o QR Code PIX. Verifique se o método PIX está ativado no Painel Stripe.');
+      throw new Error('Não foi possível gerar o QR Code PIX no momento. Verifique a configuração do gateway e tente novamente.');
     }
     pixCopyPaste = stripePix.pixCopyPaste || pixCopyPaste;
     pixQrCode = stripePix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
@@ -2451,7 +2451,7 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
         authorized: false,
         tx: null,
         split,
-        error: 'Este cartão foi salvo antes da ativação da Stripe. Cadastre o cartão novamente pelo formulário seguro para continuar.'
+        error: 'Este cartão precisa ser recadastrado pelo formulário seguro para continuar.'
       };
     }
 
@@ -2479,7 +2479,7 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
 
     if (!authSt.authorized) {
       const failedTx = await buildFailedTx(
-        authSt.error || 'Cartão recusado na Stripe.',
+        authSt.error || 'Cartão recusado.',
         authSt.paymentIntentId || `card_st_fail_${ride.id}_${Date.now()}`
       );
       return { authorized: false, tx: failedTx, split, error: authSt.error || 'Cartão recusado pelo banco emissor.' };
@@ -2630,7 +2630,7 @@ async function captureCardForRide(ride, finalAmount) {
     } catch (err) {
       return {
         captured: false,
-        error: err?.message || 'Falha ao capturar pré-autorização do cartão na Stripe.'
+        error: err?.message || 'Falha ao capturar pré-autorização do cartão.'
       };
     }
   }
@@ -2672,7 +2672,7 @@ async function refundGatewayPayment(tx, refundAmount = null) {
         refundAmountBrl: refundAmount
       });
     } catch (err) {
-      return { ok: false, error: err?.message || 'Falha ao estornar/liberar pagamento na Stripe.' };
+      return { ok: false, error: err?.message || 'Falha ao estornar ou liberar o pagamento.' };
     }
   }
   const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));

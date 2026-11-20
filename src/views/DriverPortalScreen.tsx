@@ -2727,7 +2727,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             </button>
             {debtPixModalData.provider === 'stripe' ? (
               <div style={{ fontSize: '0.74rem', color: '#15803D', fontWeight: 700, padding: '8px 10px', borderRadius: 8, backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', marginBottom: 8 }}>
-                PIX oficial gerado via Stripe. Seu saldo será liberado automaticamente após a confirmação do pagamento.
+                PIX oficial gerado. Seu saldo será liberado automaticamente após a confirmação do pagamento.
               </div>
             ) : import.meta.env.DEV && (
               <button

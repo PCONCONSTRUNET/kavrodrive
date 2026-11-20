@@ -372,8 +372,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     },
     {
       id: 'apple_pay',
-      title: 'Apple Pay (Stripe)',
-      subtitle: 'Carteira Apple Express & Checkout (pré-autorização manual)',
+      title: 'Apple Pay',
+      subtitle: 'Carteira digital Apple Express & Checkout (pré-autorização manual)',
       accent: '#0F172A',
       bgAccent: '#F1F5F9',
       hasGateway: true,
@@ -866,15 +866,15 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
               <div style={{ fontSize: '0.86rem', fontWeight: 800 }}>
                 Gateway Ativo:{' '}
                 {paymentsStatus.stripeEnabled
-                  ? 'Stripe Produção (PIX • Cartão • Apple Pay)'
+                  ? 'Pagamento Online Ativo (PIX • Cartão • Apple Pay)'
                   : paymentsStatus.gatewayProvider === 'mercadopago'
-                    ? 'Mercado Pago'
+                    ? 'Gateway Conectado'
                     : 'Modo Sandbox / Manual'}
               </div>
               <div style={{ fontSize: '0.73rem', color: paymentsStatus.stripeEnabled ? '#94A3B8' : '#64748B', marginTop: 2 }}>
                 {paymentsStatus.stripeEnabled
-                  ? 'Pré-autorização de cartão, PIX dinâmico com webhook e carteira digital Apple Pay prontos em produção.'
-                  : 'Configure STRIPE_SECRET_KEY / VITE_STRIPE_PUBLISHABLE_KEY no servidor para processar Apple Pay e cartões reais.'}
+                  ? 'Pré-autorização de cartão, PIX dinâmico com confirmação automática e carteira Apple Pay ativos.'
+                  : 'Configure as chaves do gateway no servidor para processar Apple Pay e cartões reais.'}
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -889,7 +889,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   color: paymentsStatus.stripeEnabled ? '#BEF264' : '#334155'
                 }}
               >
-                {paymentsStatus.stripeEnabled ? 'Stripe Conectada' : 'Sandbox'}
+                {paymentsStatus.stripeEnabled ? 'Gateway Conectado' : 'Sandbox'}
               </span>
               {paymentsStatus.stripeEnabled && activeMethods.includes('apple_pay') && (
                 <span
@@ -900,10 +900,14 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     borderRadius: 999,
                     backgroundColor: '#000000',
                     border: '1px solid rgba(255, 255, 255, 0.25)',
-                    color: '#FFFFFF'
+                    color: '#FFFFFF',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5
                   }}
                 >
-                   Apple Pay Ativo
+                  <PaymentMethodIcon method="apple_pay" size={14} />
+                  <span>Apple Pay Ativo</span>
                 </span>
               )}
             </div>
@@ -924,7 +928,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   Meios de Pagamento &amp; Taxas de Gateway
                 </div>
                 <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                  Ative ou desative formas de pagamento e configure o custo interno de cada gateway (Stripe / Cartão / PIX)
+                  Ative ou desative formas de pagamento e configure o custo interno de cada meio (PIX / Cartão / Apple Pay / Dinheiro)
                 </div>
               </div>
               <span
@@ -1269,7 +1273,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                       <option value="pix">PIX</option>
                       <option value="cartao_credito">Cartão de Crédito</option>
                       <option value="cartao_debito">Cartão de Débito</option>
-                      <option value="apple_pay">Apple Pay (Stripe)</option>
+                      <option value="apple_pay">Apple Pay</option>
                       <option value="dinheiro">Dinheiro</option>
                     </select>
                   </div>

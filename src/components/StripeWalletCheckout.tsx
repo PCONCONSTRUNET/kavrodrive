@@ -4,6 +4,7 @@ import { Lock, ShieldCheck, Smartphone } from 'lucide-react';
 import { LocationPoint, RideDeliveryDetails } from '../types';
 import { StorageService } from '../services/storage';
 import { getCachedStripePromise } from './StripeCardForm';
+import { PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface StripeWalletCheckoutProps {
   publishableKey: string;
@@ -60,7 +61,7 @@ const StripeWalletInner: React.FC<
   const handleConfirm = async (event: any) => {
     setWalletError('');
     if (!stripe || !elements) {
-      event?.paymentFailed?.({ reason: 'fail', message: 'Stripe ainda está carregando.' });
+      event?.paymentFailed?.({ reason: 'fail', message: 'Sistema de pagamento ainda está carregando.' });
       return;
     }
 
@@ -171,7 +172,7 @@ const StripeWalletInner: React.FC<
           padding: '2px 8px',
           borderRadius: 999
         }}>
-          Stripe Ativo
+          Ativo
         </span>
       </div>
 
@@ -243,8 +244,8 @@ const StripeWalletInner: React.FC<
                 boxShadow: '0 6px 16px rgba(0, 0, 0, 0.16)'
               }}
             >
-              <Lock size={14} color="#76D800" />
-              <span>{isOpeningHosted ? 'Abrindo Apple Pay na Stripe...' : ' Pagar com Apple Pay (Stripe)'}</span>
+              <PaymentMethodIcon method="apple_pay" size={16} />
+              <span>{isOpeningHosted ? 'Abrindo Apple Pay...' : 'Pagar com Apple Pay'}</span>
             </button>
           )}
           <div style={{
@@ -257,7 +258,7 @@ const StripeWalletInner: React.FC<
           }}>
             <ShieldCheck size={13} color="#16A34A" style={{ flexShrink: 0 }} />
             <span>
-              No iPhone/Safari com Apple Wallet, o botão nativo Touch ID / Face ID abre direto na tela; em outros navegadores abre pelo checkout seguro da Stripe.
+              No iPhone/Safari com Apple Wallet, o botão nativo Touch ID / Face ID abre direto na tela; em outros navegadores abre pelo checkout seguro.
             </span>
           </div>
         </div>
