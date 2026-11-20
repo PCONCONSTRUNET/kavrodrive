@@ -7,7 +7,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Globe,
   Menu,
   X,
   ArrowRight,
@@ -2400,27 +2399,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             style={{
               borderTop: '1px solid rgba(255,255,255,0.1)',
               paddingTop: 22,
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 14,
+              fontSize: '0.82rem',
+              color: '#94A3B8',
             }}
           >
-            <div style={{ fontSize: '0.82rem', color: '#94A3B8' }}>
-              © {new Date().getFullYear()} Kavro Drive. Todos os direitos reservados.
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-              <button type="button" onClick={() => setCityModalOpen(true)} style={footerPillStyle}>
-                <Globe size={14} color="#76D800" />
-                <span>Português (Brasil)</span>
-              </button>
-              <button type="button" onClick={() => setCityModalOpen(true)} style={footerPillStyle}>
-                <MapPin size={14} color="#76D800" />
-                <span>{selectedCity}</span>
-              </button>
-            </div>
+            © {new Date().getFullYear()} Kavro Drive. Todos os direitos reservados.
           </div>
         </div>
       </footer>
@@ -2940,21 +2923,6 @@ const footerLinkStyle: React.CSSProperties = {
   fontSize: '0.88rem',
   cursor: 'pointer',
   padding: 0,
-};
-
-const footerPillStyle: React.CSSProperties = {
-  backgroundColor: '#131E26',
-  border: '1px solid rgba(118, 216, 0, 0.25)',
-  color: '#FFFFFF',
-  borderRadius: 9,
-  height: 36,
-  padding: '0 12px',
-  fontSize: '0.82rem',
-  fontWeight: 600,
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  cursor: 'pointer',
 };
 
 const modalBackdropStyle: React.CSSProperties = {
