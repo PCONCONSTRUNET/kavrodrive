@@ -9,7 +9,7 @@ export type RideStatus =
   | 'finalizada'             // Viagem concluída
   | 'cancelada';             // Cancelada
 
-export type PaymentMethod = 'pix' | 'dinheiro' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'online';
+export type PaymentMethod = 'pix' | 'dinheiro' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'online';
 
 export type PaymentStatus =
   | 'aguardando'
@@ -261,7 +261,44 @@ export interface ClientProfile {
   birthDate?: string;
   termsAcceptedAt?: string;
   termsSignature?: PassengerTermsSignature | null;
+  walletBalance?: number;
   createdAt: string;
+}
+
+export type ClientWalletEntryType = 'topup' | 'ride_debit' | 'ride_refund' | 'route_adjustment' | 'admin_adjustment';
+
+export interface ClientWalletEntry {
+  id: string;
+  idempotencyKey: string;
+  clientId: string;
+  clientPhone?: string;
+  clientName?: string;
+  entryType: ClientWalletEntryType;
+  paymentMethod: string;
+  amount: number;
+  balanceDelta: number;
+  status: 'aguardando' | 'confirmado' | 'cancelado' | 'falhou';
+  rideId?: string | null;
+  rideCode?: string | null;
+  gatewayTxId?: string | null;
+  pixQrCode?: string;
+  pixCopyPaste?: string;
+  pixExpiresAt?: string;
+  description: string;
+  metadata?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface ClientWalletSummary {
+  clientId: string;
+  balance: number;
+  pendingBalance: number;
+  minTopupAmount: number;
+  totalDeposited: number;
+  totalSpent: number;
+  totalRefunded: number;
+  entries: ClientWalletEntry[];
 }
 
 export type KycStatus = 'pendente' | 'em_analise' | 'correcao_solicitada' | 'aprovado' | 'rejeitado';
@@ -784,6 +821,7 @@ export interface SystemConfig {
     cartao_credito?: number;
     cartao_debito?: number;
     apple_pay?: number;
+    carteira?: number;
     dinheiro?: number;
   };
   gatewayFeePercents?: {
@@ -803,6 +841,7 @@ export interface SystemConfig {
   autoSplitPixEnabled?: boolean;        // Split automático no gateway
   cardSettlementDays?: number;          // Dias para liberação de cartão (0 = imediato no disponível, >0 = saldo pendente)
   applePayDisabled?: boolean;
+  walletPaymentDisabled?: boolean;
   activePaymentMethods: PaymentMethod[];
   rideCategories?: RideCategoryConfig[];
   serviceCategories: Array<{

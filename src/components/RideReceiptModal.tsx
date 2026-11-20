@@ -100,6 +100,7 @@ export const RideReceiptModal: React.FC<RideReceiptModalProps> = ({
     cartao_credito: ride.cardLast4 ? `Cartão •••• ${ride.cardLast4}` : 'Cartão de Crédito',
     cartao_debito: ride.cardLast4 ? `Débito •••• ${ride.cardLast4}` : 'Cartão de Débito',
     apple_pay: ride.cardLast4 ? `Apple Pay •••• ${ride.cardLast4}` : 'Apple Pay',
+    carteira: 'Saldo da Carteira',
     online: 'Pagamento Online',
   };
   const paymentMethodLabel = paymentMethodLabelMap[ride.paymentMethod] || 'PIX';

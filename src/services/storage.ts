@@ -21,7 +21,9 @@ import {
   EmergencyContact,
   TrustedContact,
   SafetyAudioIncidentRecord,
-  FamilyMemberRecord
+  FamilyMemberRecord,
+  ClientWalletSummary,
+  ClientWalletEntry
 } from '../types';
 import { formatRideCode, getNextSequentialRideId } from '../utils/format';
 import {
@@ -759,6 +761,167 @@ export const StorageService = {
       return await res.json();
     } catch {
       return { ok: false, error: 'Erro ao cadastrar cartão.' };
+    }
+  },
+
+  async deleteSavedCard(cardId: string): Promise<{ ok: boolean; error?: string }> {
+    try {
+      const res = await fetch(`/api/payments/cards/${encodeURIComponent(cardId)}`, {
+        method: 'DELETE',
+        headers: this.getAuthHeaders()
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao remover cartão.' };
+    }
+  },
+
+  _syncClientWalletCache(wallet?: ClientWalletSummary | null): void {
+    if (!wallet || typeof wallet.balance !== 'number') return;
+    const cur = this.getCurrentUser();
+    if (cur && (!wallet.clientId || cur.id === wallet.clientId)) {
+      this.setCurrentUser({ ...cur, walletBalance: wallet.balance });
+    }
+    try {
+      window.dispatchEvent(new CustomEvent('up_client_wallet_updated', { detail: wallet }));
+    } catch {
+      // ignore
+    }
+  },
+
+  async fetchClientWallet(clientId?: string): Promise<{
+    ok: boolean;
+    wallet?: ClientWalletSummary;
+    error?: string;
+  }> {
+    try {
+      const q = clientId ? `?clientId=${encodeURIComponent(clientId)}&_t=${Date.now()}` : `?_t=${Date.now()}`;
+      const res = await fetch(`/api/client/wallet${q}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
+      const data = await res.json();
+      if (data.ok && data.wallet) {
+        this._syncClientWalletCache(data.wallet);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro ao consultar saldo da carteira.' };
+    }
+  },
+
+  async topupClientWallet(payload: {
+    amount: number;
+    method: 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay';
+    cardId?: string;
+    stripePaymentIntentId?: string;
+    clientId?: string;
+  }): Promise<{
+    ok: boolean;
+    pending?: boolean;
+    requiresAction?: boolean;
+    clientSecret?: string;
+    paymentIntentId?: string;
+    entry?: ClientWalletEntry;
+    wallet?: ClientWalletSummary;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/client/wallet/topup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.ok && data.wallet) {
+        this._syncClientWalletCache(data.wallet);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro ao iniciar depósito na carteira.' };
+    }
+  },
+
+  async confirmClientWalletTopup(entryId: string): Promise<{
+    ok: boolean;
+    entry?: ClientWalletEntry;
+    wallet?: ClientWalletSummary;
+    newlyConfirmed?: boolean;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/client/wallet/topup/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ entryId })
+      });
+      const data = await res.json();
+      if (data.ok && data.wallet) {
+        this._syncClientWalletCache(data.wallet);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro ao confirmar depósito PIX.' };
+    }
+  },
+
+  async createWalletTopupIntent(amount: number): Promise<{
+    ok: boolean;
+    clientSecret?: string;
+    paymentIntentId?: string;
+    amountBrl?: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/client/wallet/topup/wallet-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ amount })
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao iniciar depósito via Apple Pay.' };
+    }
+  },
+
+  async createWalletTopupCheckoutSession(amount: number, returnPath?: string): Promise<{
+    ok: boolean;
+    sessionId?: string;
+    checkoutUrl?: string;
+    amountBrl?: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/client/wallet/topup/checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ amount, returnPath })
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao abrir checkout de depósito.' };
+    }
+  },
+
+  async completeWalletTopupCheckoutSession(sessionId: string): Promise<{
+    ok: boolean;
+    entry?: ClientWalletEntry;
+    wallet?: ClientWalletSummary;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/client/wallet/topup/checkout-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ sessionId })
+      });
+      const data = await res.json();
+      if (data.ok && data.wallet) {
+        this._syncClientWalletCache(data.wallet);
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro ao validar retorno do depósito na carteira.' };
     }
   },
 

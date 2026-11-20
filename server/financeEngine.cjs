@@ -7,6 +7,8 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+const MIN_CLIENT_WALLET_TOPUP_BRL = 20;
+
 // ============================================================
 // Gerador EMV BR Code PIX (Backend Oficial)
 // ============================================================
@@ -284,7 +286,31 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS fee_amount NUMERIC DEFAULT 0;
       ALTER TABLE public.withdrawal_requests ADD COLUMN IF NOT EXISTS net_payout_amount NUMERIC DEFAULT 0;
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS rating NUMERIC;
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0;
       ALTER TABLE public.rides ADD COLUMN IF NOT EXISTS client_rated_stars NUMERIC;
+      CREATE TABLE IF NOT EXISTS public.client_wallet_entries (
+        id VARCHAR(64) PRIMARY KEY,
+        idempotency_key VARCHAR(160) UNIQUE NOT NULL,
+        client_id VARCHAR(64) NOT NULL,
+        client_phone VARCHAR(32),
+        client_name TEXT,
+        entry_type VARCHAR(40) NOT NULL,
+        payment_method VARCHAR(40) DEFAULT 'pix',
+        amount NUMERIC NOT NULL DEFAULT 0,
+        balance_delta NUMERIC NOT NULL DEFAULT 0,
+        status VARCHAR(32) NOT NULL DEFAULT 'confirmado',
+        ride_id VARCHAR(50),
+        ride_code VARCHAR(30),
+        gateway_tx_id VARCHAR(120),
+        pix_qr_code TEXT,
+        pix_copy_paste TEXT,
+        pix_expires_at TIMESTAMPTZ,
+        description TEXT NOT NULL,
+        metadata JSONB DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_client_wallet_entries_client ON public.client_wallet_entries (client_id, created_at DESC);
       CREATE TABLE IF NOT EXISTS public.ride_chat_messages (
         id VARCHAR(64) PRIMARY KEY,
         ride_id VARCHAR(50) NOT NULL,
@@ -3055,8 +3081,23 @@ async function processRideCancellationFinance(before, { cancelledBy = 'passenger
     refundAmount = round2(Math.max(0, totalPaid - feeFromPaid));
     nextPaymentStatus = refundAmount > 0 ? 'reembolsado' : 'taxa_cancelamento';
 
+    if ((before.paymentMethod === 'carteira' || tx?.method === 'carteira') && refundAmount > 0 && before.clientId) {
+      await creditClientWalletAdjustment({
+        clientId: before.clientId,
+        clientName: before.clientName,
+        clientPhone: before.clientPhone,
+        rideId: before.id,
+        rideCode: before.rideCode || before.id,
+        amount: refundAmount,
+        entryType: 'ride_refund',
+        idempotencyKey: `wallet_ride_refund_${before.id}`,
+        paymentMethod: 'carteira',
+        description: `Estorno na carteira por cancelamento da corrida ${before.rideCode || before.id}`
+      });
+    }
+
     if (tx) {
-      if (refundAmount > 0) {
+      if (refundAmount > 0 && before.paymentMethod !== 'carteira' && tx.method !== 'carteira') {
         await refundGatewayPayment(tx, refundAmount);
       }
       savedTx = await savePaymentTransaction({
@@ -3592,7 +3633,644 @@ async function markStripeCheckoutDraftRideId(sessionId, rideId) {
   );
 }
 
+// ============================================================
+// Carteira Digital do Passageiro (Saldo, Depósito Mínimo R$ 20, Débito em Corridas e Estorno)
+// ============================================================
+function formatClientWalletEntryRow(r) {
+  if (!r) return null;
+  return {
+    id: r.id,
+    idempotencyKey: r.idempotency_key || r.idempotencyKey,
+    clientId: r.client_id || r.clientId,
+    clientPhone: r.client_phone || r.clientPhone || undefined,
+    clientName: r.client_name || r.clientName || undefined,
+    entryType: r.entry_type || r.entryType,
+    paymentMethod: r.payment_method || r.paymentMethod || 'pix',
+    amount: round2(r.amount),
+    balanceDelta: round2(r.balance_delta ?? r.balanceDelta ?? 0),
+    status: r.status || 'confirmado',
+    rideId: r.ride_id || r.rideId || null,
+    rideCode: r.ride_code || r.rideCode || null,
+    gatewayTxId: r.gateway_tx_id || r.gatewayTxId || null,
+    pixQrCode: r.pix_qr_code || r.pixQrCode || undefined,
+    pixCopyPaste: r.pix_copy_paste || r.pixCopyPaste || undefined,
+    pixExpiresAt: r.pix_expires_at || r.pixExpiresAt || undefined,
+    description: r.description || '',
+    metadata: typeof r.metadata === 'string' ? JSON.parse(r.metadata || '{}') : (r.metadata || {}),
+    createdAt: r.created_at || r.createdAt || new Date().toISOString(),
+    updatedAt: r.updated_at || r.updatedAt || r.created_at || new Date().toISOString()
+  };
+}
+
+async function recomputeClientWalletBalance(clientId, pgClient = null) {
+  const cid = String(clientId || '').trim();
+  if (!cid) return 0;
+  if (!db.pool) {
+    const entries = Array.isArray(db.localStore.client_wallet_entries) ? db.localStore.client_wallet_entries : [];
+    const balance = round2(
+      entries
+        .filter(e => e.client_id === cid && e.status === 'confirmado')
+        .reduce((acc, e) => acc + Number(e.balance_delta || 0), 0)
+    );
+    const cli = (db.localStore.clients || []).find(c => c.id === cid);
+    if (cli) {
+      cli.wallet_balance = balance;
+      db.saveLocalStore();
+    }
+    return balance;
+  }
+
+  const executor = pgClient || db;
+  const sumRes = await executor.query(
+    `SELECT COALESCE(SUM(balance_delta), 0) AS bal
+     FROM public.client_wallet_entries
+     WHERE client_id = $1 AND status = 'confirmado'`,
+    [cid]
+  );
+  const balance = round2(sumRes.rows[0]?.bal || 0);
+  await executor.query(
+    `UPDATE public.clients SET wallet_balance = $1 WHERE id = $2`,
+    [balance, cid]
+  ).catch(() => {});
+  return balance;
+}
+
+async function listClientWalletEntries(clientId) {
+  await ensureExtendedSchema();
+  const cid = String(clientId || '').trim();
+  if (!cid) return [];
+  if (!db.pool) {
+    const list = Array.isArray(db.localStore.client_wallet_entries) ? db.localStore.client_wallet_entries : [];
+    return list
+      .filter(e => e.client_id === cid)
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+      .map(formatClientWalletEntryRow);
+  }
+  const r = await db.query(
+    'SELECT * FROM public.client_wallet_entries WHERE client_id = $1 ORDER BY created_at DESC LIMIT 200',
+    [cid]
+  );
+  return (r.rows || []).map(formatClientWalletEntryRow);
+}
+
+async function confirmClientWalletTopup({ entryId, gatewayTxId = null, paidAmount = null }) {
+  await ensureExtendedSchema();
+  const eid = String(entryId || '').trim();
+  const gwId = String(gatewayTxId || '').trim();
+  if (!eid && !gwId) {
+    throw new Error('Identificador do depósito não informado.');
+  }
+
+  let existing = null;
+  if (!db.pool) {
+    const entries = Array.isArray(db.localStore.client_wallet_entries) ? db.localStore.client_wallet_entries : [];
+    existing = entries.find(e => (eid && e.id === eid) || (gwId && e.gateway_tx_id === gwId)) || null;
+    if (!existing) throw new Error('Depósito não encontrado na carteira.');
+    if (existing.status === 'confirmado') {
+      const wallet = await getClientWallet(existing.client_id, { skipGatewaySync: true });
+      return { entry: formatClientWalletEntryRow(existing), wallet, newlyConfirmed: false };
+    }
+    const finalAmount = paidAmount !== null && paidAmount !== undefined && Number(paidAmount) > 0
+      ? round2(paidAmount)
+      : round2(existing.amount);
+    existing.status = 'confirmado';
+    existing.amount = finalAmount;
+    existing.balance_delta = finalAmount;
+    if (gwId) existing.gateway_tx_id = gwId;
+    existing.updated_at = new Date().toISOString();
+    await recomputeClientWalletBalance(existing.client_id);
+    const wallet = await getClientWallet(existing.client_id, { skipGatewaySync: true });
+    return { entry: formatClientWalletEntryRow(existing), wallet, newlyConfirmed: true };
+  }
+
+  const findRes = eid
+    ? await db.query('SELECT * FROM public.client_wallet_entries WHERE id = $1 LIMIT 1', [eid])
+    : await db.query('SELECT * FROM public.client_wallet_entries WHERE gateway_tx_id = $1 LIMIT 1', [gwId]);
+  existing = findRes.rows[0] || null;
+  if (!existing) throw new Error('Depósito não encontrado na carteira.');
+  if (existing.status === 'confirmado') {
+    const wallet = await getClientWallet(existing.client_id, { skipGatewaySync: true });
+    return { entry: formatClientWalletEntryRow(existing), wallet, newlyConfirmed: false };
+  }
+
+  const finalAmount = paidAmount !== null && paidAmount !== undefined && Number(paidAmount) > 0
+    ? round2(paidAmount)
+    : round2(existing.amount);
+  const updRes = await db.query(
+    `UPDATE public.client_wallet_entries
+     SET status = 'confirmado',
+         amount = $2,
+         balance_delta = $2,
+         gateway_tx_id = COALESCE(NULLIF($3, ''), gateway_tx_id),
+         updated_at = NOW()
+     WHERE id = $1 AND status <> 'confirmado'
+     RETURNING *`,
+    [existing.id, finalAmount, gwId]
+  );
+  await recomputeClientWalletBalance(existing.client_id);
+  const updatedRow = updRes.rows[0] || { ...existing, status: 'confirmado', amount: finalAmount, balance_delta: finalAmount };
+  const wallet = await getClientWallet(existing.client_id, { skipGatewaySync: true });
+  return {
+    entry: formatClientWalletEntryRow(updatedRow),
+    wallet,
+    newlyConfirmed: Boolean(updRes.rows[0])
+  };
+}
+
+async function getClientWallet(clientId, options = {}) {
+  await ensureExtendedSchema();
+  const cid = String(clientId || '').trim();
+  if (!cid) {
+    return {
+      clientId: '',
+      balance: 0,
+      pendingBalance: 0,
+      minTopupAmount: MIN_CLIENT_WALLET_TOPUP_BRL,
+      totalDeposited: 0,
+      totalSpent: 0,
+      totalRefunded: 0,
+      entries: []
+    };
+  }
+
+  let entries = await listClientWalletEntries(cid);
+
+  if (!options.skipGatewaySync && stripeGateway.isStripeEnabled()) {
+    const pendingStripeEntries = entries.filter(
+      e => e.status === 'aguardando' && String(e.gatewayTxId || '').startsWith('pi_')
+    );
+    for (const pe of pendingStripeEntries.slice(0, 5)) {
+      try {
+        const piCheck = await stripeGateway.retrievePaymentIntentStatus(pe.gatewayTxId);
+        if (piCheck && piCheck.status === 'succeeded') {
+          await confirmClientWalletTopup({
+            entryId: pe.id,
+            gatewayTxId: piCheck.id,
+            paidAmount: piCheck.amountBrl
+          });
+        }
+      } catch {
+        // ignore transient gateway lookup failures
+      }
+    }
+    if (pendingStripeEntries.length > 0) {
+      entries = await listClientWalletEntries(cid);
+    }
+  }
+
+  let balance = 0;
+  let pendingBalance = 0;
+  let totalDeposited = 0;
+  let totalSpent = 0;
+  let totalRefunded = 0;
+
+  for (const e of entries) {
+    if (e.status === 'confirmado') {
+      balance += Number(e.balanceDelta || 0);
+      if (e.entryType === 'topup') totalDeposited += Number(e.amount || 0);
+      if (e.entryType === 'ride_debit') totalSpent += Number(e.amount || 0);
+      if (e.entryType === 'ride_refund') totalRefunded += Number(e.amount || 0);
+    } else if (e.status === 'aguardando' && e.entryType === 'topup') {
+      pendingBalance += Number(e.amount || 0);
+    }
+  }
+
+  const finalBalance = round2(balance);
+  await recomputeClientWalletBalance(cid).catch(() => {});
+
+  return {
+    clientId: cid,
+    balance: finalBalance,
+    pendingBalance: round2(pendingBalance),
+    minTopupAmount: MIN_CLIENT_WALLET_TOPUP_BRL,
+    totalDeposited: round2(totalDeposited),
+    totalSpent: round2(totalSpent),
+    totalRefunded: round2(totalRefunded),
+    entries
+  };
+}
+
+async function insertClientWalletEntry({
+  id = '',
+  idempotencyKey,
+  clientId,
+  clientPhone = '',
+  clientName = '',
+  entryType,
+  paymentMethod = 'pix',
+  amount,
+  balanceDelta,
+  status = 'confirmado',
+  rideId = null,
+  rideCode = null,
+  gatewayTxId = null,
+  pixQrCode = '',
+  pixCopyPaste = '',
+  pixExpiresAt = null,
+  description,
+  metadata = {}
+}, pgClient = null) {
+  await ensureExtendedSchema();
+  const cleanKey = String(idempotencyKey || `${entryType}_${clientId}_${Date.now()}`);
+  const rowId = id || `cw-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const nowIso = new Date().toISOString();
+
+  if (!db.pool) {
+    if (!Array.isArray(db.localStore.client_wallet_entries)) db.localStore.client_wallet_entries = [];
+    const dup = db.localStore.client_wallet_entries.find(e => e.idempotency_key === cleanKey);
+    if (dup) return { entry: formatClientWalletEntryRow(dup), idempotent: true };
+    const row = {
+      id: rowId,
+      idempotency_key: cleanKey,
+      client_id: String(clientId),
+      client_phone: String(clientPhone || ''),
+      client_name: String(clientName || ''),
+      entry_type: entryType,
+      payment_method: paymentMethod || 'pix',
+      amount: round2(amount),
+      balance_delta: round2(balanceDelta),
+      status,
+      ride_id: rideId || null,
+      ride_code: rideCode || null,
+      gateway_tx_id: gatewayTxId || null,
+      pix_qr_code: pixQrCode || '',
+      pix_copy_paste: pixCopyPaste || '',
+      pix_expires_at: pixExpiresAt || null,
+      description: String(description || ''),
+      metadata: metadata || {},
+      created_at: nowIso,
+      updated_at: nowIso
+    };
+    db.localStore.client_wallet_entries.unshift(row);
+    db.saveLocalStore();
+    await recomputeClientWalletBalance(clientId);
+    return { entry: formatClientWalletEntryRow(row), idempotent: false };
+  }
+
+  const executor = pgClient || db;
+  const dupRes = await executor.query(
+    'SELECT * FROM public.client_wallet_entries WHERE idempotency_key = $1 LIMIT 1',
+    [cleanKey]
+  );
+  if (dupRes.rows[0]) {
+    return { entry: formatClientWalletEntryRow(dupRes.rows[0]), idempotent: true };
+  }
+
+  const insRes = await executor.query(
+    `INSERT INTO public.client_wallet_entries (
+      id, idempotency_key, client_id, client_phone, client_name, entry_type, payment_method,
+      amount, balance_delta, status, ride_id, ride_code, gateway_tx_id, pix_qr_code,
+      pix_copy_paste, pix_expires_at, description, metadata, created_at, updated_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb,NOW(),NOW())
+    RETURNING *`,
+    [
+      rowId,
+      cleanKey,
+      String(clientId),
+      String(clientPhone || ''),
+      String(clientName || ''),
+      entryType,
+      paymentMethod || 'pix',
+      round2(amount),
+      round2(balanceDelta),
+      status,
+      rideId || null,
+      rideCode || null,
+      gatewayTxId || null,
+      pixQrCode || '',
+      pixCopyPaste || '',
+      pixExpiresAt || null,
+      String(description || ''),
+      JSON.stringify(metadata || {})
+    ]
+  );
+  await recomputeClientWalletBalance(clientId, pgClient);
+  return { entry: formatClientWalletEntryRow(insRes.rows[0]), idempotent: false };
+}
+
+async function createClientWalletTopup({
+  clientId,
+  clientName = '',
+  clientPhone = '',
+  clientEmail = '',
+  amount,
+  method = 'pix',
+  cardId = '',
+  stripePaymentIntentId = '',
+  idempotencyKey = ''
+}) {
+  await ensureExtendedSchema();
+  const cid = String(clientId || '').trim();
+  if (!cid) throw new Error('Faça login como passageiro para depositar na carteira.');
+  const cleanAmount = round2(amount);
+  if (!Number.isFinite(cleanAmount) || cleanAmount < MIN_CLIENT_WALLET_TOPUP_BRL) {
+    throw new Error(`O valor mínimo para depósito na carteira é de R$ ${MIN_CLIENT_WALLET_TOPUP_BRL.toFixed(2).replace('.', ',')}.`);
+  }
+
+  const normalizedMethod = String(method || 'pix').toLowerCase().trim();
+  const entryId = `cw-topup-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const cfg = await getSystemConfig();
+
+  if (normalizedMethod === 'pix') {
+    const txid = `CW${cid.replace(/[^a-zA-Z0-9]/g, '').slice(-8)}${Date.now().toString().slice(-6)}`.slice(0, 25);
+    let pixCopyPaste = generateDynamicPixPayload({
+      key: cfg.pixKey || 'contato@upmobilidade.com.br',
+      beneficiaryName: cfg.pixBeneficiary || cfg.companyName || 'KAVRO DRIVE',
+      city: cfg.driverCarCity || 'BRASIL',
+      amount: cleanAmount,
+      txid
+    });
+    let pixQrCode = getQrCodeUrl(pixCopyPaste, 260);
+    let gatewayTxId = `wallet_pix_${txid}`;
+    let pixExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+
+    if (stripeGateway.isStripeEnabled()) {
+      const stripePix = await stripeGateway.createPixCharge({
+        amountBrl: cleanAmount,
+        clientId: cid,
+        entryId,
+        purpose: 'client_wallet_topup',
+        payerName: clientName || 'Passageiro Kavro',
+        payerEmail: clientEmail || 'passageiro@kavro.app',
+        description: `Depósito Carteira Kavro Drive (${cid})`,
+        qrFallbackGenerator: getQrCodeUrl
+      });
+      if (!stripePix.pixCopyPaste && !stripePix.pixQrCode) {
+        throw new Error('Não foi possível gerar o QR Code PIX no momento. Tente novamente em instantes.');
+      }
+      pixCopyPaste = stripePix.pixCopyPaste || pixCopyPaste;
+      pixQrCode = stripePix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
+      gatewayTxId = stripePix.paymentIntentId;
+      pixExpiresAt = stripePix.expiresAt || pixExpiresAt;
+    }
+
+    const { entry } = await insertClientWalletEntry({
+      id: entryId,
+      idempotencyKey: idempotencyKey || `wallet_topup_pix_${entryId}`,
+      clientId: cid,
+      clientPhone,
+      clientName,
+      entryType: 'topup',
+      paymentMethod: 'pix',
+      amount: cleanAmount,
+      balanceDelta: cleanAmount,
+      status: 'aguardando',
+      gatewayTxId,
+      pixQrCode,
+      pixCopyPaste,
+      pixExpiresAt,
+      description: `Recarga na carteira via PIX (R$ ${cleanAmount.toFixed(2).replace('.', ',')})`
+    });
+
+    const wallet = await getClientWallet(cid, { skipGatewaySync: true });
+    return { ok: true, pending: true, entry, wallet };
+  }
+
+  // Depósito imediato via Cartão salvo ou Apple Pay / Express Checkout
+  if (stripePaymentIntentId && stripeGateway.isStripeEnabled()) {
+    const checkPi = await stripeGateway.verifyAuthorizedPaymentIntent(stripePaymentIntentId);
+    if (!checkPi.authorized || checkPi.status !== 'succeeded') {
+      return { ok: false, error: 'Pagamento da recarga ainda não foi confirmado.' };
+    }
+    if (Number(checkPi.amountBrl || 0) + 0.05 < cleanAmount) {
+      return { ok: false, error: 'Valor confirmado diferente do valor da recarga.' };
+    }
+    const labelBrand = checkPi.cardBrand || (normalizedMethod === 'apple_pay' ? 'Apple Pay' : 'Cartão');
+    const last4Txt = checkPi.cardLast4 ? ` •••• ${checkPi.cardLast4}` : '';
+    const { entry } = await insertClientWalletEntry({
+      id: entryId,
+      idempotencyKey: idempotencyKey || `wallet_topup_pi_${checkPi.paymentIntentId}`,
+      clientId: cid,
+      clientPhone,
+      clientName,
+      entryType: 'topup',
+      paymentMethod: normalizedMethod,
+      amount: cleanAmount,
+      balanceDelta: cleanAmount,
+      status: 'confirmado',
+      gatewayTxId: checkPi.paymentIntentId,
+      description: `Depósito na carteira via ${labelBrand}${last4Txt}`
+    });
+    const wallet = await getClientWallet(cid, { skipGatewaySync: true });
+    return { ok: true, pending: false, entry, wallet };
+  }
+
+  const cards = await listSavedCards(cid, clientPhone);
+  const chosenCard = cards.find(c => c.id === cardId) || null;
+  if (!chosenCard) {
+    throw new Error('Selecione ou cadastre um cartão válido para depositar na carteira.');
+  }
+
+  let gatewayTxId = `wallet_card_${Date.now()}`;
+  if (stripeGateway.isStripeEnabled()) {
+    const parsedStripe = stripeGateway.parseStripeGatewayToken(chosenCard.gatewayToken);
+    if (!parsedStripe) {
+      throw new Error('Este cartão precisa ser recadastrado pelo formulário seguro para continuar.');
+    }
+    const chargeRes = await stripeGateway.authorizeCardHold({
+      amountBrl: cleanAmount,
+      customerId: parsedStripe.customerId,
+      paymentMethodId: parsedStripe.paymentMethodId,
+      clientEmail,
+      captureMethod: 'automatic',
+      purpose: 'client_wallet_topup',
+      description: `Depósito Carteira Kavro Drive (${cid})`,
+      idempotencyKey: idempotencyKey || `kavro_st_wallet_topup_${cid}_${entryId}`,
+      metadata: { clientId: cid, entryId }
+    });
+    if (chargeRes.requiresAction) {
+      return {
+        ok: false,
+        requiresAction: true,
+        clientSecret: chargeRes.clientSecret,
+        paymentIntentId: chargeRes.paymentIntentId,
+        error: chargeRes.error || 'Confirme a verificação de segurança (3DS) do cartão.'
+      };
+    }
+    if (!chargeRes.authorized) {
+      return { ok: false, error: chargeRes.error || 'Cartão recusado pelo banco emissor.' };
+    }
+    gatewayTxId = chargeRes.paymentIntentId;
+  }
+
+  const { entry } = await insertClientWalletEntry({
+    id: entryId,
+    idempotencyKey: idempotencyKey || `wallet_topup_card_${gatewayTxId}`,
+    clientId: cid,
+    clientPhone,
+    clientName,
+    entryType: 'topup',
+    paymentMethod: normalizedMethod,
+    amount: cleanAmount,
+    balanceDelta: cleanAmount,
+    status: 'confirmado',
+    gatewayTxId,
+    description: `Depósito na carteira via ${chosenCard.brand} •••• ${chosenCard.last4}`
+  });
+  const wallet = await getClientWallet(cid, { skipGatewaySync: true });
+  return { ok: true, pending: false, entry, wallet };
+}
+
+async function debitClientWalletForRide({
+  clientId,
+  clientName = '',
+  clientPhone = '',
+  rideId,
+  rideCode = '',
+  amount,
+  entryType = 'ride_debit',
+  idempotencyKey = '',
+  description = ''
+}) {
+  await ensureExtendedSchema();
+  const cid = String(clientId || '').trim();
+  const cleanAmount = round2(amount);
+  const cleanKey = String(idempotencyKey || `wallet_ride_debit_${rideId}`);
+  const descText = description || `Pagamento da corrida ${rideCode || rideId} com saldo da carteira`;
+
+  if (!cid) {
+    return { ok: false, error: 'Faça login como passageiro para pagar com o saldo da carteira.' };
+  }
+  if (!Number.isFinite(cleanAmount) || cleanAmount <= 0) {
+    return { ok: false, error: 'Valor inválido para débito na carteira.' };
+  }
+
+  if (!db.pool) {
+    const entries = Array.isArray(db.localStore.client_wallet_entries) ? db.localStore.client_wallet_entries : [];
+    const existing = entries.find(e => e.idempotency_key === cleanKey);
+    if (existing) {
+      const bal = await recomputeClientWalletBalance(cid);
+      return { ok: true, idempotent: true, entry: formatClientWalletEntryRow(existing), balanceAfter: bal };
+    }
+    const available = round2(
+      entries
+        .filter(e => e.client_id === cid && e.status === 'confirmado')
+        .reduce((acc, e) => acc + Number(e.balance_delta || 0), 0)
+    );
+    if (available + 0.001 < cleanAmount) {
+      return {
+        ok: false,
+        availableBalance: available,
+        error: `Saldo insuficiente na carteira (Disponível: R$ ${available.toFixed(2).replace('.', ',')}). Deposite a partir de R$ 20,00 para pagar com a carteira.`
+      };
+    }
+    const { entry } = await insertClientWalletEntry({
+      idempotencyKey: cleanKey,
+      clientId: cid,
+      clientPhone,
+      clientName,
+      entryType,
+      paymentMethod: 'carteira',
+      amount: cleanAmount,
+      balanceDelta: -cleanAmount,
+      status: 'confirmado',
+      rideId,
+      rideCode,
+      gatewayTxId: `wallet_${rideId}`,
+      description: descText
+    });
+    const balanceAfter = await recomputeClientWalletBalance(cid);
+    return { ok: true, idempotent: false, entry, balanceAfter };
+  }
+
+  const pgClient = await db.pool.connect();
+  try {
+    await pgClient.query('BEGIN');
+    await pgClient.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`client_wallet:${cid}`]);
+
+    const dupRes = await pgClient.query(
+      'SELECT * FROM public.client_wallet_entries WHERE idempotency_key = $1 LIMIT 1',
+      [cleanKey]
+    );
+    if (dupRes.rows[0]) {
+      const bal = await recomputeClientWalletBalance(cid, pgClient);
+      await pgClient.query('COMMIT');
+      return { ok: true, idempotent: true, entry: formatClientWalletEntryRow(dupRes.rows[0]), balanceAfter: bal };
+    }
+
+    const balRes = await pgClient.query(
+      `SELECT COALESCE(SUM(balance_delta), 0) AS bal
+       FROM public.client_wallet_entries
+       WHERE client_id = $1 AND status = 'confirmado'`,
+      [cid]
+    );
+    const available = round2(balRes.rows[0]?.bal || 0);
+    if (available + 0.001 < cleanAmount) {
+      await pgClient.query('ROLLBACK');
+      return {
+        ok: false,
+        availableBalance: available,
+        error: `Saldo insuficiente na carteira (Disponível: R$ ${available.toFixed(2).replace('.', ',')}). Deposite a partir de R$ 20,00 para pagar com a carteira.`
+      };
+    }
+
+    const { entry } = await insertClientWalletEntry(
+      {
+        idempotencyKey: cleanKey,
+        clientId: cid,
+        clientPhone,
+        clientName,
+        entryType,
+        paymentMethod: 'carteira',
+        amount: cleanAmount,
+        balanceDelta: -cleanAmount,
+        status: 'confirmado',
+        rideId,
+        rideCode,
+        gatewayTxId: `wallet_${rideId}`,
+        description: descText
+      },
+      pgClient
+    );
+    const balanceAfter = await recomputeClientWalletBalance(cid, pgClient);
+    await pgClient.query('COMMIT');
+    return { ok: true, idempotent: false, entry, balanceAfter };
+  } catch (err) {
+    await pgClient.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    pgClient.release();
+  }
+}
+
+async function creditClientWalletAdjustment({
+  clientId,
+  clientName = '',
+  clientPhone = '',
+  rideId = null,
+  rideCode = null,
+  amount,
+  entryType = 'ride_refund',
+  idempotencyKey,
+  paymentMethod = 'carteira',
+  description = ''
+}) {
+  const cid = String(clientId || '').trim();
+  const cleanAmount = round2(amount);
+  if (!cid || !Number.isFinite(cleanAmount) || cleanAmount <= 0) {
+    return null;
+  }
+  const res = await insertClientWalletEntry({
+    idempotencyKey: idempotencyKey || `wallet_adj_${cid}_${Date.now()}`,
+    clientId: cid,
+    clientPhone,
+    clientName,
+    entryType,
+    paymentMethod,
+    amount: cleanAmount,
+    balanceDelta: +cleanAmount,
+    status: 'confirmado',
+    rideId,
+    rideCode,
+    gatewayTxId: rideId ? `wallet_refund_${rideId}` : `wallet_adj_${Date.now()}`,
+    description: description || `Crédito na carteira (R$ ${cleanAmount.toFixed(2).replace('.', ',')})`
+  });
+  const wallet = await getClientWallet(cid, { skipGatewaySync: true });
+  return { ...res, wallet };
+}
+
 module.exports = {
+  MIN_CLIENT_WALLET_TOPUP_BRL,
   round2,
   calculateSplit,
   resolveCommissionPercentForRide,
@@ -3639,6 +4317,14 @@ module.exports = {
   updateSosStatusDb,
   saveStripeCheckoutDraft,
   getStripeCheckoutDraft,
-  markStripeCheckoutDraftRideId
+  markStripeCheckoutDraftRideId,
+  formatClientWalletEntryRow,
+  recomputeClientWalletBalance,
+  listClientWalletEntries,
+  getClientWallet,
+  createClientWalletTopup,
+  confirmClientWalletTopup,
+  debitClientWalletForRide,
+  creditClientWalletAdjustment
 };
 

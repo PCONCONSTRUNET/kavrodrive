@@ -91,7 +91,7 @@ function getInitialStore() {
           minWithdrawalAmount: 20.0,
           autoSplitPixEnabled: true,
           cardSettlementDays: 0,
-          activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'dinheiro'],
+          activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'carteira', 'dinheiro'],
           serviceCategories: [
             { id: 'standard', name: 'UPX • Particular Padrão', multiplier: 1.0, description: 'Viagens rápidas do dia a dia com ar-condicionado' },
             { id: 'comfort', name: 'Kavro Comfort • Executivo', multiplier: 1.25, description: 'Sedans espaçosos e motoristas mais bem avaliados' },
@@ -162,6 +162,7 @@ function getInitialStore() {
     rides: [],
     financial_ledger: [],
     payment_transactions: [],
+    client_wallet_entries: [],
     saved_cards: [],
     withdrawal_requests: [],
     expenses: [],
@@ -188,6 +189,7 @@ function loadLocalStore() {
       }
       if (!Array.isArray(merged.financial_ledger)) merged.financial_ledger = [];
       if (!Array.isArray(merged.payment_transactions)) merged.payment_transactions = [];
+      if (!Array.isArray(merged.client_wallet_entries)) merged.client_wallet_entries = [];
       if (!Array.isArray(merged.saved_cards)) merged.saved_cards = [];
       if (!Array.isArray(merged.withdrawal_requests)) merged.withdrawal_requests = [];
       if (!Array.isArray(merged.ride_chat_messages)) merged.ride_chat_messages = [];

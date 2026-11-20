@@ -44,7 +44,7 @@ const clampMoney = (raw: string, fallback: number, min = 0): number => {
   return Math.max(min, Math.round(n * 100) / 100);
 };
 
-const ALL_METHODS: PaymentMethod[] = ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'dinheiro'];
+const ALL_METHODS: PaymentMethod[] = ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'carteira', 'dinheiro'];
 
 const calcPlatformFee = (gross: number, pct: number, fixed: number): number => {
   if (gross <= 0) return 0;
@@ -140,6 +140,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     if (!cfg.applePayDisabled && base.includes('cartao_credito') && !base.includes('apple_pay')) {
       base.push('apple_pay');
     }
+    if (!cfg.walletPaymentDisabled && !base.includes('carteira')) {
+      base.push('carteira');
+    }
     return base;
   };
 
@@ -160,7 +163,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
   // Simuladores
   const [simRideAmountStr, setSimRideAmountStr] = useState('50');
-  const [simMethod, setSimMethod] = useState<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro'>('pix');
+  const [simMethod, setSimMethod] = useState<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro'>('pix');
   const [simWithdrawAmountStr, setSimWithdrawAmountStr] = useState('100');
 
   useEffect(() => {
@@ -250,6 +253,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
         cartao_credito: parsedGlobal,
         cartao_debito: parsedGlobal,
         apple_pay: parsedGlobal,
+        carteira: parsedGlobal,
         dinheiro: parsedGlobal
       },
       gatewayFeePercents: {
@@ -268,6 +272,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       cashDeductFromBalanceFirst: cashDeductFirst,
       autoSplitPixEnabled: autoSplitPix,
       applePayDisabled: !finalMethods.includes('apple_pay'),
+      walletPaymentDisabled: !finalMethods.includes('carteira'),
       activePaymentMethods: finalMethods
     };
 
@@ -327,7 +332,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
   // Prévia de Pagamentos / Gateways / Saques
   const methodRows: Array<{
-    id: 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro';
+    id: 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro';
     title: string;
     subtitle: string;
     accent: string;
@@ -382,6 +387,15 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       icon: <PaymentMethodIcon method="apple_pay" size={18} />
     },
     {
+      id: 'carteira',
+      title: 'Saldo da Carteira Kavro',
+      subtitle: 'Crédito pré-pago depositado pelo passageiro (mín. R$ 20,00)',
+      accent: '#3F6212',
+      bgAccent: '#ECFCCB',
+      hasGateway: false,
+      icon: <PaymentMethodIcon method="carteira" size={20} />
+    },
+    {
       id: 'dinheiro',
       title: 'Dinheiro (Em Mãos)',
       subtitle: 'Taxa lançada/abatida do motorista',
@@ -392,11 +406,12 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     }
   ];
 
-  const gwPctMap: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro', number> = {
+  const gwPctMap: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro', number> = {
     pix: clampPct(pixGatewayStr, 0),
     cartao_credito: clampPct(creditGatewayStr, 0),
     cartao_debito: clampPct(debitGatewayStr, 0),
     apple_pay: clampPct(applePayGatewayStr, 0),
+    carteira: 0,
     dinheiro: 0
   };
 
@@ -1267,13 +1282,14 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     />
                     <select
                       value={simMethod}
-                      onChange={(e) => setSimMethod(e.target.value as 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro')}
+                      onChange={(e) => setSimMethod(e.target.value as 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro')}
                       style={{ height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.74rem', fontWeight: 600 }}
                     >
                       <option value="pix">PIX</option>
                       <option value="cartao_credito">Cartão de Crédito</option>
                       <option value="cartao_debito">Cartão de Débito</option>
                       <option value="apple_pay">Apple Pay</option>
+                      <option value="carteira">Saldo da Carteira</option>
                       <option value="dinheiro">Dinheiro</option>
                     </select>
                   </div>

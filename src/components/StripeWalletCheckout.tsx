@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Elements, ExpressCheckoutElement, useElements, useStripe } from '@stripe/react-stripe-js';
-import { Lock, ShieldCheck, Smartphone } from 'lucide-react';
+import { ShieldCheck, Smartphone } from 'lucide-react';
 import { LocationPoint, RideDeliveryDetails } from '../types';
 import { StorageService } from '../services/storage';
 import { getCachedStripePromise } from './StripeCardForm';
@@ -9,36 +9,41 @@ import { PaymentMethodIcon } from './PaymentMethodIcon';
 interface StripeWalletCheckoutProps {
   publishableKey: string;
   amountBrl: number;
-  category: string;
-  distanceKm: number;
-  durationMin: number;
-  time: string;
+  category?: string;
+  distanceKm?: number;
+  durationMin?: number;
+  time?: string;
   origin?: LocationPoint | null;
   destination?: LocationPoint | null;
   clientId?: string;
   clientName?: string;
   clientPhone?: string;
   clientEmail?: string;
+  captureMethod?: 'manual' | 'automatic';
+  hostedButtonText?: string;
+  onCreateIntentOverride?: () => Promise<{ ok: boolean; clientSecret?: string; paymentIntentId?: string; error?: string }>;
   onBeforeConfirm: () => { ok: boolean; error?: string; deliveryDetails?: RideDeliveryDetails | null };
   onWalletAuthorized: (result: { paymentIntentId: string; brand: string }) => Promise<void>;
   onHostedCheckoutClick?: () => Promise<void>;
 }
 
 const StripeWalletInner: React.FC<
-  Omit<StripeWalletCheckoutProps, 'publishableKey'> & { amountCents: number }
+  Omit<StripeWalletCheckoutProps, 'publishableKey' | 'captureMethod'> & { amountCents: number }
 > = ({
   amountBrl,
   amountCents,
-  category,
-  distanceKm,
-  durationMin,
-  time,
+  category = 'kavro_go',
+  distanceKm = 0,
+  durationMin = 0,
+  time = '',
   origin,
   destination,
   clientId,
   clientName,
   clientPhone,
   clientEmail,
+  hostedButtonText,
+  onCreateIntentOverride,
   onBeforeConfirm,
   onWalletAuthorized,
   onHostedCheckoutClick
@@ -84,19 +89,21 @@ const StripeWalletInner: React.FC<
         return;
       }
 
-      const intentRes = await StorageService.createStripeWalletIntent({
-        clientId,
-        clientName,
-        clientPhone,
-        clientEmail,
-        category,
-        distanceKm,
-        durationMin,
-        time,
-        origin: origin || undefined,
-        destination: destination || undefined,
-        amountBrl
-      });
+      const intentRes = onCreateIntentOverride
+        ? await onCreateIntentOverride()
+        : await StorageService.createStripeWalletIntent({
+            clientId,
+            clientName,
+            clientPhone,
+            clientEmail,
+            category,
+            distanceKm,
+            durationMin,
+            time,
+            origin: origin || undefined,
+            destination: destination || undefined,
+            amountBrl
+          });
 
       if (!intentRes.ok || !intentRes.clientSecret || !intentRes.paymentIntentId) {
         const msg = intentRes.error || 'Não foi possível preparar a cobrança via Apple Pay / Carteira.';
@@ -245,7 +252,7 @@ const StripeWalletInner: React.FC<
               }}
             >
               <PaymentMethodIcon method="apple_pay" size={16} />
-              <span>{isOpeningHosted ? 'Abrindo Apple Pay...' : 'Pagar com Apple Pay'}</span>
+              <span>{isOpeningHosted ? 'Abrindo Apple Pay...' : (hostedButtonText || 'Pagar com Apple Pay')}</span>
             </button>
           )}
           <div style={{
@@ -282,6 +289,7 @@ const StripeWalletInner: React.FC<
 export const StripeWalletCheckout: React.FC<StripeWalletCheckoutProps> = ({
   publishableKey,
   amountBrl,
+  captureMethod = 'manual',
   ...rest
 }) => {
   const stripePromise = useMemo(() => getCachedStripePromise(publishableKey), [publishableKey]);
@@ -292,7 +300,7 @@ export const StripeWalletCheckout: React.FC<StripeWalletCheckoutProps> = ({
       mode: 'payment' as const,
       amount: initialAmountRef.current,
       currency: 'brl',
-      captureMethod: 'manual' as const,
+      captureMethod,
       locale: 'pt-BR' as const,
       appearance: {
         theme: 'stripe' as const,
@@ -302,7 +310,7 @@ export const StripeWalletCheckout: React.FC<StripeWalletCheckoutProps> = ({
         }
       }
     }),
-    []
+    [captureMethod]
   );
 
   if (!publishableKey) return null;

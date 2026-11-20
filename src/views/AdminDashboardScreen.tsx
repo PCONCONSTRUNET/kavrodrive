@@ -1543,6 +1543,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           cartao_credito: 'Cartão de Crédito/Débito',
           cartao_debito: 'Cartão de Débito',
           apple_pay: 'Apple Pay',
+          carteira: 'Saldo da Carteira',
           online: 'Online',
         };
         const paymentLabel = paymentLabelMap[selectedExpenseDetail.paymentMethod || 'dinheiro'] || 'Dinheiro';

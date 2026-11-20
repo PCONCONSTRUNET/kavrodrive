@@ -7,7 +7,7 @@ import {
   CheckCircle2, ShieldCheck, Car, Clock,
   Save, Check, Plus, CreditCard, ChevronRight,
   Headphones, Sparkles, Bell,
-  Camera, Lock, Send, XCircle, HelpCircle, Users
+  Camera, Lock, Send, XCircle, HelpCircle, Users, Wallet
 } from 'lucide-react';
 import { ClientProfile, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
@@ -21,6 +21,7 @@ import { FamilyProfileFlowModal } from '../components/FamilyProfileFlowModal';
 import { NotificationsModal } from '../components/NotificationsModal';
 import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from '../components/PassengerTermsContractModal';
+import { PassengerWalletModal } from '../components/PassengerWalletModal';
 import { clientExternalId } from '../services/push';
 import { formatPhone, formatCPF, isValidCPF, getCleanWhatsappNumber } from '../utils/format';
 import { searchAddressGeocode } from '../utils/geo';
@@ -45,6 +46,8 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
   const [isFamilyFlowOpen, setIsFamilyFlowOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isWalletOpen, setIsWalletOpen] = useState(false);
+  const [walletBalance, setWalletBalance] = useState<number>(Number(currentUser?.walletBalance || 0));
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() => {
     return StorageService.getNotifications().filter(n => !n.read).length;
   });
@@ -74,6 +77,33 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const [photoFeedback, setPhotoFeedback] = useState('');
   const clientPhotoInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setWalletBalance(0);
+      return;
+    }
+    let active = true;
+    const syncWallet = async () => {
+      const w = await StorageService.fetchClientWallet(currentUser.id);
+      if (active && w.ok && w.wallet) {
+        setWalletBalance(w.wallet.balance);
+      }
+    };
+    const onWalletEvent = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (detail && typeof detail.balance === 'number') {
+        setWalletBalance(detail.balance);
+      }
+    };
+    setWalletBalance(Number(currentUser.walletBalance || 0));
+    syncWallet();
+    window.addEventListener('up_client_wallet_updated', onWalletEvent);
+    return () => {
+      active = false;
+      window.removeEventListener('up_client_wallet_updated', onWalletEvent);
+    };
+  }, [currentUser?.id]);
 
   useEffect(() => {
     if (!currentUser?.id) return;
@@ -675,6 +705,158 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Atalhos Rápidos Estilo Uber (Ajuda, Carteira, Segurança, Mensagens/Avisos) */}
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 1fr',
+            gap: 10
+          }}>
+            <button
+              type="button"
+              onClick={() => navigate('/ajuda')}
+              style={{
+                background: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                borderRadius: 16,
+                padding: '13px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)'
+              }}
+            >
+              <div style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                backgroundColor: '#F1F5F9',
+                color: '#0F172A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <HelpCircle size={18} />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A' }}>Ajuda</div>
+                <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Suporte &amp; FAQ</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsWalletOpen(true)}
+              style={{
+                background: 'linear-gradient(145deg, #0B1117 0%, #16222E 100%)',
+                border: '1px solid #1E293B',
+                borderRadius: 16,
+                padding: '13px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+                boxShadow: '0 6px 16px rgba(15, 23, 42, 0.14)'
+              }}
+            >
+              <div style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                backgroundColor: 'rgba(118, 216, 0, 0.16)',
+                border: '1px solid rgba(118, 216, 0, 0.35)',
+                color: '#76D800',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <Wallet size={18} />
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>Carteira</div>
+                <div style={{ fontSize: '0.72rem', color: '#BEF264', fontWeight: 800 }}>
+                  {walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsTrustedContactsOpen(true)}
+              style={{
+                background: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                borderRadius: 16,
+                padding: '13px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)'
+              }}
+            >
+              <div style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                backgroundColor: '#EFF6FF',
+                color: '#1D4ED8',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <ShieldCheck size={18} />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A' }}>Segurança</div>
+                <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Contatos &amp; SOS</div>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsNotificationsOpen(true)}
+              style={{
+                background: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                borderRadius: 16,
+                padding: '13px 14px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                cursor: 'pointer',
+                textAlign: 'left',
+                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)'
+              }}
+            >
+              <div style={{
+                width: 34,
+                height: 34,
+                borderRadius: 10,
+                backgroundColor: '#F0FDF4',
+                color: '#15803D',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0
+              }}>
+                <Bell size={18} />
+              </div>
+              <div>
+                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A' }}>Mensagens</div>
+                <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>
+                  {unreadNotifCount > 0 ? `${unreadNotifCount} novo(s)` : 'Avisos do app'}
+                </div>
+              </div>
+            </button>
           </div>
 
           {/* Carrossel horizontal estilo Uber (Favoritos <-> Recursos de Segurança) dentro da área do cliente */}
@@ -1714,6 +1896,26 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
         userRole="client"
+      />
+
+      {/* Carteira Digital Kavro Drive (Depósito Mínimo R$ 20,00 + Formas de Pagamento) */}
+      <PassengerWalletModal
+        isOpen={isWalletOpen}
+        onClose={() => setIsWalletOpen(false)}
+        currentUser={currentUser}
+        config={config}
+        onRequireAuth={() => {
+          setAuthInitialMode('login');
+          setIsAuthModalOpen(true);
+        }}
+        onWalletUpdated={(w) => {
+          setWalletBalance(w.balance);
+          if (currentUser) {
+            const nextUser = { ...currentUser, walletBalance: w.balance };
+            setCurrentUser(nextUser);
+            if (onUserChange) onUserChange(nextUser);
+          }
+        }}
       />
     </div>
   );

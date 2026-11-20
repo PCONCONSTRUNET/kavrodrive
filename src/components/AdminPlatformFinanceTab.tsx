@@ -464,6 +464,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     if (method === 'cartao_credito') return 'Cartão de Crédito';
     if (method === 'cartao_debito') return 'Cartão de Débito';
     if (method === 'apple_pay') return 'Apple Pay';
+    if (method === 'carteira') return 'Saldo da Carteira';
     return method;
   };
 

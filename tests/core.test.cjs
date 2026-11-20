@@ -3207,3 +3207,213 @@ test('Cancelar corrida ou enviar nova solicitação encerra PIX pendentes anteri
   assert.equal(checkPix1.rows[0].status, 'cancelada');
   assert.equal(checkPix1.rows[0].payment_status, 'cancelado');
 });
+
+test('Carteira do Passageiro: depósito mínimo R$ 20, pagamento de corrida, estorno no cancelamento e repasse ao motorista', async () => {
+  const ip = { 'x-forwarded-for': '198.51.100.188' };
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '7').slice(-9).split('').map(Number);
+    if (new Set(base).size === 1) base[8] = (base[8] + 1) % 10;
+    const calc = (arr) => {
+      let s = 0;
+      for (let i = 0; i < arr.length; i++) s += arr[i] * (arr.length + 1 - i);
+      return ((s * 10) % 11) % 10;
+    };
+    const d1 = calc(base);
+    const d2 = calc([...base, d1]);
+    return [...base, d1, d2].join('');
+  };
+
+  const phone = `(48) 99511-${String(Date.now()).slice(-4)}`;
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: ip,
+    body: {
+      name: 'Lucas Carteira',
+      phone,
+      email: `carteira.${Date.now()}@kavro.test`,
+      document: makeTestCpf(Math.floor((Date.now() % 700000000) + 200000077)),
+      password: 'WalletPass123!',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliId = cliReg.json.client.id;
+  const cliToken = cliReg.json.clientToken;
+
+  // 1) Consulta saldo inicial zero e mínimo de R$ 20
+  const initWallet = await apiJson('/api/client/wallet', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(initWallet.status, 200);
+  assert.equal(initWallet.json.wallet.balance, 0);
+  assert.equal(initWallet.json.wallet.minTopupAmount, 20);
+
+  // 2) Depósito abaixo de R$ 20,00 é bloqueado pelo servidor
+  const minFailRes = await apiJson('/api/client/wallet/topup', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: { amount: 19.99, method: 'pix' }
+  });
+  assert.equal(minFailRes.status, 400);
+
+  // 3) Corrida na carteira sem saldo retorna HTTP 402 INSUFFICIENT_WALLET_BALANCE
+  const noBalRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Lucas Carteira',
+      clientPhone: phone,
+      origin: { address: 'Rua Origem Wallet, 10', lat: -28.3910, lng: -49.3930 },
+      destination: { address: 'Rua Destino Wallet, 90', lat: -28.4010, lng: -49.4030 },
+      distanceKm: 5,
+      durationMin: 10,
+      time: '15:00',
+      category: 'kavro_go',
+      paymentMethod: 'carteira'
+    }
+  });
+  assert.equal(noBalRide.status, 402);
+  assert.equal(noBalRide.json.code, 'INSUFFICIENT_WALLET_BALANCE');
+
+  // 4) Deposita R$ 50,00 via PIX e confirma depósito
+  const pixTopup = await apiJson('/api/client/wallet/topup', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: { amount: 50, method: 'pix' }
+  });
+  assert.equal(pixTopup.status, 200);
+  assert.equal(pixTopup.json.pending, true);
+  assert.ok(pixTopup.json.entry.id);
+  assert.ok(pixTopup.json.entry.pixCopyPaste);
+  assert.equal(pixTopup.json.wallet.pendingBalance, 50);
+  assert.equal(pixTopup.json.wallet.balance, 0);
+
+  const confirmTopup = await apiJson('/api/client/wallet/topup/confirm', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: { entryId: pixTopup.json.entry.id }
+  });
+  assert.equal(confirmTopup.status, 200);
+  assert.equal(confirmTopup.json.wallet.balance, 50);
+  assert.equal(confirmTopup.json.wallet.pendingBalance, 0);
+
+  // 5) Solicita corrida usando saldo da carteira -> confirma na hora e debita saldo
+  const walletRide1 = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Lucas Carteira',
+      clientPhone: phone,
+      origin: { address: 'Rua Origem Wallet, 10', lat: -28.3910, lng: -49.3930 },
+      destination: { address: 'Rua Destino Wallet, 90', lat: -28.4010, lng: -49.4030 },
+      distanceKm: 5,
+      durationMin: 10,
+      time: '15:05',
+      category: 'kavro_go',
+      paymentMethod: 'carteira'
+    }
+  });
+  assert.equal(walletRide1.status, 200);
+  assert.equal(walletRide1.json.ride.paymentMethod, 'carteira');
+  assert.equal(walletRide1.json.ride.paymentStatus, 'confirmado');
+  assert.equal(walletRide1.json.ride.status, 'aguardando_confirmacao');
+
+  const ridePrice1 = Number(walletRide1.json.ride.totalPrice);
+  assert.ok(ridePrice1 > 0 && ridePrice1 < 50);
+
+  const afterDebitWallet = await apiJson('/api/client/wallet', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(afterDebitWallet.json.wallet.balance, finance.round2(50 - ridePrice1));
+
+  // 6) Cancelamento antes do aceite estorna 100% de volta para a carteira do passageiro
+  const cancelRes = await apiJson(`/api/rides/${encodeURIComponent(walletRide1.json.ride.id)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-client-token': cliToken },
+    body: { status: 'cancelada', cancelledBy: 'passenger', cancellationReason: 'Teste estorno carteira' }
+  });
+  assert.equal(cancelRes.status, 200);
+  assert.equal(cancelRes.json.ride.paymentStatus, 'reembolsado');
+
+  const refundedWallet = await apiJson('/api/client/wallet', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(refundedWallet.json.wallet.balance, 50);
+
+  // 7) Corrida completa com saldo da carteira repassa o líquido ao motorista no livro-razão
+  const drvPhone = `(48) 99522-${String(Date.now()).slice(-4)}`;
+  const drvReg = await apiJson('/api/drivers/register', {
+    method: 'POST',
+    body: {
+      name: 'Motorista Carteira',
+      phone: drvPhone,
+      email: `drv.carteira.${Date.now()}@kavro.test`,
+      document: makeTestCpf(Math.floor((Date.now() % 700000000) + 210000099)),
+      password: '1234',
+      vehicleBrand: 'VW',
+      vehicleModel: 'Polo',
+      vehicleColor: 'Prata',
+      vehiclePlate: 'WLT2B26',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(drvReg.status, 200);
+  const drvToken = drvReg.json.driverToken;
+  const drvObj = await finance.getDriverById(drvReg.json.driver.id);
+  await finance.saveDriverRecord({
+    ...drvObj,
+    approvalStatus: 'aprovado',
+    isOnline: true,
+    kyc: { status: 'aprovado' }
+  });
+
+  const walletRide2 = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Lucas Carteira',
+      clientPhone: phone,
+      origin: { address: 'Rua Origem Wallet, 10', lat: -28.3910, lng: -49.3930 },
+      destination: { address: 'Rua Destino Wallet, 90', lat: -28.4010, lng: -49.4030 },
+      distanceKm: 5,
+      durationMin: 10,
+      time: '15:10',
+      category: 'kavro_go',
+      paymentMethod: 'carteira'
+    }
+  });
+  assert.equal(walletRide2.status, 200);
+  const ride2 = walletRide2.json.ride;
+
+  const accRes = await apiJson(`/api/rides/${encodeURIComponent(ride2.id)}/accept`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(accRes.status, 200);
+
+  const startRes = await apiJson(`/api/rides/${encodeURIComponent(ride2.id)}/status`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { status: 'em_andamento', boardingPin: ride2.boardingPin }
+  });
+  assert.equal(startRes.status, 200);
+
+  const compRes = await apiJson(`/api/rides/${encodeURIComponent(ride2.id)}/complete`, {
+    method: 'POST',
+    headers: { 'x-driver-token': drvToken },
+    body: { driverId: drvObj.id }
+  });
+  assert.equal(compRes.status, 200);
+  assert.equal(compRes.json.ride.status, 'finalizada');
+  assert.equal(compRes.json.ride.paymentStatus, 'confirmado');
+  assert.ok(Number(compRes.json.wallet.availableBalance) >= Number(ride2.driverNetAmount) - 0.01);
+
+  const finalClientWallet = await apiJson('/api/client/wallet', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(finalClientWallet.json.wallet.balance, finance.round2(50 - Number(ride2.totalPrice)));
+});

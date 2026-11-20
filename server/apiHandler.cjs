@@ -595,6 +595,7 @@ async function ensureClientsSchema() {
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS guardian_client_id VARCHAR(120);
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS birth_date VARCHAR(20);
       ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(100);
+      ALTER TABLE public.clients ADD COLUMN IF NOT EXISTS wallet_balance NUMERIC DEFAULT 0;
       CREATE TABLE IF NOT EXISTS public.family_members (
         id VARCHAR(120) PRIMARY KEY,
         guardian_id VARCHAR(120) NOT NULL,
@@ -825,6 +826,7 @@ function sanitizeClientRow(row, isAdmin = false) {
     birthDate: row.birth_date || row.birthDate || undefined,
     termsAcceptedAt: row.terms_accepted_at || undefined,
     termsSignature: row.terms_signature || undefined,
+    walletBalance: Number(row.wallet_balance ?? row.walletBalance ?? 0),
     createdAt: row.created_at
   };
   if (isAdmin) {
@@ -3715,7 +3717,9 @@ async function handleApiRequest(req, res) {
           normalizedMethod === 'apple_pay'
             ? (cfg.activePaymentMethods.includes('apple_pay') ||
                (cfg.activePaymentMethods.includes('cartao_credito') && !cfg.applePayDisabled))
-            : cfg.activePaymentMethods.includes(normalizedMethod);
+            : normalizedMethod === 'carteira'
+              ? (cfg.activePaymentMethods.includes('carteira') || !cfg.walletPaymentDisabled)
+              : cfg.activePaymentMethods.includes(normalizedMethod);
         if (!isMethodAllowed) {
           return {
             status: 400,
@@ -3985,6 +3989,47 @@ async function handleApiRequest(req, res) {
           ride.cardLast4 = authResult.tx.cardLast4;
           ride.cardBrand = authResult.tx.cardBrand;
           ride.paymentStatus = 'autorizado';
+          ride.status = 'aguardando_confirmacao';
+        } else if (ride.paymentMethod === 'carteira') {
+          // Regra 4: Pagamento integral usando saldo da Carteira Kavro do passageiro
+          const debitRes = await finance.debitClientWalletForRide({
+            clientId: ride.clientId,
+            clientName: ride.clientName,
+            clientPhone: ride.clientPhone,
+            rideId: ride.id,
+            rideCode: ride.rideCode,
+            amount: split.grossAmount
+          });
+          if (!debitRes.ok) {
+            return {
+              status: 402,
+              body: {
+                ok: false,
+                code: 'INSUFFICIENT_WALLET_BALANCE',
+                availableBalance: debitRes.availableBalance ?? 0,
+                error: debitRes.error || 'Saldo insuficiente na carteira Kavro para pagar esta corrida.',
+                paymentStatus: 'falhou'
+              }
+            };
+          }
+          const walletTx = await finance.savePaymentTransaction({
+            rideId: ride.id,
+            rideCode: ride.rideCode,
+            clientId: ride.clientId,
+            clientName: ride.clientName,
+            method: 'carteira',
+            status: 'confirmado',
+            estimatedAmount: split.grossAmount,
+            finalAmount: split.grossAmount,
+            paidAmount: split.grossAmount,
+            commissionPercent: split.commissionPercent,
+            commissionAmount: split.commissionAmount,
+            driverNetAmount: split.driverNetAmount,
+            gatewayTxId: debitRes.entry?.id || `wallet_${ride.id}`
+          });
+          ride.paymentTxId = walletTx.id;
+          ride.paidAmount = split.grossAmount;
+          ride.paymentStatus = 'confirmado';
           ride.status = 'aguardando_confirmacao';
         } else {
           // Regra 2: Dinheiro — vai direto para buscar motorista e é cobrado ao finalizar
@@ -4498,11 +4543,25 @@ async function handleApiRequest(req, res) {
           { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice, commissionPercent: split.commissionPercent, commissionFixed: split.commissionFixed },
           finalPrice
         );
-      } else if (ride.paymentMethod === 'pix') {
-        // Pix confirmado pelo gateway: garante crédito líquido no Livro-Razão do motorista que executou
+      } else if (ride.paymentMethod === 'pix' || ride.paymentMethod === 'carteira') {
+        // Pix ou Saldo da Carteira já confirmado: garante crédito líquido no Livro-Razão do motorista que executou
         if (ride.paymentStatus === 'confirmado' || ride.paymentStatus === 'pago') {
           newPaymentStatus = 'confirmado';
           paidAmount = finalPrice;
+          const existingTx = await finance.getPaymentTxByRide(ride.id);
+          if (existingTx) {
+            await finance.savePaymentTransaction({
+              ...existingTx,
+              driverId,
+              driverName: driver?.name || ride.driverName,
+              status: 'confirmado',
+              finalAmount: finalPrice,
+              paidAmount: finalPrice,
+              commissionPercent: split.commissionPercent,
+              commissionAmount: split.commissionAmount,
+              driverNetAmount: split.driverNetAmount
+            });
+          }
           await finance.settleDigitalRideToLedger(
             { ...ride, driverId, driverName: driver?.name || ride.driverName, totalPrice: finalPrice, commissionPercent: split.commissionPercent, commissionFixed: split.commissionFixed },
             finalPrice
@@ -5045,6 +5104,52 @@ async function handleApiRequest(req, res) {
           await finance.savePaymentTransaction({
             ...tx,
             finalAmount: split.grossAmount,
+            commissionPercent: split.commissionPercent,
+            commissionAmount: split.commissionAmount,
+            driverNetAmount: split.driverNetAmount
+          });
+        }
+      } else if (before.paymentMethod === 'carteira' && (before.paymentStatus === 'confirmado' || before.paymentStatus === 'pago')) {
+        const alreadyPaid = finance.round2(before.paidAmount || before.totalPrice || 0);
+        const diff = finance.round2(split.grossAmount - alreadyPaid);
+        if (diff > 0.01 && before.clientId) {
+          const extraDebit = await finance.debitClientWalletForRide({
+            clientId: before.clientId,
+            clientName: before.clientName,
+            clientPhone: before.clientPhone,
+            rideId: id,
+            rideCode: before.rideCode || id,
+            amount: diff,
+            entryType: 'route_adjustment',
+            idempotencyKey: `wallet_route_inc_${id}_${Date.now()}`,
+            description: `Complemento por alteração de rota (${before.rideCode || id})`
+          });
+          if (!extraDebit.ok) {
+            return sendJson(res, 402, {
+              ok: false,
+              error: extraDebit.error || 'Saldo insuficiente na carteira para cobrir a diferença da nova rota.'
+            });
+          }
+          nextPaidAmount = split.grossAmount;
+        } else if (diff < -0.01 && before.clientId) {
+          await finance.creditClientWalletAdjustment({
+            clientId: before.clientId,
+            clientName: before.clientName,
+            clientPhone: before.clientPhone,
+            rideId: id,
+            rideCode: before.rideCode || id,
+            amount: Math.abs(diff),
+            entryType: 'route_adjustment',
+            idempotencyKey: `wallet_route_dec_${id}_${Date.now()}`,
+            description: `Reembolso parcial por redução de rota (${before.rideCode || id})`
+          });
+          nextPaidAmount = split.grossAmount;
+        }
+        if (tx) {
+          await finance.savePaymentTransaction({
+            ...tx,
+            finalAmount: split.grossAmount,
+            paidAmount: split.grossAmount,
             commissionPercent: split.commissionPercent,
             commissionAmount: split.commissionAmount,
             driverNetAmount: split.driverNetAmount
@@ -6281,6 +6386,355 @@ async function handleApiRequest(req, res) {
       }
     }
 
+    const cardDelMatch = pathname.match(/^\/api\/payments\/cards\/([^/]+)$/);
+    if (cardDelMatch && method === 'DELETE') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para remover cartões.' });
+      }
+      const cardId = decodeURIComponent(cardDelMatch[1]);
+      if (!db.pool) {
+        const cards = db.localStore.saved_cards || [];
+        const target = cards.find(c => c.id === cardId);
+        if (!target) return sendJson(res, 404, { ok: false, error: 'Cartão não encontrado.' });
+        if (!isAdmin && target.client_id && target.client_id !== clientSession.sub) {
+          return sendJson(res, 403, { ok: false, error: 'Sem permissão para remover este cartão.' });
+        }
+        db.localStore.saved_cards = cards.filter(c => c.id !== cardId);
+        db.saveLocalStore();
+        return sendJson(res, 200, { ok: true, deleted: cardId });
+      }
+      const findRes = await db.query('SELECT id, client_id FROM public.saved_cards WHERE id = $1 LIMIT 1', [cardId]);
+      if (!findRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Cartão não encontrado.' });
+      if (!isAdmin && findRes.rows[0].client_id && findRes.rows[0].client_id !== clientSession.sub) {
+        return sendJson(res, 403, { ok: false, error: 'Sem permissão para remover este cartão.' });
+      }
+      await db.query('DELETE FROM public.saved_cards WHERE id = $1', [cardId]);
+      return sendJson(res, 200, { ok: true, deleted: cardId });
+    }
+
+    // ── CARTEIRA DIGITAL DO PASSAGEIRO (SALDO, DEPÓSITO MÍN. R$ 20, EXTRATO) ───────────────────────
+    if (pathname === '/api/client/wallet' && method === 'GET') {
+      await ensureClientsSchema();
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para acessar sua carteira.' });
+      }
+      const targetClientId = isAdmin
+        ? String(url.searchParams.get('clientId') || clientSession?.sub || '').trim()
+        : clientSession.sub;
+      if (!targetClientId) {
+        return sendJson(res, 400, { ok: false, error: 'Identificador do passageiro ausente.' });
+      }
+      const prevWallet = await finance.getClientWallet(targetClientId, { skipGatewaySync: true });
+      const wallet = await finance.getClientWallet(targetClientId);
+      if (wallet.balance > prevWallet.balance + 0.001) {
+        realtimeHub.publish('wallet:updated', { clientId: targetClientId, balance: wallet.balance }, { clientId: targetClientId });
+      }
+      return sendJson(res, 200, { ok: true, wallet });
+    }
+
+    if (pathname === '/api/client/wallet/topup' && method === 'POST') {
+      await ensureClientsSchema();
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para depositar na carteira.' });
+      }
+      const body = await parseBody(req);
+      const targetClientId = isAdmin
+        ? String(body.clientId || clientSession?.sub || '').trim()
+        : clientSession.sub;
+      if (!targetClientId) {
+        return sendJson(res, 400, { ok: false, error: 'Passageiro não identificado.' });
+      }
+      const amount = Number(String(body.amount ?? '').replace(',', '.'));
+      if (!Number.isFinite(amount) || amount < finance.MIN_CLIENT_WALLET_TOPUP_BRL) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: `O valor mínimo de depósito na carteira é de R$ ${finance.MIN_CLIENT_WALLET_TOPUP_BRL.toFixed(2).replace('.', ',')}.`
+        });
+      }
+      const cliRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
+      const cliRow = cliRes.rows[0] || {};
+      try {
+        const result = await finance.createClientWalletTopup({
+          clientId: targetClientId,
+          clientName: cliRow.name || body.clientName || 'Passageiro Kavro',
+          clientPhone: cliRow.phone || clientSession?.phone || '',
+          clientEmail: cliRow.email || clientSession?.email || '',
+          amount,
+          method: body.method || 'pix',
+          cardId: body.cardId || '',
+          stripePaymentIntentId: body.stripePaymentIntentId || ''
+        });
+        if (!result.ok) {
+          return sendJson(res, 402, result);
+        }
+        if (!result.pending && result.wallet) {
+          await audit.recordAuditEvent({
+            category: 'financeiro_corridas',
+            actionKey: 'client_wallet_topup_confirmed',
+            title: 'Depósito confirmado na carteira do passageiro',
+            summary: `${cliRow.name || targetClientId} depositou ${audit.formatMoneyPt(amount)} via ${String(body.method || 'cartao').toUpperCase()}. Novo saldo: ${audit.formatMoneyPt(result.wallet.balance)}.`,
+            severity: 'info',
+            actorRole: isAdmin ? 'admin_master' : 'passageiro',
+            actorId: targetClientId,
+            actorName: cliRow.name || targetClientId,
+            entityType: 'passageiro',
+            entityId: targetClientId,
+            entityLabel: cliRow.name || targetClientId,
+            relatedIds: { clientId: targetClientId, walletEntryId: result.entry?.id || null },
+            ipAddress: getRequestClientIp(req),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+          });
+          realtimeHub.publish('wallet:updated', { clientId: targetClientId, balance: result.wallet.balance }, { clientId: targetClientId });
+        }
+        return sendJson(res, 200, result);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao processar depósito na carteira.' });
+      }
+    }
+
+    if (pathname === '/api/client/wallet/topup/confirm' && method === 'POST') {
+      await ensureClientsSchema();
+      const isAdmin = await isAuthorizedAdmin(req);
+      const hasValidWebhookSecret = verifyWebhookSecret(req);
+      const clientSession = verifyClientToken(req);
+      const body = await parseBody(req);
+      const entryId = String(body.entryId || '').trim();
+      if (!entryId) {
+        return sendJson(res, 400, { ok: false, error: 'entryId do depósito ausente.' });
+      }
+
+      const isSandboxMode = !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
+      if (stripeGateway.isStripeEnabled() && !isAdmin && !hasValidWebhookSecret) {
+        if (!clientSession) {
+          return sendJson(res, 401, { ok: false, error: 'Sessão inválida para confirmar depósito.' });
+        }
+        const entries = await finance.listClientWalletEntries(clientSession.sub);
+        const ownedEntry = entries.find(e => e.id === entryId);
+        if (!ownedEntry) {
+          return sendJson(res, 404, { ok: false, error: 'Depósito não encontrado na sua carteira.' });
+        }
+        if (ownedEntry.status === 'confirmado') {
+          const wallet = await finance.getClientWallet(clientSession.sub, { skipGatewaySync: true });
+          return sendJson(res, 200, { ok: true, entry: ownedEntry, wallet });
+        }
+        if (String(ownedEntry.gatewayTxId || '').startsWith('pi_')) {
+          const piCheck = await stripeGateway.retrievePaymentIntentStatus(ownedEntry.gatewayTxId);
+          if (piCheck && piCheck.status === 'succeeded') {
+            const conf = await finance.confirmClientWalletTopup({
+              entryId: ownedEntry.id,
+              gatewayTxId: piCheck.id,
+              paidAmount: piCheck.amountBrl
+            });
+            realtimeHub.publish('wallet:updated', { clientId: clientSession.sub, balance: conf.wallet.balance }, { clientId: clientSession.sub });
+            return sendJson(res, 200, { ok: true, ...conf });
+          }
+        }
+        return sendJson(res, 402, { ok: false, error: 'Pagamento PIX ainda aguardando compensação bancária.' });
+      }
+
+      if (!isAdmin && !hasValidWebhookSecret && !(isSandboxMode && clientSession)) {
+        return sendJson(res, 401, { ok: false, error: 'Não autorizado para confirmar depósito manualmente.' });
+      }
+      try {
+        const result = await finance.confirmClientWalletTopup({
+          entryId,
+          gatewayTxId: body.gatewayTxId || null,
+          paidAmount: body.amount || null
+        });
+        if (!isAdmin && !hasValidWebhookSecret && clientSession && result.entry?.clientId !== clientSession.sub) {
+          return sendJson(res, 403, { ok: false, error: 'Este depósito pertence a outro passageiro.' });
+        }
+        if (result.newlyConfirmed) {
+          await audit.recordAuditEvent({
+            category: 'financeiro_corridas',
+            actionKey: 'client_wallet_topup_confirmed',
+            title: 'Recarga PIX confirmada na carteira do passageiro',
+            summary: `Recarga ${entryId} de ${audit.formatMoneyPt(result.entry.amount)} confirmada. Novo saldo: ${audit.formatMoneyPt(result.wallet.balance)}.`,
+            severity: 'info',
+            actorRole: isAdmin ? 'admin_master' : (hasValidWebhookSecret ? 'gateway' : 'passageiro'),
+            actorId: result.entry.clientId,
+            actorName: result.entry.clientName || result.entry.clientId,
+            entityType: 'passageiro',
+            entityId: result.entry.clientId,
+            relatedIds: { clientId: result.entry.clientId, walletEntryId: result.entry.id },
+            ipAddress: getRequestClientIp(req),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+          });
+          realtimeHub.publish('wallet:updated', { clientId: result.entry.clientId, balance: result.wallet.balance }, { clientId: result.entry.clientId });
+        }
+        return sendJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao confirmar depósito.' });
+      }
+    }
+
+    if (pathname === '/api/client/wallet/topup/wallet-intent' && method === 'POST') {
+      await ensureClientsSchema();
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para adicionar saldo com Apple Pay.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
+      }
+      const body = await parseBody(req);
+      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
+      const amount = Number(String(body.amount ?? '').replace(',', '.'));
+      if (!Number.isFinite(amount) || amount < finance.MIN_CLIENT_WALLET_TOPUP_BRL) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: `O valor mínimo para depósito na carteira é de R$ ${finance.MIN_CLIENT_WALLET_TOPUP_BRL.toFixed(2).replace('.', ',')}.`
+        });
+      }
+      const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
+      const cRow = cRes.rows[0] || {};
+      try {
+        const intentData = await stripeGateway.createWalletHoldIntent({
+          amountBrl: amount,
+          clientId: targetClientId,
+          clientPhone: cRow.phone || clientSession?.phone || '',
+          clientEmail: cRow.email || clientSession?.email || '',
+          clientName: cRow.name || 'Passageiro Kavro',
+          captureMethod: 'automatic',
+          purpose: 'client_wallet_topup',
+          description: `Depósito Carteira Kavro Drive (${targetClientId})`
+        });
+        return sendJson(res, 200, { ok: true, ...intentData });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao preparar pagamento Apple Pay.' });
+      }
+    }
+
+    if (pathname === '/api/client/wallet/topup/checkout-session' && method === 'POST') {
+      await ensureClientsSchema();
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para adicionar saldo na carteira.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
+      }
+      const body = await parseBody(req);
+      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
+      const amount = Number(String(body.amount ?? '').replace(',', '.'));
+      if (!Number.isFinite(amount) || amount < finance.MIN_CLIENT_WALLET_TOPUP_BRL) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: `O valor mínimo para depósito na carteira é de R$ ${finance.MIN_CLIENT_WALLET_TOPUP_BRL.toFixed(2).replace('.', ',')}.`
+        });
+      }
+      const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
+      const cRow = cRes.rows[0] || {};
+      const returnPath = typeof body.returnPath === 'string' && body.returnPath.startsWith('/') ? body.returnPath : '/';
+      const sep = returnPath.includes('?') ? '&' : '?';
+      const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const reqProto = String(req.headers['x-forwarded-proto'] || (reqHost.includes('localhost') || reqHost.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
+      const originUrl = reqHost ? `${reqProto}://${reqHost}` : 'https://kavrodrive.vercel.app';
+      try {
+        const sessionData = await stripeGateway.createWalletCheckoutSession({
+          amountBrl: amount,
+          rideTitle: `Recarga Carteira Kavro Drive (R$ ${amount.toFixed(2).replace('.', ',')})`,
+          rideDescription: 'Saldo para pagar corridas com confirmação instantânea',
+          originUrl,
+          clientId: targetClientId,
+          clientPhone: cRow.phone || clientSession?.phone || '',
+          clientEmail: cRow.email || clientSession?.email || '',
+          clientName: cRow.name || 'Passageiro Kavro',
+          captureMethod: 'automatic',
+          purpose: 'client_wallet_topup',
+          successPath: `${returnPath}${sep}wallet_checkout_session_id={CHECKOUT_SESSION_ID}`,
+          cancelPath: `${returnPath}${sep}wallet_checkout_canceled=1`,
+          extraMetadata: { returnPath }
+        });
+        return sendJson(res, 200, { ok: true, ...sessionData });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao abrir checkout de recarga.' });
+      }
+    }
+
+    if (pathname === '/api/client/wallet/topup/checkout-complete' && method === 'POST') {
+      await ensureClientsSchema();
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login para concluir seu depósito.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway de pagamento online não está configurado no servidor.' });
+      }
+      const body = await parseBody(req);
+      const sessionId = String(body.sessionId || '').trim();
+      if (!sessionId) {
+        return sendJson(res, 400, { ok: false, error: 'Identificador da sessão de recarga ausente.' });
+      }
+      const sessionCheck = await stripeGateway.retrieveWalletCheckoutSession(sessionId);
+      if (!sessionCheck.authorized || !sessionCheck.paymentIntentId) {
+        return sendJson(res, 402, { ok: false, error: 'Depósito ainda não foi autorizado.' });
+      }
+      const sessionClientId = String(sessionCheck.metadata?.clientId || clientSession?.sub || '').trim();
+      if (!isAdmin && sessionClientId && clientSession?.sub && sessionClientId !== clientSession.sub) {
+        return sendJson(res, 403, { ok: false, error: 'Esta sessão de depósito pertence a outro passageiro.' });
+      }
+      const result = await finance.createClientWalletTopup({
+        clientId: sessionClientId || clientSession.sub,
+        clientPhone: clientSession?.phone || '',
+        clientEmail: clientSession?.email || '',
+        amount: sessionCheck.amountBrl,
+        method: sessionCheck.walletType === 'apple_pay' ? 'apple_pay' : 'cartao_credito',
+        stripePaymentIntentId: sessionCheck.paymentIntentId,
+        idempotencyKey: `wallet_topup_cs_${sessionId}`
+      });
+      if (result.ok && result.wallet) {
+        realtimeHub.publish('wallet:updated', { clientId: result.wallet.clientId, balance: result.wallet.balance }, { clientId: result.wallet.clientId });
+      }
+      return sendJson(res, 200, result);
+    }
+
+    if (pathname === '/api/client/wallet/admin-adjust' && method === 'POST') {
+      await ensureClientsSchema();
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const body = await parseBody(req);
+      const clientId = String(body.clientId || '').trim();
+      const amount = Number(String(body.amount ?? '').replace(',', '.'));
+      const type = body.type === 'debit' ? 'debit' : 'credit';
+      const reason = String(body.reason || '').trim().slice(0, 180) || 'Ajuste financeiro administrativo';
+      if (!clientId || !Number.isFinite(amount) || amount <= 0) {
+        return sendJson(res, 400, { ok: false, error: 'Informe passageiro e valor positivo válido.' });
+      }
+      if (type === 'debit') {
+        const resDebit = await finance.debitClientWalletForRide({
+          clientId,
+          rideId: `adj-${Date.now()}`,
+          amount,
+          entryType: 'admin_adjustment',
+          idempotencyKey: `wallet_admin_debit_${clientId}_${Date.now()}`,
+          description: reason
+        });
+        if (!resDebit.ok) return sendJson(res, 400, resDebit);
+        const wallet = await finance.getClientWallet(clientId, { skipGatewaySync: true });
+        return sendJson(res, 200, { ok: true, wallet });
+      }
+      const resCredit = await finance.creditClientWalletAdjustment({
+        clientId,
+        amount,
+        entryType: 'admin_adjustment',
+        idempotencyKey: `wallet_admin_credit_${clientId}_${Date.now()}`,
+        paymentMethod: 'sistema',
+        description: reason
+      });
+      return sendJson(res, 200, { ok: true, wallet: resCredit?.wallet });
+    }
+
     // WEBHOOK OFICIAL STRIPE (ASSINATURA CRIPTOGRÁFICA Stripe-Signature + RAW BODY)
     if (pathname === '/api/webhooks/stripe' && method === 'POST') {
       const rawBody = await readRawBodyBuffer(req);
@@ -6326,6 +6780,36 @@ async function handleApiRequest(req, res) {
             userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
           });
           return sendJson(res, 200, { ok: true, received: true, type: 'driver_debt_pix', ...result });
+        }
+
+        if (meta.purpose === 'client_wallet_topup' && meta.clientId) {
+          const result = await finance.confirmClientWalletTopup({
+            entryId: meta.entryId || null,
+            gatewayTxId: String(pi.id),
+            paidAmount: paidBrl
+          });
+          await audit.recordAuditEvent({
+            category: 'financeiro_corridas',
+            actionKey: 'client_wallet_topup_confirmed',
+            title: 'Depósito na carteira do passageiro confirmado via PIX',
+            summary: `Recarga de ${audit.formatMoneyPt(paidBrl)} confirmada na carteira de ${result.entry?.clientName || meta.clientId}. Saldo atual: ${audit.formatMoneyPt(result.wallet?.balance || 0)}.`,
+            severity: 'info',
+            actorRole: 'gateway',
+            actorId: String(meta.clientId),
+            actorName: 'Webhook Pagamentos',
+            entityType: 'passageiro',
+            entityId: String(meta.clientId),
+            entityLabel: result.entry?.clientName || String(meta.clientId),
+            relatedIds: { clientId: String(meta.clientId), gatewayTxId: String(pi.id), walletEntryId: result.entry?.id || null },
+            ipAddress: getRequestClientIp(req),
+            userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+          });
+          realtimeHub.publish(
+            'wallet:updated',
+            { clientId: String(meta.clientId), balance: result.wallet?.balance || 0 },
+            { clientId: String(meta.clientId) }
+          );
+          return sendJson(res, 200, { ok: true, received: true, type: 'client_wallet_topup', ...result });
         }
 
         let targetRideId = meta.rideId ? normalizeRideId(meta.rideId) : '';

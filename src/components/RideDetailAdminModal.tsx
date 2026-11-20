@@ -714,14 +714,14 @@ export const RideDetailAdminModal: React.FC<RideDetailAdminModalProps> = ({
                     gap: 5,
                     padding: '3px 9px',
                     borderRadius: 7,
-                    backgroundColor: ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.15)' : ride.paymentMethod === 'dinheiro' ? 'rgba(132, 204, 22, 0.15)' : ride.paymentMethod === 'apple_pay' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(59, 130, 246, 0.15)',
-                    border: `1px solid ${ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.35)' : ride.paymentMethod === 'dinheiro' ? 'rgba(132, 204, 22, 0.35)' : ride.paymentMethod === 'apple_pay' ? 'rgba(255, 255, 255, 0.28)' : 'rgba(59, 130, 246, 0.35)'}`
+                    backgroundColor: ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.15)' : ride.paymentMethod === 'dinheiro' || ride.paymentMethod === 'carteira' ? 'rgba(132, 204, 22, 0.15)' : ride.paymentMethod === 'apple_pay' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(59, 130, 246, 0.15)',
+                    border: `1px solid ${ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.35)' : ride.paymentMethod === 'dinheiro' || ride.paymentMethod === 'carteira' ? 'rgba(132, 204, 22, 0.35)' : ride.paymentMethod === 'apple_pay' ? 'rgba(255, 255, 255, 0.28)' : 'rgba(59, 130, 246, 0.35)'}`
                   }}>
                     <PaymentMethodIcon method={ride.paymentMethod} size={15} />
                     <span style={{
                       fontSize: '0.68rem',
                       fontWeight: 800,
-                      color: ride.paymentMethod === 'pix' ? '#2DD4BF' : ride.paymentMethod === 'dinheiro' ? '#A3E635' : ride.paymentMethod === 'apple_pay' ? '#FFFFFF' : '#93C5FD',
+                      color: ride.paymentMethod === 'pix' ? '#2DD4BF' : ride.paymentMethod === 'dinheiro' || ride.paymentMethod === 'carteira' ? '#A3E635' : ride.paymentMethod === 'apple_pay' ? '#FFFFFF' : '#93C5FD',
                       textTransform: 'uppercase'
                     }}>
                       {getPaymentMethodLabel(ride.paymentMethod)}

@@ -236,11 +236,19 @@ async function authorizeCardHold({
   customerId,
   paymentMethodId,
   clientEmail,
-  driverId
+  driverId,
+  captureMethod = 'manual',
+  purpose = 'ride_card',
+  description = '',
+  idempotencyKey = '',
+  metadata = {}
 }) {
   const stripe = getStripeClient();
   const amountCents = toBrlCents(amountBrl);
   try {
+    const reqOpts = idempotencyKey
+      ? { idempotencyKey }
+      : (rideId ? { idempotencyKey: `kavro_st_auth_${rideId}_${amountCents}` } : undefined);
     const pi = await stripe.paymentIntents.create(
       {
         amount: amountCents,
@@ -248,21 +256,20 @@ async function authorizeCardHold({
         customer: customerId,
         payment_method: paymentMethodId,
         automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
-        capture_method: 'manual',
+        capture_method: captureMethod === 'automatic' ? 'automatic' : 'manual',
         confirm: true,
         off_session: true,
-        description: `Corrida Kavro Drive ${rideCode || rideId}`,
+        description: description || `Corrida Kavro Drive ${rideCode || rideId}`,
         receipt_email: clientEmail ? String(clientEmail).trim().toLowerCase() : undefined,
         metadata: {
-          purpose: 'ride_card',
+          purpose,
           rideId: String(rideId || ''),
           rideCode: String(rideCode || ''),
-          driverId: String(driverId || '')
+          driverId: String(driverId || ''),
+          ...(metadata && typeof metadata === 'object' ? metadata : {})
         }
       },
-      {
-        idempotencyKey: `kavro_st_auth_${rideId}_${amountCents}`
-      }
+      reqOpts
     );
 
     if (pi.status === 'requires_capture' || pi.status === 'succeeded') {
@@ -342,7 +349,11 @@ async function createWalletHoldIntent({
   clientPhone = '',
   clientEmail = '',
   clientName = '',
-  categoryId = ''
+  categoryId = '',
+  captureMethod = 'manual',
+  purpose = 'ride_wallet',
+  description = '',
+  extraMetadata = {}
 }) {
   const stripe = getStripeClient();
   const amountCents = toBrlCents(amountBrl);
@@ -353,12 +364,13 @@ async function createWalletHoldIntent({
     currency: 'brl',
     customer: customerId,
     automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
-    capture_method: 'manual',
-    description: `Pré-autorização de corrida Kavro Drive`,
+    capture_method: captureMethod === 'automatic' ? 'automatic' : 'manual',
+    description: description || `Pré-autorização de corrida Kavro Drive`,
     metadata: {
-      purpose: 'ride_wallet',
+      purpose,
       clientId: String(clientId || ''),
-      categoryId: String(categoryId || '')
+      categoryId: String(categoryId || ''),
+      ...(extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {})
     }
   });
 
@@ -379,7 +391,12 @@ async function createWalletCheckoutSession({
   clientPhone = '',
   clientEmail = '',
   clientName = '',
-  categoryId = ''
+  categoryId = '',
+  captureMethod = 'manual',
+  purpose = 'ride_wallet_checkout',
+  successPath = '/?stripe_checkout_session_id={CHECKOUT_SESSION_ID}',
+  cancelPath = '/?stripe_checkout_canceled=1',
+  extraMetadata = {}
 }) {
   const stripe = getStripeClient();
   const amountCents = toBrlCents(amountBrl);
@@ -413,22 +430,24 @@ async function createWalletCheckoutSession({
       }
     ],
     payment_intent_data: {
-      capture_method: 'manual',
+      capture_method: captureMethod === 'automatic' ? 'automatic' : 'manual',
       description: String(rideTitle || 'Pré-autorização de corrida Kavro Drive').slice(0, 120),
       metadata: {
-        purpose: 'ride_wallet_checkout',
+        purpose,
         clientId: String(clientId || ''),
-        categoryId: String(categoryId || '')
+        categoryId: String(categoryId || ''),
+        ...(extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {})
       }
     },
     metadata: {
-      purpose: 'ride_wallet_checkout',
+      purpose,
       clientId: String(clientId || ''),
       categoryId: String(categoryId || ''),
-      amountBrl: String(toBrlFromCents(amountCents))
+      amountBrl: String(toBrlFromCents(amountCents)),
+      ...(extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {})
     },
-    success_url: `${baseOrigin}/?stripe_checkout_session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${baseOrigin}/?stripe_checkout_canceled=1`
+    success_url: `${baseOrigin}${successPath}`,
+    cancel_url: `${baseOrigin}${cancelPath}`
   });
 
   return {
@@ -527,18 +546,24 @@ async function createPixCharge({
   rideId = '',
   rideCode = '',
   driverId = '',
+  clientId = '',
+  entryId = '',
   purpose = 'ride_pix',
   payerName = 'Passageiro Kavro Drive',
   payerEmail = 'pagamento@kavro.app',
   description = '',
+  extraMetadata = {},
   qrFallbackGenerator = null
 }) {
   const stripe = getStripeClient();
   const amountCents = toBrlCents(amountBrl);
   const expiresSec = Math.min(1209600, Math.max(60, parseInt(String(env.STRIPE_PIX_EXPIRES_SECONDS || '900'), 10) || 900));
-  const idempSuffix = purpose === 'driver_debt_pix'
-    ? `debt_${driverId}_${amountCents}_${Math.floor(Date.now() / 5000)}`
-    : `ride_${rideId}_${amountCents}`;
+  const idempSuffix =
+    purpose === 'driver_debt_pix'
+      ? `debt_${driverId}_${amountCents}_${Math.floor(Date.now() / 5000)}`
+      : purpose === 'client_wallet_topup'
+        ? `wallet_${entryId || `${clientId}_${Date.now()}`}_${amountCents}`
+        : `ride_${rideId}_${amountCents}`;
 
   const pi = await stripe.paymentIntents.create(
     {
@@ -558,14 +583,21 @@ async function createPixCharge({
         }
       },
       confirm: true,
-      description: description || (purpose === 'driver_debt_pix'
-        ? `Quitação de saldo Kavro Drive (${driverId})`
-        : `Corrida Kavro Drive ${rideCode || rideId}`),
+      description:
+        description ||
+        (purpose === 'driver_debt_pix'
+          ? `Quitação de saldo Kavro Drive (${driverId})`
+          : purpose === 'client_wallet_topup'
+            ? `Recarga Carteira Kavro Drive (${clientId})`
+            : `Corrida Kavro Drive ${rideCode || rideId}`),
       metadata: {
         purpose,
         rideId: String(rideId || ''),
         rideCode: String(rideCode || ''),
-        driverId: String(driverId || '')
+        driverId: String(driverId || ''),
+        clientId: String(clientId || ''),
+        entryId: String(entryId || ''),
+        ...(extraMetadata && typeof extraMetadata === 'object' ? extraMetadata : {})
       }
     },
     {
@@ -616,6 +648,20 @@ async function cancelOrRefundPayment({ paymentIntentId, refundAmountBrl = null }
   return { ok: false, error: `Status Stripe não estornável (${pi.status}).` };
 }
 
+async function retrievePaymentIntentStatus(paymentIntentId) {
+  const id = String(paymentIntentId || '').trim();
+  if (!id || !id.startsWith('pi_')) return null;
+  const stripe = getStripeClient();
+  const pi = await stripe.paymentIntents.retrieve(id);
+  if (!pi) return null;
+  return {
+    id: pi.id,
+    status: pi.status,
+    amountBrl: toBrlFromCents(pi.amount_received || pi.amount || 0),
+    metadata: pi.metadata || {}
+  };
+}
+
 function constructWebhookEvent(rawBody, signatureHeader) {
   const secret = getStripeWebhookSecret();
   if (!secret) {
@@ -649,6 +695,7 @@ module.exports = {
   captureCardHold,
   createPixCharge,
   cancelOrRefundPayment,
+  retrievePaymentIntentStatus,
   constructWebhookEvent,
   _setStripeClientFactoryForTest
 };

@@ -39,7 +39,8 @@ import { RideSearchingStageCard } from '../components/RideSearchingStageCard';
 import { PixQrCode } from '../components/PixQrCode';
 import { RideCancelModal } from '../components/RideCancelModal';
 import { RideEditRouteModal } from '../components/RideEditRouteModal';
-import { PaymentMethodIcon } from '../components/PaymentMethodIcon';
+import { PaymentMethodIcon, getPaymentMethodLabel } from '../components/PaymentMethodIcon';
+import { PassengerWalletModal } from '../components/PassengerWalletModal';
 import confetti from 'canvas-confetti';
 
 interface ClientBookingScreenProps {
@@ -82,6 +83,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const allowCash = allowedMethods.includes('dinheiro');
   const allowApplePayConfig =
     allowedMethods.includes('apple_pay') || (allowCreditCard && !config.applePayDisabled);
+  const allowWallet =
+    allowedMethods.includes('carteira') || !config.walletPaymentDisabled;
 
   const [passengers, setPassengers] = useState<number>(1);
   const [hasLuggage, setHasLuggage] = useState<boolean>(false);
@@ -124,7 +127,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
 
   useEffect(() => {
     const isCurrentlyAllowed =
-      paymentMethod === 'apple_pay' ? allowApplePay : allowedMethods.includes(paymentMethod);
+      paymentMethod === 'apple_pay'
+        ? allowApplePay
+        : paymentMethod === 'carteira'
+          ? allowWallet
+          : allowedMethods.includes(paymentMethod);
     if (!isCurrentlyAllowed) {
       const nextMethod: PaymentMethod = allowPix
         ? 'pix'
@@ -134,10 +141,43 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             ? 'cartao_debito'
             : allowApplePay
               ? 'apple_pay'
-              : 'dinheiro';
+              : allowWallet
+                ? 'carteira'
+                : 'dinheiro';
       setPaymentMethod(nextMethod);
     }
-  }, [allowedMethods.join(','), paymentMethod, allowApplePay]);
+  }, [allowedMethods.join(','), paymentMethod, allowApplePay, allowWallet]);
+
+  const [walletBalance, setWalletBalance] = useState<number>(Number(currentUser?.walletBalance || 0));
+  const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (!currentUser?.id) {
+      setWalletBalance(0);
+      return;
+    }
+    let alive = true;
+    const syncW = () => {
+      StorageService.fetchClientWallet(currentUser.id).then((res) => {
+        if (alive && res.ok && res.wallet) {
+          setWalletBalance(res.wallet.balance);
+        }
+      }).catch(() => {});
+    };
+    const onWalletUpdated = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      if (detail && typeof detail.balance === 'number') {
+        setWalletBalance(detail.balance);
+      }
+    };
+    setWalletBalance(Number(currentUser.walletBalance || 0));
+    syncW();
+    window.addEventListener('up_client_wallet_updated', onWalletUpdated);
+    return () => {
+      alive = false;
+      window.removeEventListener('up_client_wallet_updated', onWalletUpdated);
+    };
+  }, [currentUser?.id]);
 
   // Cartões tokenizados do passageiro
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
@@ -757,6 +797,12 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     setActiveRide(res.ride);
     onRideBooked(res.ride);
 
+    if (res.ride.paymentMethod === 'carteira' && currentUser?.id) {
+      StorageService.fetchClientWallet(currentUser.id).then((w) => {
+        if (w.ok && w.wallet) setWalletBalance(w.wallet.balance);
+      }).catch(() => {});
+    }
+
     if (res.ride.paymentMethod !== 'pix') {
       try {
         confetti({ particleCount: 60, spread: 55, origin: { y: 0.6 } });
@@ -766,7 +812,22 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   };
 
-  const handleRequestRideNow = () => submitBookingRequest();
+  const handleRequestRideNow = () => {
+    if (paymentMethod === 'carteira') {
+      if (!currentUser?.id) {
+        setRequestError('Entre na sua conta para pagar utilizando o saldo da sua Carteira.');
+        return;
+      }
+      if (walletBalance + 0.001 < pricing.totalPrice) {
+        setRequestError(
+          `Saldo insuficiente na carteira (${walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}). Deposite a partir de R$ 20,00 para pagar esta corrida.`
+        );
+        setIsWalletModalOpen(true);
+        return;
+      }
+    }
+    submitBookingRequest();
+  };
 
   const handleSimulatePixWebhook = async () => {
     if (!activeRide) return;
@@ -1635,11 +1696,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                     </span>
                   ) : (
                     <div style={{ fontSize: '0.67rem', color: '#6B7280', fontWeight: 700 }}>
-                      {activeRide.paymentMethod === 'pix'
-                        ? 'PIX'
-                        : activeRide.paymentMethod === 'dinheiro'
-                          ? 'Dinheiro'
-                          : `Cartão •••• ${activeRide.cardLast4 || 'App'}`}
+                      {activeRide.paymentMethod === 'cartao_credito' || activeRide.paymentMethod === 'cartao_debito' || activeRide.paymentMethod === 'apple_pay'
+                        ? `${getPaymentMethodLabel(activeRide.paymentMethod, true)} •••• ${activeRide.cardLast4 || 'App'}`
+                        : getPaymentMethodLabel(activeRide.paymentMethod, true)}
                     </div>
                   )}
                 </div>
@@ -2692,7 +2751,140 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>Dinheiro</span>
               </button>
             )}
+
+            {allowWallet && (
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('carteira')}
+                style={{
+                  flex: '1 1 auto',
+                  padding: '8px 12px',
+                  borderRadius: 999,
+                  border: paymentMethod === 'carteira' ? '1.5px solid #76D800' : '1px solid #E5E7EB',
+                  backgroundColor: paymentMethod === 'carteira' ? '#0F172A' : '#FFFFFF',
+                  color: paymentMethod === 'carteira' ? '#FFFFFF' : '#111111',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  cursor: 'pointer'
+                }}
+              >
+                <PaymentMethodIcon method="carteira" size={16} />
+                <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                  Carteira{walletBalance > 0 ? ` • R$ ${walletBalance.toFixed(0)}` : ''}
+                </span>
+              </button>
+            )}
           </div>
+
+          {/* Painel Carteira Kavro Drive */}
+          {paymentMethod === 'carteira' && allowWallet && (
+            <div style={{
+              backgroundColor: '#F8FAFC',
+              borderRadius: 14,
+              padding: 12,
+              border: '1px solid #E2E8F0',
+              marginBottom: 8
+            }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                marginBottom: 8
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <PaymentMethodIcon method="carteira" size={18} />
+                  <div>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>
+                      Saldo na Carteira Kavro
+                    </div>
+                    <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
+                      Disponível: <strong style={{ color: '#0F172A' }}>{walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsWalletModalOpen(true)}
+                  style={{
+                    padding: '6px 11px',
+                    borderRadius: 999,
+                    border: 'none',
+                    backgroundColor: '#0F172A',
+                    color: '#76D800',
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  <Plus size={12} />
+                  <span>Depositar</span>
+                </button>
+              </div>
+
+              {!currentUser?.id ? (
+                <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#B45309' }}>
+                  Entre na sua conta para pagar corridas com o saldo da carteira.
+                </div>
+              ) : walletBalance + 0.001 >= pricing.totalPrice ? (
+                <div style={{
+                  padding: '8px 10px',
+                  borderRadius: 10,
+                  backgroundColor: '#F0FDF4',
+                  border: '1px solid #BBF7D0',
+                  color: '#15803D',
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}>
+                  <span>Pagamento instantâneo na confirmação</span>
+                  <span>Restará {Math.max(0, walletBalance - pricing.totalPrice).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                </div>
+              ) : (
+                <div style={{
+                  padding: '9px 10px',
+                  borderRadius: 10,
+                  backgroundColor: '#FFFBEB',
+                  border: '1px solid #FDE68A',
+                  color: '#92400E',
+                  fontSize: '0.73rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  flexWrap: 'wrap'
+                }}>
+                  <span>
+                    Saldo insuficiente (faltam {(pricing.totalPrice - walletBalance).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsWalletModalOpen(true)}
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 8,
+                      border: 'none',
+                      backgroundColor: '#76D800',
+                      color: '#0B1117',
+                      fontSize: '0.72rem',
+                      fontWeight: 900,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    + Adicionar saldo (mín. R$ 20)
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Painel Dedicado: Apple Pay Stripe */}
           {paymentMethod === 'apple_pay' && allowApplePay && (
@@ -3277,6 +3469,21 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         onClose={() => setIsTrustedContactsOpen(false)}
         currentUser={currentUser || null}
         onUpdated={(list) => setTrustedCount(list.length)}
+      />
+
+      <PassengerWalletModal
+        isOpen={isWalletModalOpen}
+        onClose={() => setIsWalletModalOpen(false)}
+        currentUser={currentUser || null}
+        config={config}
+        initialMode="deposit"
+        suggestedDepositAmount={Math.max(20, Math.ceil(Math.max(0, pricing.totalPrice - walletBalance)))}
+        onWalletUpdated={(w) => {
+          setWalletBalance(w.balance);
+          if (w.balance + 0.001 >= pricing.totalPrice) {
+            setRequestError('');
+          }
+        }}
       />
     </div>
   );
