@@ -93,9 +93,8 @@ function getInitialStore() {
           cardSettlementDays: 0,
           activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'carteira', 'dinheiro'],
           serviceCategories: [
-            { id: 'standard', name: 'Kavro • Particular Padrão', multiplier: 1.0, description: 'Viagens rápidas do dia a dia com ar-condicionado' },
-            { id: 'comfort', name: 'Kavro Comfort • Executivo', multiplier: 1.25, description: 'Sedans espaçosos e motoristas mais bem avaliados' },
-            { id: 'aeroporto', name: 'Kavro Bagagem / Aeroporto', multiplier: 1.35, description: 'Porta-malas amplo para malas e viagens longas' }
+            { id: 'kavro_go', name: 'Padrão', subtitle: 'Viagem de passageiros', categoryType: 'padrao', multiplier: 1.0, description: 'Transporte padrão de passageiros em veículos 4 portas com ar-condicionado.' },
+            { id: 'kavro_entregas', name: 'Entregas', subtitle: 'Produtos e encomendas', categoryType: 'entregas', multiplier: 0.95, description: 'Envie ou receba produtos, pacotes, compras e documentos direto até o endereço informado.' }
           ],
           pixKey: 'contato@kavrodrive.com.br',
           pixType: 'email',

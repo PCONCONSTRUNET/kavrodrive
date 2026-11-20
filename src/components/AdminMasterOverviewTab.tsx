@@ -5,6 +5,7 @@ import {
 import { DriverProfile, PaymentTransaction, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { PaymentMethodBadge, PaymentMethodIcon } from './PaymentMethodIcon';
+import { normalizeCategoriesFromConfig, mapLegacyCategoryId, resolveCategoryType } from '../utils/categoryEngine';
 
 interface AdminMasterOverviewTabProps {
   rides: Ride[];
@@ -93,9 +94,11 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
     let pixTotal = 0;
     let cardTotal = 0;
     let cashTotal = 0;
-    let catStandard = 0;
-    let catComfort = 0;
-    let catBagagem = 0;
+    const platformCategories = normalizeCategoriesFromConfig(config);
+    const categoryCounts = new Map<string, number>();
+    for (const cat of platformCategories) {
+      categoryCounts.set(cat.id, 0);
+    }
 
     for (const r of validRides) {
       const val = Number(r.totalPrice || 0);
@@ -110,10 +113,27 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
       else if (r.paymentMethod === 'dinheiro') cashTotal += val;
       else cardTotal += val;
 
-      if (r.category === 'comfort') catComfort++;
-      else if (r.category === 'bagagem' || r.hasLuggage) catBagagem++;
-      else catStandard++;
+      const rideType = r.serviceType === 'entregas'
+        ? 'entregas'
+        : resolveCategoryType(r.category || r.categoryName);
+      const mappedId = mapLegacyCategoryId(
+        r.category || (rideType === 'entregas' ? 'kavro_entregas' : 'kavro_go')
+      );
+      const matchedCat =
+        platformCategories.find(c => c.id === r.category) ||
+        platformCategories.find(c => c.id === mappedId) ||
+        platformCategories.find(c => resolveCategoryType(c) === rideType) ||
+        platformCategories[0];
+      if (matchedCat) {
+        categoryCounts.set(matchedCat.id, (categoryCounts.get(matchedCat.id) || 0) + 1);
+      }
     }
+
+    const categoryBreakdown = platformCategories.map(cat => ({
+      id: cat.id,
+      name: cat.subtitle ? `${cat.name} (${cat.subtitle})` : cat.name,
+      count: categoryCounts.get(cat.id) || 0
+    }));
 
     if (grossTotal === 0 && transactions.length > 0) {
       for (const tx of transactions) {
@@ -164,13 +184,11 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
       pixTotal,
       cardTotal,
       cashTotal,
-      catStandard,
-      catComfort,
-      catBagagem,
+      categoryBreakdown,
       avgTicket,
       timeBuckets
     };
-  }, [drivers, rides, transactions, commPct]);
+  }, [drivers, rides, transactions, commPct, commFixed, config]);
 
   const filteredRides = useMemo(() => {
     return rides.filter(r => {
@@ -669,15 +687,11 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {[
-              { name: 'Kavro X (Particular)', count: stats.catStandard },
-              { name: 'Kavro Comfort', count: stats.catComfort },
-              { name: 'Kavro Bagagem', count: stats.catBagagem }
-            ].map((cat, i) => {
-              const totalCat = stats.catStandard + stats.catComfort + stats.catBagagem;
+            {stats.categoryBreakdown.map((cat) => {
+              const totalCat = stats.categoryBreakdown.reduce((sum, item) => sum + item.count, 0);
               const pct = totalCat > 0 ? Math.round((cat.count / totalCat) * 100) : 0;
               return (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div key={cat.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.74rem' }}>
                     <span style={{ color: '#334155', fontWeight: 500 }}>{cat.name}</span>
                     <span style={{ color: '#0F172A', fontWeight: 600 }}>{cat.count} ({pct}%)</span>
