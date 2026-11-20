@@ -699,11 +699,17 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   };
 
   const handleArrivePickup = async (ride: Ride) => {
-    await fetch(`/api/rides/${encodeURIComponent(ride.id)}/status`, {
+    setStatusError('');
+    const res = await fetch(`/api/rides/${encodeURIComponent(ride.id)}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
       body: JSON.stringify({ status: 'no_local' })
     });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      setStatusError(errData.error || 'Não foi possível confirmar a chegada no embarque.');
+      return;
+    }
     await StorageService.syncFromDatabase();
     refreshData();
   };
@@ -725,6 +731,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   };
 
   const handleInitiateCompleteRide = async (ride: Ride) => {
+    setStatusError('');
     if (ride.paymentMethod === 'dinheiro') {
       setCashCompleteRide(ride);
       setCashResolution('confirmado');
@@ -752,6 +759,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
 
   const handleConfirmCashCompletion = async () => {
     if (!cashCompleteRide || !currentDriver) return;
+    setStatusError('');
     setIsCompletingRide(true);
     const completedRideSnapshot = cashCompleteRide;
     const receivedVal =
@@ -2473,34 +2481,53 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           padding: 16
         }}>
           <div style={{
-            backgroundColor: '#1E293B',
+            backgroundColor: '#FFFFFF',
+            color: '#111111',
             borderRadius: 24,
             padding: 22,
             width: '100%',
             maxWidth: 400,
-            border: '1px solid #334155'
+            border: '1px solid #E5E7EB',
+            boxShadow: '0 24px 48px rgba(0,0,0,0.28)'
           }}>
-            <h3 style={{ margin: '0 0 6px 0', fontSize: '1.2rem', fontWeight: 900 }}>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '1.22rem', fontWeight: 900, color: '#111111' }}>
               Cobrar do Passageiro: R$ {cashCompleteRide.totalPrice.toFixed(2).replace('.', ',')}
             </h3>
-            <p style={{ fontSize: '0.8rem', color: '#94A3B8', marginBottom: 14, lineHeight: 1.45 }}>
+            <p style={{ fontSize: '0.84rem', color: '#4B5563', marginBottom: 16, lineHeight: 1.5 }}>
               Receba o dinheiro em mãos do passageiro. A comissão de{' '}
-              <strong style={{ color: '#F8FAFC' }}>{cashCompleteRide.commissionPercent ?? 20}%</strong>{' '}
+              <strong style={{ color: '#111111' }}>{cashCompleteRide.commissionPercent ?? 20}%</strong>{' '}
               (R$ {((cashCompleteRide.totalPrice * (cashCompleteRide.commissionPercent ?? 20)) / 100).toFixed(2).replace('.', ',')})
               será descontada automaticamente do seu Saldo Livre; caso não haja saldo suficiente, a diferença entra no seu Saldo Devedor.
             </p>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 10 }}>
               <button
                 type="button"
                 onClick={() => setCashCompleteRide(null)}
-                style={{ padding: '12px 16px', borderRadius: 12, border: '1px solid #475569', backgroundColor: 'transparent', color: '#FFF' }}
+                style={{
+                  padding: '12px 16px',
+                  borderRadius: 12,
+                  border: '1px solid #D1D5DB',
+                  backgroundColor: '#F3F4F6',
+                  color: '#111111',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
               >
                 Voltar
               </button>
               <button
                 type="button"
                 onClick={handleConfirmCashCompletion}
-                style={{ flex: 1, padding: '12px', borderRadius: 12, backgroundColor: '#22C55E', color: '#121A21', border: 'none', fontWeight: 900 }}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 12,
+                  backgroundColor: '#16A34A',
+                  color: '#FFFFFF',
+                  border: 'none',
+                  fontWeight: 900,
+                  cursor: 'pointer'
+                }}
               >
                 Confirmar Recebimento
               </button>

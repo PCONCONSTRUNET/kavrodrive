@@ -3811,3 +3811,65 @@ test('Gateway Efí Bank completo: config/certificado, PIX cobranca + Split, cart
     efiGateway.clearCaches();
   }
 });
+
+test('Regressao Postgres/Dinheiro: pixExpiresAt vazio nao quebra aceitar/status e finalize nao duplica gateway_tx_id', async () => {
+  const cashRideId = `UP-REG-${Date.now()}`;
+  const createdTx = await finance.savePaymentTransaction({
+    rideId: cashRideId,
+    rideCode: `#UP - ${cashRideId}`,
+    method: 'dinheiro',
+    status: 'aguardando',
+    estimatedAmount: 26.2,
+    finalAmount: 26.2,
+    paidAmount: 0,
+    pixExpiresAt: '',
+    gatewayTxId: `cash_init_${cashRideId}`
+  });
+  assert.equal(createdTx.pixExpiresAt, null, 'pixExpiresAt vazio deve normalizar para null (nunca string vazia para TIMESTAMPTZ)');
+
+  // Simula fluxo /accept que re-salva {...existingTx} sem gatewayTxId/pixExpiresAt
+  const reloaded = await finance.getPaymentTxByRide(cashRideId);
+  assert.equal(reloaded.pixExpiresAt, null);
+  const afterAccept = await finance.savePaymentTransaction({
+    ...reloaded,
+    driverId: 'drv-1001',
+    driverName: 'Alisson Santos'
+  });
+  assert.equal(afterAccept.id, createdTx.id);
+  assert.equal(afterAccept.pixExpiresAt, null);
+
+  // Simula settleCashRideToLedger duas vezes (sem duplicar row nem colidir em gateway_tx_id UNIQUE)
+  const firstSettle = await finance.settleCashRideToLedger(
+    {
+      id: cashRideId,
+      rideCode: `#UP - ${cashRideId}`,
+      driverId: 'drv-1001',
+      driverName: 'Alisson Santos',
+      totalPrice: 26.2,
+      commissionPercent: 20,
+      paymentMethod: 'dinheiro'
+    },
+    26.2,
+    'confirmado'
+  );
+  assert.equal(firstSettle.paymentStatus, 'confirmado');
+
+  const secondSettle = await finance.settleCashRideToLedger(
+    {
+      id: cashRideId,
+      rideCode: `#UP - ${cashRideId}`,
+      driverId: 'drv-1001',
+      driverName: 'Alisson Santos',
+      totalPrice: 26.2,
+      commissionPercent: 20,
+      paymentMethod: 'dinheiro'
+    },
+    26.2,
+    'confirmado'
+  );
+  assert.equal(secondSettle.paymentStatus, 'confirmado');
+
+  const allTxForRide = (await finance.listPaymentTransactions()).filter(t => t.rideId === cashRideId);
+  assert.equal(allTxForRide.length, 1, 'Nao deve duplicar transacao na finalizacao em dinheiro');
+  assert.equal(allTxForRide[0].status, 'confirmado');
+});

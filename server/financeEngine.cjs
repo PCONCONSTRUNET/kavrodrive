@@ -1028,6 +1028,17 @@ function formatLedgerRow(row) {
   };
 }
 
+function normalizeOptionalTimestamp(value, fallback = null) {
+  if (value === undefined || value === null) return fallback;
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? fallback : value.toISOString();
+  }
+  const raw = String(value).trim();
+  if (!raw) return fallback;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
+}
+
 function formatPaymentTxRow(row) {
   if (!row) return null;
   return {
@@ -1049,7 +1060,7 @@ function formatPaymentTxRow(row) {
     driverNetAmount: round2(row.driver_net_amount ?? row.driverNetAmount ?? 0),
     pixQrCode: row.pix_qr_code || row.pixQrCode || '',
     pixCopyPaste: row.pix_copy_paste || row.pixCopyPaste || '',
-    pixExpiresAt: row.pix_expires_at || row.pixExpiresAt || '',
+    pixExpiresAt: normalizeOptionalTimestamp(row.pix_expires_at ?? row.pixExpiresAt, null),
     cardId: row.card_id || row.cardId || '',
     cardLast4: row.card_last4 || row.cardLast4 || '',
     cardBrand: row.card_brand || row.cardBrand || '',
@@ -1057,8 +1068,8 @@ function formatPaymentTxRow(row) {
     gatewayTxId: row.gateway_tx_id || row.gatewayTxId || '',
     disputeReason: row.dispute_reason || row.disputeReason || '',
     failureReason: row.failure_reason || row.failureReason || '',
-    createdAt: row.created_at || row.createdAt || new Date().toISOString(),
-    updatedAt: row.updated_at || row.updatedAt || new Date().toISOString()
+    createdAt: normalizeOptionalTimestamp(row.created_at ?? row.createdAt, new Date().toISOString()),
+    updatedAt: normalizeOptionalTimestamp(row.updated_at ?? row.updatedAt, new Date().toISOString())
   };
 }
 
@@ -1419,8 +1430,9 @@ async function listLedgerEntries(driverId = null) {
 async function savePaymentTransaction(tx) {
   await ensureExtendedSchema();
   const now = new Date().toISOString();
+  const explicitId = String(tx.id || '').trim();
   const normalized = {
-    id: tx.id || `pay-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+    id: explicitId || `pay-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
     ride_id: tx.rideId || tx.ride_id,
     ride_code: tx.rideCode || tx.ride_code || '',
     driver_id: tx.driverId ?? tx.driver_id ?? null,
@@ -1438,15 +1450,23 @@ async function savePaymentTransaction(tx) {
     driver_net_amount: round2(tx.driverNetAmount ?? tx.driver_net_amount ?? 0),
     pix_qr_code: tx.pixQrCode ?? tx.pix_qr_code ?? '',
     pix_copy_paste: tx.pixCopyPaste ?? tx.pix_copy_paste ?? '',
-    pix_expires_at: tx.pixExpiresAt ?? tx.pix_expires_at ?? null,
+    pix_expires_at: normalizeOptionalTimestamp(
+      tx.pixExpiresAt !== undefined ? tx.pixExpiresAt : tx.pix_expires_at,
+      null
+    ),
     card_id: tx.cardId ?? tx.card_id ?? '',
     card_last4: tx.cardLast4 ?? tx.card_last4 ?? '',
     card_brand: tx.cardBrand ?? tx.card_brand ?? '',
     gateway_auth_code: tx.gatewayAuthCode ?? tx.gateway_auth_code ?? '',
-    gateway_tx_id: tx.gatewayTxId || tx.gateway_tx_id || `gw_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    gateway_tx_id:
+      String(tx.gatewayTxId || tx.gateway_tx_id || '').trim() ||
+      `gw_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     dispute_reason: tx.disputeReason ?? tx.dispute_reason ?? '',
     failure_reason: tx.failureReason ?? tx.failure_reason ?? '',
-    created_at: tx.createdAt || tx.created_at || now,
+    created_at: normalizeOptionalTimestamp(
+      tx.createdAt !== undefined ? tx.createdAt : tx.created_at,
+      now
+    ),
     updated_at: now
   };
 
@@ -1465,6 +1485,32 @@ async function savePaymentTransaction(tx) {
     db.localStore.payment_transactions.unshift(normalized);
     db.saveLocalStore();
     return formatPaymentTxRow(normalized);
+  }
+
+  // Evita duplicidade por ride_id ou colisão na constraint UNIQUE(gateway_tx_id)
+  if (!explicitId && normalized.ride_id) {
+    const byRideRes = await db.query(
+      'SELECT id, gateway_tx_id FROM public.payment_transactions WHERE ride_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [normalized.ride_id]
+    );
+    if (byRideRes.rows[0]) {
+      normalized.id = byRideRes.rows[0].id;
+    }
+  }
+
+  if (normalized.gateway_tx_id) {
+    const byGwRes = await db.query(
+      'SELECT id, ride_id FROM public.payment_transactions WHERE gateway_tx_id = $1 LIMIT 1',
+      [normalized.gateway_tx_id]
+    );
+    const conflictRow = byGwRes.rows[0];
+    if (conflictRow && conflictRow.id !== normalized.id) {
+      if (normalized.ride_id && conflictRow.ride_id === normalized.ride_id) {
+        normalized.id = conflictRow.id;
+      } else {
+        normalized.gateway_tx_id = `${normalized.gateway_tx_id}_${crypto.randomBytes(3).toString('hex')}`;
+      }
+    }
   }
 
   const r = await db.query(
@@ -1489,6 +1535,7 @@ async function savePaymentTransaction(tx) {
       driver_net_amount = EXCLUDED.driver_net_amount,
       pix_qr_code = COALESCE(NULLIF(EXCLUDED.pix_qr_code, ''), public.payment_transactions.pix_qr_code),
       pix_copy_paste = COALESCE(NULLIF(EXCLUDED.pix_copy_paste, ''), public.payment_transactions.pix_copy_paste),
+      pix_expires_at = COALESCE(EXCLUDED.pix_expires_at, public.payment_transactions.pix_expires_at),
       gateway_tx_id = COALESCE(NULLIF(EXCLUDED.gateway_tx_id, ''), public.payment_transactions.gateway_tx_id),
       dispute_reason = EXCLUDED.dispute_reason,
       failure_reason = EXCLUDED.failure_reason,
@@ -2762,7 +2809,7 @@ async function captureCardForRide(ride, finalAmount) {
       console.warn('[MP Card Capture fallback/error]:', err.message);
     }
   }
-  return { captured: true, gatewayTxId: tx?.gatewayTxId || `card_cap_${ride.id}`, provider: 'sandbox' };
+  return { captured: true, gatewayTxId: tx?.gatewayTxId || `card_cap_${ride.id}_${Date.now()}`, provider: 'sandbox' };
 }
 
 async function refundGatewayPayment(tx, refundAmount = null) {
@@ -2967,7 +3014,10 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
         ? 'parcialmente_pago'
         : 'confirmado';
 
+  const existingCashTx = await getPaymentTxByRide(ride.id);
   await savePaymentTransaction({
+    ...(existingCashTx || {}),
+    id: existingCashTx?.id,
     rideId: ride.id,
     rideCode: ride.rideCode || ride.id,
     driverId,
@@ -2982,7 +3032,7 @@ async function settleCashRideToLedger(ride, receivedAmount, resolutionType = 'co
     commissionPercent: split.commissionPercent,
     commissionAmount: split.commissionAmount,
     driverNetAmount: round2(actualPaid - split.commissionAmount),
-    gatewayTxId: `cash_${ride.id}`
+    gatewayTxId: existingCashTx?.gatewayTxId || `cash_${ride.id}_${Date.now()}`
   });
 
   const updatedWallet = await getDriverWallet(driverId);
@@ -4033,6 +4083,8 @@ async function insertClientWalletEntry({
   const rowId = id || `cw-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const nowIso = new Date().toISOString();
 
+  const normalizedPixExpiresAt = normalizeOptionalTimestamp(pixExpiresAt, null);
+
   if (!db.pool) {
     if (!Array.isArray(db.localStore.client_wallet_entries)) db.localStore.client_wallet_entries = [];
     const dup = db.localStore.client_wallet_entries.find(e => e.idempotency_key === cleanKey);
@@ -4053,7 +4105,7 @@ async function insertClientWalletEntry({
       gateway_tx_id: gatewayTxId || null,
       pix_qr_code: pixQrCode || '',
       pix_copy_paste: pixCopyPaste || '',
-      pix_expires_at: pixExpiresAt || null,
+      pix_expires_at: normalizedPixExpiresAt,
       description: String(description || ''),
       metadata: metadata || {},
       created_at: nowIso,
@@ -4097,7 +4149,7 @@ async function insertClientWalletEntry({
       gatewayTxId || null,
       pixQrCode || '',
       pixCopyPaste || '',
-      pixExpiresAt || null,
+      normalizedPixExpiresAt,
       String(description || ''),
       JSON.stringify(metadata || {})
     ]

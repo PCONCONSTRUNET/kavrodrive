@@ -4049,7 +4049,7 @@ async function handleApiRequest(req, res) {
             commissionPercent: split.commissionPercent,
             commissionAmount: split.commissionAmount,
             driverNetAmount: split.driverNetAmount,
-            gatewayTxId: debitRes.entry?.id || `wallet_${ride.id}`
+            gatewayTxId: debitRes.entry?.id || `wallet_${ride.id}_${Date.now()}`
           });
           ride.paymentTxId = walletTx.id;
           ride.paidAmount = split.grossAmount;
