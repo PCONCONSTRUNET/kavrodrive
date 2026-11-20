@@ -2374,6 +2374,18 @@ async function handleApiRequest(req, res) {
           ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();
         `, [JSON.stringify(body)]);
 
+        const stripMediaForAudit = (cfgObj) => {
+          if (!cfgObj || typeof cfgObj !== 'object') return cfgObj;
+          if (!Array.isArray(cfgObj.partnerBanners)) return cfgObj;
+          return {
+            ...cfgObj,
+            partnerBanners: cfgObj.partnerBanners.map((b) => ({
+              ...b,
+              imageUrl: String(b?.imageUrl || '').startsWith('data:image/') ? '[imagem_upload]' : (b?.imageUrl || '')
+            }))
+          };
+        };
+
         const changes = audit.buildConfigChangesDiff(beforeCfg, body);
         if (changes.length > 0) {
           const hasFeeChange = changes.some(c => audit.FEE_FIELDS.has(c.field));
@@ -2397,8 +2409,8 @@ async function handleApiRequest(req, res) {
             entityLabel: body.companyName || 'Kavro Drive',
             relatedIds: { configId: 'default' },
             changes,
-            snapshotBefore: beforeCfg,
-            snapshotAfter: body
+            snapshotBefore: stripMediaForAudit(beforeCfg),
+            snapshotAfter: stripMediaForAudit(body)
           });
         }
 

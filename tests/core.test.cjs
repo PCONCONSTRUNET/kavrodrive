@@ -3605,3 +3605,54 @@ test('Regressao Postgres/Dinheiro: pixExpiresAt vazio nao quebra aceitar/status 
     );
   }
 });
+
+test('Parceiros e Patrocinadores da Home: auditoria registra diff e GET /api/config expoe logos/banners para a Home', async () => {
+  const sampleBanners = [
+    {
+      id: 'prt-logo-1',
+      name: 'Auto Posto Central',
+      kind: 'patrocinador',
+      displayMode: 'logo',
+      imageUrl: 'https://cdn.kavro.test/logo-posto.png',
+      subtitle: '10% OFF para passageiros',
+      linkUrl: 'https://autoposto.kavro.test',
+      active: true,
+      sortOrder: 1
+    },
+    {
+      id: 'prt-banner-1',
+      name: 'Supermercado Serra',
+      kind: 'parceiro',
+      displayMode: 'banner',
+      imageUrl: 'https://cdn.kavro.test/banner-mercado.jpg',
+      subtitle: 'Entregas no mesmo dia pela Kavro',
+      active: true,
+      sortOrder: 2
+    }
+  ];
+
+  // Sem sessão Admin, POST /api/config segue bloqueado (fail-closed)
+  const unauthSave = await apiJson('/api/config', {
+    method: 'POST',
+    body: { partnerBanners: sampleBanners }
+  });
+  assert.equal(unauthSave.status, 401);
+
+  // Persistindo no system_config, GET /api/config expõe partnerBanners para Landing e ClientHome
+  const prevCfg = db.localStore.system_config?.default?.config || {};
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify({ ...prevCfg, partnerBanners: sampleBanners })]
+  );
+
+  const pubCfg = await apiJson('/api/config');
+  assert.equal(pubCfg.status, 200);
+  assert.equal(Array.isArray(pubCfg.json.partnerBanners), true);
+  assert.equal(pubCfg.json.partnerBanners.length, 2);
+  assert.equal(pubCfg.json.partnerBanners[0].name, 'Auto Posto Central');
+  assert.equal(pubCfg.json.partnerBanners[1].displayMode, 'banner');
+
+  const diff = audit.buildConfigChangesDiff({ ...prevCfg, partnerBanners: [] }, { ...prevCfg, partnerBanners: sampleBanners });
+  assert.ok(diff.some(d => d.field === 'partnerBanners' && d.after === '2 item(ns)'));
+});

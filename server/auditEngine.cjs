@@ -204,6 +204,19 @@ function buildConfigChangesDiff(beforeCfg = {}, afterCfg = {}) {
     }
   }
 
+  // Comparar alterações nos Parceiros & Patrocinadores da Home
+  const prevPartners = Array.isArray(beforeCfg?.partnerBanners) ? beforeCfg.partnerBanners : [];
+  const nextPartners = Array.isArray(afterCfg?.partnerBanners) ? afterCfg.partnerBanners : [];
+  if (JSON.stringify(prevPartners) !== JSON.stringify(nextPartners)) {
+    changes.push({
+      field: 'partnerBanners',
+      label: 'Parceiros & Banners da Home',
+      before: `${prevPartners.length} item(ns)`,
+      after: `${nextPartners.length} item(ns)`,
+      summary: `Parceiros & Patrocinadores: ${prevPartners.length} -> ${nextPartners.length} item(ns)`
+    });
+  }
+
   return changes;
 }
 

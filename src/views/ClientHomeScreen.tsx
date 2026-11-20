@@ -10,6 +10,7 @@ import { AddressPickerModal } from '../components/AddressPickerModal';
 import { StorageService, findActivePassengerRide } from '../services/storage';
 import { PassengerLiveMap } from '../components/PassengerLiveMap';
 import { PassengerFeatureCarousel } from '../components/PassengerFeatureCarousel';
+import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
 import { NotificationsModal } from '../components/NotificationsModal';
 import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 
@@ -1015,6 +1016,9 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
           onRequireAuth={onGoToProfile}
         />
       </div>
+
+      {/* ── ÁREA DE PARCEIROS & PATROCINADORES NA HOME DO APP ── */}
+      <PartnersSponsorsSection items={config.partnerBanners} variant="light" />
 
       {/* ── RODAPÉ LGPD & SEGURANÇA DE DADOS (DISCRETO) ── */}
       <div style={{ padding: '14px 20px 4px 20px', textAlign: 'center' }}>

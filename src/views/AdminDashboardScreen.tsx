@@ -34,6 +34,7 @@ import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
 import { AdminSosCenterTab } from '../components/AdminSosCenterTab';
 import { AdminRideCategoriesTab } from '../components/AdminRideCategoriesTab';
+import { AdminPartnersBannersTab } from '../components/AdminPartnersBannersTab';
 import { PaymentMethodBadge, PaymentMethodIcon } from '../components/PaymentMethodIcon';
 import { normalizeCategoriesFromConfig } from '../utils/categoryEngine';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
@@ -57,7 +58,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'repasses' | 'taxas' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'repasses' | 'taxas' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'parceiros' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [repassesInitialSubTab, setRepassesInitialSubTab] = useState<'saques' | 'motoristas' | 'corridas_split' | 'livro_razao'>('saques');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
@@ -1760,6 +1761,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'auditoria', label: 'Auditoria', icon: ShieldCheck, badge: null },
               { id: 'rotas', label: 'Rotas GPS', icon: Route, badge: completedRoutesCount > 0 ? String(completedRoutesCount) : null },
               { id: 'clientes', label: 'Passageiros', icon: Users, badge: null },
+              { id: 'parceiros', label: 'Parceiros & Banners', icon: Award, badge: Array.isArray(currentConfig.partnerBanners) && currentConfig.partnerBanners.length > 0 ? String(currentConfig.partnerBanners.length) : null },
               { id: 'notificacoes', label: 'Notificações & Push', icon: Bell, badge: null },
               { id: 'config', label: 'Tarifas & Regras', icon: Settings, badge: null },
             ]
@@ -2029,6 +2031,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
                 {activeTab === 'clientes' && 'Passageiros'}
+                {activeTab === 'parceiros' && 'Parceiros & Banners da Home'}
                 {activeTab === 'notificacoes' && 'Notificações & Push'}
                 {activeTab === 'config' && 'Tarifas & Regras'}
               </span>
@@ -7243,6 +7246,18 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             </form>
           );
         })()}
+
+        {/* ================= ABA: PARCEIROS & BANNERS DA HOME ================= */}
+        {activeTab === 'parceiros' && (
+          <AdminPartnersBannersTab
+            config={currentConfig}
+            onConfigSaved={(nextCfg) => {
+              setCurrentConfig(nextCfg);
+              setIsConfigDirty(false);
+              onRefreshData();
+            }}
+          />
+        )}
 
         {/* ================= ABA: NOTIFICAÇÕES & PUSH (DEDICADA) ================= */}
         {activeTab === 'notificacoes' && (

@@ -28,6 +28,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { SystemConfig } from '../types';
+import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
 import {
   CityOrCepSuggestion,
   lookupViaCep,
@@ -1399,6 +1400,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           )}
         </div>
       </section>
+
+      {/* ═══ PARCEIROS & PATROCINADORES DA HOME ═══ */}
+      <PartnersSponsorsSection
+        items={config.partnerBanners}
+        variant="dark"
+        isMobile={isMobile}
+        onBecomePartnerClick={() => setBusinessModalOpen(true)}
+      />
 
       {/* ═══ SEÇÃO 2 (NOVA ORDEM — VERDE SUAVE #F2F6F3): MOTORISTAS PARCEIROS EM DESTAQUE ═══ */}
       <section

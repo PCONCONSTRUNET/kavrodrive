@@ -888,6 +888,19 @@ export interface SystemConfig {
     daysOpen: number[];
   };
   pushTemplates?: Record<string, PushTemplate>;
+  partnerBanners?: HomePartnerBanner[];
+}
+
+export interface HomePartnerBanner {
+  id: string;
+  name: string;
+  kind: 'parceiro' | 'patrocinador';
+  displayMode: 'logo' | 'banner';
+  imageUrl: string;
+  subtitle?: string;
+  linkUrl?: string;
+  active: boolean;
+  sortOrder?: number;
 }
 
 export type PushAudience = 'admin' | 'cliente' | 'motorista' | 'ambos';
