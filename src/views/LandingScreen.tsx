@@ -11,7 +11,6 @@ import {
   Menu,
   X,
   ArrowRight,
-  Clock,
   ShieldCheck,
   Car,
   Sparkles,
@@ -144,7 +143,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
 
   const [pickup, setPickup] = useState<string>('');
   const [destination, setDestination] = useState<string>('');
-  const [whenMode, setWhenMode] = useState<'now' | 'schedule'>('now');
   const [locatingGps, setLocatingGps] = useState<boolean>(false);
 
   const [serviceFilter, setServiceFilter] = useState<'all' | 'mobilidade' | 'especial'>('all');
@@ -240,14 +238,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       : 'https://kavrodrive.vercel.app';
 
   const openClientFlow = (mode?: 'login' | 'register' | 'schedule') => {
-    if (pickup.trim() || destination.trim() || whenMode === 'schedule' || mode === 'schedule') {
+    if (pickup.trim() || destination.trim() || mode === 'schedule') {
       try {
         sessionStorage.setItem(
           'kavro_landing_prefill',
           JSON.stringify({
             pickup: pickup.trim(),
             destination: destination.trim(),
-            whenMode: mode === 'schedule' ? 'schedule' : whenMode,
+            whenMode: mode === 'schedule' ? 'schedule' : 'now',
             city: selectedCity,
           })
         );
@@ -1026,62 +1024,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 maxWidth: 500,
               }}
             >
-              {/* Abas Agora / Agendar */}
-              <div
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '1fr 1fr',
-                  gap: 6,
-                  backgroundColor: '#0B1218',
-                  padding: 4,
-                  borderRadius: 12,
-                  marginBottom: 14,
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setWhenMode('now')}
-                  style={{
-                    height: 36,
-                    borderRadius: 9,
-                    border: 'none',
-                    backgroundColor: whenMode === 'now' ? '#76D800' : 'transparent',
-                    color: whenMode === 'now' ? '#0B1218' : '#CBD5E1',
-                    fontSize: '0.86rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                  }}
-                >
-                  <Clock size={14} />
-                  <span>Partir agora</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setWhenMode('schedule')}
-                  style={{
-                    height: 36,
-                    borderRadius: 9,
-                    border: 'none',
-                    backgroundColor: whenMode === 'schedule' ? '#76D800' : 'transparent',
-                    color: whenMode === 'schedule' ? '#0B1218' : '#CBD5E1',
-                    fontSize: '0.86rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 6,
-                  }}
-                >
-                  <Calendar size={14} />
-                  <span>Agendar horário</span>
-                </button>
-              </div>
-
               {/* Campos Partida / Destino */}
               <div style={{ position: 'relative', marginBottom: 14 }}>
                 <div
@@ -1189,20 +1131,18 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 </div>
               </div>
 
-              {/* Botões do Simulador */}
+              {/* Botão Principal do Simulador */}
               <div
                 ref={heroCtaRef}
                 style={{
                   display: 'flex',
-                  flexDirection: isMobile ? 'column' : 'row',
-                  gap: 10,
                 }}
               >
                 <button
                   type="button"
                   onClick={() => openClientFlow()}
                   style={{
-                    flex: 1,
+                    width: '100%',
                     height: 48,
                     padding: '0 20px',
                     borderRadius: 11,
@@ -1220,25 +1160,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 >
                   <span>Calcular corrida</span>
                   <ArrowRight size={17} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => openClientFlow('login')}
-                  style={{
-                    height: 48,
-                    padding: '0 18px',
-                    borderRadius: 11,
-                    border: '1px solid rgba(255,255,255,0.16)',
-                    backgroundColor: '#0B1218',
-                    color: '#FFFFFF',
-                    fontSize: '0.88rem',
-                    fontWeight: 600,
-                    cursor: 'pointer',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  Ver histórico
                 </button>
               </div>
             </div>
