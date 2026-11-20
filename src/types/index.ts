@@ -493,6 +493,7 @@ export interface DriverProfile {
   bankName?: string;
   bankAgency?: string;
   bankAccount?: string;
+  efiAccountId?: string;
   autoPayoutWeekly?: boolean;
   acceptsCash?: boolean;
   approvalStatus: DriverApprovalStatus;
@@ -971,4 +972,51 @@ export interface AuditLogsResponse {
   total: number;
   latestDbId: number;
   summaryByCategory: Record<string, number>;
+}
+
+export interface EfiBankAdminConfig {
+  enabled: boolean;
+  sandbox: boolean;
+  clientId: string;
+  hasClientSecret: boolean;
+  clientSecretMasked: string;
+  pixKey: string;
+  hasCertificate: boolean;
+  certificateFileName: string;
+  certificateBytes: number;
+  hasCertificatePassphrase: boolean;
+  hasPemCert: boolean;
+  hasPemKey: boolean;
+  useForPassengerPix: boolean;
+  splitEnabled: boolean;
+  driverPixSendEnabled: boolean;
+  skipMtlsWebhook: boolean;
+  webhookSecret: string;
+  webhookUrl: string;
+  lastTestedAt?: string | null;
+  lastTestOk?: boolean | null;
+  lastTestMessage?: string;
+  updatedAt?: string | null;
+  credentialsReady: boolean;
+}
+
+export interface EfiBankConfigUpdatePayload {
+  enabled?: boolean;
+  sandbox?: boolean;
+  clientId?: string;
+  clientSecret?: string;
+  clearClientSecret?: boolean;
+  pixKey?: string;
+  certificateBase64?: string;
+  certificateFileName?: string;
+  certificatePassphrase?: string;
+  removeCertificate?: boolean;
+  pemCert?: string;
+  pemKey?: string;
+  useForPassengerPix?: boolean;
+  splitEnabled?: boolean;
+  driverPixSendEnabled?: boolean;
+  skipMtlsWebhook?: boolean;
+  regenerateWebhookSecret?: boolean;
+  webhookUrl?: string;
 }

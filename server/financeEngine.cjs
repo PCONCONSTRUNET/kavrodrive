@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const db = require('./db.cjs');
 const env = require('./env.cjs');
 const stripeGateway = require('./stripeGateway.cjs');
+const efiBankGateway = require('./efiBankGateway.cjs');
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
@@ -948,6 +949,7 @@ function formatDriverRow(row, categoriesConfig) {
     bankName: row.bank_name || row.bankName || '',
     bankAgency: row.bank_agency || row.bankAgency || '',
     bankAccount: row.bank_account || row.bankAccount || '',
+    efiAccountId: String(row.efi_account_id || row.efiAccountId || meta.efiAccountId || '').trim(),
     autoPayoutWeekly: row.auto_payout_weekly !== false,
     cnhDocumentPhoto: row.cnhDocumentPhoto || meta.cnhDocumentPhoto || '',
     selfiePhoto: row.selfiePhoto || meta.selfiePhoto || '',
@@ -1193,6 +1195,9 @@ async function saveDriverRecord(driverRow) {
       cats
     ),
     activeVehicleId: driverRow.activeVehicleId !== undefined ? driverRow.activeVehicleId : (prevMeta.activeVehicleId || undefined),
+    efiAccountId: driverRow.efiAccountId !== undefined
+      ? String(driverRow.efiAccountId || '').replace(/\D/g, '')
+      : (prevMeta.efiAccountId || ''),
     profileChangeRequest: driverRow.profileChangeRequest !== undefined ? driverRow.profileChangeRequest : (prevMeta.profileChangeRequest || null)
   };
 
@@ -1484,6 +1489,7 @@ async function savePaymentTransaction(tx) {
       driver_net_amount = EXCLUDED.driver_net_amount,
       pix_qr_code = COALESCE(NULLIF(EXCLUDED.pix_qr_code, ''), public.payment_transactions.pix_qr_code),
       pix_copy_paste = COALESCE(NULLIF(EXCLUDED.pix_copy_paste, ''), public.payment_transactions.pix_copy_paste),
+      gateway_tx_id = COALESCE(NULLIF(EXCLUDED.gateway_tx_id, ''), public.payment_transactions.gateway_tx_id),
       dispute_reason = EXCLUDED.dispute_reason,
       failure_reason = EXCLUDED.failure_reason,
       updated_at = NOW()
@@ -1901,6 +1907,41 @@ function mapAsaasPixType(pixType) {
 
 async function dispatchAutomatedPixPayout(wd) {
   const amount = round2(wd.netPayoutAmount !== undefined && wd.netPayoutAmount > 0 ? wd.netPayoutAmount : wd.amount);
+
+  if (await efiBankGateway.isEfiDriverPayoutActive()) {
+    try {
+      const drv = wd.driverId ? await getDriverById(wd.driverId).catch(() => null) : null;
+      const efiRes = await efiBankGateway.sendPixPayout({
+        idEnvio: wd.id,
+        amountBrl: amount,
+        pixKey: wd.pixKey,
+        cpfFavorecido: drv?.document || '',
+        description: `Repasse Motorista Kavro Drive (${wd.driverName || wd.driverId}) - ${wd.id}`
+      });
+      if (!efiRes.ok) {
+        return {
+          ok: false,
+          payoutProvider: 'efibank_pix',
+          payoutStatus: 'falha_psp',
+          error: efiRes.error || 'Falha ao disparar PIX pela Efí Bank.'
+        };
+      }
+      return {
+        ok: true,
+        payoutProvider: 'efibank_pix',
+        payoutStatus: 'processado_automaticamente',
+        payoutProviderTxId: String(efiRes.e2eId || efiRes.idEnvio)
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        payoutProvider: 'efibank_pix',
+        payoutStatus: 'falha_conexao',
+        error: err.message
+      };
+    }
+  }
+
   const webhookUrl = String(process.env.PIX_PAYOUT_WEBHOOK_URL || '').trim();
   const payoutApiKey = String(process.env.PIX_PAYOUT_API_KEY || '').trim();
   const asaasApiKey = String(process.env.ASAAS_API_KEY || '').trim();
@@ -2292,7 +2333,42 @@ async function createPixChargeForRide(ride) {
   let gatewayTxId = `pix_${ride.id}_${Date.now()}`;
   let pixExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
 
-  if (stripeGateway.isStripeEnabled()) {
+  if (await efiBankGateway.isEfiPixActive()) {
+    let payerCpf = '';
+    if (ride.clientId) {
+      try {
+        const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [ride.clientId]);
+        payerCpf = String(cliR.rows[0]?.document || '');
+      } catch {}
+    }
+    const drv = ride.driverId ? await getDriverById(ride.driverId).catch(() => null) : null;
+    const efiPix = await efiBankGateway.createPixCharge({
+      amountBrl: split.grossAmount,
+      txidPrefix: 'KVRIDE',
+      entityId: ride.id,
+      payerName: ride.clientName || 'Passageiro Kavro',
+      payerCpf,
+      description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
+      split:
+        drv && drv.efiAccountId
+          ? {
+              commissionPercent: split.commissionPercent,
+              driverPercent: round2(100 - split.commissionPercent),
+              driverCpf: drv.document,
+              driverEfiAccountId: drv.efiAccountId,
+              description: `Split Corrida ${ride.rideCode || ride.id} - ${drv.name}`
+            }
+          : null,
+      qrFallbackGenerator: getQrCodeUrl
+    });
+    if (!efiPix.pixCopyPaste && !efiPix.pixQrCode) {
+      throw new Error('Efí Bank não retornou QR Code PIX válido. Verifique sua chave PIX e certificado mTLS.');
+    }
+    pixCopyPaste = efiPix.pixCopyPaste || pixCopyPaste;
+    pixQrCode = efiPix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
+    gatewayTxId = efiPix.txid;
+    pixExpiresAt = efiPix.expiresAt || pixExpiresAt;
+  } else if (stripeGateway.isStripeEnabled()) {
     const stripePix = await stripeGateway.createPixCharge({
       amountBrl: split.grossAmount,
       rideId: ride.id,
@@ -2929,7 +3005,47 @@ async function createDriverDebtSettlementPix(driverId, customAmount = null) {
   }
 
   const txid = `DEBT${String(driverId).replace(/[^a-zA-Z0-9]/g, '')}${Date.now().toString().slice(-5)}`.slice(0, 25);
-  if (stripeGateway.isStripeEnabled()) {
+  if (await efiBankGateway.isEfiPixActive()) {
+    const drv = await getDriverById(driverId).catch(() => null);
+    const efiDebtPix = await efiBankGateway.createPixCharge({
+      amountBrl: amountToPay,
+      txidPrefix: 'KVDEBT',
+      entityId: driverId,
+      payerName: drv?.name || 'Motorista Parceiro Kavro',
+      payerCpf: drv?.document || '',
+      description: `Quitação saldo devedor Kavro (${driverId})`,
+      qrFallbackGenerator: getQrCodeUrl
+    });
+    const finalQr = efiDebtPix.pixQrCode || getQrCodeUrl(efiDebtPix.pixCopyPaste, 240);
+    await savePaymentTransaction({
+      id: `tx_debt_${driverId}`,
+      rideId: `DEBT_${driverId}`,
+      rideCode: `QUIT-${String(driverId).slice(-6)}`,
+      driverId,
+      driverName: drv?.name || null,
+      method: 'pix',
+      status: 'aguardando',
+      estimatedAmount: amountToPay,
+      finalAmount: amountToPay,
+      paidAmount: 0,
+      commissionPercent: 0,
+      commissionAmount: 0,
+      driverNetAmount: 0,
+      pixQrCode: finalQr,
+      pixCopyPaste: efiDebtPix.pixCopyPaste,
+      pixExpiresAt: efiDebtPix.expiresAt,
+      gatewayTxId: efiDebtPix.txid
+    });
+    return {
+      driverId,
+      amount: amountToPay,
+      txid: efiDebtPix.txid,
+      gatewayTxId: efiDebtPix.txid,
+      pixCopyPaste: efiDebtPix.pixCopyPaste,
+      pixQrCode: finalQr,
+      provider: 'efibank'
+    };
+  } else if (stripeGateway.isStripeEnabled()) {
     const stripeDebtPix = await stripeGateway.createPixCharge({
       amountBrl: amountToPay,
       driverId,
@@ -3713,6 +3829,22 @@ async function listClientWalletEntries(clientId) {
   return (r.rows || []).map(formatClientWalletEntryRow);
 }
 
+async function findClientWalletEntryByGatewayTxId(gatewayTxId) {
+  const gwId = String(gatewayTxId || '').trim();
+  if (!gwId) return null;
+  await ensureExtendedSchema();
+  if (!db.pool) {
+    const entries = Array.isArray(db.localStore.client_wallet_entries) ? db.localStore.client_wallet_entries : [];
+    const found = entries.find(e => e.gateway_tx_id === gwId);
+    return found ? formatClientWalletEntryRow(found) : null;
+  }
+  const res = await db.query(
+    'SELECT * FROM public.client_wallet_entries WHERE gateway_tx_id = $1 LIMIT 1',
+    [gwId]
+  );
+  return res.rows[0] ? formatClientWalletEntryRow(res.rows[0]) : null;
+}
+
 async function confirmClientWalletTopup({ entryId, gatewayTxId = null, paidAmount = null }) {
   await ensureExtendedSchema();
   const eid = String(entryId || '').trim();
@@ -3795,25 +3927,51 @@ async function getClientWallet(clientId, options = {}) {
 
   let entries = await listClientWalletEntries(cid);
 
-  if (!options.skipGatewaySync && stripeGateway.isStripeEnabled()) {
-    const pendingStripeEntries = entries.filter(
-      e => e.status === 'aguardando' && String(e.gatewayTxId || '').startsWith('pi_')
-    );
-    for (const pe of pendingStripeEntries.slice(0, 5)) {
-      try {
-        const piCheck = await stripeGateway.retrievePaymentIntentStatus(pe.gatewayTxId);
-        if (piCheck && piCheck.status === 'succeeded') {
-          await confirmClientWalletTopup({
-            entryId: pe.id,
-            gatewayTxId: piCheck.id,
-            paidAmount: piCheck.amountBrl
-          });
+  if (!options.skipGatewaySync) {
+    let syncedAny = false;
+    if (await efiBankGateway.isEfiPixActive()) {
+      const pendingEfiEntries = entries.filter(
+        e =>
+          e.status === 'aguardando' &&
+          (e.metadata?.provider === 'efibank' || String(e.gatewayTxId || '').startsWith('KVWLT'))
+      );
+      for (const pe of pendingEfiEntries.slice(0, 5)) {
+        try {
+          const efiCheck = await efiBankGateway.getPixChargeStatus(pe.gatewayTxId);
+          if (efiCheck && efiCheck.paid) {
+            await confirmClientWalletTopup({
+              entryId: pe.id,
+              gatewayTxId: pe.gatewayTxId,
+              paidAmount: efiCheck.amountBrl || pe.amount
+            });
+            syncedAny = true;
+          }
+        } catch {
+          // ignore transient Efí lookup failures
         }
-      } catch {
-        // ignore transient gateway lookup failures
       }
     }
-    if (pendingStripeEntries.length > 0) {
+    if (stripeGateway.isStripeEnabled()) {
+      const pendingStripeEntries = entries.filter(
+        e => e.status === 'aguardando' && String(e.gatewayTxId || '').startsWith('pi_')
+      );
+      for (const pe of pendingStripeEntries.slice(0, 5)) {
+        try {
+          const piCheck = await stripeGateway.retrievePaymentIntentStatus(pe.gatewayTxId);
+          if (piCheck && piCheck.status === 'succeeded') {
+            await confirmClientWalletTopup({
+              entryId: pe.id,
+              gatewayTxId: piCheck.id,
+              paidAmount: piCheck.amountBrl
+            });
+            syncedAny = true;
+          }
+        } catch {
+          // ignore transient gateway lookup failures
+        }
+      }
+    }
+    if (syncedAny) {
       entries = await listClientWalletEntries(cid);
     }
   }
@@ -3983,8 +4141,32 @@ async function createClientWalletTopup({
     let pixQrCode = getQrCodeUrl(pixCopyPaste, 260);
     let gatewayTxId = `wallet_pix_${txid}`;
     let pixExpiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    let pixProvider = 'sandbox';
 
-    if (stripeGateway.isStripeEnabled()) {
+    if (await efiBankGateway.isEfiPixActive()) {
+      let payerCpf = '';
+      try {
+        const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [cid]);
+        payerCpf = String(cliR.rows[0]?.document || '');
+      } catch {}
+      const efiPix = await efiBankGateway.createPixCharge({
+        amountBrl: cleanAmount,
+        txidPrefix: 'KVWLT',
+        entityId: cid,
+        payerName: clientName || 'Passageiro Kavro',
+        payerCpf,
+        description: `Recarga Carteira Kavro (${cid})`,
+        qrFallbackGenerator: getQrCodeUrl
+      });
+      if (!efiPix.pixCopyPaste && !efiPix.pixQrCode) {
+        throw new Error('Não foi possível gerar o QR Code PIX pela Efí Bank no momento.');
+      }
+      pixCopyPaste = efiPix.pixCopyPaste || pixCopyPaste;
+      pixQrCode = efiPix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
+      gatewayTxId = efiPix.txid;
+      pixExpiresAt = efiPix.expiresAt || pixExpiresAt;
+      pixProvider = 'efibank';
+    } else if (stripeGateway.isStripeEnabled()) {
       const stripePix = await stripeGateway.createPixCharge({
         amountBrl: cleanAmount,
         clientId: cid,
@@ -4002,6 +4184,7 @@ async function createClientWalletTopup({
       pixQrCode = stripePix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
       gatewayTxId = stripePix.paymentIntentId;
       pixExpiresAt = stripePix.expiresAt || pixExpiresAt;
+      pixProvider = 'stripe';
     }
 
     const { entry } = await insertClientWalletEntry({
@@ -4019,6 +4202,7 @@ async function createClientWalletTopup({
       pixQrCode,
       pixCopyPaste,
       pixExpiresAt,
+      metadata: { provider: pixProvider, txid: gatewayTxId },
       description: `Recarga na carteira via PIX (R$ ${cleanAmount.toFixed(2).replace('.', ',')})`
     });
 
@@ -4321,6 +4505,7 @@ module.exports = {
   formatClientWalletEntryRow,
   recomputeClientWalletBalance,
   listClientWalletEntries,
+  findClientWalletEntryByGatewayTxId,
   getClientWallet,
   createClientWalletTopup,
   confirmClientWalletTopup,

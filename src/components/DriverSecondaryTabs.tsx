@@ -183,6 +183,9 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   const [isMutatingPixList, setIsMutatingPixList] = useState(false);
   const [showAddPixForm, setShowAddPixForm] = useState(false);
   const [withdrawalFilter, setWithdrawalFilter] = useState<'all' | 'pending' | 'completed' | 'rejected'>('all');
+  const [efiAccountDraft, setEfiAccountDraft] = useState(currentDriver.efiAccountId || '');
+  const [isSavingEfiAccount, setIsSavingEfiAccount] = useState(false);
+  const [efiAccountFeedback, setEfiAccountFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   const ownerDocDigits = String(currentDriver.document || '').replace(/\D/g, '');
   const savedPixKeys: DriverPixKey[] = (() => {
@@ -1586,6 +1589,78 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                     {(isMutatingPixList || isSavingPix) ? 'Validando e salvando...' : 'Cadastrar Chave PIX'}
                   </button>
                 </form>
+              )}
+            </div>
+
+            {/* Conta Digital Efí Bank (Opcional para Split Automático na Corrida) */}
+            <div style={CARD_STYLE}>
+              <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#111111' }}>
+                Conta Digital Efí Bank (Split Automático — Opcional)
+              </div>
+              <div style={{ fontSize: '0.74rem', color: '#6B7280', marginTop: 2, lineHeight: 1.4, marginBottom: 10 }}>
+                Se você possui conta no Efí Bank (mesmo CPF do titular), informe o número da conta para receber divisão automática de corridas elegíveis. Caso não informe, seus repasses chegam normalmente via Chave PIX ao solicitar saque.
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="Nº da conta Efí (ex: 1234567)"
+                  value={efiAccountDraft}
+                  onChange={(e) => setEfiAccountDraft(e.target.value.replace(/\D/g, ''))}
+                  style={{
+                    flex: 1,
+                    height: 40,
+                    padding: '0 12px',
+                    borderRadius: 10,
+                    border: '1px solid #D1D5DB',
+                    fontSize: '0.84rem',
+                    fontWeight: 700,
+                    color: '#111111'
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={isSavingEfiAccount}
+                  onClick={async () => {
+                    setEfiAccountFeedback(null);
+                    setIsSavingEfiAccount(true);
+                    const res = await StorageService.updateDriverProfile(currentDriver.id, {
+                      efiAccountId: efiAccountDraft.trim()
+                    });
+                    setIsSavingEfiAccount(false);
+                    if (res.ok && res.driver) {
+                      onDriverUpdated(res.driver);
+                      setEfiAccountFeedback({ type: 'ok', text: 'Conta Efí salva para split!' });
+                      setTimeout(() => setEfiAccountFeedback(null), 3500);
+                    } else {
+                      setEfiAccountFeedback({ type: 'err', text: res.error || 'Erro ao salvar conta Efí.' });
+                    }
+                  }}
+                  style={{
+                    height: 40,
+                    padding: '0 14px',
+                    borderRadius: 10,
+                    border: 'none',
+                    backgroundColor: '#111111',
+                    color: '#FFFFFF',
+                    fontSize: '0.78rem',
+                    fontWeight: 800,
+                    cursor: isSavingEfiAccount ? 'wait' : 'pointer',
+                    flexShrink: 0
+                  }}
+                >
+                  {isSavingEfiAccount ? 'Salvando...' : 'Salvar Conta'}
+                </button>
+              </div>
+              {efiAccountFeedback && (
+                <div style={{
+                  marginTop: 8,
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  color: efiAccountFeedback.type === 'ok' ? '#15803D' : '#DC2626'
+                }}>
+                  {efiAccountFeedback.text}
+                </div>
               )}
             </div>
 

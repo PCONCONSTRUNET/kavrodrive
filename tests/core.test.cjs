@@ -3417,3 +3417,362 @@ test('Carteira do Passageiro: depósito mínimo R$ 20, pagamento de corrida, est
   });
   assert.equal(finalClientWallet.json.wallet.balance, finance.round2(50 - Number(ride2.totalPrice)));
 });
+
+test('Gateway Efí Bank completo: config/certificado, PIX cobranca + Split, carteira R$20+, webhook HMAC e repasse PIX motorista', async () => {
+  const efiGateway = require('../server/efiBankGateway.cjs');
+  const paidTxids = new Set();
+  const capturedCalls = [];
+  const makeTestCpf = (numSeed) => {
+    const base = String(numSeed).replace(/\D/g, '').padStart(9, '0').slice(-9);
+    const digits = base.split('').map(Number);
+    if (digits.every((d) => d === digits[0])) digits[8] = (digits[8] + 1) % 10;
+    const calc = (sliceLen) => {
+      let sum = 0;
+      for (let i = 0; i < sliceLen; i++) sum += digits[i] * (sliceLen + 1 - i);
+      const rem = (sum * 10) % 11;
+      return rem >= 10 ? 0 : rem;
+    };
+    digits.push(calc(9));
+    digits.push(calc(10));
+    return digits.join('');
+  };
+
+  efiGateway._setEfiRequestForTest(async ({ method, urlStr, headers, bodyObj }) => {
+    const parsed = new URL(urlStr);
+    const route = `${method} ${parsed.pathname}`;
+    capturedCalls.push({ route, headers, bodyObj });
+
+    if (route === 'POST /oauth/token') {
+      assert.ok(String(headers.Authorization || '').startsWith('Basic '));
+      assert.equal(bodyObj?.grant_type, 'client_credentials');
+      return {
+        status: 200,
+        data: { access_token: 'efi_test_access_token_123', token_type: 'Bearer', expires_in: 3600 }
+      };
+    }
+
+    if (route === 'GET /v2/gn/saldo') {
+      return { status: 200, data: { saldo: '1850.45' } };
+    }
+
+    if (route.startsWith('PUT /v2/webhook/')) {
+      assert.equal(headers['x-skip-mtls-checking'], 'true');
+      return { status: 201, data: { webhookUrl: bodyObj.webhookUrl } };
+    }
+
+    if (route === 'POST /v2/gn/split/config') {
+      return { status: 200, data: { id: 'split_cfg_kavro_99' } };
+    }
+
+    if (route.startsWith('PUT /v2/gn/split/cob/')) {
+      return { status: 200, data: { vinculado: true } };
+    }
+
+    if (route.startsWith('PUT /v2/cob/')) {
+      const txid = decodeURIComponent(parsed.pathname.split('/').pop());
+      return {
+        status: 201,
+        data: {
+          txid,
+          status: 'ATIVA',
+          loc: { id: 7788 },
+          pixCopiaECola: `00020101021226800014BR.GOV.BCB.PIX2558pix.sejaefi.com.br/qr/${txid}53039865802BR6304ABCD`
+        }
+      };
+    }
+
+    if (route === 'GET /v2/loc/7788/qrcode') {
+      return {
+        status: 200,
+        data: {
+          qrcode: '00020101021226800014BR.GOV.BCB.PIX2558pix.sejaefi.com.br/qr/v2-loc-7788',
+          imagemQrcode: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+          linkVisualizacao: 'https://pix.sejaefi.com.br/cob/7788'
+        }
+      };
+    }
+
+    if (route.startsWith('GET /v2/cob/')) {
+      const txid = decodeURIComponent(parsed.pathname.split('/').pop());
+      if (paidTxids.has(txid)) {
+        return {
+          status: 200,
+          data: {
+            txid,
+            status: 'CONCLUIDA',
+            valor: { original: '50.00' },
+            pix: [{ endToEndId: `E18236120202611201600${txid.slice(0, 6)}`, valor: '50.00', txid }]
+          }
+        };
+      }
+      return { status: 200, data: { txid, status: 'ATIVA', valor: { original: '50.00' } } };
+    }
+
+    if (route.startsWith('PUT /v3/gn/pix/')) {
+      const idEnvio = decodeURIComponent(parsed.pathname.split('/').pop());
+      return {
+        status: 201,
+        data: {
+          idEnvio,
+          e2eId: `E18236120PAYOUT${idEnvio.slice(0, 8)}`,
+          status: 'EM_PROCESSAMENTO'
+        }
+      };
+    }
+
+    return { status: 404, data: { error: `Unhandled route ${route}` } };
+  });
+
+  try {
+    // 1) Endpoints Admin Efí rejeitam anônimo (401 fail-closed)
+    const anonGet = await apiJson('/api/admin/gateways/efibank');
+    assert.equal(anonGet.status, 401);
+    const anonPost = await apiJson('/api/admin/gateways/efibank', {
+      method: 'POST',
+      body: { enabled: true }
+    });
+    assert.equal(anonPost.status, 401);
+
+    // 2) Salva configuração Efí Bank com certificado .p12 base64 válido e verifica mascaramento
+    const fakeP12Base64 = Buffer.from('FAKE-PKCS12-BINARY-CERT-PAYLOAD-FOR-TEST-'.repeat(4)).toString('base64');
+    const savedCfg = await efiGateway.saveEfiConfig({
+      enabled: true,
+      sandbox: true,
+      clientId: 'Client_Id_test_kavro_123',
+      clientSecret: 'Client_Secret_super_secret_999',
+      pixKey: 'efipay@sejaefi.com.br',
+      certificateBase64: `data:application/x-pkcs12;base64,${fakeP12Base64}`,
+      certificateFileName: 'kavro-homolog.p12',
+      certificatePassphrase: '',
+      useForPassengerPix: true,
+      splitEnabled: true,
+      driverPixSendEnabled: true,
+      skipMtlsWebhook: true
+    });
+    assert.equal(savedCfg.enabled, true);
+
+    const maskedForAdmin = efiGateway.sanitizeEfiConfigForAdmin(savedCfg);
+    assert.equal(maskedForAdmin.hasClientSecret, true);
+    assert.equal(maskedForAdmin.hasCertificate, true);
+    assert.equal(maskedForAdmin.certificateFileName, 'kavro-homolog.p12');
+    assert.equal(JSON.stringify(maskedForAdmin).includes('Client_Secret_super_secret_999'), false);
+    assert.equal(JSON.stringify(maskedForAdmin).includes(fakeP12Base64), false);
+
+    // /api/payments/config público expõe flags sem segredos
+    const pubPayCfg = await apiJson('/api/payments/config');
+    assert.equal(pubPayCfg.status, 200);
+    assert.equal(pubPayCfg.json.gatewayProvider, 'efibank');
+    assert.equal(pubPayCfg.json.efiEnabled, true);
+    assert.equal(pubPayCfg.json.efiPixActive, true);
+    assert.equal(pubPayCfg.json.efiSplitEnabled, true);
+    assert.equal(pubPayCfg.json.efiDriverPixSendEnabled, true);
+    assert.equal(pubPayCfg.json.autoPixPayoutEnabled, true);
+    assert.equal(pubPayCfg.json.clientSecret, undefined);
+
+    // 3) Testa conexão mTLS + leitura de saldo + registro de webhook
+    const connTest = await efiGateway.testConnection();
+    assert.equal(connTest.ok, true);
+    assert.equal(connTest.balanceBrl, 1850.45);
+    assert.equal(connTest.environment, 'homologacao');
+
+    const regWh = await efiGateway.registerWebhook({
+      fallbackOrigin: baseUrl,
+      skipMtls: true
+    });
+    assert.equal(regWh.ok, true);
+    assert.ok(regWh.webhookUrl.includes('/api/webhooks/efibank?hmac='));
+
+    // 4) Cadastro passageiro e motorista com Conta Efí (para testar Split + Envio PIX)
+    const cliPhone = `(48) 99611-${String(Date.now()).slice(-4)}`;
+    const cliCpf = makeTestCpf(Math.floor((Date.now() % 650000000) + 120000044));
+    const cliReg = await apiJson('/api/clients/register', {
+      method: 'POST',
+      body: {
+        name: 'Passageiro Efi Bank',
+        phone: cliPhone,
+        document: cliCpf,
+        email: `efi.cli.${Date.now()}@kavro.test`,
+        password: '1234',
+        termsAcceptance: { accepted: true }
+      }
+    });
+    assert.equal(cliReg.status, 200);
+    const cliToken = cliReg.json.clientToken;
+    const cliId = cliReg.json.client.id;
+
+    const drvPhone = `(48) 99622-${String(Date.now()).slice(-4)}`;
+    const drvCpf = makeTestCpf(Math.floor((Date.now() % 650000000) + 230000055));
+    const drvReg = await apiJson('/api/drivers/register', {
+      method: 'POST',
+      body: {
+        name: 'Motorista Efi Split',
+        phone: drvPhone,
+        email: `efi.drv.${Date.now()}@kavro.test`,
+        document: drvCpf,
+        password: '1234',
+        vehicleBrand: 'Hyundai',
+        vehicleModel: 'HB20S',
+        vehicleColor: 'Branco',
+        vehiclePlate: 'EFI2A26',
+        termsAcceptance: { accepted: true }
+      }
+    });
+    assert.equal(drvReg.status, 200);
+    const drvToken = drvReg.json.driverToken;
+    const drvSaved = await finance.getDriverById(drvReg.json.driver.id);
+    await finance.saveDriverRecord({
+      ...drvSaved,
+      approvalStatus: 'aprovado',
+      isOnline: true,
+      kyc: { status: 'aprovado' }
+    });
+
+    // Motorista salva própria conta digital Efí via SELF endpoint
+    const saveEfiAccRes = await apiJson(`/api/drivers/${encodeURIComponent(drvSaved.id)}`, {
+      method: 'PATCH',
+      headers: { 'x-driver-token': drvToken },
+      body: {
+        efiAccountId: '9876543',
+        pixKey: drvCpf,
+        pixType: 'cpf'
+      }
+    });
+    assert.equal(saveEfiAccRes.status, 200);
+    assert.equal(saveEfiAccRes.json.driver.efiAccountId, '9876543');
+
+    // 5) Recarga na Carteira via PIX gera cobrança Efí e confirma via webhook HMAC
+    const walletTopup = await apiJson('/api/client/wallet/topup', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { amount: 50, method: 'pix' }
+    });
+    assert.equal(walletTopup.status, 200);
+    assert.equal(walletTopup.json.pending, true);
+    const walletTxid = walletTopup.json.entry.gatewayTxId;
+    assert.ok(walletTxid.startsWith('KVWLT'));
+    assert.ok(walletTxid.length >= 26 && walletTxid.length <= 35);
+
+    // Webhook sem HMAC falha fechado (401)
+    const whUnauthorized = await apiJson('/api/webhooks/efibank', {
+      method: 'POST',
+      body: { pix: [{ txid: walletTxid, endToEndId: 'E123', valor: '50.00' }] }
+    });
+    assert.equal(whUnauthorized.status, 401);
+
+    // Marca como CONCLUIDA na resposta da API Efí e envia webhook autenticado por HMAC
+    paidTxids.add(walletTxid);
+    const whPathWithHmac = `/api/webhooks/efibank?hmac=${encodeURIComponent(savedCfg.webhookSecret)}`;
+    const whWalletConfirm = await apiJson(whPathWithHmac, {
+      method: 'POST',
+      body: { pix: [{ txid: walletTxid, endToEndId: 'E18236120WALLET01', valor: '50.00' }] }
+    });
+    assert.equal(whWalletConfirm.status, 200);
+    assert.equal(whWalletConfirm.json.processed[0].type, 'wallet_topup');
+    assert.equal(whWalletConfirm.json.processed[0].newlyConfirmed, true);
+
+    const wCheck = await apiJson('/api/client/wallet', { headers: { 'x-client-token': cliToken } });
+    assert.equal(wCheck.json.wallet.balance, 50);
+
+    // 6) Cria corrida PIX com motorista atribuído (testa Split + cobrança Efí + verificação ativa /pix/verify)
+    const efiRideRes = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Efi Bank',
+        clientPhone: cliPhone,
+        driverId: drvSaved.id,
+        origin: { address: 'Origem Efi, 10', lat: -28.391, lng: -49.393 },
+        destination: { address: 'Destino Efi, 90', lat: -28.401, lng: -49.403 },
+        distanceKm: 6,
+        durationMin: 12,
+        time: '16:10',
+        category: 'kavro_go',
+        paymentMethod: 'pix'
+      }
+    });
+    assert.equal(efiRideRes.status, 200);
+    const efiRide = efiRideRes.json.ride;
+    assert.equal(efiRide.paymentStatus, 'aguardando');
+    assert.ok(capturedCalls.some(c => c.route === 'POST /v2/gn/split/config'));
+    assert.ok(capturedCalls.some(c => c.route.startsWith('PUT /v2/gn/split/cob/')));
+
+    const rideTx = await finance.getPaymentTxByRide(efiRide.id);
+    assert.ok(rideTx.gatewayTxId.startsWith('KVRIDE'));
+    assert.ok(rideTx.gatewayTxId.length >= 26 && rideTx.gatewayTxId.length <= 35);
+
+    // Passageiro clica "Já paguei — verificar agora" (/api/payments/pix/verify) antes e depois de CONCLUIDA
+    const checkPending = await apiJson('/api/payments/pix/verify', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { rideId: efiRide.id }
+    });
+    assert.equal(checkPending.status, 200);
+    assert.equal(checkPending.json.paid, false);
+
+    paidTxids.add(rideTx.gatewayTxId);
+    const checkPaid = await apiJson('/api/payments/pix/verify', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { rideId: efiRide.id }
+    });
+    assert.equal(checkPaid.status, 200);
+    assert.equal(checkPaid.json.paid, true);
+    assert.equal(checkPaid.json.ride.paymentStatus, 'confirmado');
+
+    // 7) Saque do motorista aprovado dispara PIX automático via Efí (/v3/gn/pix/:idEnvio)
+    await finance.recordLedgerEntry({
+      idempotencyKey: `efi_seed_credit_${drvSaved.id}`,
+      driverId: drvSaved.id,
+      driverName: 'Motorista Efi Split',
+      entryType: 'ride_earning_credit',
+      paymentMethod: 'pix',
+      grossAmount: 100,
+      commissionPercent: 20,
+      commissionAmount: 20,
+      driverNetAmount: 80,
+      balanceDelta: 80,
+      balanceBucket: 'available',
+      status: 'confirmado',
+      description: 'Saldo disponível para saque Efí Bank'
+    });
+
+    const wdReq = await apiJson(`/api/drivers/${encodeURIComponent(drvSaved.id)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: {
+        amount: 60,
+        pixKey: drvCpf,
+        pixType: 'cpf'
+      }
+    });
+    assert.equal(wdReq.status, 200);
+    const wdId = wdReq.json.withdrawal.id;
+
+    const approvedPayout = await finance.processWithdrawalAdmin({
+      withdrawalId: wdId,
+      action: 'approve',
+      notes: 'Repasse Efí automático'
+    });
+    assert.equal(approvedPayout.ok, true);
+    assert.equal(approvedPayout.payoutProvider, 'efibank_pix');
+    assert.equal(approvedPayout.payoutStatus, 'processado_automaticamente');
+    assert.ok(String(approvedPayout.payoutProviderTxId || '').startsWith('E18236120PAYOUT'));
+
+    const pixSendCall = capturedCalls.find(c => c.route.startsWith('PUT /v3/gn/pix/'));
+    assert.ok(pixSendCall);
+    assert.equal(pixSendCall.bodyObj.pagador.chave, 'efipay@sejaefi.com.br');
+    assert.equal(pixSendCall.bodyObj.favorecido.chave, drvCpf);
+    assert.equal(pixSendCall.bodyObj.favorecido.cpf, drvCpf);
+
+    // 8) Desativar Efí Bank pelo Master desliga imediatamente no /api/payments/config
+    await efiGateway.saveEfiConfig({ enabled: false });
+    const afterOffCfg = await apiJson('/api/payments/config');
+    assert.equal(afterOffCfg.json.efiEnabled, false);
+    assert.equal(afterOffCfg.json.efiPixActive, false);
+  } finally {
+    await efiGateway.saveEfiConfig({ enabled: false, removeCertificate: true, clearClientSecret: true }).catch(() => {});
+    efiGateway._setEfiRequestForTest(null);
+    efiGateway.clearCaches();
+  }
+});

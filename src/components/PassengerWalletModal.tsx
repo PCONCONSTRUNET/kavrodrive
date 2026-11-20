@@ -63,11 +63,13 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   const [selectedCardId, setSelectedCardId] = useState('');
 
   const [paymentsConfig, setPaymentsConfig] = useState<{
-    gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    efiPixActive: boolean;
     stripeEnabled: boolean;
     stripePublishableKey: string;
   }>({
     gatewayProvider: 'sandbox',
+    efiPixActive: false,
     stripeEnabled: false,
     stripePublishableKey: String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim()
   });
@@ -132,6 +134,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
       .then((cfg) =>
         setPaymentsConfig({
           gatewayProvider: cfg.gatewayProvider,
+          efiPixActive: cfg.efiPixActive,
           stripeEnabled: cfg.stripeEnabled,
           stripePublishableKey: cfg.stripePublishableKey
         })
@@ -643,7 +646,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                       >
                         {isConfirmingPix
                           ? 'Verificando pagamento...'
-                          : paymentsConfig.stripeEnabled
+                          : (paymentsConfig.efiPixActive || paymentsConfig.stripeEnabled)
                             ? 'Já paguei — verificar agora'
                             : 'Confirmar pagamento PIX (Teste)'}
                       </button>

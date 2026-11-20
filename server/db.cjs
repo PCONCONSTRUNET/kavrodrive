@@ -174,7 +174,8 @@ function getInitialStore() {
     password_reset_codes: [],
     audit_logs: [],
     family_members: [],
-    sos_alerts: {}
+    sos_alerts: {},
+    gateway_configs: {}
   };
 }
 
@@ -196,6 +197,7 @@ function loadLocalStore() {
       if (!Array.isArray(merged.password_reset_codes)) merged.password_reset_codes = [];
       if (!Array.isArray(merged.audit_logs)) merged.audit_logs = [];
       if (!Array.isArray(merged.family_members)) merged.family_members = [];
+      if (!merged.gateway_configs || typeof merged.gateway_configs !== 'object') merged.gateway_configs = {};
       return merged;
     }
   } catch {
@@ -958,6 +960,30 @@ async function localQuery(text, params = []) {
       saveLocalStore();
     }
     return { rows: m ? [m] : [], rowCount: m ? 1 : 0 };
+  }
+
+  // 11. gateway_configs (Efí Bank e configurações sensíveis isoladas)
+  if (upper.includes('FROM PUBLIC.GATEWAY_CONFIGS')) {
+    if (!localStore.gateway_configs || typeof localStore.gateway_configs !== 'object') {
+      localStore.gateway_configs = {};
+    }
+    const provider = String(params[0] || 'efibank').trim();
+    const row = localStore.gateway_configs[provider];
+    return { rows: row ? [row] : [], rowCount: row ? 1 : 0 };
+  }
+  if (upper.includes('INTO PUBLIC.GATEWAY_CONFIGS')) {
+    if (!localStore.gateway_configs || typeof localStore.gateway_configs !== 'object') {
+      localStore.gateway_configs = {};
+    }
+    const provider = String(params[0] || 'efibank').trim();
+    const cfgObj = parseJsonSafe(params[1], {});
+    localStore.gateway_configs[provider] = {
+      provider,
+      config: cfgObj,
+      updated_at: new Date().toISOString()
+    };
+    saveLocalStore();
+    return { rows: [localStore.gateway_configs[provider]], rowCount: 1 };
   }
 
   return { rows: [], rowCount: 0 };

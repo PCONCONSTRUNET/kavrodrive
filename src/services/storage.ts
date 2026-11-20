@@ -627,7 +627,12 @@ export const StorageService = {
   },
 
   async fetchPaymentsConfig(): Promise<{
-    gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    efiEnabled: boolean;
+    efiPixActive: boolean;
+    efiSplitEnabled: boolean;
+    efiDriverPixSendEnabled: boolean;
+    efiSandbox: boolean;
     stripeEnabled: boolean;
     stripePublishableKey: string;
     mercadopagoEnabled: boolean;
@@ -638,8 +643,21 @@ export const StorageService = {
       const res = await fetch('/api/payments/config', { cache: 'no-store' });
       if (res.ok) {
         const d = await res.json();
+        const provider =
+          d.gatewayProvider === 'efibank'
+            ? 'efibank'
+            : d.gatewayProvider === 'stripe'
+              ? 'stripe'
+              : d.gatewayProvider === 'mercadopago'
+                ? 'mercadopago'
+                : 'sandbox';
         return {
-          gatewayProvider: d.gatewayProvider === 'stripe' ? 'stripe' : (d.gatewayProvider === 'mercadopago' ? 'mercadopago' : 'sandbox'),
+          gatewayProvider: provider,
+          efiEnabled: Boolean(d.efiEnabled),
+          efiPixActive: Boolean(d.efiPixActive),
+          efiSplitEnabled: Boolean(d.efiSplitEnabled),
+          efiDriverPixSendEnabled: Boolean(d.efiDriverPixSendEnabled),
+          efiSandbox: Boolean(d.efiSandbox),
           stripeEnabled: Boolean(d.stripeEnabled),
           stripePublishableKey: String(d.stripePublishableKey || '').trim(),
           mercadopagoEnabled: Boolean(d.mercadopagoEnabled),
@@ -651,12 +669,103 @@ export const StorageService = {
     const localStripePub = String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim();
     return {
       gatewayProvider: localStripePub ? 'stripe' : 'sandbox',
+      efiEnabled: false,
+      efiPixActive: false,
+      efiSplitEnabled: false,
+      efiDriverPixSendEnabled: false,
+      efiSandbox: false,
       stripeEnabled: false,
       stripePublishableKey: localStripePub,
       mercadopagoEnabled: false,
       mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
       autoPixPayoutEnabled: false
     };
+  },
+
+  async verifyPixPaymentStatus(rideId: string): Promise<{ ok: boolean; paid?: boolean; status?: string; ride?: Ride; error?: string }> {
+    try {
+      const res = await fetch('/api/payments/pix/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ rideId })
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao verificar PIX.' };
+    }
+  },
+
+  async fetchAdminEfiBankConfig(): Promise<{
+    ok: boolean;
+    config?: import('../types').EfiBankAdminConfig;
+    computedWebhookUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/efibank', {
+        cache: 'no-store',
+        headers: { ...this.getAuthHeaders() }
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao carregar Efí Bank.' };
+    }
+  },
+
+  async saveAdminEfiBankConfig(payload: import('../types').EfiBankConfigUpdatePayload): Promise<{
+    ok: boolean;
+    config?: import('../types').EfiBankAdminConfig;
+    computedWebhookUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/efibank', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao salvar Efí Bank.' };
+    }
+  },
+
+  async testAdminEfiBankConnection(overridePayload?: import('../types').EfiBankConfigUpdatePayload): Promise<{
+    ok: boolean;
+    tokenObtained?: boolean;
+    environment?: string;
+    balanceBrl?: number | null;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/efibank/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(overridePayload || {})
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao testar certificado Efí Bank.' };
+    }
+  },
+
+  async registerAdminEfiBankWebhook(payload?: { webhookUrl?: string; skipMtls?: boolean }): Promise<{
+    ok: boolean;
+    webhookUrl?: string;
+    config?: import('../types').EfiBankAdminConfig;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/efibank/register-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload || {})
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao registrar webhook na Efí Bank.' };
+    }
   },
 
   async createStripeSetupIntent(payload?: {

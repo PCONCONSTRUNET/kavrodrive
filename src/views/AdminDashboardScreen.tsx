@@ -7,7 +7,7 @@ import {
   Calculator, HelpCircle, Zap, Moon, Sun, Check, X, Sparkles, User, Luggage,
   Menu, LayoutDashboard, Car, LogOut, Search, UserPlus, Award, Edit2, Trash2,
   Fuel, Wrench, Wallet, ArrowUpRight, ArrowDownRight, Share2, Coins, CreditCard, Lock, RefreshCw, Bell,
-  Route, ShieldAlert, ShieldCheck, FileCheck2, Percent
+  Route, ShieldAlert, ShieldCheck, FileCheck2, Percent, Landmark
 } from 'lucide-react';
 import { playNewRideSound } from '../utils/soundAndVoice';
 import { Ride, SystemConfig, Expense, ClientProfile, RideStatus, PaymentStatus, PaymentMethod } from '../types';
@@ -28,6 +28,7 @@ import { RideRoutePlaybackModal } from '../components/RideRoutePlaybackModal';
 import { AdminRecordedRoutesTab } from '../components/AdminRecordedRoutesTab';
 import { AdminPlatformFinanceTab } from '../components/AdminPlatformFinanceTab';
 import { AdminFinancialFeesTab } from '../components/AdminFinancialFeesTab';
+import { AdminEfiBankTab } from '../components/AdminEfiBankTab';
 import { AdminAuditTab } from '../components/AdminAuditTab';
 import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
@@ -56,7 +57,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'taxas' | 'auditoria' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'taxas' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
 
@@ -1747,6 +1748,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'categorias', label: 'Categorias de Corridas', icon: Sliders, badge: null },
               { id: 'financeiro', label: 'Financeiro & Split', icon: DollarSign, badge: null },
               { id: 'taxas', label: 'Taxas Financeiras', icon: Percent, badge: null },
+              { id: 'efibank', label: 'Efí Bank (API & Pix)', icon: Landmark, badge: null },
               { id: 'sos', label: 'Central SOS', icon: ShieldAlert, badge: activeSosAlertsCount > 0 ? String(activeSosAlertsCount) : null, isDanger: activeSosAlertsCount > 0 },
             ]
           },
@@ -2019,6 +2021,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'categorias' && 'Categorias de Corridas'}
                 {activeTab === 'financeiro' && 'Financeiro & Split'}
                 {activeTab === 'taxas' && 'Taxas Financeiras'}
+                {activeTab === 'efibank' && 'Efí Bank (Certificado, PIX & Split)'}
                 {activeTab === 'auditoria' && 'Auditoria & Trilha do Banco'}
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
@@ -4740,11 +4743,17 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
         {activeTab === 'taxas' && (
           <AdminFinancialFeesTab
             config={currentConfig}
+            onOpenEfiConfig={() => setActiveTab('efibank')}
             onConfigUpdated={(next) => {
               setCurrentConfig(next);
               onRefreshData();
             }}
           />
+        )}
+
+        {/* ================= ABA DEDICADA: CONFIGURAÇÃO EFÍ BANK (API, CERTIFICADO, SPLIT & PAYOUTS) ================= */}
+        {activeTab === 'efibank' && (
+          <AdminEfiBankTab />
         )}
 
         {activeTab === 'auditoria' && (

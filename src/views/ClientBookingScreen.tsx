@@ -108,7 +108,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [showExtraOptions, setShowExtraOptions] = useState<boolean>(false);
 
   const [paymentsConfig, setPaymentsConfig] = useState<{
-    gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
+    gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
+    efiEnabled?: boolean;
+    efiPixActive?: boolean;
     stripeEnabled: boolean;
     stripePublishableKey: string;
     mercadopagoEnabled: boolean;
@@ -116,6 +118,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     autoPixPayoutEnabled: boolean;
   }>({
     gatewayProvider: 'sandbox',
+    efiEnabled: false,
+    efiPixActive: false,
     stripeEnabled: false,
     stripePublishableKey: String(import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '').trim(),
     mercadopagoEnabled: false,
@@ -208,6 +212,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [copiedPix, setCopiedPix] = useState(false);
   const [pixRemainingLabel, setPixRemainingLabel] = useState('');
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
+  const [isCheckingEfiPix, setIsCheckingEfiPix] = useState(false);
+  const [efiCheckNotice, setEfiCheckNotice] = useState('');
   const [locatingOriginGps, setLocatingOriginGps] = useState(false);
   const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
   const [isSafetyCenterOpen, setIsSafetyCenterOpen] = useState(false);
@@ -829,6 +835,28 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     submitBookingRequest();
   };
 
+  const handleCheckEfiPixNow = async () => {
+    if (!activeRide) return;
+    setIsCheckingEfiPix(true);
+    setEfiCheckNotice('');
+    const res = await StorageService.verifyPixPaymentStatus(activeRide.id);
+    setIsCheckingEfiPix(false);
+    if (res.ok && res.paid && res.ride) {
+      setActiveRide(res.ride);
+      try {
+        confetti({ particleCount: 70, spread: 60, origin: { y: 0.6 } });
+      } catch {
+        // ignore
+      }
+      return;
+    }
+    if (!res.ok) {
+      setEfiCheckNotice(res.error || 'Não foi possível verificar o PIX agora.');
+      return;
+    }
+    setEfiCheckNotice('Pagamento ainda aguardando compensação bancária. Assim que compensar, a corrida libera automaticamente.');
+  };
+
   const handleSimulatePixWebhook = async () => {
     if (!activeRide) return;
     setIsSimulatingWebhook(true);
@@ -905,7 +933,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               fontWeight: 800
             }}>
               <PaymentMethodIcon method="pix" size={14} />
-              <span>{paymentsConfig.stripeEnabled ? 'PIX Instantâneo' : 'PIX Gateway'}</span>
+              <span>{(paymentsConfig.efiPixActive || paymentsConfig.stripeEnabled) ? 'PIX Instantâneo' : 'PIX Gateway'}</span>
               {pixRemainingLabel && (
                 <span style={{
                   display: 'inline-flex',
@@ -1090,8 +1118,41 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               </span>
             </div>
 
-            {/* Botão de Simulação do Webhook apenas em desenvolvimento sem Stripe ativa */}
-            {import.meta.env.DEV && !paymentsConfig.stripeEnabled && (
+            {/* Verificação ativa Efí Bank quando gateway Efí PIX está ativo */}
+            {paymentsConfig.efiPixActive && (
+              <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                <button
+                  type="button"
+                  onClick={handleCheckEfiPixNow}
+                  disabled={isCheckingEfiPix}
+                  style={{
+                    padding: '9px 18px',
+                    borderRadius: 999,
+                    backgroundColor: '#F8FAFC',
+                    color: '#0F172A',
+                    border: '1px solid #CBD5E1',
+                    fontWeight: 800,
+                    fontSize: '0.78rem',
+                    cursor: isCheckingEfiPix ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6
+                  }}
+                >
+                  <RefreshCw size={13} className={isCheckingEfiPix ? 'animate-spin' : ''} />
+                  <span>{isCheckingEfiPix ? 'Consultando banco...' : 'Já paguei — verificar agora'}</span>
+                </button>
+                {efiCheckNotice && (
+                  <div style={{ fontSize: '0.72rem', color: '#475569', fontWeight: 600 }}>
+                    {efiCheckNotice}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Botão de Simulação do Webhook apenas em desenvolvimento sem gateway real ativo */}
+            {import.meta.env.DEV && !paymentsConfig.efiPixActive && !paymentsConfig.stripeEnabled && (
               <button
                 type="button"
                 onClick={handleSimulatePixWebhook}

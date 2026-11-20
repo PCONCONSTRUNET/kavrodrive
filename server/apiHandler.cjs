@@ -4,6 +4,7 @@ const push = require('./push.cjs');
 const env = require('./env.cjs');
 const finance = require('./financeEngine.cjs');
 const stripeGateway = require('./stripeGateway.cjs');
+const efiBankGateway = require('./efiBankGateway.cjs');
 const kycStorage = require('./kycStorage.cjs');
 const driverTermsContract = require('./driverTermsContract.cjs');
 const passengerTermsContract = require('./passengerTermsContract.cjs');
@@ -2974,7 +2975,7 @@ async function handleApiRequest(req, res) {
 
         const ALLOWED_DRIVER_SELF_FIELDS = new Set([
           'photo', 'vehiclePhoto', 'bio', 'enabledCategories', 'disabledCategoryIds', 'pendingCategoryRequests',
-          'pixKey', 'pixType', 'pixKeys', 'bankName', 'bankAgency', 'bankAccount',
+          'pixKey', 'pixType', 'pixKeys', 'bankName', 'bankAgency', 'bankAccount', 'efiAccountId',
           'autoPayoutWeekly', 'acceptsCash'
         ]);
         const nextUpdates = {};
@@ -6107,16 +6108,115 @@ async function handleApiRequest(req, res) {
       const stripePubKey = stripeGateway.getStripePublishableKey();
       const stripeOn = stripeGateway.isStripeEnabled();
       const mpOn = Boolean(env.MERCADOPAGO_ACCESS_TOKEN);
-      const gatewayProvider = stripeOn ? 'stripe' : (mpOn ? 'mercadopago' : 'sandbox');
+      const efiCfg = await efiBankGateway.getEfiConfig();
+      const efiOn = await efiBankGateway.isEfiEnabled();
+      const efiPixActive = await efiBankGateway.isEfiPixActive();
+      const efiSplitEnabled = await efiBankGateway.isEfiSplitActive();
+      const efiDriverPixSendEnabled = await efiBankGateway.isEfiDriverPayoutActive();
+      const gatewayProvider = efiPixActive ? 'efibank' : (stripeOn ? 'stripe' : (mpOn ? 'mercadopago' : 'sandbox'));
       return sendJson(res, 200, {
         ok: true,
         gatewayProvider,
+        efiEnabled: efiOn,
+        efiPixActive,
+        efiSplitEnabled,
+        efiDriverPixSendEnabled,
+        efiSandbox: Boolean(efiCfg.sandbox),
         stripeEnabled: stripeOn,
         stripePublishableKey: stripePubKey,
         mercadopagoEnabled: mpOn,
         mercadopagoPublicKey: mpPublicKey,
-        autoPixPayoutEnabled: Boolean(process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
+        autoPixPayoutEnabled: Boolean(efiDriverPixSendEnabled || process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
       });
+    }
+
+    // CONFIGURAÇÃO EXCLUSIVA PAINEL MASTER: EFÍ BANK (CREDENCIAIS, CERTIFICADO .P12, SPLIT & PAYOUTS)
+    if (pathname === '/api/admin/gateways/efibank') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const protoHeader = String(req.headers['x-forwarded-proto'] || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
+      const requestOrigin = String(req.headers.origin || '').trim() || (hostHeader ? `${protoHeader}://${hostHeader}` : 'https://kavrodrive.vercel.app');
+
+      if (method === 'GET') {
+        const cfg = await efiBankGateway.getEfiConfig({ forceFresh: true });
+        return sendJson(res, 200, {
+          ok: true,
+          config: efiBankGateway.sanitizeEfiConfigForAdmin(cfg),
+          computedWebhookUrl: efiBankGateway.buildComputedWebhookUrl(requestOrigin, cfg.webhookSecret)
+        });
+      }
+      if (method === 'POST') {
+        const body = await parseBody(req);
+        try {
+          const prev = await efiBankGateway.getEfiConfig({ forceFresh: true });
+          const saved = await efiBankGateway.saveEfiConfig(body || {});
+          const actor = getAdminActorContext(req);
+          await audit.recordAuditEvent({
+            category: 'financeiro_config',
+            actionKey: 'efibank_config_updated',
+            title: `Efí Bank ${saved.enabled ? 'ativada' : 'desativada'} no Painel Master (${saved.sandbox ? 'Homologação' : 'Produção'})`,
+            summary: `Efí Bank ${saved.enabled ? 'ATIVADA' : 'DESATIVADA'} • PIX Cobrança: ${saved.useForPassengerPix ? 'Sim' : 'Não'} • PIX Motorista API: ${saved.driverPixSendEnabled ? 'Sim' : 'Não'} • Split Efí: ${saved.splitEnabled ? 'Sim' : 'Não'}.`,
+            severity: 'info',
+            actorRole: actor.actorRole,
+            actorId: actor.actorId,
+            actorName: actor.actorName,
+            entityType: 'gateway',
+            entityId: 'efibank',
+            entityLabel: 'Efí Bank PIX & Split',
+            changes: [
+              { field: 'enabled', label: 'Status Gateway Efí', before: String(prev.enabled), after: String(saved.enabled) },
+              { field: 'sandbox', label: 'Ambiente', before: prev.sandbox ? 'Homologação' : 'Produção', after: saved.sandbox ? 'Homologação' : 'Produção' },
+              { field: 'splitEnabled', label: 'Split Automático Efí', before: String(prev.splitEnabled), after: String(saved.splitEnabled) },
+              { field: 'driverPixSendEnabled', label: 'Envio PIX Motorista API', before: String(prev.driverPixSendEnabled), after: String(saved.driverPixSendEnabled) }
+            ],
+            ipAddress: actor.ipAddress,
+            userAgent: actor.userAgent
+          });
+          return sendJson(res, 200, {
+            ok: true,
+            config: efiBankGateway.sanitizeEfiConfigForAdmin(saved),
+            computedWebhookUrl: efiBankGateway.buildComputedWebhookUrl(requestOrigin, saved.webhookSecret)
+          });
+        } catch (err) {
+          return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao salvar configurações da Efí Bank.' });
+        }
+      }
+    }
+
+    if (pathname === '/api/admin/gateways/efibank/test' && method === 'POST') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const body = await parseBody(req);
+      const testRes = await efiBankGateway.testConnection(body || {});
+      return sendJson(res, testRes.ok ? 200 : 400, testRes);
+    }
+
+    if (pathname === '/api/admin/gateways/efibank/register-webhook' && method === 'POST') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const body = await parseBody(req);
+      const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const protoHeader = String(req.headers['x-forwarded-proto'] || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
+      const fallbackOrigin = String(req.headers.origin || '').trim() || (hostHeader ? `${protoHeader}://${hostHeader}` : 'https://kavrodrive.vercel.app');
+      try {
+        const regRes = await efiBankGateway.registerWebhook({
+          webhookUrl: body.webhookUrl,
+          skipMtls: body.skipMtls !== false,
+          fallbackOrigin
+        });
+        const cfg = await efiBankGateway.getEfiConfig({ forceFresh: true });
+        return sendJson(res, 200, {
+          ok: true,
+          webhookUrl: regRes.webhookUrl,
+          config: efiBankGateway.sanitizeEfiConfigForAdmin(cfg)
+        });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Falha ao registrar webhook na Efí Bank.' });
+      }
     }
 
     if (pathname === '/api/payments/stripe/setup-intent' && method === 'POST') {
@@ -6509,8 +6609,9 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 400, { ok: false, error: 'entryId do depósito ausente.' });
       }
 
-      const isSandboxMode = !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
-      if (stripeGateway.isStripeEnabled() && !isAdmin && !hasValidWebhookSecret) {
+      const efiPixActive = await efiBankGateway.isEfiPixActive();
+      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
+      if ((efiPixActive || stripeGateway.isStripeEnabled()) && !isAdmin && !hasValidWebhookSecret) {
         if (!clientSession) {
           return sendJson(res, 401, { ok: false, error: 'Sessão inválida para confirmar depósito.' });
         }
@@ -6523,7 +6624,21 @@ async function handleApiRequest(req, res) {
           const wallet = await finance.getClientWallet(clientSession.sub, { skipGatewaySync: true });
           return sendJson(res, 200, { ok: true, entry: ownedEntry, wallet });
         }
-        if (String(ownedEntry.gatewayTxId || '').startsWith('pi_')) {
+        if (efiPixActive && ownedEntry.gatewayTxId && (ownedEntry.metadata?.provider === 'efibank' || String(ownedEntry.gatewayTxId).startsWith('KVWLT'))) {
+          try {
+            const efiCheck = await efiBankGateway.getPixChargeStatus(ownedEntry.gatewayTxId);
+            if (efiCheck && efiCheck.paid) {
+              const conf = await finance.confirmClientWalletTopup({
+                entryId: ownedEntry.id,
+                gatewayTxId: ownedEntry.gatewayTxId,
+                paidAmount: efiCheck.amountBrl || ownedEntry.amount
+              });
+              realtimeHub.publish('wallet:updated', { clientId: clientSession.sub, balance: conf.wallet.balance }, { clientId: clientSession.sub });
+              return sendJson(res, 200, { ok: true, ...conf });
+            }
+          } catch {}
+        }
+        if (stripeGateway.isStripeEnabled() && String(ownedEntry.gatewayTxId || '').startsWith('pi_')) {
           const piCheck = await stripeGateway.retrievePaymentIntentStatus(ownedEntry.gatewayTxId);
           if (piCheck && piCheck.status === 'succeeded') {
             const conf = await finance.confirmClientWalletTopup({
@@ -6873,6 +6988,174 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, { ok: true, received: true, eventType: evtType });
     }
 
+    // WEBHOOK OFICIAL EFÍ BANK (PIX RECEBIDO COM VALIDAÇÃO HMAC + CONSULTA AO VIVO /v2/cob/:txid)
+    if (pathname === '/api/webhooks/efibank' || pathname === '/api/webhooks/efibank/pix') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const validHmac = await efiBankGateway.verifyWebhookRequestHmac(req.url);
+      if (!isAdmin && !validHmac) {
+        return sendJson(res, 401, { ok: false, error: 'Assinatura HMAC de webhook Efí Bank inválida.' });
+      }
+
+      if (method === 'GET') {
+        return sendJson(res, 200, { ok: true, webhookReady: true });
+      }
+
+      if (method === 'POST') {
+        const body = await parseBody(req);
+        const pixEvents = Array.isArray(body?.pix) ? body.pix : [];
+        if (pixEvents.length === 0) {
+          return sendJson(res, 200, { ok: true, received: true, ping: true });
+        }
+
+        const processed = [];
+        for (const ev of pixEvents) {
+          const txid = String(ev?.txid || '').trim();
+          if (!txid) continue;
+
+          // Regra de ouro Efí Bank: confirmar status CONCLUIDA diretamente na API antes de liberar
+          let cobCheck;
+          try {
+            cobCheck = await efiBankGateway.getPixChargeStatus(txid);
+          } catch (err) {
+            processed.push({ txid, ok: false, error: err.message });
+            continue;
+          }
+          if (!cobCheck || !cobCheck.paid) {
+            processed.push({ txid, ok: true, status: cobCheck?.status || 'aguardando' });
+            continue;
+          }
+
+          const paidBrl = cobCheck.amountBrl || Number(String(ev?.valor || '0').replace(',', '.')) || 0;
+          const e2eId = String(ev?.endToEndId || cobCheck.endToEndId || txid);
+
+          // 1) Verifica se é recarga na Carteira do Passageiro
+          const walletEntry = await finance.findClientWalletEntryByGatewayTxId(txid);
+          if (walletEntry) {
+            const confW = await finance.confirmClientWalletTopup({
+              entryId: walletEntry.id,
+              gatewayTxId: txid,
+              paidAmount: paidBrl || walletEntry.amount
+            });
+            if (confW.newlyConfirmed) {
+              await audit.recordAuditEvent({
+                category: 'financeiro_corridas',
+                actionKey: 'client_wallet_topup_confirmed',
+                title: 'Recarga PIX confirmada via Efí Bank',
+                summary: `Recarga de ${audit.formatMoneyPt(paidBrl || walletEntry.amount)} confirmada via Efí Bank (txid ${txid}).`,
+                severity: 'info',
+                actorRole: 'gateway',
+                actorId: walletEntry.clientId,
+                actorName: 'Efí Bank PIX',
+                entityType: 'passageiro',
+                entityId: walletEntry.clientId,
+                relatedIds: { clientId: walletEntry.clientId, walletEntryId: walletEntry.id, txid, e2eId },
+                ipAddress: getRequestClientIp(req),
+                userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+              });
+              realtimeHub.publish(
+                'wallet:updated',
+                { clientId: walletEntry.clientId, balance: confW.wallet?.balance || 0 },
+                { clientId: walletEntry.clientId }
+              );
+            }
+            processed.push({ txid, type: 'wallet_topup', ok: true, newlyConfirmed: confW.newlyConfirmed });
+            continue;
+          }
+
+          // 2) Verifica se é pagamento de corrida ou quitação de dívida do motorista
+          const matchedTx = await finance.getPaymentTxByGatewayTxId(txid);
+          if (matchedTx && String(matchedTx.rideId || '').startsWith('DEBT_') && matchedTx.driverId) {
+            if (matchedTx.status !== 'confirmado') {
+              const debtRes = await finance.confirmDriverDebtSettlementWebhook({
+                driverId: String(matchedTx.driverId),
+                amount: paidBrl || matchedTx.finalAmount,
+                gatewayTxId: e2eId
+              });
+              await finance.savePaymentTransaction({
+                ...matchedTx,
+                status: 'confirmado',
+                paidAmount: paidBrl || matchedTx.finalAmount,
+                gatewayAuthCode: e2eId
+              });
+              await audit.recordAuditEvent({
+                category: 'financeiro_corridas',
+                actionKey: 'driver_debt_settled',
+                title: 'Quitação de dívida de motorista via Efí Bank PIX',
+                summary: `Dívida de ${debtRes.wallet?.driverName || matchedTx.driverId} quitada via Efí Bank em ${audit.formatMoneyPt(paidBrl)}.`,
+                severity: 'info',
+                actorRole: 'gateway',
+                actorId: String(matchedTx.driverId),
+                actorName: 'Efí Bank PIX',
+                entityType: 'motorista',
+                entityId: String(matchedTx.driverId),
+                relatedIds: { driverId: String(matchedTx.driverId), txid, e2eId },
+                ipAddress: getRequestClientIp(req),
+                userAgent: String(req.headers['user-agent'] || '').slice(0, 220) || null
+              });
+            }
+            processed.push({ txid, type: 'driver_debt_pix', ok: true });
+            continue;
+          }
+
+          if (matchedTx?.rideId) {
+            const settlement = await confirmDigitalRidePaymentAndPublish({
+              rideId: matchedTx.rideId,
+              paidAmountBrl: paidBrl || matchedTx.finalAmount,
+              gatewayTxId: e2eId,
+              gatewayLabel: 'Efí Bank PIX'
+            });
+            processed.push({ txid, type: 'ride_pix', rideId: matchedTx.rideId, ...settlement });
+            continue;
+          }
+
+          processed.push({ txid, ok: true, ignored: true });
+        }
+
+        return sendJson(res, 200, { ok: true, received: true, processed });
+      }
+    }
+
+    // VERIFICAÇÃO ATIVA DE PIX EFÍ BANK PARA CORRIDA (BOTÃO "JÁ PAGUEI" / POLLING)
+    if (pathname === '/api/payments/pix/verify' && method === 'POST') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      const driverSession = verifyDriverToken(req);
+      if (!isAdmin && !clientSession && !driverSession) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada.' });
+      }
+      const body = await parseBody(req);
+      const rideId = normalizeRideId(body.rideId || '');
+      if (!rideId) return sendJson(res, 400, { ok: false, error: 'rideId ausente.' });
+      const prevRes = await db.query('SELECT * FROM public.rides WHERE id = $1', [rideId]);
+      if (!prevRes.rows[0]) return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      const ride = formatRideFromDb(prevRes.rows[0]);
+      if (!isAdmin && ride.clientId && clientSession?.sub && ride.clientId !== clientSession.sub && ride.driverId !== driverSession?.sub) {
+        return sendJson(res, 403, { ok: false, error: 'Acesso negado.' });
+      }
+      if (ride.paymentStatus === 'confirmado' || ride.paymentStatus === 'pago') {
+        return sendJson(res, 200, { ok: true, paid: true, ride });
+      }
+      const tx = await finance.getPaymentTxByRide(rideId);
+      if (tx?.gatewayTxId && (await efiBankGateway.isEfiPixActive())) {
+        try {
+          const check = await efiBankGateway.getPixChargeStatus(tx.gatewayTxId);
+          if (check?.paid) {
+            const settled = await confirmDigitalRidePaymentAndPublish({
+              rideId,
+              paidAmountBrl: check.amountBrl || ride.totalPrice,
+              gatewayTxId: check.endToEndId || tx.gatewayTxId,
+              gatewayLabel: 'Efí Bank PIX'
+            });
+            return sendJson(res, 200, { ok: true, paid: true, ...settled });
+          }
+          return sendJson(res, 200, { ok: true, paid: false, status: check?.status || 'ATIVA' });
+        } catch (err) {
+          return sendJson(res, 400, { ok: false, paid: false, error: err.message });
+        }
+      }
+      return sendJson(res, 200, { ok: true, paid: false, status: ride.paymentStatus });
+    }
+
     // WEBHOOK UNIFICADO DO GATEWAY (PIX, CARTÃO, QUITAÇÃO DE DÍVIDA) — COM IDEMPOTÊNCIA E AUTENTICAÇÃO
     if ((pathname === '/api/payments/webhook' || pathname === '/api/webhooks/mercadopago') && (method === 'POST' || method === 'GET')) {
       const body = method === 'POST' ? await parseBody(req) : {};
@@ -6909,8 +7192,9 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 200, mpResult);
       }
 
-      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem Stripe/MP Live) pelo dono autenticado
-      const isSandboxMode = !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
+      // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem Efí/Stripe/MP Live) pelo dono autenticado
+      const efiPixActive = await efiBankGateway.isEfiPixActive();
+      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN && !stripeGateway.isStripeEnabled();
 
       // 1) Quitação de dívida de motorista via PIX
       if (eventType === 'debt.confirmed' && body.driverId) {
