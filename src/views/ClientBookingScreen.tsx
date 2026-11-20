@@ -2118,13 +2118,15 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               width: 42,
               height: 42,
               borderRadius: '50%',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E5E7EB',
+              backgroundColor: 'rgba(255, 255, 255, 0.78)',
+              backdropFilter: 'blur(16px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+              border: '1px solid rgba(255, 255, 255, 0.72)',
               color: '#111111',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+              boxShadow: '0 4px 16px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
               cursor: 'pointer',
               pointerEvents: 'auto'
             }}
@@ -2148,9 +2150,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             )}
 
             <div style={{
-              backgroundColor: '#FFFFFF',
+              backgroundColor: 'rgba(255, 255, 255, 0.78)',
+              backdropFilter: 'blur(16px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
               color: '#111111',
-              border: '1px solid #E5E7EB',
+              border: '1px solid rgba(255, 255, 255, 0.72)',
               padding: '7px 12px',
               borderRadius: 999,
               fontSize: '0.74rem',
@@ -2158,7 +2162,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
-              boxShadow: '0 4px 14px rgba(0,0,0,0.14)'
+              boxShadow: '0 4px 16px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.8)'
             }}>
               <span style={{
                 width: 8,
@@ -2173,17 +2177,20 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       </div>
 
       {/* =====================================================================
-          BOTTOM SHEET BRANCA ESTILO UBER PASSAGEIRO
+          BOTTOM SHEET BRANCA GLASS ESTILO UBER PASSAGEIRO
          ===================================================================== */}
       <div style={{
         flex: 1,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: 'rgba(255, 255, 255, 0.88)',
+        backdropFilter: 'blur(18px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
+        borderTop: '1px solid rgba(255, 255, 255, 0.75)',
         borderRadius: '24px 24px 0 0',
         marginTop: -22,
         zIndex: 10,
         position: 'relative',
         padding: '10px 16px 18px 16px',
-        boxShadow: '0 -8px 28px rgba(0,0,0,0.12)'
+        boxShadow: '0 -8px 28px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.8)'
       }}>
         {/* Handle cinza */}
         <div style={{
@@ -3240,7 +3247,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         )}
       </div>
 
-      {/* CTA Compacto e Elegante Fixo acima da barra inferior */}
+      {/* CTA Compacto e Elegante Fixo acima da barra inferior (Branco Glass) */}
       <div style={{
         position: 'fixed',
         bottom: 58,
@@ -3248,12 +3255,13 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         transform: 'translateX(-50%)',
         width: '100%',
         maxWidth: 480,
-        backgroundColor: 'rgba(255, 255, 255, 0.96)',
-        backdropFilter: 'blur(8px)',
-        borderTop: '1px solid #E5E7EB',
+        backgroundColor: 'rgba(255, 255, 255, 0.78)',
+        backdropFilter: 'blur(18px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
+        borderTop: '1px solid rgba(15, 23, 42, 0.08)',
         padding: '8px 16px 10px 16px',
         zIndex: 45,
-        boxShadow: '0 -6px 18px rgba(15, 23, 42, 0.06)',
+        boxShadow: '0 -6px 22px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.75)',
         boxSizing: 'border-box',
         display: 'flex',
         justifyContent: 'center'

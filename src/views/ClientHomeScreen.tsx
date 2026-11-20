@@ -237,19 +237,21 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         onSelect={handleSelectLocation}
       />
 
-      {/* ── HEADER ESTILO UBER + KAVRO (LIMPO E DIRETO) ───────────────────── */}
+      {/* ── HEADER ESTILO UBER + KAVRO (BRANCO GLASSMORPHISM) ──────────────── */}
       <div style={{
         position: 'sticky',
         top: 0,
         zIndex: 30,
-        backgroundColor: 'rgba(255, 255, 255, 0.96)',
-        backdropFilter: 'blur(10px)',
+        backgroundColor: 'rgba(255, 255, 255, 0.76)',
+        backdropFilter: 'blur(18px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
         padding: '12px 16px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 8,
-        borderBottom: '1px solid #F1F5F9',
+        borderBottom: '1px solid rgba(15, 23, 42, 0.08)',
+        boxShadow: '0 4px 20px rgba(15, 23, 42, 0.05), inset 0 -1px 0 rgba(255, 255, 255, 0.65)',
         width: '100%',
         boxSizing: 'border-box'
       }}>

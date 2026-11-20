@@ -373,7 +373,7 @@ const ClientApp: React.FC<{
         )}
       </div>
 
-      {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (Estilo Uber Passageiro Claro) */}
+      {/* BARRA DE NAVEGAÇÃO INFERIOR FIXA (Branca Glassmorphism Estilo Apple / Uber) */}
       <nav style={{
         position: 'fixed',
         bottom: 0,
@@ -381,14 +381,16 @@ const ClientApp: React.FC<{
         transform: 'translateX(-50%)',
         width: '100%',
         maxWidth: 480,
-        backgroundColor: '#FFFFFF',
-        borderTop: '1px solid #E5E7EB',
+        backgroundColor: 'rgba(255, 255, 255, 0.78)',
+        backdropFilter: 'blur(18px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
+        borderTop: '1px solid rgba(15, 23, 42, 0.08)',
         padding: '7px 14px calc(9px + env(safe-area-inset-bottom, 0px)) 14px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-around',
         zIndex: 50,
-        boxShadow: '0 -4px 18px rgba(0,0,0,0.06)',
+        boxShadow: '0 -6px 24px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.75)',
         boxSizing: 'border-box'
       }}>
         <button

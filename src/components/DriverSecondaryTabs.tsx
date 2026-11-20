@@ -704,8 +704,11 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
           position: sticky;
           top: 0;
           z-index: 10;
-          background-color: #FFFFFF;
-          border-bottom: 1px solid #E5E7EB;
+          background-color: rgba(255, 255, 255, 0.78);
+          backdrop-filter: blur(18px) saturate(180%);
+          -webkit-backdrop-filter: blur(18px) saturate(180%);
+          border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+          box-shadow: 0 4px 20px rgba(15, 23, 42, 0.05), inset 0 -1px 0 rgba(255, 255, 255, 0.7);
           padding: calc(12px + env(safe-area-inset-top, 0px)) 16px 12px 16px;
         }
         .kavro-drv-content {

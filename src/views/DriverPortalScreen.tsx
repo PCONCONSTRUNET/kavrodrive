@@ -1994,13 +1994,15 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               width: 46,
               height: 46,
               borderRadius: '50%',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E5E7EB',
+              backgroundColor: 'rgba(255, 255, 255, 0.78)',
+              backdropFilter: 'blur(16px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+              border: '1px solid rgba(255, 255, 255, 0.72)',
               color: '#111111',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+              boxShadow: '0 4px 16px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
               cursor: 'pointer',
               pointerEvents: 'auto'
             }}
@@ -2037,15 +2039,17 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               onClick={() => setActiveTab('ganhos')}
               style={{
                 marginTop: -6,
-                backgroundColor: '#FFFFFF',
+                backgroundColor: 'rgba(255, 255, 255, 0.84)',
+                backdropFilter: 'blur(14px) saturate(180%)',
+                WebkitBackdropFilter: 'blur(14px) saturate(180%)',
                 color: '#111111',
-                border: '1px solid #E5E7EB',
+                border: '1px solid rgba(255, 255, 255, 0.75)',
                 borderRadius: 6,
                 padding: '2px 10px',
                 fontSize: '0.68rem',
                 fontWeight: 900,
                 letterSpacing: '0.06em',
-                boxShadow: '0 3px 10px rgba(0,0,0,0.12)',
+                boxShadow: '0 3px 12px rgba(15, 23, 42, 0.14)',
                 cursor: 'pointer'
               }}
             >
@@ -2062,13 +2066,15 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
               width: 46,
               height: 46,
               borderRadius: '50%',
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E5E7EB',
+              backgroundColor: 'rgba(255, 255, 255, 0.78)',
+              backdropFilter: 'blur(16px) saturate(180%)',
+              WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+              border: '1px solid rgba(255, 255, 255, 0.72)',
               color: '#111111',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+              boxShadow: '0 4px 16px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
               cursor: 'pointer',
               pointerEvents: 'auto'
             }}
@@ -2206,13 +2212,15 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                   width: 44,
                   height: 44,
                   borderRadius: '50%',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
+                  backgroundColor: 'rgba(255, 255, 255, 0.78)',
+                  backdropFilter: 'blur(16px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                  border: '1px solid rgba(255, 255, 255, 0.72)',
                   color: '#111111',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+                  boxShadow: '0 4px 16px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
                   cursor: 'pointer'
                 }}
               >
@@ -2226,13 +2234,15 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                   width: 44,
                   height: 44,
                   borderRadius: '50%',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
+                  backgroundColor: 'rgba(255, 255, 255, 0.78)',
+                  backdropFilter: 'blur(16px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                  border: '1px solid rgba(255, 255, 255, 0.72)',
                   color: '#111111',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  boxShadow: '0 4px 14px rgba(0,0,0,0.16)',
+                  boxShadow: '0 4px 16px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
                   cursor: 'pointer'
                 }}
               >
@@ -2241,12 +2251,15 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             </div>
           </div>
 
-          {/* Barra Branca Inferior Docked Estilo Uber Driver */}
+          {/* Barra Branca Inferior Docked Estilo Uber Driver (Glassmorphism Claro) */}
           <div style={{
-            backgroundColor: '#FFFFFF',
+            backgroundColor: 'rgba(255, 255, 255, 0.78)',
+            backdropFilter: 'blur(20px) saturate(180%)',
+            WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+            borderTop: '1px solid rgba(255, 255, 255, 0.75)',
             borderRadius: '20px 20px 0 0',
             padding: '10px 18px calc(16px + env(safe-area-inset-bottom, 0px)) 18px',
-            boxShadow: '0 -6px 26px rgba(0,0,0,0.14)',
+            boxShadow: '0 -8px 28px rgba(15, 23, 42, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.85)',
             pointerEvents: 'auto',
             color: '#111111'
           }}>

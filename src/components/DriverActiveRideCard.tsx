@@ -255,9 +255,11 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                   width: 36,
                   height: 36,
                   borderRadius: '50%',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
-                  boxShadow: '0 3px 10px rgba(0,0,0,0.18)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.80)',
+                  backdropFilter: 'blur(16px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                  border: '1px solid rgba(255, 255, 255, 0.72)',
+                  boxShadow: '0 3px 12px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -280,9 +282,11 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                   width: 36,
                   height: 36,
                   borderRadius: '50%',
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E5E7EB',
-                  boxShadow: '0 3px 10px rgba(0,0,0,0.18)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.80)',
+                  backdropFilter: 'blur(16px) saturate(180%)',
+                  WebkitBackdropFilter: 'blur(16px) saturate(180%)',
+                  border: '1px solid rgba(255, 255, 255, 0.72)',
+                  boxShadow: '0 3px 12px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.8)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -326,12 +330,15 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
         </div>
 
         {/* =====================================================================
-            3. DOCK INFERIOR ULTRA-COMPACTO ESTILO UBER (RETRAÍDO POR PADRÃO)
+            3. DOCK INFERIOR ULTRA-COMPACTO ESTILO UBER (BRANCO GLASSMORPHISM)
            ===================================================================== */}
         <div style={{
-          backgroundColor: '#FFFFFF',
+          backgroundColor: 'rgba(255, 255, 255, 0.80)',
+          backdropFilter: 'blur(20px) saturate(180%)',
+          WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+          borderTop: '1px solid rgba(255, 255, 255, 0.75)',
           borderRadius: '18px 18px 0 0',
-          boxShadow: '0 -6px 24px rgba(0,0,0,0.16)',
+          boxShadow: '0 -8px 26px rgba(15, 23, 42, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.85)',
           padding: '7px 14px calc(10px + env(safe-area-inset-bottom, 0px)) 14px',
           color: '#111111',
           pointerEvents: 'auto'
