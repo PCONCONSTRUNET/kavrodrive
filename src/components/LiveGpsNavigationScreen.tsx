@@ -213,7 +213,12 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
   const [isCancelModalOpen, setIsCancelModalOpen] = useState<boolean>(false);
   const [gpsFixed, setGpsFixed] = useState<boolean>(Boolean(liveRide.driverLocation?.lat));
   const [closingNotice, setClosingNotice] = useState<string | null>(null);
+  const [isDriverHudExpanded, setIsDriverHudExpanded] = useState<boolean>(false);
   const hasAutoClosedRef = useRef(false);
+
+  useEffect(() => {
+    setIsDriverHudExpanded(false);
+  }, [rideStatus]);
 
   const showCarMarker = isDriver || (!isWaitingDriver && gpsFixed);
   const hasRealTelemetry = isDriver || (!isWaitingDriver && gpsFixed);
@@ -1399,12 +1404,262 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               )}
             </div>
           </div>
+        ) : isDriver ? (
+          <div>
+            <div
+              onClick={() => setIsDriverHudExpanded(v => !v)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                cursor: 'pointer'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                <div style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '50%',
+                  backgroundColor: '#121A21',
+                  color: '#76D800',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 800,
+                  fontSize: '0.78rem',
+                  flexShrink: 0
+                }}>
+                  {liveRide.clientName ? liveRide.clientName.charAt(0).toUpperCase() : 'C'}
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {liveRide.clientName}
+                    </span>
+                    <span style={{
+                      backgroundColor: rideStatus === 'em_andamento' ? '#DCFCE7' : '#DBEAFE',
+                      color: rideStatus === 'em_andamento' ? '#15803D' : '#1D4ED8',
+                      padding: '2px 6px',
+                      borderRadius: 999,
+                      fontSize: '0.58rem',
+                      fontWeight: 800,
+                      flexShrink: 0
+                    }}>
+                      {rideStatus === 'na_fila'
+                        ? 'Na Fila'
+                        : rideStatus === 'no_local'
+                          ? 'No Local'
+                          : rideStatus === 'a_caminho' || rideStatus === 'confirmada'
+                            ? 'A Caminho'
+                            : 'Em Viagem'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#475569', fontWeight: 700, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {hasRealTelemetry ? `${formatTimerMmSs(etaSecondsLeft)} (~${arrivalClockStr})` : `${liveRide.durationMin || 5} min`}
+                    {' • '}
+                    {hasRealTelemetry
+                      ? (metersToDestination < 1000
+                          ? `${metersToDestination} m`
+                          : `${(metersToDestination / 1000).toFixed(1).replace('.', ',')} km`)
+                      : `${liveRide.distanceKm.toFixed(1).replace('.', ',')} km`}
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setIsDriverHudExpanded(v => !v);
+                }}
+                style={{
+                  height: 30,
+                  padding: '0 10px',
+                  borderRadius: 999,
+                  backgroundColor: isDriverHudExpanded ? '#111111' : '#F1F5F9',
+                  color: isDriverHudExpanded ? '#FFFFFF' : '#0F172A',
+                  border: '1px solid #E2E8F0',
+                  fontSize: '0.7rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  flexShrink: 0
+                }}
+              >
+                {isDriverHudExpanded ? 'Ocultar' : 'Opções'}
+              </button>
+            </div>
+
+            {isDriverHudExpanded && (
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #E2E8F0', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <div style={{ fontSize: '0.74rem', color: '#475569', fontWeight: 700 }}>
+                    {formatPhone(liveRide.clientPhone)} • <span style={{ color: '#15803D', fontWeight: 900 }}>R$ {liveRide.totalPrice.toFixed(2).replace('.', ',')}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <a
+                      href={whatsappUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      title="WhatsApp"
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 8,
+                        backgroundColor: '#FFFFFF',
+                        border: '1.5px solid #25D366',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        textDecoration: 'none'
+                      }}
+                    >
+                      <WhatsAppIcon size={15} />
+                    </a>
+                    <a
+                      href={`tel:${cleanPhone}`}
+                      title="Ligar"
+                      style={{
+                        width: 30,
+                        height: 30,
+                        borderRadius: 8,
+                        backgroundColor: '#121A21',
+                        color: '#FFFFFF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        textDecoration: 'none'
+                      }}
+                    >
+                      <Phone size={13} />
+                    </a>
+                  </div>
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
+                  <div style={{ backgroundColor: '#F8FAFC', borderRadius: 8, padding: '4px 6px', border: '1px solid #E2E8F0', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.54rem', color: '#64748B', fontWeight: 800 }}>CLIENTE</div>
+                    <div style={{ fontSize: '0.76rem', fontWeight: 900, color: '#0F172A' }}>
+                      {rideStatus === 'em_andamento' ? 'Embarcado' : rideStatus === 'no_local' ? 'No local' : metersToClient < 1000 ? `${metersToClient} m` : `${(metersToClient / 1000).toFixed(1).replace('.', ',')} km`}
+                    </div>
+                  </div>
+                  <a
+                    href={getGoogleMapsRouteUrl(ride.origin, ride.destination)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      borderRadius: 8,
+                      backgroundColor: '#121A21',
+                      color: '#FFFFFF',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 4,
+                      textDecoration: 'none'
+                    }}
+                  >
+                    <ExternalLink size={12} color="#76D800" />
+                    <span>Maps</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    style={{
+                      borderRadius: 8,
+                      backgroundColor: '#F1F5F9',
+                      color: '#334155',
+                      fontSize: '0.72rem',
+                      fontWeight: 700,
+                      border: '1px solid #CBD5E1',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Voltar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              {(rideStatus === 'confirmada' || rideStatus === 'a_caminho' || rideStatus === 'no_local') && (
+                <button
+                  type="button"
+                  onClick={() => handleAdvanceStatus('em_andamento')}
+                  className="btn-ios-primary"
+                  style={{
+                    flex: 1,
+                    height: 38,
+                    padding: '0 12px',
+                    borderRadius: 10,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    fontSize: '0.82rem',
+                    fontWeight: 800,
+                    margin: 0
+                  }}
+                >
+                  <Check size={15} />
+                  <span>Passageiro Embarcou (Iniciar Viagem)</span>
+                </button>
+              )}
+
+              {rideStatus === 'em_andamento' && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setIsCheckoutOpen(true)}
+                    style={{
+                      flex: 1,
+                      height: 38,
+                      backgroundColor: '#10B981',
+                      color: '#ffffff',
+                      borderRadius: 10,
+                      fontSize: '0.82rem',
+                      fontWeight: 800,
+                      border: 'none',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <CheckCircle2 size={15} />
+                    <span>Finalizar (R$ {ride.totalPrice.toFixed(2).replace('.', ',')})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsSosModalOpen(true)}
+                    style={{
+                      height: 38,
+                      padding: '0 10px',
+                      borderRadius: 10,
+                      backgroundColor: '#DC2626',
+                      color: '#FFFFFF',
+                      fontSize: '0.74rem',
+                      fontWeight: 900,
+                      border: 'none',
+                      cursor: 'pointer',
+                      flexShrink: 0
+                    }}
+                    title="Central de Emergência SOS"
+                  >
+                    SOS
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         ) : (
         <>
-        {/* Linha 1: Motorista/Passageiro + Placa/Valor + WhatsApp/Ligar em linha única */}
+        {/* Linha 1: Passageiro + Placa + WhatsApp/Ligar */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-            {!isDriver && liveRide.driverPhoto ? (
+            {liveRide.driverPhoto ? (
               <img
                 src={liveRide.driverPhoto}
                 alt={driverDisplayName}
@@ -1431,13 +1686,13 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                 fontSize: '0.86rem',
                 flexShrink: 0
               }}>
-                {isDriver ? (liveRide.clientName ? liveRide.clientName.charAt(0).toUpperCase() : 'C') : driverDisplayName.charAt(0).toUpperCase()}
+                {driverDisplayName.charAt(0).toUpperCase()}
               </div>
             )}
             <div style={{ minWidth: 0, flex: 1 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
                 <span style={{ fontSize: '0.88rem', fontWeight: 800, color: '#0F172A', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {isDriver ? liveRide.clientName : driverDisplayName}
+                  {driverDisplayName}
                 </span>
                 <span style={{
                   backgroundColor: rideStatus === 'em_andamento' ? '#DCFCE7' : '#DBEAFE',
@@ -1458,20 +1713,17 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                 </span>
               </div>
               <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {isDriver
-                  ? formatPhone(liveRide.clientPhone)
-                  : [
-                      liveRide.driverVehicle || 'Veículo parceiro',
-                      liveRide.driverCarColor,
-                      liveRide.driverRating ? `★ ${Number(liveRide.driverRating).toFixed(2)}` : ''
-                    ].filter(Boolean).join(' • ')}
+                {[
+                  liveRide.driverVehicle || 'Veículo parceiro',
+                  liveRide.driverCarColor,
+                  liveRide.driverRating ? `★ ${Number(liveRide.driverRating).toFixed(2)}` : ''
+                ].filter(Boolean).join(' • ')}
               </div>
             </div>
           </div>
 
-          {/* Placa / Valor + Botões WhatsApp / Telefone compactos */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            {!isDriver && liveRide.driverPlate ? (
+            {liveRide.driverPlate ? (
               <MercosulPlateBadge plate={liveRide.driverPlate} size="sm" />
             ) : (
               <div style={{
@@ -1491,7 +1743,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             )}
 
             <a
-              href={isDriver ? whatsappUrl : `https://wa.me/55${driverPhoneClean || supportPhoneClean}`}
+              href={`https://wa.me/55${driverPhoneClean || supportPhoneClean}`}
               target="_blank"
               rel="noopener noreferrer"
               title="WhatsApp"
@@ -1511,7 +1763,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             </a>
 
             <a
-              href={`tel:${isDriver ? cleanPhone : (driverPhoneClean || supportPhoneClean)}`}
+              href={`tel:${driverPhoneClean || supportPhoneClean}`}
               title="Ligar"
               style={{
                 width: 32,
@@ -1531,7 +1783,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         </div>
 
         {/* PIN de Embarque quando aguardando embarque */}
-        {!isDriver && liveRide.boardingPin && (rideStatus === 'confirmada' || rideStatus === 'a_caminho' || rideStatus === 'no_local') && (
+        {liveRide.boardingPin && (rideStatus === 'confirmada' || rideStatus === 'a_caminho' || rideStatus === 'no_local') && (
           <div style={{
             marginBottom: 8,
             padding: '7px 11px',
@@ -1562,14 +1814,13 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           </div>
         )}
 
-        {/* Linha 2: Barra de Telemetria Slim (Timer + Distância Cliente + Distância Destino) */}
+        {/* Linha 2: Barra de Telemetria Slim */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1fr 1fr',
           gap: 6,
           marginBottom: 8
         }}>
-          {/* Card 1: Timer */}
           <div style={{
             backgroundColor: '#121A21',
             borderRadius: 9,
@@ -1592,7 +1843,6 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             </div>
           </div>
 
-          {/* Card 2: Até o Cliente */}
           <div style={{
             backgroundColor: '#F8FAFC',
             borderRadius: 9,
@@ -1601,7 +1851,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             textAlign: 'center'
           }}>
             <div style={{ fontSize: '0.54rem', color: '#64748B', fontWeight: 800, textTransform: 'uppercase', lineHeight: 1 }}>
-              📍 {isDriver ? 'Cliente' : 'Até Você'}
+              📍 Até Você
             </div>
             <div style={{
               fontSize: '0.82rem',
@@ -1625,7 +1875,6 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             </div>
           </div>
 
-          {/* Card 3: Até o Destino */}
           <div style={{
             backgroundColor: '#F8FAFC',
             borderRadius: 9,
@@ -1653,125 +1902,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           </div>
         </div>
 
-        {/* Linha 3: Botões de Ação Compactos */}
-        {isDriver ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {(rideStatus === 'confirmada' || rideStatus === 'a_caminho') && (
-              <button
-                type="button"
-                onClick={() => handleAdvanceStatus('em_andamento')}
-                className="btn-ios-primary"
-                style={{
-                  height: 38,
-                  padding: '0 12px',
-                  borderRadius: 10,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  fontSize: '0.82rem',
-                  fontWeight: 800,
-                  width: '100%',
-                  margin: 0
-                }}
-              >
-                <Check size={15} />
-                <span>Passageiro Embarcou (Iniciar Viagem)</span>
-              </button>
-            )}
-
-            {rideStatus === 'em_andamento' && (
-              <button
-                type="button"
-                onClick={() => setIsCheckoutOpen(true)}
-                style={{
-                  height: 38,
-                  backgroundColor: '#10B981',
-                  color: '#ffffff',
-                  borderRadius: 10,
-                  fontSize: '0.84rem',
-                  fontWeight: 800,
-                  border: 'none',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  width: '100%'
-                }}
-              >
-                <CheckCircle2 size={15} />
-                <span>Concluir e Receber (R$ {ride.totalPrice.toFixed(2).replace('.', ',')})</span>
-              </button>
-            )}
-
-            <div style={{ display: 'grid', gridTemplateColumns: rideStatus === 'em_andamento' ? '1fr 1fr 0.8fr' : '1fr 1fr', gap: 6 }}>
-              <a
-                href={getGoogleMapsRouteUrl(ride.origin, ride.destination)}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  height: 32,
-                  borderRadius: 9,
-                  backgroundColor: '#121A21',
-                  color: '#FFFFFF',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 5,
-                  textDecoration: 'none'
-                }}
-              >
-                <ExternalLink size={12} color="#76D800" />
-                <span>Maps</span>
-              </a>
-
-              <button
-                type="button"
-                onClick={onClose}
-                style={{
-                  height: 32,
-                  borderRadius: 9,
-                  backgroundColor: '#F1F5F9',
-                  color: '#334155',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
-                  border: '1px solid #CBD5E1',
-                  cursor: 'pointer'
-                }}
-              >
-                Voltar
-              </button>
-
-              {rideStatus === 'em_andamento' && (
-                <button
-                  type="button"
-                  onClick={() => setIsSosModalOpen(true)}
-                  style={{
-                    height: 32,
-                    borderRadius: 9,
-                    backgroundColor: '#DC2626',
-                    color: '#FFFFFF',
-                    fontSize: '0.74rem',
-                    fontWeight: 900,
-                    border: '1px solid #FCA5A5',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    gap: 4
-                  }}
-                  title="Central de Emergência SOS"
-                >
-                  🚨 SOS
-                </button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7, width: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7, width: '100%' }}>
             {/* Botão de Compartilhar Rota em Tempo Real com a Família / Amigos */}
             <button
               type="button"
@@ -1862,7 +1993,6 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               </button>
             )}
           </div>
-        )}
         </>
         )}
       </div>
