@@ -24,7 +24,6 @@ import {
   Plane,
   Bike,
   Star,
-  HelpCircle,
   CheckCircle2,
   Wallet,
 } from 'lucide-react';
@@ -763,78 +762,70 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         </div>
       </header>
 
-      {/* Modal Mobile de Atalhos Rápidos & Conta */}
-      {isMobile && mobileDrawerOpen && (
+      {/* Drawer Lateral Mobile (somente rotas principais com abertura suave em câmera lenta) */}
+      {isMobile && (
         <div
+          aria-hidden={!mobileDrawerOpen}
           onClick={() => setMobileDrawerOpen(false)}
           style={{
             position: 'fixed',
             inset: 0,
-            backgroundColor: 'rgba(6, 11, 15, 0.78)',
+            backgroundColor: 'rgba(6, 11, 15, 0.74)',
             backdropFilter: 'blur(8px)',
             WebkitBackdropFilter: 'blur(8px)',
             zIndex: 190,
-            padding: 16,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            justifyContent: 'flex-end',
+            opacity: mobileDrawerOpen ? 1 : 0,
+            visibility: mobileDrawerOpen ? 'visible' : 'hidden',
+            pointerEvents: mobileDrawerOpen ? 'auto' : 'none',
+            transition: 'opacity 520ms cubic-bezier(0.16, 1, 0.3, 1), visibility 620ms',
           }}
         >
-          <div
+          <aside
             onClick={(e) => e.stopPropagation()}
             style={{
-              width: '100%',
-              maxWidth: 400,
-              maxHeight: '88dvh',
-              overflowY: 'auto',
+              width: 'min(82vw, 320px)',
+              height: '100dvh',
               backgroundColor: '#0E171E',
-              border: '1px solid rgba(118, 216, 0, 0.28)',
-              borderRadius: 20,
-              padding: 18,
-              boxShadow: '0 24px 60px rgba(0, 0, 0, 0.55)',
+              borderLeft: '1px solid rgba(118, 216, 0, 0.28)',
+              borderTopLeftRadius: 24,
+              borderBottomLeftRadius: 24,
+              padding: 'calc(20px + env(safe-area-inset-top, 0px)) 18px calc(24px + env(safe-area-inset-bottom, 0px)) 18px',
+              boxShadow: '-24px 0 64px rgba(0, 0, 0, 0.65)',
               display: 'flex',
               flexDirection: 'column',
-              gap: 16,
+              gap: 18,
+              overflowY: 'auto',
+              transform: mobileDrawerOpen ? 'translate3d(0, 0, 0)' : 'translate3d(104%, 0, 0)',
+              opacity: mobileDrawerOpen ? 1 : 0.65,
+              transition: 'transform 620ms cubic-bezier(0.16, 1, 0.3, 1), opacity 520ms cubic-bezier(0.16, 1, 0.3, 1)',
+              willChange: 'transform, opacity',
             }}
           >
-            {/* Cabeçalho do Modal */}
+            {/* Cabeçalho do Drawer Lateral */}
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 10,
-                paddingBottom: 12,
+                paddingBottom: 14,
                 borderBottom: '1px solid rgba(255,255,255,0.08)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <img
-                  src="/logo-horizontal-white.png"
-                  alt="Kavro Drive"
-                  style={{ height: 24, width: 'auto', objectFit: 'contain' }}
-                />
-                <span
-                  style={{
-                    fontSize: '0.7rem',
-                    fontWeight: 800,
-                    color: '#8CE826',
-                    backgroundColor: 'rgba(118, 216, 0, 0.12)',
-                    border: '1px solid rgba(118, 216, 0, 0.3)',
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                  }}
-                >
-                  Atalhos
-                </span>
-              </div>
+              <img
+                src="/logo-horizontal-white.png"
+                alt="Kavro Drive"
+                style={{ height: 24, width: 'auto', objectFit: 'contain' }}
+              />
               <button
                 type="button"
                 aria-label="Fechar menu"
                 onClick={() => setMobileDrawerOpen(false)}
                 style={{
-                  width: 34,
-                  height: 34,
+                  width: 36,
+                  height: 36,
                   borderRadius: 10,
                   border: '1px solid rgba(255,255,255,0.14)',
                   backgroundColor: '#131E26',
@@ -843,14 +834,24 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
+                  flexShrink: 0,
                 }}
               >
                 <X size={18} />
               </button>
             </div>
 
-            {/* Ações Principais de Acesso */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {/* Entrar e Criar conta */}
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+                transform: mobileDrawerOpen ? 'translate3d(0, 0, 0)' : 'translate3d(24px, 0, 0)',
+                opacity: mobileDrawerOpen ? 1 : 0,
+                transition: 'transform 560ms cubic-bezier(0.16, 1, 0.3, 1) 80ms, opacity 480ms ease 80ms',
+              }}
+            >
               <button
                 type="button"
                 onClick={() => {
@@ -858,12 +859,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   openClientFlow('login');
                 }}
                 style={{
-                  height: 44,
+                  height: 48,
                   borderRadius: 12,
                   border: 'none',
                   backgroundColor: '#76D800',
                   color: '#0B1218',
-                  fontSize: '0.9rem',
+                  fontSize: '0.94rem',
                   fontWeight: 800,
                   cursor: 'pointer',
                   display: 'flex',
@@ -880,12 +881,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   openClientFlow('register');
                 }}
                 style={{
-                  height: 44,
+                  height: 48,
                   borderRadius: 12,
                   border: '1px solid rgba(118, 216, 0, 0.45)',
                   backgroundColor: '#131E26',
                   color: '#FFFFFF',
-                  fontSize: '0.9rem',
+                  fontSize: '0.94rem',
                   fontWeight: 700,
                   cursor: 'pointer',
                   display: 'flex',
@@ -897,111 +898,51 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               </button>
             </div>
 
-            {/* Cidade Atual */}
-            <button
-              type="button"
-              onClick={() => {
-                setMobileDrawerOpen(false);
-                setCityModalOpen(true);
-              }}
-              style={{
-                width: '100%',
-                padding: '10px 12px',
-                borderRadius: 12,
-                backgroundColor: '#131E26',
-                border: '1px solid rgba(118, 216, 0, 0.2)',
-                color: '#E2E8F0',
-                fontSize: '0.84rem',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                cursor: 'pointer',
-              }}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-                <MapPin size={15} color="#76D800" />
-                <span>Cidade: <strong>{selectedCity.replace(', BR', '')}</strong></span>
-              </span>
-              <span style={{ color: '#8CE826', fontSize: '0.76rem', fontWeight: 700 }}>Alterar</span>
-            </button>
+            <div style={{ height: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
 
-            <div>
-              <div style={drawerGroupLabelStyle}>Para Passageiros</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {[
-                  { label: 'Simular e pedir corrida', action: () => openClientFlow('login') },
-                  { label: 'Agendar horário', action: () => openClientFlow('schedule') },
-                  { label: 'Explorar categorias', action: () => scrollToSection('servicos') },
-                  { label: 'Como funciona em 5 passos', action: () => scrollToSection('como-funciona') },
-                ].map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    onClick={() => {
-                      setMobileDrawerOpen(false);
-                      item.action();
-                    }}
-                    style={drawerRowBtnStyle}
-                  >
-                    <span>{item.label}</span>
-                    <ChevronRight size={17} color="#76D800" />
-                  </button>
-                ))}
-              </div>
+            {/* Portal do Motorista e Agendar Horário */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileDrawerOpen(false);
+                  navigate('/kavro-drive');
+                }}
+                style={{
+                  ...drawerRowBtnStyle,
+                  transform: mobileDrawerOpen ? 'translate3d(0, 0, 0)' : 'translate3d(28px, 0, 0)',
+                  opacity: mobileDrawerOpen ? 1 : 0,
+                  transition: 'transform 600ms cubic-bezier(0.16, 1, 0.3, 1) 140ms, opacity 500ms ease 140ms',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                  <Car size={18} color="#76D800" />
+                  <span>Portal do Motorista</span>
+                </span>
+                <ChevronRight size={17} color="#76D800" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileDrawerOpen(false);
+                  openClientFlow('schedule');
+                }}
+                style={{
+                  ...drawerRowBtnStyle,
+                  transform: mobileDrawerOpen ? 'translate3d(0, 0, 0)' : 'translate3d(32px, 0, 0)',
+                  opacity: mobileDrawerOpen ? 1 : 0,
+                  transition: 'transform 640ms cubic-bezier(0.16, 1, 0.3, 1) 200ms, opacity 520ms ease 200ms',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                  <Calendar size={18} color="#76D800" />
+                  <span>Agendar horário</span>
+                </span>
+                <ChevronRight size={17} color="#76D800" />
+              </button>
             </div>
-
-            <div>
-              <div style={drawerGroupLabelStyle}>Motoristas &amp; Transparência</div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {[
-                  { label: 'Portal do Motorista', action: () => navigate('/kavro-drive') },
-                  { label: 'Vantagens para Parceiros', action: () => scrollToSection('motoristas') },
-                  { label: 'Soluções Corporativas', action: () => scrollToSection('empresas') },
-                  { label: 'Segurança & Auditoria Pública', action: () => navigate('/auditoria') },
-                ].map((item) => (
-                  <button
-                    key={item.label}
-                    type="button"
-                    onClick={() => {
-                      setMobileDrawerOpen(false);
-                      item.action();
-                    }}
-                    style={drawerRowBtnStyle}
-                  >
-                    <span>{item.label}</span>
-                    <ChevronRight size={17} color="#76D800" />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => {
-                setMobileDrawerOpen(false);
-                navigate('/ajuda');
-              }}
-              style={{
-                width: '100%',
-                padding: '13px 16px',
-                borderRadius: 12,
-                backgroundColor: 'rgba(118, 216, 0, 0.12)',
-                border: '1px solid rgba(118, 216, 0, 0.35)',
-                color: '#8CE826',
-                fontWeight: 700,
-                fontSize: '0.9rem',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 8,
-              }}
-            >
-              <HelpCircle size={18} />
-              <span>Central de Ajuda e WhatsApp</span>
-            </button>
-          </div>
+          </aside>
         </div>
       )}
 
@@ -2961,16 +2902,6 @@ const darkDropdownItemStyle: React.CSSProperties = {
   fontWeight: 600,
   color: '#FFFFFF',
   cursor: 'pointer',
-};
-
-const drawerGroupLabelStyle: React.CSSProperties = {
-  fontSize: '0.72rem',
-  fontWeight: 800,
-  color: '#8CE826',
-  textTransform: 'uppercase',
-  letterSpacing: '0.06em',
-  marginBottom: 8,
-  paddingLeft: 4,
 };
 
 const drawerRowBtnStyle: React.CSSProperties = {
