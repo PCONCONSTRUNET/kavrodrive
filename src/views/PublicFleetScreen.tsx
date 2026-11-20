@@ -269,31 +269,32 @@ export const PublicFleetScreen: React.FC<PublicFleetScreenProps> = ({ config }) 
           position: 'sticky',
           top: 0,
           zIndex: 80,
-          backgroundColor: 'rgba(11, 18, 24, 0.96)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
+          backgroundColor: 'rgba(11, 18, 24, 0.88)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
           borderBottom: '1px solid rgba(118, 216, 0, 0.2)',
         }}
       >
         <div
           style={{
             ...containerStyle,
-            height: isMobile ? 58 : 64,
+            height: isMobile ? 60 : 66,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 8,
+            gap: 12,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 7 : 10, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 12, minWidth: 0 }}>
             <button
               type="button"
               onClick={() => navigate('/')}
               title="Voltar para a Home"
+              aria-label="Voltar para a Home"
               style={{
-                width: 32,
-                height: 32,
-                borderRadius: 9,
+                width: 36,
+                height: 36,
+                borderRadius: 10,
                 border: '1px solid rgba(255,255,255,0.16)',
                 backgroundColor: '#131E26',
                 color: '#FFFFFF',
@@ -312,12 +313,11 @@ export const PublicFleetScreen: React.FC<PublicFleetScreenProps> = ({ config }) 
               alt="Kavro Drive"
               onClick={() => navigate('/')}
               style={{
-                height: isMobile ? 20 : 28,
+                height: isMobile ? 24 : 28,
                 width: 'auto',
                 objectFit: 'contain',
                 cursor: 'pointer',
-                flexShrink: 1,
-                minWidth: 0,
+                flexShrink: 0,
               }}
             />
 
@@ -337,69 +337,77 @@ export const PublicFleetScreen: React.FC<PublicFleetScreenProps> = ({ config }) 
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 5 : 6, flexShrink: 0 }}>
-            <button
-              type="button"
-              onClick={fetchPublicFleet}
-              title="Atualizar frota"
-              style={{
-                height: 32,
-                padding: isMobile ? '0 8px' : '0 12px',
-                borderRadius: 9,
-                border: '1px solid rgba(118, 216, 0, 0.25)',
-                backgroundColor: '#131E26',
-                color: '#E2E8F0',
-                fontSize: '0.78rem',
-                fontWeight: 600,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 5,
-                cursor: 'pointer',
-              }}
-            >
-              <RefreshCw size={13} style={{ opacity: loading ? 0.55 : 1 }} />
-              {!isMobile && <span>Atualizar</span>}
-            </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {!isMobile && (
+              <>
+                <button
+                  type="button"
+                  onClick={fetchPublicFleet}
+                  title="Atualizar frota"
+                  style={{
+                    height: 36,
+                    padding: '0 13px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(118, 216, 0, 0.25)',
+                    backgroundColor: '#131E26',
+                    color: '#E2E8F0',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  <RefreshCw size={14} style={{ opacity: loading ? 0.55 : 1 }} />
+                  <span>Atualizar</span>
+                </button>
 
-            <button
-              type="button"
-              onClick={handleShare}
-              style={{
-                height: 32,
-                padding: isMobile ? '0 8px' : '0 12px',
-                borderRadius: 9,
-                border: '1px solid rgba(255,255,255,0.16)',
-                backgroundColor: '#131E26',
-                color: copiedLink ? '#76D800' : '#FFFFFF',
-                fontSize: isMobile ? '0.74rem' : '0.78rem',
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                cursor: 'pointer',
-              }}
-            >
-              {copiedLink ? <Check size={13} /> : <Share2 size={13} />}
-              <span>{copiedLink ? 'Copiado' : isMobile ? 'Link' : 'Compartilhar'}</span>
-            </button>
+                <button
+                  type="button"
+                  onClick={handleShare}
+                  style={{
+                    height: 36,
+                    padding: '0 13px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    backgroundColor: '#131E26',
+                    color: copiedLink ? '#76D800' : '#FFFFFF',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {copiedLink ? <Check size={14} /> : <Share2 size={14} />}
+                  <span>{copiedLink ? 'Copiado' : 'Compartilhar'}</span>
+                </button>
+              </>
+            )}
 
             <button
               type="button"
               onClick={() => navigate('/cliente')}
               style={{
-                height: 32,
-                padding: isMobile ? '0 9px' : '0 14px',
-                borderRadius: 9,
+                height: 36,
+                padding: isMobile ? '0 15px' : '0 16px',
+                borderRadius: 10,
                 border: 'none',
                 backgroundColor: '#76D800',
                 color: '#0B1218',
-                fontSize: isMobile ? '0.74rem' : '0.78rem',
+                fontSize: isMobile ? '0.8rem' : '0.82rem',
                 fontWeight: 800,
                 cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
                 whiteSpace: 'nowrap',
               }}
             >
-              Pedir corrida
+              <span>Pedir corrida</span>
+              <ArrowRight size={14} />
             </button>
           </div>
         </div>
@@ -465,28 +473,77 @@ export const PublicFleetScreen: React.FC<PublicFleetScreenProps> = ({ config }) 
               </p>
             </div>
 
-            <button
-              type="button"
-              onClick={() => navigate('/kavro-drive')}
-              style={{
-                height: 38,
-                padding: '0 14px',
-                borderRadius: 10,
-                border: '1px solid rgba(118, 216, 0, 0.38)',
-                backgroundColor: '#131E26',
-                color: '#8CE826',
-                fontSize: '0.8rem',
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 7,
-                cursor: 'pointer',
-                flexShrink: 0,
-              }}
-            >
-              <Car size={14} />
-              <span>Quero dirigir na Kavro</span>
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 8, flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => navigate('/kavro-drive')}
+                style={{
+                  height: 38,
+                  padding: '0 14px',
+                  borderRadius: 10,
+                  border: '1px solid rgba(118, 216, 0, 0.38)',
+                  backgroundColor: '#131E26',
+                  color: '#8CE826',
+                  fontSize: '0.8rem',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 7,
+                  cursor: 'pointer',
+                  flexShrink: 0,
+                }}
+              >
+                <Car size={14} />
+                <span>Quero dirigir na Kavro</span>
+              </button>
+
+              {isMobile && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleShare}
+                    style={{
+                      height: 38,
+                      padding: '0 13px',
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,255,255,0.16)',
+                      backgroundColor: '#131E26',
+                      color: copiedLink ? '#76D800' : '#E2E8F0',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {copiedLink ? <Check size={14} /> : <Share2 size={14} />}
+                    <span>{copiedLink ? 'Copiado' : 'Compartilhar'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={fetchPublicFleet}
+                    title="Atualizar frota"
+                    aria-label="Atualizar frota"
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 10,
+                      border: '1px solid rgba(255,255,255,0.16)',
+                      backgroundColor: '#131E26',
+                      color: '#E2E8F0',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <RefreshCw size={14} style={{ opacity: loading ? 0.55 : 1 }} />
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           {/* 4 KPIs da Frota (sem dados de viagens/localizações públicas) */}

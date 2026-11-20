@@ -266,32 +266,33 @@ export const CitiesServedScreen: React.FC<CitiesServedScreenProps> = ({ config }
             gap: 10,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
             <button
               type="button"
               onClick={() => navigate('/')}
+              title="Voltar para a Home"
+              aria-label="Voltar para a Home"
               style={{
+                width: 36,
                 height: 36,
-                padding: '0 12px',
                 borderRadius: 10,
                 border: '1px solid rgba(255,255,255,0.16)',
                 backgroundColor: '#131E26',
                 color: '#FFFFFF',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 6,
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexShrink: 0,
               }}
             >
-              <ArrowLeft size={15} />
-              <span>Voltar</span>
+              <ArrowLeft size={16} />
             </button>
             <img
               src="/logo-horizontal-white.png"
               alt="Kavro Drive"
-              style={{ height: 24, width: 'auto', objectFit: 'contain' }}
+              onClick={() => navigate('/')}
+              style={{ height: 24, width: 'auto', objectFit: 'contain', cursor: 'pointer', flexShrink: 0 }}
             />
           </div>
 
