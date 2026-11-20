@@ -11,6 +11,7 @@ import { formatPhone, formatDocument, getCleanWhatsappNumber } from '../utils/fo
 import { computeClientAutoScore } from '../utils/scoringEngine';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
+import { PaymentMethodBadge } from './PaymentMethodIcon';
 
 // ============================================================================
 // MODAL 1: FORMULÁRIO DE CADASTRO / EDIÇÃO MANUAL DE CLIENTE
@@ -404,7 +405,7 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
     .filter(r => r.status !== 'cancelada' && r.paymentMethod === 'pix')
     .reduce((acc, r) => acc + (r.totalPrice || 0), 0);
   const cardSpent = clientRides
-    .filter(r => r.status !== 'cancelada' && (r.paymentMethod === 'cartao_credito' || r.paymentMethod === 'cartao_debito' || r.paymentMethod === 'online'))
+    .filter(r => r.status !== 'cancelada' && (r.paymentMethod === 'cartao_credito' || r.paymentMethod === 'cartao_debito' || r.paymentMethod === 'apple_pay' || r.paymentMethod === 'online'))
     .reduce((acc, r) => acc + (r.totalPrice || 0), 0);
   const cashSpent = clientRides
     .filter(r => r.status !== 'cancelada' && r.paymentMethod === 'dinheiro')
@@ -959,8 +960,8 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                           <td style={{ padding: '10px 12px', color: '#334155' }}>
                             {r.driverName || 'Frota Kavro'}
                           </td>
-                          <td style={{ padding: '10px 12px', color: '#334155', textTransform: 'uppercase' }}>
-                            {r.paymentMethod}
+                          <td style={{ padding: '10px 12px', color: '#334155' }}>
+                            <PaymentMethodBadge method={r.paymentMethod} compact iconSize={13} />
                           </td>
                           <td style={{ padding: '10px 12px' }}>
                             <span style={{
@@ -1032,8 +1033,8 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
                             <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0F172A' }}>
                               Corrida {r.id}
                             </td>
-                            <td style={{ padding: '10px 12px', color: '#334155', textTransform: 'uppercase' }}>
-                              {r.paymentMethod}
+                            <td style={{ padding: '10px 12px', color: '#334155' }}>
+                              <PaymentMethodBadge method={r.paymentMethod} compact iconSize={13} />
                             </td>
                             <td style={{ padding: '10px 12px' }}>
                               <span style={{

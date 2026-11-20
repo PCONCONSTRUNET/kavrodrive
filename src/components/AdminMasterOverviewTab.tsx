@@ -4,6 +4,7 @@ import {
 } from 'lucide-react';
 import { DriverProfile, PaymentTransaction, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { PaymentMethodBadge, PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface AdminMasterOverviewTabProps {
   rides: Ride[];
@@ -623,9 +624,9 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {[
-              { label: 'PIX Dinâmico (Gateway)', value: stats.pixTotal, pct: pixPct, dot: '#0F172A' },
-              { label: 'Cartão de Crédito / Débito', value: stats.cardTotal, pct: cardPct, dot: '#64748B' },
-              { label: 'Dinheiro (Comissão em Débito)', value: stats.cashTotal, pct: cashPct, dot: '#94A3B8' }
+              { method: 'pix', label: 'PIX Dinâmico (Gateway)', value: stats.pixTotal, pct: pixPct },
+              { method: 'cartao_credito', label: 'Cartão de Crédito / Débito • Apple Pay', value: stats.cardTotal, pct: cardPct },
+              { method: 'dinheiro', label: 'Dinheiro (Comissão em Débito)', value: stats.cashTotal, pct: cashPct }
             ].map((item, idx) => (
               <div key={idx} style={{
                 display: 'flex',
@@ -636,7 +637,7 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
                 fontSize: '0.76rem'
               }}>
                 <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#334155', fontWeight: 500 }}>
-                  <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: item.dot }} />
+                  <PaymentMethodIcon method={item.method} size={16} />
                   {item.label}
                 </span>
                 <span style={{ fontWeight: 600, color: '#0F172A' }}>
@@ -848,7 +849,7 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
                       </td>
 
                       <td style={{ padding: '12px 14px', whiteSpace: 'nowrap', fontSize: '0.74rem', color: '#334155', fontWeight: 500 }}>
-                        {r.paymentMethod === 'pix' ? 'PIX' : r.paymentMethod === 'dinheiro' ? 'Dinheiro' : 'Cartão'}
+                        <PaymentMethodBadge method={r.paymentMethod} compact iconSize={14} />
                       </td>
 
                       <td style={{ padding: '12px 14px', fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap' }}>

@@ -638,6 +638,7 @@ export const AdminFinanceTreasurySection: React.FC<AdminFinanceTreasurySectionPr
                 >
                   <option value="pix">PIX</option>
                   <option value="cartao_credito">Cartão</option>
+                  <option value="apple_pay">Apple Pay</option>
                   <option value="dinheiro">Dinheiro</option>
                 </select>
               </div>

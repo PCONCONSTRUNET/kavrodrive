@@ -4,6 +4,7 @@ import { Ride, SystemConfig } from '../types';
 import { getCategoryById, resolveCategoryType } from '../utils/categoryEngine';
 import { calculateHaversineDistance } from '../utils/geo';
 import { playNewRideSound, stopNewRideSound } from '../utils/soundAndVoice';
+import { PaymentMethodBadge } from './PaymentMethodIcon';
 
 interface DriverIncomingRideModalProps {
   ride: Ride | null;
@@ -198,11 +199,12 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
           </div>
         </div>
 
-        {/* Avaliação do Passageiro */}
+        {/* Avaliação do Passageiro + Ícone do Meio de Pagamento */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 12,
+          justifyContent: 'space-between',
+          gap: 10,
           fontSize: '0.84rem',
           fontWeight: 700,
           color: '#334155',
@@ -212,6 +214,7 @@ export const DriverIncomingRideModal: React.FC<DriverIncomingRideModalProps> = (
             <Star size={15} fill="#0F172A" color="#0F172A" />
             <span>{clientRatingLabel} ({clientFirstName})</span>
           </div>
+          <PaymentMethodBadge method={ride.paymentMethod} compact={false} iconSize={16} />
         </div>
 
         {/* Resumo do Produto / Destinatário quando for Entrega */}

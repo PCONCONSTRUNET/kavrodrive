@@ -7,6 +7,7 @@ import {
 import { Ride, SystemConfig, PaymentMethod } from '../types';
 import { generatePixPayload, getQrCodeImageUrl } from '../utils/pix';
 import { formatRideCode } from '../utils/format';
+import { PaymentMethodIcon } from './PaymentMethodIcon';
 import confetti from 'canvas-confetti';
 
 interface RidePaymentCheckoutModalProps {
@@ -268,7 +269,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
                 color: selectedMethod === 'pix' ? '#0F172A' : '#64748B'
               }}
             >
-              <img width="15" height="15" src="https://img.icons8.com/fluency/48/pix.png" alt="pix" />
+              <PaymentMethodIcon method="pix" size={16} />
               <span>PIX</span>
             </button>
 
@@ -291,7 +292,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
                 color: selectedMethod === 'cartao_credito' ? '#0F172A' : '#64748B'
               }}
             >
-              <CreditCard size={15} color={selectedMethod === 'cartao_credito' ? '#2563EB' : '#64748B'} />
+              <PaymentMethodIcon method="cartao_credito" size={16} />
               <span>Cartão</span>
             </button>
 
@@ -314,7 +315,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
                 color: selectedMethod === 'dinheiro' ? '#0F172A' : '#64748B'
               }}
             >
-              <img width="15" height="15" src="https://img.icons8.com/fluency/48/money.png" alt="dinheiro" />
+              <PaymentMethodIcon method="dinheiro" size={16} />
               <span>Dinheiro</span>
             </button>
           </div>
@@ -354,7 +355,7 @@ export const RidePaymentCheckoutModal: React.FC<RidePaymentCheckoutModalProps> =
                   style={{ width: 175, height: 175, display: 'block', borderRadius: 8 }}
                 />
                 <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 6 }}>
-                  <img width="15" height="15" src="https://img.icons8.com/fluency/48/pix.png" alt="pix" />
+                  <PaymentMethodIcon method="pix" size={16} />
                   <span style={{ fontSize: '0.86rem', fontWeight: 900, color: '#0F172A' }}>
                     {priceFormatted}
                   </span>

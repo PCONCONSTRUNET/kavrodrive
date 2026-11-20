@@ -21,6 +21,7 @@ import { VehiclePhotoPreview } from '../components/VehiclePhotoPreview';
 import { RideSearchingStageCard } from '../components/RideSearchingStageCard';
 import { RideCancelModal } from '../components/RideCancelModal';
 import { RideEditRouteModal } from '../components/RideEditRouteModal';
+import { PaymentMethodIcon, getPaymentMethodLabel } from '../components/PaymentMethodIcon';
 import { formatCurrency, formatPhone, formatRideCode, getCleanWhatsappNumber } from '../utils/format';
 import { getGoogleMapsRouteUrl, calculateHaversineDistance } from '../utils/geo';
 import { resolveCategoryType } from '../utils/categoryEngine';
@@ -1300,14 +1301,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
             ? (hasCancellationFee ? Number(ride.cancellationFeeApplied) : 0)
             : Number(ride.totalPrice || 0);
 
-          const methodDisplay =
-            ride.paymentMethod === 'pix'
-              ? 'PIX'
-              : ride.paymentMethod === 'cartao_credito'
-                ? 'Cartão de Crédito'
-                : ride.paymentMethod === 'cartao_debito'
-                  ? 'Cartão de Débito'
-                  : 'Dinheiro';
+          const methodDisplay = getPaymentMethodLabel(ride.paymentMethod);
 
           const shouldShowPixCopy =
             !isCancelledRide &&
@@ -1369,8 +1363,9 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
                   <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 600 }}>
                     Forma de pagamento
                   </div>
-                  <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A', marginTop: 2 }}>
-                    {methodDisplay}
+                  <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, fontSize: '0.88rem', fontWeight: 700, color: '#0F172A', marginTop: 2 }}>
+                    <PaymentMethodIcon method={ride.paymentMethod} size={18} />
+                    <span>{methodDisplay}</span>
                   </div>
                 </div>
               </div>

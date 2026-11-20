@@ -2,7 +2,7 @@ import React, { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
   X, Download, Check, Car, Star, Zap,
-  AlertTriangle, CreditCard, Banknote, RotateCcw,
+  AlertTriangle, RotateCcw,
   ChevronRight, Copy, Image as ImageIcon
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
@@ -10,6 +10,7 @@ import { WhatsAppIcon } from './WhatsAppIcon';
 import { PassengerLiveMap } from './PassengerLiveMap';
 import { formatCurrency, formatPhone, formatRideCode, getCleanWhatsappNumber } from '../utils/format';
 import { downloadElementAsPdf, downloadElementAsImage } from '../utils/pdfGenerator';
+import { PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface RideReceiptModalProps {
   isOpen: boolean;
@@ -376,23 +377,17 @@ ${publicTrackingUrl}`;
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                   <div style={{
-                    width: 34,
-                    height: 24,
-                    borderRadius: 6,
-                    backgroundColor: '#F3F4F6',
-                    border: '1px solid #E5E7EB',
+                    width: 38,
+                    height: 28,
+                    borderRadius: 8,
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0
                   }}>
-                    {ride.paymentMethod === 'pix' ? (
-                      <img width="16" height="16" src="https://img.icons8.com/fluency/48/pix.png" alt="PIX" data-html2canvas-ignore="true" />
-                    ) : ride.paymentMethod === 'dinheiro' ? (
-                      <Banknote size={15} color="#16A34A" />
-                    ) : (
-                      <CreditCard size={15} color="#0F172A" />
-                    )}
+                    <PaymentMethodIcon method={ride.paymentMethod} size={20} />
                   </div>
                   <div>
                     <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#0F172A' }}>

@@ -39,6 +39,7 @@ import { RideSearchingStageCard } from '../components/RideSearchingStageCard';
 import { PixQrCode } from '../components/PixQrCode';
 import { RideCancelModal } from '../components/RideCancelModal';
 import { RideEditRouteModal } from '../components/RideEditRouteModal';
+import { PaymentMethodIcon } from '../components/PaymentMethodIcon';
 import confetti from 'canvas-confetti';
 
 interface ClientBookingScreenProps {
@@ -842,13 +843,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               fontSize: '0.68rem',
               fontWeight: 800
             }}>
-              <span style={{
-                width: 6,
-                height: 6,
-                borderRadius: '50%',
-                backgroundColor: '#76D800',
-                boxShadow: '0 0 8px #76D800'
-              }} />
+              <PaymentMethodIcon method="pix" size={14} />
               <span>{paymentsConfig.stripeEnabled ? 'PIX Stripe' : 'PIX Gateway'}</span>
               {pixRemainingLabel && (
                 <span style={{
@@ -2616,11 +2611,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 5,
+                  gap: 6,
                   cursor: 'pointer'
                 }}
               >
-                <QrCode size={14} color={paymentMethod === 'pix' ? '#76D800' : '#16A34A'} />
+                <PaymentMethodIcon method="pix" size={16} />
                 <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>PIX</span>
               </button>
             )}
@@ -2639,11 +2634,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 5,
+                  gap: 6,
                   cursor: 'pointer'
                 }}
               >
-                <CreditCard size={14} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#76D800' : '#2563EB'} />
+                <PaymentMethodIcon method="cartao_credito" size={18} />
                 <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
                   Cartão
                 </span>
@@ -2664,11 +2659,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 5,
+                  gap: 6,
                   cursor: 'pointer'
                 }}
               >
-                <span style={{ fontSize: '0.84rem', fontWeight: 900, lineHeight: 1 }}></span>
+                <PaymentMethodIcon method="apple_pay" size={16} />
                 <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
                   Apple Pay
                 </span>
@@ -2689,11 +2684,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  gap: 5,
+                  gap: 6,
                   cursor: 'pointer'
                 }}
               >
-                <Banknote size={14} color={paymentMethod === 'dinheiro' ? '#76D800' : '#B45309'} />
+                <PaymentMethodIcon method="dinheiro" size={17} />
                 <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>Dinheiro</span>
               </button>
             )}
@@ -2716,16 +2711,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 marginBottom: 6
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <span style={{
-                    backgroundColor: '#000000',
-                    color: '#FFFFFF',
-                    padding: '3px 8px',
-                    borderRadius: 999,
-                    fontSize: '0.72rem',
-                    fontWeight: 900
-                  }}>
-                     Pay
-                  </span>
+                  <PaymentMethodIcon method="apple_pay" size={18} />
                   <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#0F172A' }}>
                     Kavro × Stripe Apple Pay
                   </span>
@@ -3259,12 +3245,16 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           }}
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-            {isSubmitting && <RefreshCw size={15} className="animate-spin" />}
+            {isSubmitting ? (
+              <RefreshCw size={15} className="animate-spin" />
+            ) : (
+              <PaymentMethodIcon method={paymentMethod} size={16} />
+            )}
             <span>
               {isSubmitting
                 ? 'Conectando motorista...'
                 : paymentMethod === 'apple_pay'
-                  ? ' Pagar com Apple Pay'
+                  ? 'Pagar com Apple Pay'
                   : serviceMode === 'entregas'
                     ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
                     : `Confirmar ${selectedCatObj.name || 'Padrão'}`}

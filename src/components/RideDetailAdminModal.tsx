@@ -11,6 +11,7 @@ import { WhatsAppIcon } from './WhatsAppIcon';
 import { RideReceiptModal } from './RideReceiptModal';
 import { RideRoutePlaybackModal } from './RideRoutePlaybackModal';
 import { formatPhone, formatRideCode } from '../utils/format';
+import { PaymentMethodIcon, getPaymentMethodLabel } from './PaymentMethodIcon';
 
 interface RideDetailAdminModalProps {
   ride: Ride | null;
@@ -710,26 +711,20 @@ export const RideDetailAdminModal: React.FC<RideDetailAdminModalProps> = ({
                   <div style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 4,
-                    padding: '2px 8px',
+                    gap: 5,
+                    padding: '3px 9px',
                     borderRadius: 7,
-                    backgroundColor: ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.15)' : ride.paymentMethod === 'dinheiro' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                    border: `1px solid ${ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.35)' : ride.paymentMethod === 'dinheiro' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(59, 130, 246, 0.35)'}`
+                    backgroundColor: ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.15)' : ride.paymentMethod === 'dinheiro' ? 'rgba(132, 204, 22, 0.15)' : ride.paymentMethod === 'apple_pay' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(59, 130, 246, 0.15)',
+                    border: `1px solid ${ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.35)' : ride.paymentMethod === 'dinheiro' ? 'rgba(132, 204, 22, 0.35)' : ride.paymentMethod === 'apple_pay' ? 'rgba(255, 255, 255, 0.28)' : 'rgba(59, 130, 246, 0.35)'}`
                   }}>
-                    {ride.paymentMethod === 'pix' ? (
-                      <img width="14" height="14" src="https://img.icons8.com/fluency/48/pix.png" alt="pix" />
-                    ) : ride.paymentMethod === 'dinheiro' ? (
-                      <img width="14" height="14" src="https://img.icons8.com/fluency/48/money.png" alt="dinheiro" />
-                    ) : (
-                      <img width="14" height="14" src="https://img.icons8.com/color/48/bank-card-back-side.png" alt="cartão" />
-                    )}
+                    <PaymentMethodIcon method={ride.paymentMethod} size={15} />
                     <span style={{
                       fontSize: '0.68rem',
                       fontWeight: 800,
-                      color: ride.paymentMethod === 'pix' ? '#2DD4BF' : ride.paymentMethod === 'dinheiro' ? '#FCD34D' : '#93C5FD',
+                      color: ride.paymentMethod === 'pix' ? '#2DD4BF' : ride.paymentMethod === 'dinheiro' ? '#A3E635' : ride.paymentMethod === 'apple_pay' ? '#FFFFFF' : '#93C5FD',
                       textTransform: 'uppercase'
                     }}>
-                      {ride.paymentMethod === 'pix' ? 'PIX Instantâneo' : ride.paymentMethod === 'dinheiro' ? 'Dinheiro em Espécie' : 'Cartão'}
+                      {getPaymentMethodLabel(ride.paymentMethod)}
                     </span>
                   </div>
                 </div>

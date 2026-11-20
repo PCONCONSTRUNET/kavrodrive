@@ -8,6 +8,7 @@ import { Ride, SystemConfig, LocationPoint, PaymentMethod, PaymentStatus, RideSt
 import { calculateHaversineDistance, estimateDurationMinutes } from '../utils/geo';
 import { calculateRidePrice, StorageService } from '../services/storage';
 import { AddressPickerModal } from '../components/AddressPickerModal';
+import { PaymentMethodIcon } from '../components/PaymentMethodIcon';
 import { formatPhone, formatRideCode, parseCurrencyInput, parseCurrencyToFloat } from '../utils/format';
 
 interface ManualRideModalProps {
@@ -587,7 +588,7 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
                   boxShadow: paymentMethod === 'pix' ? '0 2px 8px rgba(118, 216, 0, 0.2)' : 'none'
                 }}
               >
-                <img width="24" height="24" src="https://img.icons8.com/fluency/48/pix.png" alt="pix" />
+                <PaymentMethodIcon method="pix" size={24} />
                 <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#121A21' }}>PIX</span>
               </div>
 
@@ -607,7 +608,7 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
                   boxShadow: paymentMethod === 'cartao_credito' ? '0 2px 8px rgba(118, 216, 0, 0.2)' : 'none'
                 }}
               >
-                <img width="24" height="24" src="https://img.icons8.com/color/48/bank-card-back-side.png" alt="cartão" />
+                <PaymentMethodIcon method="cartao_credito" size={24} />
                 <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#121A21' }}>Cartão</span>
               </div>
 
@@ -627,7 +628,7 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
                   boxShadow: paymentMethod === 'dinheiro' ? '0 2px 8px rgba(118, 216, 0, 0.2)' : 'none'
                 }}
               >
-                <img width="24" height="24" src="https://img.icons8.com/fluency/48/money.png" alt="dinheiro" />
+                <PaymentMethodIcon method="dinheiro" size={24} />
                 <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#121A21' }}>Dinheiro</span>
               </div>
             </div>

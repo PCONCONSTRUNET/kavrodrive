@@ -33,6 +33,7 @@ import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
 import { AdminSosCenterTab } from '../components/AdminSosCenterTab';
 import { AdminRideCategoriesTab } from '../components/AdminRideCategoriesTab';
+import { PaymentMethodBadge, PaymentMethodIcon } from '../components/PaymentMethodIcon';
 import { normalizeCategoriesFromConfig } from '../utils/categoryEngine';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { isDriverVehicleConfigured, getMissingVehicleFields } from '../services/vehicleService';
@@ -1283,25 +1284,26 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 5 }}>
                   Formato de Pagamento *
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
                   {[
-                    { id: 'pix', label: 'PIX', icon: '💠' },
-                    { id: 'cartao_credito', label: 'Cartão', icon: '💳' },
-                    { id: 'dinheiro', label: 'Dinheiro', icon: '💵' }
+                    { id: 'pix' as const, label: 'PIX' },
+                    { id: 'cartao_credito' as const, label: 'Cartão' },
+                    { id: 'apple_pay' as const, label: 'Apple Pay' },
+                    { id: 'dinheiro' as const, label: 'Dinheiro' }
                   ].map(m => {
                     const isSelected = newTransactionPaymentMethod === m.id;
                     return (
                       <button
                         key={m.id}
                         type="button"
-                        onClick={() => setNewTransactionPaymentMethod(m.id as any)}
+                        onClick={() => setNewTransactionPaymentMethod(m.id)}
                         style={{
                           padding: '7px 4px',
                           borderRadius: 10,
                           border: isSelected ? '2px solid #121A21' : '1px solid #E2E8F0',
                           backgroundColor: isSelected ? '#121A21' : '#F8FAFC',
                           color: isSelected ? '#FFFFFF' : '#334155',
-                          fontSize: '0.74rem',
+                          fontSize: '0.72rem',
                           fontWeight: isSelected ? 800 : 600,
                           cursor: 'pointer',
                           display: 'flex',
@@ -1311,7 +1313,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                           transition: 'all 0.15s ease'
                         }}
                       >
-                        <span>{m.icon}</span>
+                        <PaymentMethodIcon method={m.id} size={14} />
                         <span>{m.label}</span>
                       </button>
                     );
@@ -2314,24 +2316,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 R$ {ride.totalPrice.toFixed(2)}
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                {ride.paymentMethod === 'pix' && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '2px 8px', borderRadius: 8 }}>
-                                    <img width="16" height="16" src="https://img.icons8.com/fluency/48/pix.png" alt="pix" />
-                                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#121A21' }}>PIX</span>
-                                  </div>
-                                )}
-                                {ride.paymentMethod === 'cartao_credito' && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '2px 8px', borderRadius: 8 }}>
-                                    <img width="16" height="16" src="https://img.icons8.com/color/48/bank-card-back-side.png" alt="cartão" />
-                                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#121A21' }}>Cartão</span>
-                                  </div>
-                                )}
-                                {ride.paymentMethod === 'dinheiro' && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: '#F8FAFC', border: '1px solid #E2E8F0', padding: '2px 8px', borderRadius: 8 }}>
-                                    <img width="16" height="16" src="https://img.icons8.com/fluency/48/money.png" alt="dinheiro" />
-                                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#121A21' }}>Dinheiro</span>
-                                  </div>
-                                )}
+                                <PaymentMethodBadge method={ride.paymentMethod} compact iconSize={15} />
                                 <span style={{
                                   fontSize: '0.7rem',
                                   fontWeight: 800,
@@ -5511,31 +5496,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
 
                                 {/* Destaque Forma de Pagamento & Status */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                                  <div style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 4,
-                                    padding: '2px 7px',
-                                    borderRadius: 6,
-                                    backgroundColor: ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.15)' : ride.paymentMethod === 'dinheiro' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(59, 130, 246, 0.15)',
-                                    border: `1px solid ${ride.paymentMethod === 'pix' ? 'rgba(0, 180, 216, 0.35)' : ride.paymentMethod === 'dinheiro' ? 'rgba(245, 158, 11, 0.35)' : 'rgba(59, 130, 246, 0.35)'}`
-                                  }}>
-                                    {ride.paymentMethod === 'pix' ? (
-                                      <img width="13" height="13" src="https://img.icons8.com/fluency/48/pix.png" alt="pix" />
-                                    ) : ride.paymentMethod === 'dinheiro' ? (
-                                      <img width="13" height="13" src="https://img.icons8.com/fluency/48/money.png" alt="dinheiro" />
-                                    ) : (
-                                      <img width="13" height="13" src="https://img.icons8.com/color/48/bank-card-back-side.png" alt="cartão" />
-                                    )}
-                                    <span style={{
-                                      fontSize: '0.64rem',
-                                      fontWeight: 800,
-                                      color: ride.paymentMethod === 'pix' ? '#2DD4BF' : ride.paymentMethod === 'dinheiro' ? '#FCD34D' : '#93C5FD',
-                                      textTransform: 'uppercase'
-                                    }}>
-                                      {ride.paymentMethod === 'pix' ? 'PIX' : ride.paymentMethod === 'dinheiro' ? 'Dinheiro' : 'Cartão'}
-                                    </span>
-                                  </div>
+                                  <PaymentMethodBadge method={ride.paymentMethod} compact dark iconSize={13} />
 
                                   <span style={{
                                     fontSize: '0.62rem',
@@ -5873,17 +5834,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                   </div>
 
                                   {exp.paymentMethod && (
-                                    <span style={{
-                                      fontSize: '0.62rem',
-                                      fontWeight: 800,
-                                      padding: '1px 5px',
-                                      borderRadius: 5,
-                                      backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                                      color: exp.paymentMethod === 'pix' ? '#2DD4BF' : exp.paymentMethod === 'dinheiro' ? '#FCD34D' : '#93C5FD',
-                                      textTransform: 'uppercase'
-                                    }}>
-                                      {exp.paymentMethod === 'pix' ? 'PIX' : exp.paymentMethod === 'dinheiro' ? 'Dinheiro' : 'Cartão'}
-                                    </span>
+                                    <PaymentMethodBadge method={exp.paymentMethod} compact dark iconSize={12} />
                                   )}
                                 </div>
 
@@ -6918,10 +6869,15 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 color: active ? '#FFFFFF' : '#475569',
                                 fontSize: '0.72rem',
                                 fontWeight: 700,
-                                cursor: 'pointer'
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                gap: 5
                               }}
                             >
-                              {pm.label}
+                              <PaymentMethodIcon method={pm.id} size={13} />
+                              <span>{pm.label}</span>
                             </button>
                           );
                         })}

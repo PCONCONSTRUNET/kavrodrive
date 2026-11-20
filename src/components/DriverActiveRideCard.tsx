@@ -8,6 +8,7 @@ import { getCategoryById, resolveCategoryType } from '../utils/categoryEngine';
 import { getCleanWhatsappNumber } from '../utils/format';
 import { getGoogleMapsRouteUrl } from '../utils/geo';
 import { RouteStepSummary } from './DriverHomeMap';
+import { PaymentMethodIcon, getPaymentMethodLabel } from './PaymentMethodIcon';
 
 interface DriverActiveRideCardProps {
   ride: Ride;
@@ -583,8 +584,10 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
                 </div>
 
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: '0.7rem', color: '#6B7280', fontWeight: 700 }}>
-                    {category.name} • {ride.paymentMethod === 'dinheiro' ? '💵 Dinheiro' : ride.paymentMethod === 'pix' ? '⚡ PIX' : '💳 Cartão'}
+                  <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'flex-end', gap: 5, fontSize: '0.7rem', color: '#6B7280', fontWeight: 700 }}>
+                    <span>{category.name} •</span>
+                    <PaymentMethodIcon method={ride.paymentMethod} size={14} />
+                    <span>{getPaymentMethodLabel(ride.paymentMethod, true)}</span>
                   </div>
                   <div style={{ fontSize: '0.88rem', fontWeight: 900, color: '#15803D' }}>
                     Ganho: R$ {netEarnings.toFixed(2).replace('.', ',')}

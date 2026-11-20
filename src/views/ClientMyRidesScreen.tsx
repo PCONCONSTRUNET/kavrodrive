@@ -19,6 +19,7 @@ import { RideReceiptModal } from '../components/RideReceiptModal';
 import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
 import { RideCancelModal } from '../components/RideCancelModal';
 import { RideEditRouteModal } from '../components/RideEditRouteModal';
+import { PaymentMethodBadge } from '../components/PaymentMethodIcon';
 
 interface ClientMyRidesScreenProps {
   rides: Ride[];
@@ -531,8 +532,9 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                             }}>
                               {destTitle}
                             </div>
-                            <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 2 }}>
-                              {formatActivityDateTime(ride.date, ride.time)} • R$ {ride.totalPrice.toFixed(2).replace('.', ',')}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: '0.75rem', color: '#64748B', marginTop: 3 }}>
+                              <span>{formatActivityDateTime(ride.date, ride.time)} • R$ {ride.totalPrice.toFixed(2).replace('.', ',')}</span>
+                              <PaymentMethodBadge method={ride.paymentMethod} compact iconSize={12} />
                             </div>
                           </div>
                         </div>
@@ -603,8 +605,11 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                           <div style={{ fontSize: '0.76rem', color: '#64748B', marginTop: 3 }}>
                             {formatActivityDateTime(ride.date, ride.time)}
                           </div>
-                          <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A', marginTop: 3 }}>
-                            R$ {ride.totalPrice.toFixed(2).replace('.', ',')}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                            <span style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
+                              R$ {ride.totalPrice.toFixed(2).replace('.', ',')}
+                            </span>
+                            <PaymentMethodBadge method={ride.paymentMethod} compact iconSize={12} />
                           </div>
                         </div>
 
@@ -692,10 +697,13 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                     <div style={{ fontSize: '0.78rem', color: '#64748B', marginTop: 4 }}>
                       {formatActivityDateTime(featuredRide.date, featuredRide.time)}
                     </div>
-                    <div style={{ fontSize: '0.82rem', color: '#475569', fontWeight: 700, marginTop: 3 }}>
-                      R$ {displayPrice.toFixed(2).replace('.', ',')}
-                      {isCancelled ? ' • Cancelada' : ''}
-                      {hiddenRideIds.includes(featuredRide.id) ? ' • Ocultada' : ''}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: '0.82rem', color: '#475569', fontWeight: 700, marginTop: 4 }}>
+                      <span>
+                        R$ {displayPrice.toFixed(2).replace('.', ',')}
+                        {isCancelled ? ' • Cancelada' : ''}
+                        {hiddenRideIds.includes(featuredRide.id) ? ' • Ocultada' : ''}
+                      </span>
+                      <PaymentMethodBadge method={featuredRide.paymentMethod} compact iconSize={13} />
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>
@@ -787,10 +795,13 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                           <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 3 }}>
                             {formatActivityDateTime(ride.date, ride.time)}
                           </div>
-                          <div style={{ fontSize: '0.76rem', color: isCancelled ? '#64748B' : '#0F172A', fontWeight: 600, marginTop: 1 }}>
-                            R$ {displayPrice.toFixed(2).replace('.', ',')}
-                            {isCancelled ? ' • Cancelada' : ''}
-                            {hiddenRideIds.includes(ride.id) ? ' • Ocultada' : ''}
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: '0.76rem', color: isCancelled ? '#64748B' : '#0F172A', fontWeight: 600, marginTop: 2 }}>
+                            <span>
+                              R$ {displayPrice.toFixed(2).replace('.', ',')}
+                              {isCancelled ? ' • Cancelada' : ''}
+                              {hiddenRideIds.includes(ride.id) ? ' • Ocultada' : ''}
+                            </span>
+                            <PaymentMethodBadge method={ride.paymentMethod} compact iconSize={11} />
                           </div>
                         </div>
                       </div>
@@ -942,7 +953,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       </button>
                     </div>
 
-                    <div style={{ marginTop: 8 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
                       <span style={{
                         display: 'inline-block',
                         padding: '3px 9px',
@@ -954,6 +965,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
                       }}>
                         {st.label}
                       </span>
+                      <PaymentMethodBadge method={selectedRide.paymentMethod} compact={false} iconSize={14} />
                     </div>
                   </div>
 

@@ -20,6 +20,7 @@ import { AdminCrlvReviewModal } from './AdminCrlvReviewModal';
 import { AdminFinanceTreasurySection, TreasuryMetrics } from './AdminFinanceTreasurySection';
 import { AdminFinancialFeesTab } from './AdminFinancialFeesTab';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
+import { PaymentMethodBadge } from './PaymentMethodIcon';
 import {
   formatDocument,
   formatPhone,
@@ -315,8 +316,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const refundedTotal = refunded.reduce((acc, t) => acc + Number(t.refundedAmount || t.finalAmount || 0), 0);
 
     const pixTxs = valid.filter(t => t.method === 'pix');
-    const cardTxs = valid.filter(t => t.method === 'cartao_credito' || t.method === 'cartao_debito');
-    const creditTxs = valid.filter(t => t.method === 'cartao_credito');
+    const cardTxs = valid.filter(t => t.method === 'cartao_credito' || t.method === 'cartao_debito' || t.method === 'apple_pay');
+    const creditTxs = valid.filter(t => t.method === 'cartao_credito' || t.method === 'apple_pay');
     const debitTxs = valid.filter(t => t.method === 'cartao_debito');
     const cashTxs = valid.filter(t => t.method === 'dinheiro');
 
@@ -462,6 +463,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     if (method === 'dinheiro') return 'Dinheiro';
     if (method === 'cartao_credito') return 'Cartão de Crédito';
     if (method === 'cartao_debito') return 'Cartão de Débito';
+    if (method === 'apple_pay') return 'Apple Pay';
     return method;
   };
 
@@ -1390,7 +1392,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                 <div style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: '#64748B' }}>Para: {dest.split(',')[0]}</div>
                               </td>
                               <td style={{ padding: '10px 12px', color: '#334155', fontWeight: 500 }}>
-                                {renderMethodLabel(r.paymentMethod || 'pix')}
+                                <PaymentMethodBadge method={r.paymentMethod || 'pix'} compact iconSize={13} />
                               </td>
                               <td style={{ padding: '10px 12px', fontWeight: 600, color: '#0F172A' }}>{formatBRL(gross)}</td>
                               <td style={{ padding: '10px 12px', color: '#64748B' }}>{formatBRL(fee)}</td>
@@ -2737,6 +2739,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   <option value="dinheiro">Dinheiro</option>
                   <option value="cartao_credito">Cartão de Crédito</option>
                   <option value="cartao_debito">Cartão de Débito</option>
+                  <option value="apple_pay">Apple Pay</option>
                 </select>
 
                 <select
@@ -2789,7 +2792,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           {tx.driverName || 'Motorista Parceiro'}
                         </td>
                         <td style={{ padding: '12px 14px', color: '#334155', fontWeight: 500 }}>
-                          {renderMethodLabel(tx.method)}
+                          <PaymentMethodBadge method={tx.method} compact iconSize={13} />
                         </td>
                         <td style={{ padding: '12px 14px', fontWeight: 600, color: '#0F172A', whiteSpace: 'nowrap' }}>
                           {formatBRL(tx.finalAmount)}

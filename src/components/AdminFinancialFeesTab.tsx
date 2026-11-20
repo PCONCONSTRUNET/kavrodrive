@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { PaymentMethod, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface AdminFinancialFeesTabProps {
   config: SystemConfig;
@@ -345,7 +346,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       hasGateway: true,
       gwStr: pixGatewayStr,
       setGwStr: setPixGatewayStr,
-      icon: <QrCode size={16} color="#15803D" />
+      icon: <PaymentMethodIcon method="pix" size={20} />
     },
     {
       id: 'cartao_credito',
@@ -356,7 +357,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       hasGateway: true,
       gwStr: creditGatewayStr,
       setGwStr: setCreditGatewayStr,
-      icon: <CreditCard size={16} color="#1D4ED8" />
+      icon: <PaymentMethodIcon method="cartao_credito" size={22} />
     },
     {
       id: 'cartao_debito',
@@ -367,7 +368,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       hasGateway: true,
       gwStr: debitGatewayStr,
       setGwStr: setDebitGatewayStr,
-      icon: <CreditCard size={16} color="#4338CA" />
+      icon: <PaymentMethodIcon method="cartao_debito" size={22} />
     },
     {
       id: 'apple_pay',
@@ -378,7 +379,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       hasGateway: true,
       gwStr: applePayGatewayStr,
       setGwStr: setApplePayGatewayStr,
-      icon: <Smartphone size={16} color="#0F172A" />
+      icon: <PaymentMethodIcon method="apple_pay" size={18} />
     },
     {
       id: 'dinheiro',
@@ -387,7 +388,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       accent: '#B45309',
       bgAccent: '#FFFBEB',
       hasGateway: false,
-      icon: <Banknote size={16} color="#B45309" />
+      icon: <PaymentMethodIcon method="dinheiro" size={22} />
     }
   ];
 

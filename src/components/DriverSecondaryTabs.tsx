@@ -46,6 +46,7 @@ import {
 } from '../services/vehicleService';
 import { VehiclePhotoPreview } from './VehiclePhotoPreview';
 import { readCrlvDocumentFile } from '../utils/crlvReader';
+import { PaymentMethodBadge } from './PaymentMethodIcon';
 
 interface DriverSecondaryTabsProps {
   activeTab: 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
@@ -1069,21 +1070,11 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                       }}
                     >
                       <div style={{ minWidth: 0, flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
                           <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#111111' }}>
                             {formatRideCode(r)}
                           </span>
-                          <span style={{
-                            fontSize: '0.68rem',
-                            fontWeight: 700,
-                            padding: '1px 7px',
-                            borderRadius: 999,
-                            backgroundColor: '#E5E7EB',
-                            color: '#374151',
-                            textTransform: 'uppercase'
-                          }}>
-                            {r.paymentMethod}
-                          </span>
+                          <PaymentMethodBadge method={r.paymentMethod} compact iconSize={13} />
                         </div>
                         <div style={{
                           fontSize: '0.8rem',
