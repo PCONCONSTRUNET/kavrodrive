@@ -1164,32 +1164,44 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               </div>
             </div>
 
-            {/* Selos rápidos de confiança (substitui link solto abaixo do botão) */}
+            {/* Selos rápidos de confiança alinhados simetricamente ao card */}
             <div
               style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 10,
-                marginTop: 16,
+                display: isMobile ? 'grid' : 'flex',
+                gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : undefined,
+                flexWrap: isMobile ? undefined : 'wrap',
+                gap: isMobile ? 6 : 10,
+                marginTop: 14,
+                maxWidth: 500,
               }}
             >
-              {['PIX instantâneo', 'Motoristas com KYC', 'Tarifa antes de embarcar'].map((tag) => (
+              {[
+                { mobile: 'PIX na hora', desktop: 'PIX instantâneo' },
+                { mobile: 'KYC verificado', desktop: 'Motoristas com KYC' },
+                { mobile: 'Valor antes', desktop: 'Tarifa antes de embarcar' },
+              ].map((tag) => (
                 <div
-                  key={tag}
+                  key={tag.desktop}
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 6,
-                    fontSize: '0.8rem',
+                    justifyContent: isMobile ? 'center' : 'flex-start',
+                    gap: isMobile ? 4 : 6,
+                    fontSize: isMobile ? '0.69rem' : '0.8rem',
+                    fontWeight: 600,
                     color: '#CBD5E1',
                     backgroundColor: 'rgba(255,255,255,0.04)',
                     border: '1px solid rgba(255,255,255,0.08)',
                     borderRadius: 999,
-                    padding: '5px 11px',
+                    padding: isMobile ? '6px 6px' : '5px 11px',
+                    whiteSpace: 'nowrap',
+                    minWidth: 0,
                   }}
                 >
-                  <CheckCircle2 size={13} color="#76D800" />
-                  <span>{tag}</span>
+                  <CheckCircle2 size={isMobile ? 12 : 13} color="#76D800" style={{ flexShrink: 0 }} />
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {isMobile ? tag.mobile : tag.desktop}
+                  </span>
                 </div>
               ))}
             </div>
