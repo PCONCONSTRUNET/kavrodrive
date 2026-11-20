@@ -108,8 +108,13 @@ function resolveCommissionPercentForRide(cfg = {}, categoryObj = null, paymentMe
       return Math.min(100, Math.max(0, round2(catPct)));
     }
   }
-  const methodKey = paymentMethod === 'online' ? 'cartao_credito' : String(paymentMethod || 'pix');
   const perMethodMap = cfg?.paymentMethodCommissionPercents || {};
+  const methodKey =
+    paymentMethod === 'online'
+      ? 'cartao_credito'
+      : paymentMethod === 'apple_pay' && (perMethodMap.apple_pay === undefined || perMethodMap.apple_pay === null || perMethodMap.apple_pay === '')
+        ? 'cartao_credito'
+        : String(paymentMethod || 'pix');
   const rawMethodPct = perMethodMap[methodKey];
   if (rawMethodPct !== undefined && rawMethodPct !== null && rawMethodPct !== '') {
     const parsed = Number(rawMethodPct);
@@ -328,6 +333,13 @@ async function ensureExtendedSchema() {
       CREATE INDEX IF NOT EXISTS idx_rides_client_id ON public.rides (client_id);
       CREATE INDEX IF NOT EXISTS idx_financial_ledger_driver_created ON public.financial_ledger (driver_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_sos_alerts_active_updated ON public.sos_alerts (active, updated_at DESC);
+      CREATE TABLE IF NOT EXISTS public.stripe_checkout_drafts (
+        session_id VARCHAR(128) PRIMARY KEY,
+        client_id VARCHAR(64),
+        payload_json JSONB NOT NULL,
+        created_ride_id VARCHAR(64),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
     `);
     extendedSchemaReady = true;
   } catch (err) {
@@ -2701,7 +2713,7 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
   const walletBefore = await getDriverWallet(ride.driverId);
 
   const settlementBucket =
-    (ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') &&
+    ['cartao_credito', 'cartao_debito', 'apple_pay'].includes(ride.paymentMethod) &&
     Number(cfg.cardSettlementDays || 0) > 0
       ? 'pending'
       : 'available';
@@ -3090,7 +3102,7 @@ async function processRideCancellationFinance(before, { cancelledBy = 'passenger
     feeSplit = calculateSplit(appliedCancellationFee, commPct);
 
     if (!wasDigitalPaid) {
-      const isCardMethod = before.paymentMethod === 'cartao_credito' || before.paymentMethod === 'cartao_debito';
+      const isCardMethod = ['cartao_credito', 'cartao_debito', 'apple_pay'].includes(before.paymentMethod);
       let capturedGatewayId = tx?.gatewayTxId || `cancel_fee_${id}`;
       if (isCardMethod && before.paymentStatus === 'autorizado') {
         const cap = await captureCardForRide(before, appliedCancellationFee);
@@ -3238,12 +3250,14 @@ async function getPlatformFinancialOverview() {
       pix: commPctDefault,
       cartao_credito: commPctDefault,
       cartao_debito: commPctDefault,
+      apple_pay: commPctDefault,
       dinheiro: commPctDefault
     },
     gatewayFeePercents: cfg.gatewayFeePercents || {
       pix: 0,
       cartao_credito: 0,
-      cartao_debito: 0
+      cartao_debito: 0,
+      apple_pay: 0
     },
     withdrawalFeePercent: Number(cfg.withdrawalFeePercent ?? 0),
     withdrawalFeeFixed: Number(cfg.withdrawalFeeFixed ?? 0),
@@ -3514,6 +3528,70 @@ async function updateSosStatusDb(id, { status = 'resolvido', active = false, not
   return formatSosRow(r.rows[0]);
 }
 
+async function saveStripeCheckoutDraft(sessionId, clientId, payloadJson) {
+  await ensureExtendedSchema();
+  const sid = String(sessionId || '').trim();
+  const cid = String(clientId || '').trim();
+  if (!sid) return null;
+  if (!db.pool) {
+    if (!db.localStore.stripe_checkout_drafts) db.localStore.stripe_checkout_drafts = {};
+    db.localStore.stripe_checkout_drafts[sid] = {
+      sessionId: sid,
+      clientId: cid,
+      payload: payloadJson || {},
+      createdRideId: null,
+      createdAt: new Date().toISOString()
+    };
+    db.saveLocalStore();
+    return db.localStore.stripe_checkout_drafts[sid];
+  }
+  await db.query(
+    `INSERT INTO public.stripe_checkout_drafts (session_id, client_id, payload_json, created_ride_id, created_at)
+     VALUES ($1, $2, $3::jsonb, NULL, NOW())
+     ON CONFLICT (session_id) DO UPDATE SET payload_json = EXCLUDED.payload_json`,
+    [sid, cid, JSON.stringify(payloadJson || {})]
+  );
+  return { sessionId: sid, clientId: cid, payload: payloadJson || {}, createdRideId: null };
+}
+
+async function getStripeCheckoutDraft(sessionId) {
+  await ensureExtendedSchema();
+  const sid = String(sessionId || '').trim();
+  if (!sid) return null;
+  if (!db.pool) {
+    const row = db.localStore.stripe_checkout_drafts?.[sid];
+    return row || null;
+  }
+  const r = await db.query('SELECT * FROM public.stripe_checkout_drafts WHERE session_id = $1 LIMIT 1', [sid]);
+  const row = r.rows[0];
+  if (!row) return null;
+  return {
+    sessionId: row.session_id,
+    clientId: row.client_id,
+    payload: row.payload_json || {},
+    createdRideId: row.created_ride_id || null,
+    createdAt: row.created_at
+  };
+}
+
+async function markStripeCheckoutDraftRideId(sessionId, rideId) {
+  await ensureExtendedSchema();
+  const sid = String(sessionId || '').trim();
+  const rid = String(rideId || '').trim();
+  if (!sid || !rid) return;
+  if (!db.pool) {
+    if (db.localStore.stripe_checkout_drafts?.[sid]) {
+      db.localStore.stripe_checkout_drafts[sid].createdRideId = rid;
+      db.saveLocalStore();
+    }
+    return;
+  }
+  await db.query(
+    'UPDATE public.stripe_checkout_drafts SET created_ride_id = $2 WHERE session_id = $1',
+    [sid, rid]
+  );
+}
+
 module.exports = {
   round2,
   calculateSplit,
@@ -3558,6 +3636,9 @@ module.exports = {
   listSosAlertsDb,
   getSosAlertByIdDb,
   upsertSosAlertDb,
-  updateSosStatusDb
+  updateSosStatusDb,
+  saveStripeCheckoutDraft,
+  getStripeCheckoutDraft,
+  markStripeCheckoutDraftRideId
 };
 

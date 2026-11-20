@@ -13,9 +13,16 @@
     { "source": "/manifest.json", "destination": "/api?__path=manifest" },
     { "source": "/manifest-admin.json", "destination": "/api?__path=manifest&role=admin" },
     { "source": "/api/:path*", "destination": "/api?__path=:path*" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|\\.well-known/).*)", "destination": "/index.html" }
   ],
   "headers": [
+    {
+      "source": "/.well-known/apple-developer-merchantid-domain-association",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+        { "key": "Cache-Control", "value": "public, max-age=3600" }
+      ]
+    },
     {
       "source": "/sw.js",
       "headers": [

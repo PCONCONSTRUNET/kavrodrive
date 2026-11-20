@@ -1,6 +1,6 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Elements, ExpressCheckoutElement, useElements, useStripe } from '@stripe/react-stripe-js';
-import { ShieldCheck, Smartphone } from 'lucide-react';
+import { Lock, ShieldCheck, Smartphone } from 'lucide-react';
 import { LocationPoint, RideDeliveryDetails } from '../types';
 import { StorageService } from '../services/storage';
 import { getCachedStripePromise } from './StripeCardForm';
@@ -20,10 +20,14 @@ interface StripeWalletCheckoutProps {
   clientEmail?: string;
   onBeforeConfirm: () => { ok: boolean; error?: string; deliveryDetails?: RideDeliveryDetails | null };
   onWalletAuthorized: (result: { paymentIntentId: string; brand: string }) => Promise<void>;
+  onHostedCheckoutClick?: () => Promise<void>;
 }
 
-const StripeWalletInner: React.FC<Omit<StripeWalletCheckoutProps, 'publishableKey'>> = ({
+const StripeWalletInner: React.FC<
+  Omit<StripeWalletCheckoutProps, 'publishableKey'> & { amountCents: number }
+> = ({
   amountBrl,
+  amountCents,
   category,
   distanceKm,
   durationMin,
@@ -35,7 +39,8 @@ const StripeWalletInner: React.FC<Omit<StripeWalletCheckoutProps, 'publishableKe
   clientPhone,
   clientEmail,
   onBeforeConfirm,
-  onWalletAuthorized
+  onWalletAuthorized,
+  onHostedCheckoutClick
 }) => {
   const stripe = useStripe();
   const elements = useElements();
@@ -44,6 +49,13 @@ const StripeWalletInner: React.FC<Omit<StripeWalletCheckoutProps, 'publishableKe
   const [isReady, setIsReady] = useState<boolean>(false);
   const [walletError, setWalletError] = useState<string>('');
   const [isAuthorizing, setIsAuthorizing] = useState<boolean>(false);
+  const [isOpeningHosted, setIsOpeningHosted] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (elements) {
+      elements.update({ amount: amountCents });
+    }
+  }, [elements, amountCents]);
 
   const handleConfirm = async (event: any) => {
     setWalletError('');
@@ -175,11 +187,11 @@ const StripeWalletInner: React.FC<Omit<StripeWalletCheckoutProps, 'publishableKe
               applePay: 'book',
               googlePay: 'pay'
             },
-            paymentMethodOrder: ['apple_pay', 'google_pay', 'link'],
+            paymentMethodOrder: ['apple_pay', 'google_pay'],
             paymentMethods: {
-              applePay: 'auto',
+              applePay: 'always',
               googlePay: 'auto',
-              link: 'auto'
+              link: 'never'
             },
             layout: {
               maxColumns: 2,
@@ -192,7 +204,6 @@ const StripeWalletInner: React.FC<Omit<StripeWalletCheckoutProps, 'publishableKe
             const activeList: string[] = [];
             if (av?.applePay) activeList.push('Apple Pay');
             if (av?.googlePay) activeList.push('Google Pay');
-            if (av?.link) activeList.push('Stripe Link');
             setAvailableNames(activeList);
             setHasExpressWallets(activeList.length > 0);
           }}
@@ -201,19 +212,54 @@ const StripeWalletInner: React.FC<Omit<StripeWalletCheckoutProps, 'publishableKe
       </div>
 
       {isReady && !hasExpressWallets && (
-        <div style={{
-          marginTop: 6,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: '0.7rem',
-          color: '#64748B',
-          lineHeight: 1.35
-        }}>
-          <ShieldCheck size={13} color="#16A34A" style={{ flexShrink: 0 }} />
-          <span>
-            Apple Pay pronto na Stripe — exibido automaticamente no Safari / iPhone com carteira configurada.
-          </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
+          {onHostedCheckoutClick && (
+            <button
+              type="button"
+              disabled={isOpeningHosted || isAuthorizing}
+              onClick={async () => {
+                setWalletError('');
+                setIsOpeningHosted(true);
+                try {
+                  await onHostedCheckoutClick();
+                } finally {
+                  setIsOpeningHosted(false);
+                }
+              }}
+              style={{
+                width: '100%',
+                height: 42,
+                borderRadius: 999,
+                backgroundColor: '#000000',
+                color: '#FFFFFF',
+                border: '1px solid #1E293B',
+                fontWeight: 800,
+                fontSize: '0.84rem',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 7,
+                cursor: isOpeningHosted ? 'wait' : 'pointer',
+                boxShadow: '0 6px 16px rgba(0, 0, 0, 0.16)'
+              }}
+            >
+              <Lock size={14} color="#76D800" />
+              <span>{isOpeningHosted ? 'Abrindo Apple Pay na Stripe...' : ' Pagar com Apple Pay (Stripe)'}</span>
+            </button>
+          )}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            fontSize: '0.7rem',
+            color: '#64748B',
+            lineHeight: 1.35
+          }}>
+            <ShieldCheck size={13} color="#16A34A" style={{ flexShrink: 0 }} />
+            <span>
+              No iPhone/Safari com Apple Wallet, o botão nativo Touch ID / Face ID abre direto na tela; em outros navegadores abre pelo checkout seguro da Stripe.
+            </span>
+          </div>
         </div>
       )}
 
@@ -239,29 +285,30 @@ export const StripeWalletCheckout: React.FC<StripeWalletCheckoutProps> = ({
 }) => {
   const stripePromise = useMemo(() => getCachedStripePromise(publishableKey), [publishableKey]);
   const amountCents = Math.max(50, Math.round((Number(amountBrl) || 0) * 100));
+  const initialAmountRef = useRef<number>(amountCents);
+  const elementsOptions = useMemo(
+    () => ({
+      mode: 'payment' as const,
+      amount: initialAmountRef.current,
+      currency: 'brl',
+      captureMethod: 'manual' as const,
+      locale: 'pt-BR' as const,
+      appearance: {
+        theme: 'stripe' as const,
+        variables: {
+          borderRadius: '12px',
+          colorPrimary: '#0F172A'
+        }
+      }
+    }),
+    []
+  );
 
   if (!publishableKey) return null;
 
   return (
-    <Elements
-      key={`wallet-${amountCents}`}
-      stripe={stripePromise}
-      options={{
-        mode: 'payment',
-        amount: amountCents,
-        currency: 'brl',
-        captureMethod: 'manual',
-        locale: 'pt-BR',
-        appearance: {
-          theme: 'stripe',
-          variables: {
-            borderRadius: '12px',
-            colorPrimary: '#0F172A'
-          }
-        }
-      }}
-    >
-      <StripeWalletInner amountBrl={amountBrl} {...rest} />
+    <Elements stripe={stripePromise} options={elementsOptions}>
+      <StripeWalletInner amountBrl={amountBrl} amountCents={amountCents} {...rest} />
     </Elements>
   );
 };

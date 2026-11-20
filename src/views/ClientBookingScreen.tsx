@@ -79,6 +79,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const allowDebitCard = allowedMethods.includes('cartao_debito');
   const allowAnyCard = allowCreditCard || allowDebitCard;
   const allowCash = allowedMethods.includes('dinheiro');
+  const allowApplePayConfig =
+    allowedMethods.includes('apple_pay') || (allowCreditCard && !config.applePayDisabled);
 
   const [passengers, setPassengers] = useState<number>(1);
   const [hasLuggage, setHasLuggage] = useState<boolean>(false);
@@ -101,31 +103,6 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [notes, setNotes] = useState<string>('');
   const [showExtraOptions, setShowExtraOptions] = useState<boolean>(false);
 
-  useEffect(() => {
-    if (!allowedMethods.includes(paymentMethod)) {
-      const nextMethod: PaymentMethod = allowPix
-        ? 'pix'
-        : allowCreditCard
-          ? 'cartao_credito'
-          : allowDebitCard
-            ? 'cartao_debito'
-            : 'dinheiro';
-      setPaymentMethod(nextMethod);
-    }
-  }, [allowedMethods.join(','), paymentMethod]);
-
-  // Cartões tokenizados do passageiro
-  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
-  const [selectedCardId, setSelectedCardId] = useState<string>('');
-  const [isAddingCardModal, setIsAddingCardModal] = useState<boolean>(false);
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardHolder, setCardHolder] = useState(currentUser?.name || '');
-  const [cardExpMonth, setCardExpMonth] = useState('12');
-  const [cardExpYear, setCardExpYear] = useState('2029');
-  const [cardCvv, setCardCvv] = useState('');
-  const [cardType, setCardType] = useState<'cartao_credito' | 'cartao_debito'>('cartao_credito');
-  const [cardError, setCardError] = useState('');
-  const [isSavingCard, setIsSavingCard] = useState(false);
   const [paymentsConfig, setPaymentsConfig] = useState<{
     gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
     stripeEnabled: boolean;
@@ -141,6 +118,38 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
     autoPixPayoutEnabled: false
   });
+  const allowApplePay =
+    paymentsConfig.stripeEnabled && Boolean(paymentsConfig.stripePublishableKey) && allowApplePayConfig;
+
+  useEffect(() => {
+    const isCurrentlyAllowed =
+      paymentMethod === 'apple_pay' ? allowApplePay : allowedMethods.includes(paymentMethod);
+    if (!isCurrentlyAllowed) {
+      const nextMethod: PaymentMethod = allowPix
+        ? 'pix'
+        : allowCreditCard
+          ? 'cartao_credito'
+          : allowDebitCard
+            ? 'cartao_debito'
+            : allowApplePay
+              ? 'apple_pay'
+              : 'dinheiro';
+      setPaymentMethod(nextMethod);
+    }
+  }, [allowedMethods.join(','), paymentMethod, allowApplePay]);
+
+  // Cartões tokenizados do passageiro
+  const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
+  const [selectedCardId, setSelectedCardId] = useState<string>('');
+  const [isAddingCardModal, setIsAddingCardModal] = useState<boolean>(false);
+  const [cardNumber, setCardNumber] = useState('');
+  const [cardHolder, setCardHolder] = useState(currentUser?.name || '');
+  const [cardExpMonth, setCardExpMonth] = useState('12');
+  const [cardExpYear, setCardExpYear] = useState('2029');
+  const [cardCvv, setCardCvv] = useState('');
+  const [cardType, setCardType] = useState<'cartao_credito' | 'cartao_debito'>('cartao_credito');
+  const [cardError, setCardError] = useState('');
+  const [isSavingCard, setIsSavingCard] = useState(false);
 
   // Estado da solicitação em tempo real (restaura corrida ativa do passageiro automaticamente igual à Uber)
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -251,6 +260,51 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   // Carrega configuração ativa do gateway de pagamento (Stripe / Mercado Pago / Sandbox)
   useEffect(() => {
     StorageService.fetchPaymentsConfig().then(setPaymentsConfig).catch(() => {});
+  }, []);
+
+  // Finaliza corrida automaticamente após retorno do Apple Pay / Stripe Checkout
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = String(params.get('stripe_checkout_session_id') || '').trim();
+    const canceled = params.get('stripe_checkout_canceled');
+    if (!sessionId && !canceled) return;
+
+    const cleanUrl = `${window.location.pathname}${window.location.hash || ''}`;
+    window.history.replaceState({}, '', cleanUrl);
+
+    if (canceled && !sessionId) {
+      setRequestError('Pagamento no Apple Pay / Stripe cancelado antes da confirmação.');
+      return;
+    }
+
+    let cancelledFlag = false;
+    setIsSubmitting(true);
+    StorageService.completeStripeCheckoutSession(sessionId)
+      .then((res) => {
+        if (cancelledFlag) return;
+        setIsSubmitting(false);
+        if (res.ok && res.ride) {
+          setActiveRide(res.ride);
+          onRideBooked(res.ride);
+          try {
+            confetti({ particleCount: 60, spread: 55, origin: { y: 0.6 } });
+          } catch {
+            // ignore
+          }
+        } else {
+          setRequestError(res.error || 'Não foi possível concluir a autorização via Apple Pay.');
+        }
+      })
+      .catch(() => {
+        if (!cancelledFlag) {
+          setIsSubmitting(false);
+          setRequestError('Erro ao verificar autorização do pagamento Apple Pay na Stripe.');
+        }
+      });
+    return () => {
+      cancelledFlag = true;
+    };
   }, []);
 
   // Carrega cartões tokenizados salvos
@@ -567,6 +621,74 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     return { ok: true, isDeliveryOrder, deliveryDetails: normalizedDeliveryPayload };
   };
 
+  const buildValidatedRideDraft = (effectiveMethod: PaymentMethod, cardMeta?: {
+    cardId?: string;
+    cardLast4?: string;
+    cardBrand?: string;
+    stripePaymentIntentId?: string;
+    validation: { isDeliveryOrder: boolean; deliveryDetails: RideDeliveryDetails | null };
+  }) => {
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const v = cardMeta?.validation || { isDeliveryOrder: false, deliveryDetails: null };
+    return {
+      clientId: currentUser?.id,
+      clientName: currentUser?.name || 'Passageiro',
+      clientPhone: currentUser?.phone || '',
+      origin: origin!,
+      destination: destination!,
+      date: todayStr,
+      time: nowTimeStr,
+      passengers: v.isDeliveryOrder ? 0 : passengers,
+      hasLuggage: v.isDeliveryOrder ? deliveryPackageSize === 'grande' : hasLuggage,
+      distanceKm,
+      durationMin,
+      category: selectedCategory,
+      categoryName: pricing.categoryName,
+      serviceType: (v.isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
+      deliveryDetails: v.deliveryDetails || null,
+      appliedFareSnapshot: {
+        ...pricing.appliedFareSnapshot,
+        categoryType: (v.isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
+        ...(v.deliveryDetails ? { deliveryDetails: v.deliveryDetails } : {})
+      },
+      baseFare: pricing.appliedFareSnapshot.baseFare,
+      commissionPercent: pricing.commissionPercent,
+      totalPrice: pricing.totalPrice,
+      paymentMethod: effectiveMethod,
+      cardId: cardMeta?.cardId,
+      cardLast4: cardMeta?.cardLast4,
+      cardBrand: cardMeta?.cardBrand,
+      stripePaymentIntentId: cardMeta?.stripePaymentIntentId,
+      notes: v.isDeliveryOrder
+        ? (deliveryInstructions.trim() || `Entrega: ${v.deliveryDetails?.itemDescription || ''}`)
+        : notes,
+      isManualBooking: false
+    };
+  };
+
+  const handleStartApplePayCheckout = async () => {
+    const validation = validateBookingBeforePayment();
+    if (!validation.ok) return;
+
+    setIsSubmitting(true);
+    setRequestError('');
+    const draftPayload = buildValidatedRideDraft('apple_pay', {
+      cardBrand: 'Apple Pay',
+      validation: {
+        isDeliveryOrder: validation.isDeliveryOrder,
+        deliveryDetails: validation.deliveryDetails || null
+      }
+    });
+    const sessionRes = await StorageService.createStripeCheckoutSession(draftPayload);
+    if (!sessionRes.ok || !sessionRes.checkoutUrl) {
+      setIsSubmitting(false);
+      setRequestError(sessionRes.error || 'Não foi possível iniciar o pagamento via Apple Pay na Stripe.');
+      return;
+    }
+    window.location.assign(sessionRes.checkoutUrl);
+  };
+
   const submitBookingRequest = async (overrides?: {
     stripePaymentIntentId?: string;
     paymentMethodOverride?: PaymentMethod;
@@ -576,51 +698,29 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     if (!validation.ok) return;
 
     const effectiveMethod = overrides?.paymentMethodOverride || paymentMethod;
-    const isCard = effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito';
+    if (effectiveMethod === 'apple_pay' && !overrides?.stripePaymentIntentId) {
+      await handleStartApplePayCheckout();
+      return;
+    }
+
+    const isCard = effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito' || effectiveMethod === 'apple_pay';
     const chosenCard = savedCards.find(c => c.id === selectedCardId);
-    if (isCard && !overrides?.stripePaymentIntentId && !chosenCard) {
+    if ((effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito') && !overrides?.stripePaymentIntentId && !chosenCard) {
       setIsAddingCardModal(true);
       return;
     }
 
     setIsSubmitting(true);
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-
-    const baseRequestPayload = {
-      clientId: currentUser?.id,
-      clientName: currentUser?.name || 'Passageiro',
-      clientPhone: currentUser?.phone || '',
-      origin: origin!,
-      destination: destination!,
-      date: todayStr,
-      time: nowTimeStr,
-      passengers: validation.isDeliveryOrder ? 0 : passengers,
-      hasLuggage: validation.isDeliveryOrder ? deliveryPackageSize === 'grande' : hasLuggage,
-      distanceKm,
-      durationMin,
-      category: selectedCategory,
-      categoryName: pricing.categoryName,
-      serviceType: (validation.isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
-      deliveryDetails: validation.deliveryDetails || null,
-      appliedFareSnapshot: {
-        ...pricing.appliedFareSnapshot,
-        categoryType: (validation.isDeliveryOrder ? 'entregas' : 'padrao') as ServiceCategoryType,
-        ...(validation.deliveryDetails ? { deliveryDetails: validation.deliveryDetails } : {})
-      },
-      baseFare: pricing.appliedFareSnapshot.baseFare,
-      commissionPercent: pricing.commissionPercent,
-      totalPrice: pricing.totalPrice,
-      paymentMethod: effectiveMethod,
+    const baseRequestPayload = buildValidatedRideDraft(effectiveMethod, {
       cardId: isCard && !overrides?.stripePaymentIntentId ? chosenCard?.id : undefined,
       cardLast4: isCard && !overrides?.stripePaymentIntentId ? chosenCard?.last4 : undefined,
-      cardBrand: overrides?.cardBrandOverride || (isCard ? chosenCard?.brand : undefined),
+      cardBrand: overrides?.cardBrandOverride || (effectiveMethod === 'apple_pay' ? 'Apple Pay' : isCard ? chosenCard?.brand : undefined),
       stripePaymentIntentId: overrides?.stripePaymentIntentId,
-      notes: validation.isDeliveryOrder
-        ? (deliveryInstructions.trim() || `Entrega: ${validation.deliveryDetails?.itemDescription || ''}`)
-        : notes,
-      isManualBooking: false
-    };
+      validation: {
+        isDeliveryOrder: validation.isDeliveryOrder,
+        deliveryDetails: validation.deliveryDetails || null
+      }
+    });
 
     let res = await StorageService.requestRideOnDemand(baseRequestPayload);
 
@@ -2497,22 +2597,23 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           marginBottom: 8
         }}>
           <div style={{
-            display: 'grid',
-            gridTemplateColumns: `repeat(${Math.max(1, (allowPix ? 1 : 0) + (allowAnyCard ? 1 : 0) + (allowCash ? 1 : 0))}, 1fr)`,
+            display: 'flex',
+            flexWrap: 'wrap',
             gap: 6,
-            marginBottom: 8
+            marginBottom: 10
           }}>
             {allowPix && (
               <button
                 type="button"
                 onClick={() => setPaymentMethod('pix')}
                 style={{
-                  padding: '8px 6px',
-                  borderRadius: 10,
+                  flex: '1 1 auto',
+                  padding: '8px 12px',
+                  borderRadius: 999,
                   border: paymentMethod === 'pix' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
                   backgroundColor: paymentMethod === 'pix' ? '#0F172A' : '#FFFFFF',
                   color: paymentMethod === 'pix' ? '#FFFFFF' : '#111111',
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 5,
@@ -2520,7 +2621,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 }}
               >
                 <QrCode size={14} color={paymentMethod === 'pix' ? '#76D800' : '#16A34A'} />
-                <span style={{ fontSize: '0.78rem', fontWeight: 800 }}>PIX</span>
+                <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>PIX</span>
               </button>
             )}
 
@@ -2529,12 +2630,13 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 type="button"
                 onClick={() => setPaymentMethod(allowCreditCard ? 'cartao_credito' : 'cartao_debito')}
                 style={{
-                  padding: '8px 6px',
-                  borderRadius: 10,
+                  flex: '1 1 auto',
+                  padding: '8px 12px',
+                  borderRadius: 999,
                   border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
                   backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#0F172A' : '#FFFFFF',
                   color: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#FFFFFF' : '#111111',
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 5,
@@ -2543,7 +2645,32 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               >
                 <CreditCard size={14} color={(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#76D800' : '#2563EB'} />
                 <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                  {paymentsConfig.stripeEnabled ? 'Cartão • Apple Pay' : 'Cartão'}
+                  Cartão
+                </span>
+              </button>
+            )}
+
+            {allowApplePay && (
+              <button
+                type="button"
+                onClick={() => setPaymentMethod('apple_pay')}
+                style={{
+                  flex: '1 1 auto',
+                  padding: '8px 12px',
+                  borderRadius: 999,
+                  border: paymentMethod === 'apple_pay' ? '1.5px solid #76D800' : '1px solid #1E293B',
+                  backgroundColor: paymentMethod === 'apple_pay' ? '#000000' : '#FFFFFF',
+                  color: paymentMethod === 'apple_pay' ? '#FFFFFF' : '#0F172A',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 5,
+                  cursor: 'pointer'
+                }}
+              >
+                <span style={{ fontSize: '0.84rem', fontWeight: 900, lineHeight: 1 }}></span>
+                <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
+                  Apple Pay
                 </span>
               </button>
             )}
@@ -2553,12 +2680,13 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 type="button"
                 onClick={() => setPaymentMethod('dinheiro')}
                 style={{
-                  padding: '8px 6px',
-                  borderRadius: 10,
+                  flex: '1 1 auto',
+                  padding: '8px 12px',
+                  borderRadius: 999,
                   border: paymentMethod === 'dinheiro' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
                   backgroundColor: paymentMethod === 'dinheiro' ? '#0F172A' : '#FFFFFF',
                   color: paymentMethod === 'dinheiro' ? '#FFFFFF' : '#111111',
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 5,
@@ -2566,10 +2694,79 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 }}
               >
                 <Banknote size={14} color={paymentMethod === 'dinheiro' ? '#76D800' : '#B45309'} />
-                <span style={{ fontSize: '0.78rem', fontWeight: 800 }}>Dinheiro</span>
+                <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>Dinheiro</span>
               </button>
             )}
           </div>
+
+          {/* Painel Dedicado: Apple Pay Stripe */}
+          {paymentMethod === 'apple_pay' && allowApplePay && (
+            <div style={{
+              backgroundColor: '#F8FAFC',
+              borderRadius: 14,
+              padding: 12,
+              border: '1px solid #E2E8F0',
+              marginBottom: 8
+            }}>
+              <div style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                marginBottom: 6
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                  <span style={{
+                    backgroundColor: '#000000',
+                    color: '#FFFFFF',
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                    fontSize: '0.72rem',
+                    fontWeight: 900
+                  }}>
+                     Pay
+                  </span>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#0F172A' }}>
+                    Kavro × Stripe Apple Pay
+                  </span>
+                </div>
+                <span style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 800,
+                  color: '#15803D',
+                  backgroundColor: '#DCFCE7',
+                  padding: '2px 8px',
+                  borderRadius: 999
+                }}>
+                  Ativo
+                </span>
+              </div>
+
+              <StripeWalletCheckout
+                publishableKey={paymentsConfig.stripePublishableKey}
+                amountBrl={pricing.totalPrice}
+                category={selectedCategory}
+                distanceKm={distanceKm}
+                durationMin={durationMin}
+                time={nowTimeStr}
+                origin={origin}
+                destination={destination}
+                clientId={currentUser?.id}
+                clientName={currentUser?.name}
+                clientPhone={currentUser?.phone}
+                clientEmail={currentUser?.email}
+                onBeforeConfirm={validateBookingBeforePayment}
+                onHostedCheckoutClick={handleStartApplePayCheckout}
+                onWalletAuthorized={async ({ paymentIntentId, brand }) => {
+                  await submitBookingRequest({
+                    stripePaymentIntentId: paymentIntentId,
+                    paymentMethodOverride: 'apple_pay',
+                    cardBrandOverride: brand || 'Apple Pay'
+                  });
+                }}
+              />
+            </div>
+          )}
 
           {/* Cartões tokenizados e Apple Pay / Carteiras Stripe */}
           {(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') && (
@@ -2593,7 +2790,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <img src="/logo-icon.png" alt="Kavro" style={{ width: 18, height: 18, borderRadius: 4, objectFit: 'contain' }} />
                   <span style={{ fontSize: '0.73rem', fontWeight: 800, color: '#0F172A' }}>
-                    Kavro Pay • Cartão ou Carteira
+                    Kavro Pay • Cartão Salvo
                   </span>
                 </div>
                 <button
@@ -2663,11 +2860,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 ))
               ) : (
                 <div style={{ fontSize: '0.73rem', color: '#64748B', textAlign: 'center', padding: '4px 0 6px 0' }}>
-                  Nenhum cartão salvo — toque em <strong>Novo cartão</strong> ou pague com Apple Pay abaixo.
+                  Nenhum cartão salvo — toque em <strong>Novo cartão</strong> ou pague com <strong>Apple Pay</strong>.
                 </div>
               )}
 
-              {paymentsConfig.stripeEnabled && paymentsConfig.stripePublishableKey && (
+              {allowApplePay && (
                 <StripeWalletCheckout
                   publishableKey={paymentsConfig.stripePublishableKey}
                   amountBrl={pricing.totalPrice}
@@ -2682,10 +2879,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   clientPhone={currentUser?.phone}
                   clientEmail={currentUser?.email}
                   onBeforeConfirm={validateBookingBeforePayment}
+                  onHostedCheckoutClick={handleStartApplePayCheckout}
                   onWalletAuthorized={async ({ paymentIntentId, brand }) => {
                     await submitBookingRequest({
                       stripePaymentIntentId: paymentIntentId,
-                      paymentMethodOverride: 'cartao_credito',
+                      paymentMethodOverride: 'apple_pay',
                       cardBrandOverride: brand
                     });
                   }}
@@ -3041,9 +3239,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             maxWidth: 360,
             height: 44,
             borderRadius: 999,
-            backgroundColor: serviceMode === 'entregas' ? '#15803D' : '#0F172A',
+            backgroundColor:
+              paymentMethod === 'apple_pay'
+                ? '#000000'
+                : serviceMode === 'entregas'
+                  ? '#15803D'
+                  : '#0F172A',
             color: '#FFFFFF',
-            border: 'none',
+            border: paymentMethod === 'apple_pay' ? '1.5px solid #76D800' : 'none',
             fontSize: '0.88rem',
             fontWeight: 800,
             display: 'flex',
@@ -3060,9 +3263,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             <span>
               {isSubmitting
                 ? 'Conectando motorista...'
-                : serviceMode === 'entregas'
-                  ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
-                  : `Confirmar ${selectedCatObj.name || 'Padrão'}`}
+                : paymentMethod === 'apple_pay'
+                  ? ' Pagar com Apple Pay'
+                  : serviceMode === 'entregas'
+                    ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
+                    : `Confirmar ${selectedCatObj.name || 'Padrão'}`}
             </span>
           </span>
           <span style={{

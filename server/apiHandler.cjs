@@ -3643,6 +3643,424 @@ async function handleApiRequest(req, res) {
 
       return sendJson(res, 200, { ok: true, message: 'Documentos e biometria purgados com sucesso.', driver: updated });
     }
+
+    const isCardLikeMethod = (m) => m === 'cartao_credito' || m === 'cartao_debito' || m === 'apple_pay';
+
+    const executeRideSave = async ({ ride, isAdmin, driverSession, clientSession }) => {
+      if (!isAdmin && !driverSession && !clientSession) {
+        return { status: 401, body: { ok: false, error: 'Faça login para solicitar ou gerenciar corridas.' } };
+      }
+      const cfg = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
+      const commPct = Number(cfg.platformCommissionPercent ?? 20);
+
+      if (ride.id) {
+        ride.id = normalizeRideId(ride.id);
+      }
+
+      const prevRes = ride.id
+        ? await db.query('SELECT * FROM public.rides WHERE id = $1', [ride.id])
+        : { rows: [] };
+      const before = prevRes.rows[0] ? formatRideFromDb(prevRes.rows[0]) : null;
+
+      if (!before) {
+        if (!isAdmin && !clientSession?.sub) {
+          return { status: 401, body: { ok: false, error: 'Faça login como passageiro para solicitar uma corrida.' } };
+        }
+        if (!isAdmin && clientSession?.sub) {
+          ride.clientId = clientSession.sub;
+          ride.isManualBooking = false;
+        }
+      } else {
+        const isOwnerClient = Boolean(clientSession && clientSession.sub && clientSession.sub === before.clientId);
+        const isAssignedDriver = Boolean(driverSession && driverSession.sub && driverSession.sub === before.driverId);
+        if (!isAdmin && !isOwnerClient && !isAssignedDriver) {
+          return { status: 401, body: { ok: false, error: 'Sem permissão para alterar esta corrida.' } };
+        }
+        if (!isAdmin) {
+          // Impede alteração arbitrária de preço ou vínculo financeiro por não-admins em corridas existentes
+          ride.totalPrice = before.totalPrice;
+          ride.driverId = before.driverId;
+          ride.clientId = before.clientId;
+        }
+      }
+
+      if (!before) {
+        const seqRes = await db.query('SELECT COALESCE(MAX(ride_number), 0) + 1 AS next_num FROM public.rides');
+        const nextNum = Number(seqRes.rows[0]?.next_num || 1);
+        const padded = String(nextNum).padStart(3, '0');
+        ride.rideNumber = nextNum;
+        ride.id = `UP-${padded}`;
+        ride.rideCode = `#UP - ${padded}`;
+      } else {
+        ride.rideNumber = before.rideNumber;
+        ride.rideCode = before.rideCode;
+      }
+
+      const now = new Date();
+      if (!ride.date) {
+        ride.date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      }
+      if (!ride.time) {
+        ride.time = now.toTimeString().slice(0, 5);
+      }
+
+      // Cálculo oficial de comissão e valor líquido do motorista no backend respeitando meio de pagamento, plataforma e categoria
+      const allCats = finance.normalizeCategoriesServer(cfg);
+      const mappedCatId = finance.mapLegacyCategoryIdServer(ride.category || before?.category || 'kavro_go');
+      const matchedCat = allCats.find(c => c.id === ride.category || c.id === mappedCatId) || allCats[0];
+      const reqMethod = ride.paymentMethod || before?.paymentMethod || 'dinheiro';
+      if (!before && !ride.isManualBooking && Array.isArray(cfg.activePaymentMethods) && cfg.activePaymentMethods.length > 0) {
+        const normalizedMethod = reqMethod === 'online' ? 'cartao_credito' : reqMethod;
+        const isMethodAllowed =
+          normalizedMethod === 'apple_pay'
+            ? (cfg.activePaymentMethods.includes('apple_pay') ||
+               (cfg.activePaymentMethods.includes('cartao_credito') && !cfg.applePayDisabled))
+            : cfg.activePaymentMethods.includes(normalizedMethod);
+        if (!isMethodAllowed) {
+          return {
+            status: 400,
+            body: {
+              ok: false,
+              error: `A forma de pagamento "${normalizedMethod}" está desativada pela plataforma no momento.`
+            }
+          };
+        }
+      }
+      const resolvedMethodCommPct = finance.resolveCommissionPercentForRide
+        ? finance.resolveCommissionPercentForRide(cfg, matchedCat, reqMethod)
+        : commPct;
+      const effectiveCommPct = !before
+        ? Number(
+            (isAdmin && ride.commissionPercent !== undefined)
+              ? ride.commissionPercent
+              : (resolvedMethodCommPct ?? commPct)
+          )
+        : Number(
+            (isAdmin && ride.commissionPercent !== undefined)
+              ? ride.commissionPercent
+              : (before?.paymentMethod && before.paymentMethod !== reqMethod
+                  ? resolvedMethodCommPct
+                  : (before?.commissionPercent ?? resolvedMethodCommPct ?? commPct))
+          );
+      const defaultCommFixed = finance.resolveCommissionFixedForRide
+        ? finance.resolveCommissionFixedForRide(cfg, null)
+        : Math.max(0, finance.round2(cfg.platformCommissionFixed ?? 0));
+      const effectiveCommFixed = !before
+        ? Math.max(0, finance.round2((isAdmin && ride.commissionFixed !== undefined) ? ride.commissionFixed : defaultCommFixed))
+        : Math.max(0, finance.round2(
+            (isAdmin && ride.commissionFixed !== undefined)
+              ? ride.commissionFixed
+              : (before?.commissionFixed ?? before?.appliedFareSnapshot?.commissionFixed ?? defaultCommFixed)
+          ));
+
+      ride.category = matchedCat ? matchedCat.id : mappedCatId;
+      ride.categoryName = ride.categoryName || before?.categoryName || matchedCat?.name || 'KAVRO GO';
+      const isDeliveryRide = Boolean(
+        (matchedCat && finance.resolveCategoryTypeServer(matchedCat) === 'entregas') ||
+        finance.resolveCategoryTypeServer(ride.category) === 'entregas' ||
+        before?.serviceType === 'entregas'
+      );
+      const rawDelivery = (ride.deliveryDetails && typeof ride.deliveryDetails === 'object')
+        ? ride.deliveryDetails
+        : (before?.deliveryDetails && typeof before.deliveryDetails === 'object' ? before.deliveryDetails : null);
+
+      let normalizedDelivery = before?.deliveryDetails || null;
+      if (isDeliveryRide) {
+        const delRole = rawDelivery?.role === 'receiver' ? 'receiver' : 'sender';
+        const recipientName = String(rawDelivery?.recipientName || '').trim().slice(0, 120);
+        const recipientPhone = String(rawDelivery?.recipientPhone || '').trim().slice(0, 32);
+        const recipientPhoneDigits = recipientPhone.replace(/\D/g, '');
+        const itemDescription = String(rawDelivery?.itemDescription || '').trim().slice(0, 200);
+        const packageSize = ['pequeno', 'medio', 'grande'].includes(rawDelivery?.packageSize)
+          ? rawDelivery.packageSize
+          : 'pequeno';
+        const dropoffMode = ['porta_mao', 'portaria', 'recepcao'].includes(rawDelivery?.dropoffMode)
+          ? rawDelivery.dropoffMode
+          : 'porta_mao';
+        const instructions = String(rawDelivery?.instructions || '').trim().slice(0, 260);
+
+        if (!before && !ride.isManualBooking) {
+          if (recipientName.length < 2) {
+            return {
+              status: 400,
+              body: {
+                ok: false,
+                error: `Informe o nome completo de quem vai ${delRole === 'sender' ? 'receber' : 'entregar'} o pacote.`
+              }
+            };
+          }
+          if (recipientPhoneDigits.length < 10) {
+            return {
+              status: 400,
+              body: {
+                ok: false,
+                error: 'Informe um telefone/WhatsApp válido com DDD para a entrega.'
+              }
+            };
+          }
+          if (itemDescription.length < 2) {
+            return {
+              status: 400,
+              body: {
+                ok: false,
+                error: 'Descreva o produto ou item que será entregue.'
+              }
+            };
+          }
+        }
+
+        if (recipientName || itemDescription || recipientPhone) {
+          normalizedDelivery = {
+            role: delRole,
+            recipientName,
+            recipientPhone,
+            itemDescription,
+            packageSize,
+            dropoffMode,
+            ...(instructions ? { instructions } : {})
+          };
+        }
+      }
+
+      ride.serviceType = isDeliveryRide ? 'entregas' : 'padrao';
+      ride.deliveryDetails = isDeliveryRide ? normalizedDelivery : null;
+      if (isDeliveryRide) {
+        ride.passengers = 0;
+      }
+
+      const officialFare = !before && !(isAdmin && ride.isManualBooking)
+        ? security.calculateOfficialRidePriceServer({
+            cfg,
+            categoryObj: matchedCat,
+            distanceKm: ride.distanceKm,
+            durationMin: ride.durationMin,
+            origin: ride.origin,
+            destination: ride.destination,
+            timeStr: ride.time,
+            city: ride.city
+          })
+        : null;
+
+      const existingPin = before?.appliedFareSnapshot?.boardingPin || null;
+      let generatedPin = existingPin;
+      let isTeenRideFlag = Boolean(before?.appliedFareSnapshot?.isTeenRide);
+      let guardianClientIdFlag = before?.appliedFareSnapshot?.guardianClientId || null;
+
+      if (!before && !ride.isManualBooking) {
+        let clientSafetyPrefs = normalizeSafetyPreferencesServer({});
+        let isTeenAccount = false;
+        if (ride.clientId) {
+          try {
+            await ensureClientsSchema();
+            const cliPrefRes = await db.query(
+              'SELECT safety_preferences, account_type, guardian_client_id FROM public.clients WHERE id = $1 LIMIT 1',
+              [ride.clientId]
+            );
+            if (cliPrefRes.rows[0]) {
+              clientSafetyPrefs = normalizeSafetyPreferencesServer(
+                cliPrefRes.rows[0].safety_preferences || cliPrefRes.rows[0].safetyPreferences
+              );
+              isTeenAccount =
+                (cliPrefRes.rows[0].account_type || cliPrefRes.rows[0].accountType) === 'teen' ||
+                Boolean(cliPrefRes.rows[0].guardian_client_id || cliPrefRes.rows[0].guardianClientId);
+              guardianClientIdFlag =
+                cliPrefRes.rows[0].guardian_client_id || cliPrefRes.rows[0].guardianClientId || null;
+            }
+          } catch {
+            // mantém fallback seguro
+          }
+        }
+        isTeenRideFlag = isTeenAccount;
+        const shouldUsePin =
+          isDeliveryRide || isTeenAccount || clientSafetyPrefs.familySafetyEnabled || clientSafetyPrefs.boardingPinEnabled !== false;
+        if (shouldUsePin) {
+          generatedPin = clientSafetyPrefs.customBoardingPin && /^\d{4}$/.test(clientSafetyPrefs.customBoardingPin)
+            ? clientSafetyPrefs.customBoardingPin
+            : String(crypto.randomInt(1000, 9999));
+        } else {
+          generatedPin = null;
+        }
+      }
+
+      if (!ride.appliedFareSnapshot && matchedCat) {
+        ride.appliedFareSnapshot = before?.appliedFareSnapshot || {
+          categoryId: matchedCat.id,
+          categoryName: matchedCat.name,
+          categoryType: ride.serviceType,
+          ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
+          baseFare: officialFare ? officialFare.pricing.baseFare : Number(matchedCat.baseFare ?? cfg.baseFare ?? 8.0),
+          pricePerKm: officialFare ? officialFare.pricing.pricePerKm : Number(matchedCat.pricePerKm ?? cfg.pricePerKm ?? 3.2),
+          pricePerMinute: officialFare ? officialFare.pricing.pricePerMinute : Number(matchedCat.pricePerMinute ?? cfg.pricePerMinute ?? 0.5),
+          minimumFare: officialFare ? officialFare.pricing.minimumFare : Number(matchedCat.minimumFare ?? cfg.minimumFare ?? 15.0),
+          multiplier: Number(matchedCat.multiplier ?? 1.0),
+          commissionPercent: effectiveCommPct,
+          commissionFixed: effectiveCommFixed,
+          ...(generatedPin ? { boardingPin: generatedPin } : {}),
+          ...(isTeenRideFlag ? { isTeenRide: true, guardianClientId: guardianClientIdFlag, requireTopRatedDrivers: true } : {})
+        };
+      } else if (ride.appliedFareSnapshot) {
+        ride.appliedFareSnapshot = {
+          ...ride.appliedFareSnapshot,
+          categoryType: ride.serviceType,
+          ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
+          ...(generatedPin && !ride.appliedFareSnapshot.boardingPin ? { boardingPin: generatedPin } : {}),
+          ...(isTeenRideFlag ? { isTeenRide: true, guardianClientId: guardianClientIdFlag, requireTopRatedDrivers: true } : {})
+        };
+      }
+
+      const authoritativeTotal = officialFare
+        ? officialFare.totalPrice
+        : Number(ride.totalPrice || before?.totalPrice || 0);
+      const split = finance.calculateSplit(authoritativeTotal, effectiveCommPct, effectiveCommFixed);
+      ride.estimatedPrice = before ? before.estimatedPrice : split.grossAmount;
+      ride.totalPrice = split.grossAmount;
+      ride.commissionPercent = split.commissionPercent;
+      ride.commissionFixed = split.commissionFixed;
+      ride.commissionAmount = split.commissionAmount;
+      ride.driverNetAmount = split.driverNetAmount;
+      if (ride.appliedFareSnapshot) {
+        ride.appliedFareSnapshot = {
+          ...ride.appliedFareSnapshot,
+          categoryType: ride.serviceType,
+          ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
+          commissionPercent: split.commissionPercent,
+          commissionFixed: split.commissionFixed
+        };
+      }
+
+      // Tratamento na criação de nova corrida conforme o método de pagamento
+      if (!before && !ride.isManualBooking) {
+        if (ride.paymentMethod === 'pix') {
+          // Regra 1: Corrida PIX pré-paga aguarda confirmação do webhook do gateway antes de confirmar!
+          try {
+            const { tx } = await finance.createPixChargeForRide(ride);
+            ride.paymentTxId = tx.id;
+            ride.pixQrCode = tx.pixQrCode;
+            ride.pixCopyPaste = tx.pixCopyPaste;
+            ride.paymentStatus = 'aguardando';
+            ride.status = 'aguardando_pagamento';
+          } catch (pixErr) {
+            return {
+              status: 402,
+              body: {
+                ok: false,
+                error: pixErr?.message || 'Não foi possível gerar o QR Code PIX no gateway.',
+                paymentStatus: 'falhou'
+              }
+            };
+          }
+        } else if (isCardLikeMethod(ride.paymentMethod)) {
+          // Regra 3: Pré-autoriza cartão ou Apple Pay no gateway ao solicitar a corrida
+          const authResult = await finance.authorizeCardForRide(ride, {
+            cardId: ride.cardId,
+            cardLast4: ride.cardLast4,
+            cardBrand: ride.cardBrand,
+            mpCardToken: ride.mpCardToken,
+            stripePaymentIntentId: ride.stripePaymentIntentId
+          });
+          if (authResult.requiresAction) {
+            return {
+              status: 402,
+              body: {
+                ok: false,
+                requiresAction: true,
+                clientSecret: authResult.clientSecret,
+                paymentIntentId: authResult.paymentIntentId,
+                error: authResult.error || 'Confirme a verificação de segurança (3DS) do cartão.',
+                paymentStatus: 'acao_necessaria'
+              }
+            };
+          }
+          if (!authResult.authorized) {
+            return {
+              status: 402,
+              body: {
+                ok: false,
+                error: authResult.error || 'Pagamento recusado pelo emissor do cartão.',
+                paymentStatus: 'falhou'
+              }
+            };
+          }
+          ride.paymentTxId = authResult.tx.id;
+          ride.cardLast4 = authResult.tx.cardLast4;
+          ride.cardBrand = authResult.tx.cardBrand;
+          ride.paymentStatus = 'autorizado';
+          ride.status = 'aguardando_confirmacao';
+        } else {
+          // Regra 2: Dinheiro — vai direto para buscar motorista e é cobrado ao finalizar
+          const tx = await finance.savePaymentTransaction({
+            rideId: ride.id,
+            rideCode: ride.rideCode,
+            clientId: ride.clientId,
+            clientName: ride.clientName,
+            method: 'dinheiro',
+            status: 'aguardando',
+            estimatedAmount: split.grossAmount,
+            finalAmount: split.grossAmount,
+            paidAmount: 0,
+            commissionPercent: split.commissionPercent,
+            commissionAmount: split.commissionAmount,
+            driverNetAmount: split.driverNetAmount,
+            gatewayTxId: `cash_init_${ride.id}_${Date.now()}`
+          });
+          ride.paymentTxId = tx.id;
+          ride.paymentStatus = 'aguardando';
+          ride.status = 'aguardando_confirmacao';
+        }
+      }
+
+      let alsoCancelledRideIds = [];
+      if (!before && !ride.isManualBooking) {
+        alsoCancelledRideIds = await cancelAwaitingPaymentRidesForClient({
+          clientId: ride.clientId,
+          clientPhone: ride.clientPhone,
+          excludeRideId: ride.id,
+          reason: 'Substituída por nova solicitação do passageiro',
+          cancelledBy: 'passenger'
+        });
+      }
+
+      const savedRide = await upsertFullRide(ride);
+
+      // Auto-cadastra cliente se necessário
+      if (savedRide.clientPhone && savedRide.clientName) {
+        const cleanPhone = String(savedRide.clientPhone).trim();
+        const cleanName = String(savedRide.clientName).trim();
+        if (cleanPhone && cleanName) {
+          try {
+            const existingCli = await db.query(
+              'SELECT id FROM public.clients WHERE phone = $1 LIMIT 1',
+              [cleanPhone]
+            );
+            if (existingCli.rows.length === 0) {
+              const newCliId = savedRide.clientId || `cli-${Date.now()}`;
+              await db.query(`
+                INSERT INTO public.clients (id, name, phone, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (id) DO NOTHING
+              `, [newCliId, cleanName, cleanPhone]);
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      const [enrichedSavedRide] = await attachClientRatingsToRides([savedRide]);
+      await push.handleRideChange(before, enrichedSavedRide);
+      realtimeHub.publish(
+        before ? 'ride:updated' : 'ride:created',
+        { rideId: enrichedSavedRide.id, status: enrichedSavedRide.status },
+        { rideId: enrichedSavedRide.id, clientId: enrichedSavedRide.clientId, driverId: enrichedSavedRide.driverId }
+      );
+      const viewerRide = security.sanitizeRideForViewer(enrichedSavedRide, {
+        isAdmin,
+        isOwnerClient: Boolean(clientSession && enrichedSavedRide.clientId === clientSession.sub),
+        isDriver: Boolean(driverSession && enrichedSavedRide.driverId === driverSession.sub)
+      });
+      return { status: 200, body: { ok: true, ride: viewerRide, alsoCancelledRideIds } };
+    };
+
     if (pathname === '/api/rides') {
       if (method === 'GET') {
         const isAdmin = await isAuthorizedAdmin(req);
@@ -3702,392 +4120,8 @@ async function handleApiRequest(req, res) {
         const isAdmin = await isAuthorizedAdmin(req);
         const driverSession = verifyDriverToken(req);
         const clientSession = verifyClientToken(req);
-        if (!isAdmin && !driverSession && !clientSession) {
-          return sendJson(res, 401, { ok: false, error: 'Faça login para solicitar ou gerenciar corridas.' });
-        }
-        const cfg = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
-        const commPct = Number(cfg.platformCommissionPercent ?? 20);
-
-        if (ride.id) {
-          ride.id = normalizeRideId(ride.id);
-        }
-
-        const prevRes = ride.id
-          ? await db.query('SELECT * FROM public.rides WHERE id = $1', [ride.id])
-          : { rows: [] };
-        const before = prevRes.rows[0] ? formatRideFromDb(prevRes.rows[0]) : null;
-
-        if (!before) {
-          if (!isAdmin && !clientSession?.sub) {
-            return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para solicitar uma corrida.' });
-          }
-          if (!isAdmin && clientSession?.sub) {
-            ride.clientId = clientSession.sub;
-            ride.isManualBooking = false;
-          }
-        } else {
-          const isOwnerClient = Boolean(clientSession && clientSession.sub && clientSession.sub === before.clientId);
-          const isAssignedDriver = Boolean(driverSession && driverSession.sub && driverSession.sub === before.driverId);
-          if (!isAdmin && !isOwnerClient && !isAssignedDriver) {
-            return sendJson(res, 401, { ok: false, error: 'Sem permissão para alterar esta corrida.' });
-          }
-          if (!isAdmin) {
-            // Impede alteração arbitrária de preço ou vínculo financeiro por não-admins em corridas existentes
-            ride.totalPrice = before.totalPrice;
-            ride.driverId = before.driverId;
-            ride.clientId = before.clientId;
-          }
-        }
-
-        if (!before) {
-          const seqRes = await db.query('SELECT COALESCE(MAX(ride_number), 0) + 1 AS next_num FROM public.rides');
-          const nextNum = Number(seqRes.rows[0]?.next_num || 1);
-          const padded = String(nextNum).padStart(3, '0');
-          ride.rideNumber = nextNum;
-          ride.id = `UP-${padded}`;
-          ride.rideCode = `#UP - ${padded}`;
-        } else {
-          ride.rideNumber = before.rideNumber;
-          ride.rideCode = before.rideCode;
-        }
-
-        const now = new Date();
-        if (!ride.date) {
-          ride.date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-        }
-        if (!ride.time) {
-          ride.time = now.toTimeString().slice(0, 5);
-        }
-
-        // Cálculo oficial de comissão e valor líquido do motorista no backend respeitando meio de pagamento, plataforma e categoria
-        const allCats = finance.normalizeCategoriesServer(cfg);
-        const mappedCatId = finance.mapLegacyCategoryIdServer(ride.category || before?.category || 'kavro_go');
-        const matchedCat = allCats.find(c => c.id === ride.category || c.id === mappedCatId) || allCats[0];
-        const reqMethod = ride.paymentMethod || before?.paymentMethod || 'dinheiro';
-        if (!before && !ride.isManualBooking && Array.isArray(cfg.activePaymentMethods) && cfg.activePaymentMethods.length > 0) {
-          const normalizedMethod = reqMethod === 'online' ? 'cartao_credito' : reqMethod;
-          if (!cfg.activePaymentMethods.includes(normalizedMethod)) {
-            return sendJson(res, 400, {
-              ok: false,
-              error: `A forma de pagamento "${normalizedMethod}" está desativada pela plataforma no momento.`
-            });
-          }
-        }
-        const resolvedMethodCommPct = finance.resolveCommissionPercentForRide
-          ? finance.resolveCommissionPercentForRide(cfg, matchedCat, reqMethod)
-          : commPct;
-        const effectiveCommPct = !before
-          ? Number(
-              (isAdmin && ride.commissionPercent !== undefined)
-                ? ride.commissionPercent
-                : (resolvedMethodCommPct ?? commPct)
-            )
-          : Number(
-              (isAdmin && ride.commissionPercent !== undefined)
-                ? ride.commissionPercent
-                : (before?.paymentMethod && before.paymentMethod !== reqMethod
-                    ? resolvedMethodCommPct
-                    : (before?.commissionPercent ?? resolvedMethodCommPct ?? commPct))
-            );
-        const defaultCommFixed = finance.resolveCommissionFixedForRide
-          ? finance.resolveCommissionFixedForRide(cfg, null)
-          : Math.max(0, finance.round2(cfg.platformCommissionFixed ?? 0));
-        const effectiveCommFixed = !before
-          ? Math.max(0, finance.round2((isAdmin && ride.commissionFixed !== undefined) ? ride.commissionFixed : defaultCommFixed))
-          : Math.max(0, finance.round2(
-              (isAdmin && ride.commissionFixed !== undefined)
-                ? ride.commissionFixed
-                : (before?.commissionFixed ?? before?.appliedFareSnapshot?.commissionFixed ?? defaultCommFixed)
-            ));
-
-        ride.category = matchedCat ? matchedCat.id : mappedCatId;
-        ride.categoryName = ride.categoryName || before?.categoryName || matchedCat?.name || 'KAVRO GO';
-        const isDeliveryRide = Boolean(
-          (matchedCat && finance.resolveCategoryTypeServer(matchedCat) === 'entregas') ||
-          finance.resolveCategoryTypeServer(ride.category) === 'entregas' ||
-          before?.serviceType === 'entregas'
-        );
-        const rawDelivery = (ride.deliveryDetails && typeof ride.deliveryDetails === 'object')
-          ? ride.deliveryDetails
-          : (before?.deliveryDetails && typeof before.deliveryDetails === 'object' ? before.deliveryDetails : null);
-
-        let normalizedDelivery = before?.deliveryDetails || null;
-        if (isDeliveryRide) {
-          const delRole = rawDelivery?.role === 'receiver' ? 'receiver' : 'sender';
-          const recipientName = String(rawDelivery?.recipientName || '').trim().slice(0, 120);
-          const recipientPhone = String(rawDelivery?.recipientPhone || '').trim().slice(0, 32);
-          const recipientPhoneDigits = recipientPhone.replace(/\D/g, '');
-          const itemDescription = String(rawDelivery?.itemDescription || '').trim().slice(0, 200);
-          const packageSize = ['pequeno', 'medio', 'grande'].includes(rawDelivery?.packageSize)
-            ? rawDelivery.packageSize
-            : 'pequeno';
-          const dropoffMode = ['porta_mao', 'portaria', 'recepcao'].includes(rawDelivery?.dropoffMode)
-            ? rawDelivery.dropoffMode
-            : 'porta_mao';
-          const instructions = String(rawDelivery?.instructions || '').trim().slice(0, 260);
-
-          if (!before && !ride.isManualBooking) {
-            if (recipientName.length < 2) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: `Informe o nome completo de quem vai ${delRole === 'sender' ? 'receber' : 'entregar'} o pacote.`
-              });
-            }
-            if (recipientPhoneDigits.length < 10) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: 'Informe um telefone/WhatsApp válido com DDD para a entrega.'
-              });
-            }
-            if (itemDescription.length < 2) {
-              return sendJson(res, 400, {
-                ok: false,
-                error: 'Descreva o produto ou item que será entregue.'
-              });
-            }
-          }
-
-          if (recipientName || itemDescription || recipientPhone) {
-            normalizedDelivery = {
-              role: delRole,
-              recipientName,
-              recipientPhone,
-              itemDescription,
-              packageSize,
-              dropoffMode,
-              ...(instructions ? { instructions } : {})
-            };
-          }
-        }
-
-        ride.serviceType = isDeliveryRide ? 'entregas' : 'padrao';
-        ride.deliveryDetails = isDeliveryRide ? normalizedDelivery : null;
-        if (isDeliveryRide) {
-          ride.passengers = 0;
-        }
-
-        const officialFare = !before && !(isAdmin && ride.isManualBooking)
-          ? security.calculateOfficialRidePriceServer({
-              cfg,
-              categoryObj: matchedCat,
-              distanceKm: ride.distanceKm,
-              durationMin: ride.durationMin,
-              origin: ride.origin,
-              destination: ride.destination,
-              timeStr: ride.time,
-              city: ride.city
-            })
-          : null;
-
-        const existingPin = before?.appliedFareSnapshot?.boardingPin || null;
-        let generatedPin = existingPin;
-        let isTeenRideFlag = Boolean(before?.appliedFareSnapshot?.isTeenRide);
-        let guardianClientIdFlag = before?.appliedFareSnapshot?.guardianClientId || null;
-
-        if (!before && !ride.isManualBooking) {
-          let clientSafetyPrefs = normalizeSafetyPreferencesServer({});
-          let isTeenAccount = false;
-          if (ride.clientId) {
-            try {
-              await ensureClientsSchema();
-              const cliPrefRes = await db.query(
-                'SELECT safety_preferences, account_type, guardian_client_id FROM public.clients WHERE id = $1 LIMIT 1',
-                [ride.clientId]
-              );
-              if (cliPrefRes.rows[0]) {
-                clientSafetyPrefs = normalizeSafetyPreferencesServer(
-                  cliPrefRes.rows[0].safety_preferences || cliPrefRes.rows[0].safetyPreferences
-                );
-                isTeenAccount =
-                  (cliPrefRes.rows[0].account_type || cliPrefRes.rows[0].accountType) === 'teen' ||
-                  Boolean(cliPrefRes.rows[0].guardian_client_id || cliPrefRes.rows[0].guardianClientId);
-                guardianClientIdFlag =
-                  cliPrefRes.rows[0].guardian_client_id || cliPrefRes.rows[0].guardianClientId || null;
-              }
-            } catch {
-              // mantém fallback seguro
-            }
-          }
-          isTeenRideFlag = isTeenAccount;
-          const shouldUsePin =
-            isDeliveryRide || isTeenAccount || clientSafetyPrefs.familySafetyEnabled || clientSafetyPrefs.boardingPinEnabled !== false;
-          if (shouldUsePin) {
-            generatedPin = clientSafetyPrefs.customBoardingPin && /^\d{4}$/.test(clientSafetyPrefs.customBoardingPin)
-              ? clientSafetyPrefs.customBoardingPin
-              : String(crypto.randomInt(1000, 9999));
-          } else {
-            generatedPin = null;
-          }
-        }
-
-        if (!ride.appliedFareSnapshot && matchedCat) {
-          ride.appliedFareSnapshot = before?.appliedFareSnapshot || {
-            categoryId: matchedCat.id,
-            categoryName: matchedCat.name,
-            categoryType: ride.serviceType,
-            ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
-            baseFare: officialFare ? officialFare.pricing.baseFare : Number(matchedCat.baseFare ?? cfg.baseFare ?? 8.0),
-            pricePerKm: officialFare ? officialFare.pricing.pricePerKm : Number(matchedCat.pricePerKm ?? cfg.pricePerKm ?? 3.2),
-            pricePerMinute: officialFare ? officialFare.pricing.pricePerMinute : Number(matchedCat.pricePerMinute ?? cfg.pricePerMinute ?? 0.5),
-            minimumFare: officialFare ? officialFare.pricing.minimumFare : Number(matchedCat.minimumFare ?? cfg.minimumFare ?? 15.0),
-            multiplier: Number(matchedCat.multiplier ?? 1.0),
-            commissionPercent: effectiveCommPct,
-            commissionFixed: effectiveCommFixed,
-            ...(generatedPin ? { boardingPin: generatedPin } : {}),
-            ...(isTeenRideFlag ? { isTeenRide: true, guardianClientId: guardianClientIdFlag, requireTopRatedDrivers: true } : {})
-          };
-        } else if (ride.appliedFareSnapshot) {
-          ride.appliedFareSnapshot = {
-            ...ride.appliedFareSnapshot,
-            categoryType: ride.serviceType,
-            ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
-            ...(generatedPin && !ride.appliedFareSnapshot.boardingPin ? { boardingPin: generatedPin } : {}),
-            ...(isTeenRideFlag ? { isTeenRide: true, guardianClientId: guardianClientIdFlag, requireTopRatedDrivers: true } : {})
-          };
-        }
-
-        const authoritativeTotal = officialFare
-          ? officialFare.totalPrice
-          : Number(ride.totalPrice || before?.totalPrice || 0);
-        const split = finance.calculateSplit(authoritativeTotal, effectiveCommPct, effectiveCommFixed);
-        ride.estimatedPrice = before ? before.estimatedPrice : split.grossAmount;
-        ride.totalPrice = split.grossAmount;
-        ride.commissionPercent = split.commissionPercent;
-        ride.commissionFixed = split.commissionFixed;
-        ride.commissionAmount = split.commissionAmount;
-        ride.driverNetAmount = split.driverNetAmount;
-        if (ride.appliedFareSnapshot) {
-          ride.appliedFareSnapshot = {
-            ...ride.appliedFareSnapshot,
-            categoryType: ride.serviceType,
-            ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
-            commissionPercent: split.commissionPercent,
-            commissionFixed: split.commissionFixed
-          };
-        }
-
-        // Tratamento na criação de nova corrida conforme o método de pagamento
-        if (!before && !ride.isManualBooking) {
-          if (ride.paymentMethod === 'pix') {
-            // Regra 1: Corrida PIX pré-paga aguarda confirmação do webhook do gateway antes de confirmar!
-            try {
-              const { tx } = await finance.createPixChargeForRide(ride);
-              ride.paymentTxId = tx.id;
-              ride.pixQrCode = tx.pixQrCode;
-              ride.pixCopyPaste = tx.pixCopyPaste;
-              ride.paymentStatus = 'aguardando';
-              ride.status = 'aguardando_pagamento';
-            } catch (pixErr) {
-              return sendJson(res, 402, {
-                ok: false,
-                error: pixErr?.message || 'Não foi possível gerar o QR Code PIX no gateway.',
-                paymentStatus: 'falhou'
-              });
-            }
-          } else if (ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') {
-            // Regra 3: Pré-autoriza cartão no gateway ao solicitar a corrida
-            const authResult = await finance.authorizeCardForRide(ride, {
-              cardId: ride.cardId,
-              cardLast4: ride.cardLast4,
-              cardBrand: ride.cardBrand,
-              mpCardToken: ride.mpCardToken,
-              stripePaymentIntentId: ride.stripePaymentIntentId
-            });
-            if (authResult.requiresAction) {
-              return sendJson(res, 402, {
-                ok: false,
-                requiresAction: true,
-                clientSecret: authResult.clientSecret,
-                paymentIntentId: authResult.paymentIntentId,
-                error: authResult.error || 'Confirme a verificação de segurança (3DS) do cartão.',
-                paymentStatus: 'acao_necessaria'
-              });
-            }
-            if (!authResult.authorized) {
-              return sendJson(res, 402, {
-                ok: false,
-                error: authResult.error || 'Pagamento recusado pelo emissor do cartão.',
-                paymentStatus: 'falhou'
-              });
-            }
-            ride.paymentTxId = authResult.tx.id;
-            ride.cardLast4 = authResult.tx.cardLast4;
-            ride.cardBrand = authResult.tx.cardBrand;
-            ride.paymentStatus = 'autorizado';
-            ride.status = 'aguardando_confirmacao';
-          } else {
-            // Regra 2: Dinheiro — vai direto para buscar motorista e é cobrado ao finalizar
-            const tx = await finance.savePaymentTransaction({
-              rideId: ride.id,
-              rideCode: ride.rideCode,
-              clientId: ride.clientId,
-              clientName: ride.clientName,
-              method: 'dinheiro',
-              status: 'aguardando',
-              estimatedAmount: split.grossAmount,
-              finalAmount: split.grossAmount,
-              paidAmount: 0,
-              commissionPercent: split.commissionPercent,
-              commissionAmount: split.commissionAmount,
-              driverNetAmount: split.driverNetAmount,
-              gatewayTxId: `cash_init_${ride.id}_${Date.now()}`
-            });
-            ride.paymentTxId = tx.id;
-            ride.paymentStatus = 'aguardando';
-            ride.status = 'aguardando_confirmacao';
-          }
-        }
-
-        let alsoCancelledRideIds = [];
-        if (!before && !ride.isManualBooking) {
-          alsoCancelledRideIds = await cancelAwaitingPaymentRidesForClient({
-            clientId: ride.clientId,
-            clientPhone: ride.clientPhone,
-            excludeRideId: ride.id,
-            reason: 'Substituída por nova solicitação do passageiro',
-            cancelledBy: 'passenger'
-          });
-        }
-
-        const savedRide = await upsertFullRide(ride);
-
-        // Auto-cadastra cliente se necessário
-        if (savedRide.clientPhone && savedRide.clientName) {
-          const cleanPhone = String(savedRide.clientPhone).trim();
-          const cleanName = String(savedRide.clientName).trim();
-          if (cleanPhone && cleanName) {
-            try {
-              const existingCli = await db.query(
-                'SELECT id FROM public.clients WHERE phone = $1 LIMIT 1',
-                [cleanPhone]
-              );
-              if (existingCli.rows.length === 0) {
-                const newCliId = savedRide.clientId || `cli-${Date.now()}`;
-                await db.query(`
-                  INSERT INTO public.clients (id, name, phone, created_at)
-                  VALUES ($1, $2, $3, NOW())
-                  ON CONFLICT (id) DO NOTHING
-                `, [newCliId, cleanName, cleanPhone]);
-              }
-            } catch {
-              // ignore
-            }
-          }
-        }
-
-        const [enrichedSavedRide] = await attachClientRatingsToRides([savedRide]);
-        await push.handleRideChange(before, enrichedSavedRide);
-        realtimeHub.publish(
-          before ? 'ride:updated' : 'ride:created',
-          { rideId: enrichedSavedRide.id, status: enrichedSavedRide.status },
-          { rideId: enrichedSavedRide.id, clientId: enrichedSavedRide.clientId, driverId: enrichedSavedRide.driverId }
-        );
-        const viewerRide = security.sanitizeRideForViewer(enrichedSavedRide, {
-          isAdmin,
-          isOwnerClient: Boolean(clientSession && enrichedSavedRide.clientId === clientSession.sub),
-          isDriver: Boolean(driverSession && enrichedSavedRide.driverId === driverSession.sub)
-        });
-        return sendJson(res, 200, { ok: true, ride: viewerRide, alsoCancelledRideIds });
+        const result = await executeRideSave({ ride, isAdmin, driverSession, clientSession });
+        return sendJson(res, result.status, result.body);
       }
     }
 
@@ -4251,7 +4285,7 @@ async function handleApiRequest(req, res) {
         }
         if (
           tipVal > 0 &&
-          (ride.paymentMethod === 'pix' || ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') &&
+          (ride.paymentMethod === 'pix' || isCardLikeMethod(ride.paymentMethod)) &&
           ride.paymentStatus !== 'confirmado' &&
           ride.paymentStatus !== 'pago' &&
           !isAdmin
@@ -4430,8 +4464,8 @@ async function handleApiRequest(req, res) {
         );
         newPaymentStatus = cashRes.paymentStatus;
         paidAmount = cashRes.paidAmount;
-      } else if (ride.paymentMethod === 'cartao_credito' || ride.paymentMethod === 'cartao_debito') {
-        // Captura o pagamento autorizado no cartão (Mercado Pago ou Sandbox) e lança no Livro-Razão
+      } else if (isCardLikeMethod(ride.paymentMethod)) {
+        // Captura o pagamento autorizado no cartão ou Apple Pay (Stripe / Mercado Pago / Sandbox) e lança no Livro-Razão
         const capRes = await finance.captureCardForRide(ride, finalPrice);
         if (!capRes.captured) {
           return sendJson(res, 402, {
@@ -4982,7 +5016,7 @@ async function handleApiRequest(req, res) {
             });
           }
         }
-      } else if (before.paymentMethod === 'cartao_credito' || before.paymentMethod === 'cartao_debito') {
+      } else if (isCardLikeMethod(before.paymentMethod)) {
         const authorizedMax = finance.round2(tx?.estimatedAmount || before.estimatedPrice || before.totalPrice || 0);
         const isRealStripeHold = Boolean(tx && String(tx.gatewayTxId || '').startsWith('pi_'));
         if (split.grossAmount > authorizedMax + 0.01 && isRealStripeHold) {
@@ -6056,6 +6090,130 @@ async function handleApiRequest(req, res) {
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao iniciar pagamento via Apple Pay / Carteira.' });
       }
+    }
+
+    if (pathname === '/api/payments/stripe/checkout-session' && method === 'POST') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para pagar com Apple Pay.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor.' });
+      }
+      await ensureClientsSchema();
+      const body = await parseBody(req);
+      const cfg = (await getCachedSystemConfig()) || {};
+      const allCats = finance.normalizeCategoriesServer(cfg);
+      const mappedCatId = finance.mapLegacyCategoryIdServer(body.category || 'kavro_go');
+      const matchedCat = allCats.find(c => c.id === body.category || c.id === mappedCatId) || allCats[0];
+      const officialFare = security.calculateOfficialRidePriceServer({
+        cfg,
+        categoryObj: matchedCat,
+        distanceKm: body.distanceKm,
+        durationMin: body.durationMin,
+        origin: body.origin,
+        destination: body.destination,
+        timeStr: body.time,
+        city: body.city
+      });
+
+      const targetClientId = isAdmin ? String(body.clientId || clientSession?.sub || '').trim() : clientSession.sub;
+      let clientRow = null;
+      if (targetClientId) {
+        const cRes = await db.query('SELECT id, name, phone, email FROM public.clients WHERE id = $1 LIMIT 1', [targetClientId]);
+        clientRow = cRes.rows[0] || null;
+      }
+
+      const originHeader = String(req.headers.origin || '').trim();
+      const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const protoHeader = String(req.headers['x-forwarded-proto'] || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
+      const fallbackOrigin = hostHeader ? `${protoHeader}://${hostHeader}` : 'https://kavrodrive.vercel.app';
+      const returnBaseOrigin = originHeader || fallbackOrigin;
+
+      const destLabel = body.destination?.address || 'Corrida Kavro Drive';
+      try {
+        const sessionData = await stripeGateway.createWalletCheckoutSession({
+          amountBrl: officialFare.totalPrice,
+          rideTitle: `Kavro Drive • ${matchedCat?.name || 'Padrão'}`,
+          rideDescription: `Destino: ${destLabel}`,
+          originUrl: returnBaseOrigin,
+          clientId: targetClientId,
+          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
+          clientEmail: clientRow?.email || body.clientEmail || clientSession?.email || '',
+          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro',
+          categoryId: matchedCat?.id || mappedCatId
+        });
+        await finance.saveStripeCheckoutDraft(sessionData.sessionId, targetClientId, {
+          ...body,
+          clientId: targetClientId,
+          clientName: clientRow?.name || body.clientName || 'Passageiro Kavro',
+          clientPhone: clientRow?.phone || body.clientPhone || clientSession?.phone || '',
+          paymentMethod: body.paymentMethod === 'cartao_credito' ? 'cartao_credito' : 'apple_pay'
+        });
+        return sendJson(res, 200, { ok: true, ...sessionData });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao abrir checkout seguro Stripe / Apple Pay.' });
+      }
+    }
+
+    if (pathname === '/api/payments/stripe/checkout-complete' && method === 'POST') {
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      if (!isAdmin && !clientSession) {
+        return sendJson(res, 401, { ok: false, error: 'Faça login como passageiro para concluir sua corrida.' });
+      }
+      if (!stripeGateway.isStripeEnabled()) {
+        return sendJson(res, 400, { ok: false, error: 'Gateway Stripe não está configurada no servidor.' });
+      }
+      const body = await parseBody(req);
+      const sessionId = String(body.sessionId || '').trim();
+      if (!sessionId) {
+        return sendJson(res, 400, { ok: false, error: 'sessionId Stripe ausente.' });
+      }
+
+      const draft = await finance.getStripeCheckoutDraft(sessionId);
+      if (!draft) {
+        return sendJson(res, 404, { ok: false, error: 'Sessão de checkout não encontrada.' });
+      }
+      if (!isAdmin && draft.clientId && clientSession?.sub && draft.clientId !== clientSession.sub) {
+        return sendJson(res, 403, { ok: false, error: 'Esta sessão de pagamento pertence a outro passageiro.' });
+      }
+
+      if (draft.createdRideId) {
+        const prevRideRes = await db.query('SELECT * FROM public.rides WHERE id = $1 LIMIT 1', [draft.createdRideId]);
+        if (prevRideRes.rows[0]) {
+          const [formatted] = await attachClientRatingsToRides([formatRideFromDb(prevRideRes.rows[0])]);
+          return sendJson(res, 200, {
+            ok: true,
+            idempotent: true,
+            ride: security.sanitizeRideForViewer(formatted, { isAdmin, isOwnerClient: true })
+          });
+        }
+      }
+
+      const sessionCheck = await stripeGateway.retrieveWalletCheckoutSession(sessionId);
+      if (!sessionCheck.authorized || !sessionCheck.paymentIntentId) {
+        return sendJson(res, 402, { ok: false, error: 'Pagamento no checkout Stripe ainda não foi autorizado.' });
+      }
+
+      const ridePayload = {
+        ...(draft.payload || {}),
+        paymentMethod: draft.payload?.paymentMethod || 'apple_pay',
+        cardBrand: sessionCheck.cardBrand || 'Apple Pay',
+        cardLast4: sessionCheck.cardLast4,
+        stripePaymentIntentId: sessionCheck.paymentIntentId
+      };
+      const result = await executeRideSave({
+        ride: ridePayload,
+        isAdmin,
+        driverSession: null,
+        clientSession
+      });
+      if (result.status === 200 && result.body?.ride?.id) {
+        await finance.markStripeCheckoutDraftRideId(sessionId, result.body.ride.id);
+      }
+      return sendJson(res, result.status, result.body);
     }
 
     if (pathname === '/api/payments/pix/create' && method === 'POST') {

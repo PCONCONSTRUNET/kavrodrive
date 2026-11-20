@@ -1502,6 +1502,7 @@ test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual captur
   process.env.STRIPE_WEBHOOK_SECRET = webhookSecret;
 
   const piStore = new Map();
+  const csStore = new Map();
   const capturedCalls = [];
   const canceledCalls = [];
   let seq = 1;
@@ -1510,6 +1511,48 @@ test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual captur
   stripeGateway._setStripeClientFactoryForTest(() => ({
     customers: {
       create: async (params) => ({ id: `cus_test_${seq++}`, ...params })
+    },
+    checkout: {
+      sessions: {
+        create: async (params) => {
+          const sid = `cs_test_${seq++}`;
+          const unitAmount = params.line_items?.[0]?.price_data?.unit_amount || 0;
+          const piId = `pi_cs_${seq++}`;
+          const pi = {
+            id: piId,
+            client_secret: `${piId}_secret_test`,
+            amount: unitAmount,
+            amount_capturable: unitAmount,
+            amount_received: 0,
+            currency: 'brl',
+            status: 'requires_capture',
+            metadata: params.payment_intent_data?.metadata || {},
+            latest_charge: {
+              id: `ch_cs_${seq}`,
+              payment_method_details: {
+                card: {
+                  brand: 'visa',
+                  last4: '8888',
+                  wallet: { type: 'apple_pay' }
+                }
+              }
+            }
+          };
+          piStore.set(piId, pi);
+          const session = {
+            id: sid,
+            url: `https://checkout.stripe.test/pay/${sid}`,
+            status: 'complete',
+            payment_status: 'paid',
+            amount_total: unitAmount,
+            payment_intent: pi,
+            metadata: params.metadata || {}
+          };
+          csStore.set(sid, session);
+          return session;
+        },
+        retrieve: async (id) => csStore.get(id)
+      }
     },
     setupIntents: {
       create: async (params) => ({
@@ -1922,6 +1965,48 @@ test('Gateway Stripe completo: SetupIntent cartao, pre-autorizacao manual captur
       }
     });
     assert.equal(underpaidWalletRide.status, 402);
+
+    // 9) Apple Pay Checkout Session (Hosted fallback) cria corrida apple_pay idempotente
+    const csRes = await apiJson('/api/payments/stripe/checkout-session', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Cliente Apple Pay',
+        clientPhone: '(48) 99988-7766',
+        origin: { address: 'Origem Apple, 10', lat: -27.59, lng: -48.54 },
+        destination: { address: 'Destino Apple, 90', lat: -27.61, lng: -48.51 },
+        distanceKm: 10,
+        durationMin: 15,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'apple_pay'
+      }
+    });
+    assert.equal(csRes.status, 200);
+    assert.ok(csRes.json.sessionId);
+    assert.ok(csRes.json.checkoutUrl);
+
+    const csDoneRes = await apiJson('/api/payments/stripe/checkout-complete', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { sessionId: csRes.json.sessionId }
+    });
+    assert.equal(csDoneRes.status, 200);
+    assert.equal(csDoneRes.json.ride.paymentMethod, 'apple_pay');
+    assert.equal(csDoneRes.json.ride.paymentStatus, 'autorizado');
+    assert.equal(csDoneRes.json.ride.cardBrand, 'Apple Pay');
+    assert.equal(csDoneRes.json.ride.cardLast4, '8888');
+
+    // Repetir checkout-complete para a mesma sessão retorna a mesma corrida de forma idempotente
+    const csDoneAgain = await apiJson('/api/payments/stripe/checkout-complete', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { sessionId: csRes.json.sessionId }
+    });
+    assert.equal(csDoneAgain.status, 200);
+    assert.equal(csDoneAgain.json.idempotent, true);
+    assert.equal(csDoneAgain.json.ride.id, csDoneRes.json.ride.id);
   } finally {
     stripeGateway._setStripeClientFactoryForTest(null);
     if (prevSecret === undefined) delete process.env.STRIPE_SECRET_KEY; else process.env.STRIPE_SECRET_KEY = prevSecret;

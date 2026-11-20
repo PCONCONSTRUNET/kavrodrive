@@ -370,6 +370,119 @@ async function createWalletHoldIntent({
   };
 }
 
+async function createWalletCheckoutSession({
+  amountBrl,
+  rideTitle = 'Corrida Kavro Drive',
+  rideDescription = '',
+  originUrl = 'https://kavrodrive.vercel.app',
+  clientId = '',
+  clientPhone = '',
+  clientEmail = '',
+  clientName = '',
+  categoryId = ''
+}) {
+  const stripe = getStripeClient();
+  const amountCents = toBrlCents(amountBrl);
+  const customerId = await ensureCustomer({ clientId, clientPhone, clientEmail, clientName });
+
+  let baseOrigin = 'https://kavrodrive.vercel.app';
+  try {
+    const parsed = new URL(String(originUrl || '').trim());
+    if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+      baseOrigin = parsed.origin;
+    }
+  } catch {
+    baseOrigin = 'https://kavrodrive.vercel.app';
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    payment_method_types: ['card'],
+    locale: 'pt-BR',
+    customer: customerId,
+    line_items: [
+      {
+        quantity: 1,
+        price_data: {
+          currency: 'brl',
+          unit_amount: amountCents,
+          product_data: {
+            name: String(rideTitle || 'Corrida Kavro Drive').slice(0, 120),
+            ...(rideDescription ? { description: String(rideDescription).slice(0, 200) } : {})
+          }
+        }
+      }
+    ],
+    payment_intent_data: {
+      capture_method: 'manual',
+      description: String(rideTitle || 'Pré-autorização de corrida Kavro Drive').slice(0, 120),
+      metadata: {
+        purpose: 'ride_wallet_checkout',
+        clientId: String(clientId || ''),
+        categoryId: String(categoryId || '')
+      }
+    },
+    metadata: {
+      purpose: 'ride_wallet_checkout',
+      clientId: String(clientId || ''),
+      categoryId: String(categoryId || ''),
+      amountBrl: String(toBrlFromCents(amountCents))
+    },
+    success_url: `${baseOrigin}/?stripe_checkout_session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${baseOrigin}/?stripe_checkout_canceled=1`
+  });
+
+  return {
+    sessionId: session.id,
+    checkoutUrl: session.url,
+    customerId,
+    amountBrl: toBrlFromCents(amountCents)
+  };
+}
+
+async function retrieveWalletCheckoutSession(sessionId) {
+  const stripe = getStripeClient();
+  const session = await stripe.checkout.sessions.retrieve(String(sessionId || '').trim(), {
+    expand: ['payment_intent', 'payment_intent.latest_charge', 'payment_intent.payment_method']
+  });
+  if (!session) {
+    return { authorized: false, error: 'Sessão Stripe não encontrada.' };
+  }
+  const piObj = session.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
+  const piId = piObj?.id || (typeof session.payment_intent === 'string' ? session.payment_intent : '');
+  const piStatus = piObj?.status || (session.payment_status === 'paid' ? 'succeeded' : '');
+  const ok = Boolean(
+    session.status === 'complete' &&
+    piId &&
+    (piStatus === 'requires_capture' || piStatus === 'succeeded' || session.payment_status === 'paid')
+  );
+  const chargeObj = piObj?.latest_charge && typeof piObj.latest_charge === 'object' ? piObj.latest_charge : null;
+  const chargeCard = chargeObj?.payment_method_details?.card || null;
+  const pmCard = piObj?.payment_method && typeof piObj.payment_method === 'object' ? piObj.payment_method.card : null;
+  const cardInfo = chargeCard || pmCard || {};
+  const walletType = String(cardInfo?.wallet?.type || '').toLowerCase();
+  const cardBrand =
+    walletType === 'apple_pay'
+      ? 'Apple Pay'
+      : walletType === 'google_pay'
+        ? 'Google Pay'
+        : cardInfo?.brand
+          ? normalizeStripeBrand(cardInfo.brand)
+          : 'Apple Pay';
+
+  return {
+    authorized: ok,
+    sessionId: session.id,
+    status: session.status,
+    paymentIntentId: piId,
+    amountBrl: toBrlFromCents(piObj?.amount || session.amount_total || 0),
+    cardBrand,
+    cardLast4: cardInfo?.last4 ? String(cardInfo.last4) : undefined,
+    walletType: walletType || 'apple_pay',
+    metadata: session.metadata || {}
+  };
+}
+
 async function captureCardHold({ paymentIntentId, finalAmountBrl }) {
   const stripe = getStripeClient();
   const pi = await stripe.paymentIntents.retrieve(String(paymentIntentId).trim());
@@ -529,6 +642,8 @@ module.exports = {
   ensureCustomer,
   createCardSetupIntent,
   createWalletHoldIntent,
+  createWalletCheckoutSession,
+  retrieveWalletCheckoutSession,
   resolveSavedCard,
   authorizeCardHold,
   verifyAuthorizedPaymentIntent,

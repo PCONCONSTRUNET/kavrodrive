@@ -72,12 +72,14 @@ function getInitialStore() {
             pix: 20,
             cartao_credito: 20,
             cartao_debito: 20,
+            apple_pay: 20,
             dinheiro: 20
           },
           gatewayFeePercents: {
             pix: 0,
             cartao_credito: 0,
-            cartao_debito: 0
+            cartao_debito: 0,
+            apple_pay: 0
           },
           withdrawalFeePercent: 0,
           withdrawalFeeFixed: 0,
@@ -89,7 +91,7 @@ function getInitialStore() {
           minWithdrawalAmount: 20.0,
           autoSplitPixEnabled: true,
           cardSettlementDays: 0,
-          activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'],
+          activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'dinheiro'],
           serviceCategories: [
             { id: 'standard', name: 'UPX • Particular Padrão', multiplier: 1.0, description: 'Viagens rápidas do dia a dia com ar-condicionado' },
             { id: 'comfort', name: 'Kavro Comfort • Executivo', multiplier: 1.25, description: 'Sedans espaçosos e motoristas mais bem avaliados' },

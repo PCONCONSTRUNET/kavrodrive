@@ -93,13 +93,15 @@ export const RideReceiptModal: React.FC<RideReceiptModalProps> = ({
     ride.paymentStatus === 'parcial';
   const isRefunded = ride.paymentStatus === 'reembolsado';
 
-  const paymentMethodLabel = {
+  const paymentMethodLabelMap: Record<string, string> = {
     pix: 'PIX',
     dinheiro: 'Dinheiro',
     cartao_credito: ride.cardLast4 ? `Cartão •••• ${ride.cardLast4}` : 'Cartão de Crédito',
     cartao_debito: ride.cardLast4 ? `Débito •••• ${ride.cardLast4}` : 'Cartão de Débito',
+    apple_pay: ride.cardLast4 ? `Apple Pay •••• ${ride.cardLast4}` : 'Apple Pay (Stripe)',
     online: 'Pagamento Online',
-  }[ride.paymentMethod] || 'PIX';
+  };
+  const paymentMethodLabel = paymentMethodLabelMap[ride.paymentMethod] || 'PIX';
 
   const tipMatch = String(ride.passengerNotes || '').match(/Gorjeta:\s*R\$\s*([\d.,]+)/i);
   const recordedTipAmount = tipMatch ? parseFloat(tipMatch[1].replace('.', '').replace(',', '.')) || 0 : 0;

@@ -1535,13 +1535,15 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           }
         }
 
-        const paymentLabel = {
+        const paymentLabelMap: Record<string, string> = {
           pix: 'PIX Instantâneo',
           dinheiro: 'Dinheiro em Espécie',
           cartao_credito: 'Cartão de Crédito/Débito',
           cartao_debito: 'Cartão de Débito',
+          apple_pay: 'Apple Pay (Stripe)',
           online: 'Online',
-        }[selectedExpenseDetail.paymentMethod || 'dinheiro'] || 'Dinheiro';
+        };
+        const paymentLabel = paymentLabelMap[selectedExpenseDetail.paymentMethod || 'dinheiro'] || 'Dinheiro';
 
         return (
           <div

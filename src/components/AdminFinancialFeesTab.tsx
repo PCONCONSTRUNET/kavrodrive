@@ -12,6 +12,7 @@ import {
   QrCode,
   RefreshCw,
   ShieldCheck,
+  Smartphone,
   Wallet
 } from 'lucide-react';
 import { PaymentMethod, SystemConfig } from '../types';
@@ -42,7 +43,7 @@ const clampMoney = (raw: string, fallback: number, min = 0): number => {
   return Math.max(min, Math.round(n * 100) / 100);
 };
 
-const ALL_METHODS: PaymentMethod[] = ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'];
+const ALL_METHODS: PaymentMethod[] = ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'dinheiro'];
 
 const calcPlatformFee = (gross: number, pct: number, fixed: number): number => {
   if (gross <= 0) return 0;
@@ -100,6 +101,19 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   const [debitGatewayStr, setDebitGatewayStr] = useState(
     String(config.gatewayFeePercents?.cartao_debito ?? 0)
   );
+  const [applePayGatewayStr, setApplePayGatewayStr] = useState(
+    String(config.gatewayFeePercents?.apple_pay ?? config.gatewayFeePercents?.cartao_credito ?? 0)
+  );
+  const [paymentsStatus, setPaymentsStatus] = useState<{
+    gatewayProvider: 'stripe' | 'mercadopago' | 'sandbox';
+    stripeEnabled: boolean;
+  }>({ gatewayProvider: 'sandbox', stripeEnabled: false });
+
+  useEffect(() => {
+    StorageService.fetchPaymentsConfig()
+      .then((cfg) => setPaymentsStatus({ gatewayProvider: cfg.gatewayProvider, stripeEnabled: cfg.stripeEnabled }))
+      .catch(() => {});
+  }, []);
 
   const [withdrawalFeePercentStr, setWithdrawalFeePercentStr] = useState(
     String(config.withdrawalFeePercent ?? 0)
@@ -117,11 +131,18 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     String(config.cardSettlementDays ?? 0)
   );
 
-  const [activeMethods, setActiveMethods] = useState<PaymentMethod[]>(() =>
-    Array.isArray(config.activePaymentMethods) && config.activePaymentMethods.length > 0
-      ? config.activePaymentMethods
-      : ALL_METHODS
-  );
+  const resolveInitialMethods = (cfg: SystemConfig): PaymentMethod[] => {
+    const base: PaymentMethod[] =
+      Array.isArray(cfg.activePaymentMethods) && cfg.activePaymentMethods.length > 0
+        ? [...cfg.activePaymentMethods]
+        : [...ALL_METHODS];
+    if (!cfg.applePayDisabled && base.includes('cartao_credito') && !base.includes('apple_pay')) {
+      base.push('apple_pay');
+    }
+    return base;
+  };
+
+  const [activeMethods, setActiveMethods] = useState<PaymentMethod[]>(() => resolveInitialMethods(config));
   const [autoBlockDelinquent, setAutoBlockDelinquent] = useState<boolean>(
     config.autoBlockDelinquentDrivers !== false
   );
@@ -138,7 +159,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
   // Simuladores
   const [simRideAmountStr, setSimRideAmountStr] = useState('50');
-  const [simMethod, setSimMethod] = useState<'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro'>('pix');
+  const [simMethod, setSimMethod] = useState<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro'>('pix');
   const [simWithdrawAmountStr, setSimWithdrawAmountStr] = useState('100');
 
   useEffect(() => {
@@ -158,16 +179,13 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setPixGatewayStr(String(config.gatewayFeePercents?.pix ?? 0));
     setCreditGatewayStr(String(config.gatewayFeePercents?.cartao_credito ?? 0));
     setDebitGatewayStr(String(config.gatewayFeePercents?.cartao_debito ?? 0));
+    setApplePayGatewayStr(String(config.gatewayFeePercents?.apple_pay ?? config.gatewayFeePercents?.cartao_credito ?? 0));
     setWithdrawalFeePercentStr(String(config.withdrawalFeePercent ?? 0));
     setWithdrawalFeeFixedStr(String(config.withdrawalFeeFixed ?? 0));
     setMinWithdrawalStr(String(config.minWithdrawalAmount ?? 20));
     setMaxDebtLimitStr(String(config.maxDriverDebtLimit ?? 100));
     setCardSettlementDaysStr(String(config.cardSettlementDays ?? 0));
-    setActiveMethods(
-      Array.isArray(config.activePaymentMethods) && config.activePaymentMethods.length > 0
-        ? config.activePaymentMethods
-        : ALL_METHODS
-    );
+    setActiveMethods(resolveInitialMethods(config));
     setAutoBlockDelinquent(config.autoBlockDelinquentDrivers !== false);
     setCashDeductFirst(config.cashDeductFromBalanceFirst !== false);
     setAutoSplitPix(config.autoSplitPixEnabled !== false);
@@ -205,6 +223,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     const parsedPixGw = clampPct(pixGatewayStr, 0);
     const parsedCreditGw = clampPct(creditGatewayStr, 0);
     const parsedDebitGw = clampPct(debitGatewayStr, 0);
+    const parsedApplePayGw = clampPct(applePayGatewayStr, 0);
 
     const parsedWdPct = clampPct(withdrawalFeePercentStr, 0);
     const parsedWdFixed = clampMoney(withdrawalFeeFixedStr, 0, 0);
@@ -212,6 +231,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     const parsedMaxDebt = clampMoney(maxDebtLimitStr, 100, 0);
     const parsedCardDays = Math.min(60, Math.max(0, parseInt(cardSettlementDaysStr.replace(/\D/g, ''), 10) || 0));
 
+    const finalMethods = activeMethods.length > 0 ? activeMethods : ALL_METHODS;
     const latestConfig = StorageService.getConfig();
     const nextConfig: SystemConfig = {
       ...latestConfig,
@@ -228,12 +248,14 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
         pix: parsedGlobal,
         cartao_credito: parsedGlobal,
         cartao_debito: parsedGlobal,
+        apple_pay: parsedGlobal,
         dinheiro: parsedGlobal
       },
       gatewayFeePercents: {
         pix: parsedPixGw,
         cartao_credito: parsedCreditGw,
-        cartao_debito: parsedDebitGw
+        cartao_debito: parsedDebitGw,
+        apple_pay: parsedApplePayGw
       },
       withdrawalFeePercent: parsedWdPct,
       withdrawalFeeFixed: parsedWdFixed,
@@ -244,7 +266,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       autoBlockDelinquentDrivers: autoBlockDelinquent,
       cashDeductFromBalanceFirst: cashDeductFirst,
       autoSplitPixEnabled: autoSplitPix,
-      activePaymentMethods: activeMethods.length > 0 ? activeMethods : ALL_METHODS
+      applePayDisabled: !finalMethods.includes('apple_pay'),
+      activePaymentMethods: finalMethods
     };
 
     const ok = await StorageService.saveConfig(nextConfig);
@@ -269,6 +292,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setPixGatewayStr(String(parsedPixGw));
     setCreditGatewayStr(String(parsedCreditGw));
     setDebitGatewayStr(String(parsedDebitGw));
+    setApplePayGatewayStr(String(parsedApplePayGw));
     setWithdrawalFeePercentStr(String(parsedWdPct));
     setWithdrawalFeeFixedStr(String(parsedWdFixed));
     setMinWithdrawalStr(String(parsedMinWd));
@@ -302,7 +326,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
   // Prévia de Pagamentos / Gateways / Saques
   const methodRows: Array<{
-    id: 'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro';
+    id: 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro';
     title: string;
     subtitle: string;
     accent: string;
@@ -346,6 +370,17 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       icon: <CreditCard size={16} color="#4338CA" />
     },
     {
+      id: 'apple_pay',
+      title: 'Apple Pay (Stripe)',
+      subtitle: 'Carteira Apple Express & Checkout (pré-autorização manual)',
+      accent: '#0F172A',
+      bgAccent: '#F1F5F9',
+      hasGateway: true,
+      gwStr: applePayGatewayStr,
+      setGwStr: setApplePayGatewayStr,
+      icon: <Smartphone size={16} color="#0F172A" />
+    },
+    {
       id: 'dinheiro',
       title: 'Dinheiro (Em Mãos)',
       subtitle: 'Taxa lançada/abatida do motorista',
@@ -356,10 +391,11 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     }
   ];
 
-  const gwPctMap: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro', number> = {
+  const gwPctMap: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro', number> = {
     pix: clampPct(pixGatewayStr, 0),
     cartao_credito: clampPct(creditGatewayStr, 0),
     cartao_debito: clampPct(debitGatewayStr, 0),
+    apple_pay: clampPct(applePayGatewayStr, 0),
     dinheiro: 0
   };
 
@@ -808,6 +844,70 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       {/* ===================================================================== */}
       {subTab === 'pagamentos' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Status ao vivo do Gateway de Pagamentos (Stripe / Apple Pay / PIX) */}
+          <div
+            style={{
+              background: paymentsStatus.stripeEnabled
+                ? 'linear-gradient(135deg, #0B1117 0%, #15222C 100%)'
+                : '#F8FAFC',
+              color: paymentsStatus.stripeEnabled ? '#FFFFFF' : '#0F172A',
+              borderRadius: 12,
+              border: paymentsStatus.stripeEnabled ? '1px solid #1E293B' : '1px solid #E2E8F0',
+              padding: '14px 18px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 10
+            }}
+          >
+            <div>
+              <div style={{ fontSize: '0.86rem', fontWeight: 800 }}>
+                Gateway Ativo:{' '}
+                {paymentsStatus.stripeEnabled
+                  ? 'Stripe Produção (PIX • Cartão • Apple Pay)'
+                  : paymentsStatus.gatewayProvider === 'mercadopago'
+                    ? 'Mercado Pago'
+                    : 'Modo Sandbox / Manual'}
+              </div>
+              <div style={{ fontSize: '0.73rem', color: paymentsStatus.stripeEnabled ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+                {paymentsStatus.stripeEnabled
+                  ? 'Pré-autorização de cartão, PIX dinâmico com webhook e carteira digital Apple Pay prontos em produção.'
+                  : 'Configure STRIPE_SECRET_KEY / VITE_STRIPE_PUBLISHABLE_KEY no servidor para processar Apple Pay e cartões reais.'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <span
+                style={{
+                  fontSize: '0.7rem',
+                  fontWeight: 800,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  backgroundColor: paymentsStatus.stripeEnabled ? 'rgba(118, 216, 0, 0.16)' : '#E2E8F0',
+                  border: paymentsStatus.stripeEnabled ? '1px solid rgba(118, 216, 0, 0.4)' : '1px solid #CBD5E1',
+                  color: paymentsStatus.stripeEnabled ? '#BEF264' : '#334155'
+                }}
+              >
+                {paymentsStatus.stripeEnabled ? 'Stripe Conectada' : 'Sandbox'}
+              </span>
+              {paymentsStatus.stripeEnabled && activeMethods.includes('apple_pay') && (
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    padding: '4px 10px',
+                    borderRadius: 999,
+                    backgroundColor: '#000000',
+                    border: '1px solid rgba(255, 255, 255, 0.25)',
+                    color: '#FFFFFF'
+                  }}
+                >
+                   Apple Pay Ativo
+                </span>
+              )}
+            </div>
+          </div>
+
           {/* Tabela direta: Meios de Pagamento x Comissão x Taxa do Gateway */}
           <div
             style={{
@@ -1162,12 +1262,13 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     />
                     <select
                       value={simMethod}
-                      onChange={(e) => setSimMethod(e.target.value as 'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro')}
+                      onChange={(e) => setSimMethod(e.target.value as 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'dinheiro')}
                       style={{ height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.74rem', fontWeight: 600 }}
                     >
                       <option value="pix">PIX</option>
                       <option value="cartao_credito">Cartão de Crédito</option>
                       <option value="cartao_debito">Cartão de Débito</option>
+                      <option value="apple_pay">Apple Pay (Stripe)</option>
                       <option value="dinheiro">Dinheiro</option>
                     </select>
                   </div>

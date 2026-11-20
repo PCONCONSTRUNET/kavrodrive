@@ -700,6 +700,42 @@ export const StorageService = {
     }
   },
 
+  async createStripeCheckoutSession(payload: Record<string, unknown>): Promise<{
+    ok: boolean;
+    sessionId?: string;
+    checkoutUrl?: string;
+    amountBrl?: number;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/payments/stripe/checkout-session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao abrir sessão segura Apple Pay / Stripe.' };
+    }
+  },
+
+  async completeStripeCheckoutSession(sessionId: string): Promise<{
+    ok: boolean;
+    ride?: Ride;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/payments/stripe/checkout-complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ sessionId })
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro ao confirmar autorização Stripe da corrida.' };
+    }
+  },
+
   async saveTokenizedCard(payload: {
     clientId?: string;
     clientPhone?: string;

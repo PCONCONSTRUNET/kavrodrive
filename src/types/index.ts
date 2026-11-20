@@ -9,7 +9,7 @@ export type RideStatus =
   | 'finalizada'             // Viagem concluída
   | 'cancelada';             // Cancelada
 
-export type PaymentMethod = 'pix' | 'dinheiro' | 'cartao_credito' | 'cartao_debito' | 'online';
+export type PaymentMethod = 'pix' | 'dinheiro' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'online';
 
 export type PaymentStatus =
   | 'aguardando'
@@ -783,12 +783,14 @@ export interface SystemConfig {
     pix?: number;
     cartao_credito?: number;
     cartao_debito?: number;
+    apple_pay?: number;
     dinheiro?: number;
   };
   gatewayFeePercents?: {
     pix?: number;
     cartao_credito?: number;
     cartao_debito?: number;
+    apple_pay?: number;
   };
   withdrawalFeePercent?: number;        // Taxa % cobrada por saque PIX do motorista (ex: 0%)
   withdrawalFeeFixed?: number;          // Taxa fixa em R$ por saque PIX do motorista (ex: R$ 0,00)
@@ -800,6 +802,7 @@ export interface SystemConfig {
   minWithdrawalAmount?: number;         // Saque mínimo, ex: R$ 20,00
   autoSplitPixEnabled?: boolean;        // Split automático no gateway
   cardSettlementDays?: number;          // Dias para liberação de cartão (0 = imediato no disponível, >0 = saldo pendente)
+  applePayDisabled?: boolean;
   activePaymentMethods: PaymentMethod[];
   rideCategories?: RideCategoryConfig[];
   serviceCategories: Array<{
