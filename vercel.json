@@ -50,7 +50,7 @@
       ]
     },
     {
-      "source": "/admin",
+      "source": "/administracion",
       "headers": [
         { "key": "Set-Cookie", "value": "up_pwa_role=admin; Path=/; Max-Age=31536000; SameSite=Lax" },
         { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }

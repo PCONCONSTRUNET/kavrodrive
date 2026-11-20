@@ -1119,7 +1119,7 @@ export const App: React.FC = () => {
         element={<Navigate to="/kavro-drive" replace />}
       />
 
-      {/* Rotas do Painel Administrativo Master (/administracion) */}
+      {/* Rota exclusiva do Painel Administrativo Master (/administracion) */}
       <Route
         path="/administracion/*"
         element={<DriverRoute rides={rides} config={config} refreshData={refreshData} />}
@@ -1127,22 +1127,6 @@ export const App: React.FC = () => {
       <Route
         path="/administracion"
         element={<DriverRoute rides={rides} config={config} refreshData={refreshData} />}
-      />
-      <Route
-        path="/admin/*"
-        element={<Navigate to="/administracion" replace />}
-      />
-      <Route
-        path="/admin"
-        element={<Navigate to="/administracion" replace />}
-      />
-      <Route
-        path="/painel"
-        element={<Navigate to="/administracion" replace />}
-      />
-      <Route
-        path="/dashboard"
-        element={<Navigate to="/administracion" replace />}
       />
 
       {/* Rota 404 dedicada no tema Kavro Drive */}

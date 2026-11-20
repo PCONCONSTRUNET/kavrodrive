@@ -2057,7 +2057,7 @@ async function handleApiRequest(req, res) {
       const referer = String(req.headers.referer || '');
       const isAdmin =
         roleParam === 'admin' ||
-        /\/(administracion|admin|motora|motorista|painel|dashboard)(\/|\?|$)/i.test(referer);
+        /\/(administracion|motora|motorista)(\/|\?|$)/i.test(referer);
 
       const manifestData = {
         id: isAdmin ? '/motora' : '/cliente',

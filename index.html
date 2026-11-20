@@ -14,7 +14,7 @@
       (function () {
         try {
           var p = window.location.pathname || '/';
-          var isAdminRoute = /^\/(administracion|admin|motora|motorista|painel|dashboard)(\/|$)/i.test(p);
+          var isAdminRoute = /^\/(administracion|motora|motorista)(\/|$)/i.test(p);
           var m = document.getElementById('app-manifest');
           var titleMeta = document.getElementById('apple-app-title');
           if (isAdminRoute) {

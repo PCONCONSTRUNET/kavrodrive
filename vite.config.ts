@@ -27,7 +27,7 @@ function supabaseApiPlugin() {
       })
     },
     closeBundle() {
-      // Gera dist/admin.html com /manifest-admin.json nativo no HTML estático para /motora e /admin
+      // Gera dist/admin.html com /manifest-admin.json nativo no HTML estático para /motora e /administracion
       const distDir = path.resolve(process.cwd(), 'dist')
       const indexHtmlPath = path.join(distDir, 'index.html')
       if (fs.existsSync(indexHtmlPath)) {
