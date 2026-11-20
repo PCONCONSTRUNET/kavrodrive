@@ -2420,35 +2420,40 @@ async function handleApiRequest(req, res) {
       }
     }
 
-    // 2.1 AUDITORIA PÚBLICA MULTI-MOTORISTA (DADOS SANITIZADOS LGPD)
-    if (pathname === '/api/public/audit' && method === 'GET') {
-      const [cfgRes, allDrivers, ridesRes] = await Promise.all([
+    // 2.1 FROTA VERIFICADA PÚBLICA MULTI-MOTORISTA (SOMENTE FROTA — SEM CORRIDAS OU LOCALIZAÇÕES)
+    if (pathname === '/api/public/fleet' && method === 'GET') {
+      const [cfgRes, allDrivers] = await Promise.all([
         db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
-        finance.listDrivers(),
-        db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC')
+        finance.listDrivers()
       ]);
 
       const cfg = sanitizePublicConfig(cfgRes.rows[0]?.config || {}, false) || {};
-      const allFormattedRides = ridesRes.rows.map(formatRideFromDb);
-      const completedRides = allFormattedRides.filter(r => r.status === 'finalizada');
-      const registeredCount = allFormattedRides.filter(r => r.status !== 'cancelada').length;
-
-      const driverStatsMap = new Map();
-      completedRides.forEach((r) => {
-        if (!r.driverId) return;
-        const prev = driverStatsMap.get(r.driverId) || { rides: 0, km: 0, passengers: 0 };
-        prev.rides += 1;
-        prev.km += Number(r.distanceKm) || 0;
-        prev.passengers += Number(r.passengers) || 1;
-        driverStatsMap.set(r.driverId, prev);
-      });
 
       const approvedDrivers = allDrivers
         .filter(d => d.approvalStatus === 'aprovado')
         .map(d => {
-          const st = driverStatsMap.get(d.id) || { rides: 0, km: 0, passengers: 0 };
           const kycOk = Boolean(d.kyc && (d.kyc.status === 'aprovado' || d.kyc.verified));
           const termsOk = Boolean(d.termsSignature && d.termsSignature.acceptedAt);
+          const approvedVehicles = Array.isArray(d.vehicles)
+            ? d.vehicles
+                .filter(v => !v.approvalStatus || v.approvalStatus === 'aprovado')
+                .map(v => ({
+                  id: v.id,
+                  brand: v.brand || '',
+                  model: v.model || '',
+                  version: v.version || '',
+                  color: v.color || '',
+                  year: v.year || '',
+                  plate: v.plate || '',
+                  vehiclePhoto: v.vehiclePhoto || '',
+                  hasFourDoors: v.hasFourDoors !== false,
+                  hasAirConditioning: v.hasAirConditioning !== false,
+                  eligibleCategories: Array.isArray(v.eligibleCategories) ? v.eligibleCategories : [],
+                  enabledCategories: Array.isArray(v.enabledCategories) ? v.enabledCategories : [],
+                  isActive: Boolean(v.isActive),
+                }))
+            : [];
+
           return {
             id: d.id,
             name: d.name || 'Motorista Parceiro',
@@ -2463,6 +2468,7 @@ async function handleApiRequest(req, res) {
             vehiclePlate: d.vehiclePlate || '',
             vehicleCategory: d.vehicleCategory || 'kavro_go',
             vehiclePhoto: d.vehiclePhoto || '',
+            vehicles: approvedVehicles,
             eligibleCategories: Array.isArray(d.eligibleCategories) ? d.eligibleCategories : [],
             enabledCategories: Array.isArray(d.enabledCategories) ? d.enabledCategories : [],
             hasAirConditioning: d.hasAirConditioning !== false,
@@ -2471,53 +2477,15 @@ async function handleApiRequest(req, res) {
             rating: Number(d.rating || 5.0),
             kycVerified: kycOk,
             termsAccepted: termsOk,
-            termsSignatureCode: d.termsSignature?.signatureCode || '',
-            completedRidesCount: Math.max(st.rides, Number(d.totalRides || 0)),
-            auditedRidesCount: st.rides,
-            auditedKm: Number(st.km.toFixed(1)),
-            passengersServed: st.passengers,
             createdAt: d.createdAt,
           };
         });
 
-      const driverById = new Map(approvedDrivers.map(d => [d.id, d]));
-
-      const maskClientName = (fullName) => {
-        const s = String(fullName || '').trim();
-        if (!s) return 'Passageiro Verificado';
-        const parts = s.split(/\s+/);
-        if (parts.length === 1) return `${parts[0].slice(0, 3)}•••`;
-        return `${parts[0]} ${parts[parts.length - 1].charAt(0).toUpperCase()}. •••`;
-      };
-
-      const publicRides = completedRides.slice(0, 200).map((r) => {
-        const drv = r.driverId ? driverById.get(r.driverId) : null;
-        return {
-          id: r.id,
-          rideCode: r.rideCode,
-          date: r.date,
-          time: r.time,
-          originAddress: r.origin?.address || 'Origem registrada',
-          destinationAddress: r.destination?.address || 'Destino registrado',
-          distanceKm: Number(r.distanceKm || 0),
-          passengers: Number(r.passengers || 1),
-          category: r.category,
-          categoryName: r.categoryName || r.category,
-          paymentMethod: r.paymentMethod || 'pix',
-          paymentStatus: r.paymentStatus || 'confirmado',
-          driverId: r.driverId || '',
-          driverName: r.driverName || drv?.name || 'Motorista Verificado',
-          driverVehicle:
-            r.driverVehicle ||
-            [drv?.vehicleBrand, drv?.vehicleModel, drv?.vehicleYear].filter(Boolean).join(' ') ||
-            'Veículo Verificado',
-          driverPlate: r.driverPlate || drv?.vehiclePlate || '',
-          passengerMasked: maskClientName(r.clientName),
-        };
-      });
-
-      const totalKm = completedRides.reduce((acc, r) => acc + (Number(r.distanceKm) || 0), 0);
-      const totalPassengers = completedRides.reduce((acc, r) => acc + (Number(r.passengers) || 1), 0);
+      const totalVehicles = approvedDrivers.reduce(
+        (acc, d) => acc + Math.max(d.vehicles.length, d.vehiclePlate ? 1 : 0),
+        0
+      );
+      const verifiedKycCount = approvedDrivers.filter(d => d.kycVerified).length;
       const avgRating = approvedDrivers.length > 0
         ? Number((approvedDrivers.reduce((acc, d) => acc + (d.rating || 5), 0) / approvedDrivers.length).toFixed(2))
         : 5.0;
@@ -2525,17 +2493,21 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, {
         ok: true,
         summary: {
-          city: cfg.driverCarCity || 'Operação Regional',
+          city: cfg.driverCarCity || 'Santa Catarina',
           totalApprovedDrivers: approvedDrivers.length,
           onlineDrivers: approvedDrivers.filter(d => d.isOnline).length,
-          totalCompletedRides: completedRides.length,
-          totalRegisteredRides: registeredCount,
-          totalKm: Number(totalKm.toFixed(1)),
-          totalPassengers,
+          totalVehicles,
+          verifiedKycCount,
           avgRating,
         },
         drivers: approvedDrivers,
-        rides: publicRides,
+      });
+    }
+
+    if (pathname === '/api/public/audit' && method === 'GET') {
+      return sendJson(res, 410, {
+        ok: false,
+        error: 'A auditoria pública foi removida por privacidade e segurança. Consulte /api/public/fleet.',
       });
     }
 

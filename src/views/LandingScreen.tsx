@@ -647,11 +647,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                       type="button"
                       onClick={() => {
                         setAboutMenuOpen(false);
-                        navigate('/auditoria');
+                        navigate('/frotas');
                       }}
                       style={darkDropdownItemStyle}
                     >
-                      Segurança &amp; Auditoria
+                      Frota Verificada
                     </button>
                     <button
                       type="button"
@@ -2382,8 +2382,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             <div>
               <h4 style={footerColTitleStyle}>Transparência</h4>
               <div style={footerColListStyle}>
-                <button type="button" onClick={() => navigate('/auditoria')} style={footerLinkStyle}>
-                  Auditoria &amp; Segurança
+                <button type="button" onClick={() => navigate('/frotas')} style={footerLinkStyle}>
+                  Frota verificada
                 </button>
                 <button type="button" onClick={() => navigate('/cidades-atendidas')} style={footerLinkStyle}>
                   Cidades atendidas

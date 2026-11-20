@@ -1,13 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import {
-  X, ShieldCheck, CheckCircle2, Phone, MapPin, Calendar,
-  Clock, Car, Award, Search, Share2, Check, User
+  X, ShieldCheck, CheckCircle2, Phone, Car, Share2, Check
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { WhatsAppIcon } from './WhatsAppIcon';
 import { VehiclePhotoPreview } from './VehiclePhotoPreview';
-import { formatPhone, formatRideCode, getCleanWhatsappNumber } from '../utils/format';
+import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
 
 interface DriverPublicAuditModalProps {
   isOpen: boolean;
@@ -17,28 +16,13 @@ interface DriverPublicAuditModalProps {
   isAdminView?: boolean;
 }
 
-// Mascara o sobrenome do passageiro na auditoria pública para proteger a LGPD mantendo a transparência
-function maskClientNameForAudit(fullName: string, isAdminView?: boolean): string {
-  if (!fullName) return 'Passageiro Verificado';
-  if (isAdminView) return fullName;
-  const parts = fullName.trim().split(/\s+/);
-  if (parts.length === 1) {
-    return `${parts[0].slice(0, 3)}•••`;
-  }
-  const first = parts[0];
-  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
-  return `${first} ${lastInitial}. •••`;
-}
-
 export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
   isOpen,
   onClose,
   config,
   rides,
-  isAdminView = false,
 }) => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [copiedAuditLink, setCopiedAuditLink] = useState(false);
+  const [copiedFleetLink, setCopiedFleetLink] = useState(false);
 
   const driverName = config.driverName?.trim() || 'Alisson Santos';
   const driverPhone = config.driverPhone?.trim() || config.companyPhone || '(48) 99691-5303';
@@ -47,33 +31,13 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
   const driverPlate = config.driverPlate?.trim() || '';
   const driverBio =
     config.driverBio?.trim() ||
-    'Motorista particular verificado com agendamento exclusivo, rastreamento ao vivo e histórico de viagens 100% auditado.';
+    'Motorista particular verificado com veículo vistoriado, documentação regular e rastreamento ao vivo durante a corrida.';
 
   const cleanWhatsapp = getCleanWhatsappNumber(driverPhone || config.companyWhatsapp);
 
-  // Corridas finalizadas (auditadas) ordenadas da mais recente para a mais antiga
   const completedRides = useMemo(() => {
-    return rides
-      .filter((r) => r.status === 'finalizada')
-      .sort((a, b) => {
-        const dA = `${a.date}T${a.time || '00:00'}`;
-        const dB = `${b.date}T${b.time || '00:00'}`;
-        return dB.localeCompare(dA);
-      });
+    return rides.filter((r) => r.status === 'finalizada');
   }, [rides]);
-
-  const filteredCompletedRides = useMemo(() => {
-    if (!searchTerm.trim()) return completedRides;
-    const q = searchTerm.toLowerCase();
-    return completedRides.filter(
-      (r) =>
-        r.id.toLowerCase().includes(q) ||
-        r.origin.address.toLowerCase().includes(q) ||
-        r.destination.address.toLowerCase().includes(q) ||
-        r.date.includes(q) ||
-        (isAdminView && r.clientName.toLowerCase().includes(q))
-    );
-  }, [completedRides, searchTerm, isAdminView]);
 
   const totalCompleted = completedRides.length;
   const totalRegistered = rides.filter((r) => r.status !== 'cancelada').length;
@@ -86,20 +50,20 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
     [completedRides]
   );
 
-  const handleShareAudit = () => {
-    const auditUrl = `${window.location.origin}/auditoria`;
+  const handleShareFleet = () => {
+    const fleetUrl = `${window.location.origin}/frotas`;
     if (navigator.share) {
       navigator
         .share({
-          title: `Perfil & Auditoria de Segurança - ${driverName} (Kavro Drive)`,
-          text: `Confira o perfil verificado e o histórico auditado de corridas realizadas por ${driverName} na Kavro Drive.`,
-          url: auditUrl,
+          title: `Perfil & Frota Verificada - ${driverName} (Kavro Drive)`,
+          text: `Confira o perfil verificado e o veículo aprovado de ${driverName} na Kavro Drive.`,
+          url: fleetUrl,
         })
         .catch(() => {});
     } else {
-      navigator.clipboard.writeText(auditUrl);
-      setCopiedAuditLink(true);
-      setTimeout(() => setCopiedAuditLink(false), 2500);
+      navigator.clipboard.writeText(fleetUrl);
+      setCopiedFleetLink(true);
+      setTimeout(() => setCopiedFleetLink(false), 2500);
     }
   };
 
@@ -179,7 +143,7 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
                 Transparência & Segurança
               </div>
               <div style={{ fontSize: '0.88rem', fontWeight: 900 }}>
-                Perfil & Auditoria Pública
+                Perfil & Frota Verificada
               </div>
             </div>
           </div>
@@ -187,14 +151,14 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               type="button"
-              onClick={handleShareAudit}
-              title="Compartilhar Auditoria"
+              onClick={handleShareFleet}
+              title="Compartilhar Frota"
               style={{
                 height: 28,
                 padding: '0 9px',
                 borderRadius: 999,
-                backgroundColor: copiedAuditLink ? '#76D800' : 'rgba(255,255,255,0.1)',
-                color: copiedAuditLink ? '#121A21' : '#FFFFFF',
+                backgroundColor: copiedFleetLink ? '#76D800' : 'rgba(255,255,255,0.1)',
+                color: copiedFleetLink ? '#121A21' : '#FFFFFF',
                 border: 'none',
                 fontSize: '0.68rem',
                 fontWeight: 800,
@@ -204,8 +168,8 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
                 cursor: 'pointer',
               }}
             >
-              {copiedAuditLink ? <Check size={12} /> : <Share2 size={12} />}
-              <span>{copiedAuditLink ? 'Copiado!' : 'Compartilhar'}</span>
+              {copiedFleetLink ? <Check size={12} /> : <Share2 size={12} />}
+              <span>{copiedFleetLink ? 'Copiado!' : 'Compartilhar'}</span>
             </button>
 
             <button
@@ -391,7 +355,7 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
             {/* Botões de Contato Direto com o Motorista */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
               <a
-                href={`https://wa.me/${cleanWhatsapp}?text=Ol%C3%A1%20${encodeURIComponent(driverName)},%20vi%20seu%20perfil%20verificado%20na%20UP%20Mobilidade!`}
+                href={`https://wa.me/${cleanWhatsapp}?text=Ol%C3%A1%20${encodeURIComponent(driverName)},%20vi%20seu%20perfil%20verificado%20na%20Kavro%20Drive!`}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
@@ -459,7 +423,7 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
             />
           </div>
 
-          {/* CARD 2: MÉTRICAS AUDITADAS DE SEGURANÇA & EXPERIÊNCIA */}
+          {/* CARD 2: MÉTRICAS DE EXPERIÊNCIA (SEM EXPOSIÇÃO DE ROTAS/LOCALIZAÇÕES) */}
           <div
             style={{
               display: 'grid',
@@ -483,7 +447,7 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
               <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#76D800', marginTop: 1 }}>
                 {totalCompleted}
               </div>
-              <div style={{ fontSize: '0.55rem', color: '#CBD5E1' }}>Auditadas</div>
+              <div style={{ fontSize: '0.55rem', color: '#CBD5E1' }}>Concluídas</div>
             </div>
 
             <div
@@ -519,7 +483,7 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
               <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#0F172A', marginTop: 1 }}>
                 {totalKm.toFixed(0)}
               </div>
-              <div style={{ fontSize: '0.55rem', color: '#64748B' }}>km seguros</div>
+              <div style={{ fontSize: '0.55rem', color: '#64748B' }}>km totais</div>
             </div>
 
             <div
@@ -541,229 +505,18 @@ export const DriverPublicAuditModal: React.FC<DriverPublicAuditModalProps> = ({
             </div>
           </div>
 
-          {/* CARD 3: REGISTRO PÚBLICO DE AUDITORIA DE CORRIDAS FINALIZADAS */}
           <div
             style={{
-              backgroundColor: '#FFFFFF',
-              borderRadius: 14,
-              padding: '12px',
-              border: '1px solid #E2E8F0',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
+              backgroundColor: '#F0FDF4',
+              borderRadius: 12,
+              padding: '10px 12px',
+              border: '1px solid #BBF7D0',
+              fontSize: '0.74rem',
+              color: '#166534',
+              lineHeight: 1.45,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Award size={16} color="#16A34A" />
-                <div>
-                  <h3 style={{ fontSize: '0.84rem', fontWeight: 900, color: '#0F172A', margin: 0 }}>
-                    Auditoria de Corridas Concluídas
-                  </h3>
-                  <p style={{ fontSize: '0.66rem', color: '#64748B', margin: 0 }}>
-                    Histórico auditado pelo sistema para segurança
-                  </p>
-                </div>
-              </div>
-              <span
-                style={{
-                  backgroundColor: '#F0FDF4',
-                  color: '#15803D',
-                  border: '1px solid #BBF7D0',
-                  fontSize: '0.64rem',
-                  fontWeight: 800,
-                  padding: '2px 7px',
-                  borderRadius: 999,
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                {completedRides.length} {completedRides.length === 1 ? 'corrida' : 'corridas'}
-              </span>
-            </div>
-
-            {/* Busca rápida por código ou bairro/rua */}
-            <div style={{ position: 'relative' }}>
-              <Search
-                size={14}
-                color="#94A3B8"
-                style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }}
-              />
-              <input
-                type="text"
-                placeholder="Pesquisar por #KV, rua ou cidade..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '7px 10px 7px 30px',
-                  borderRadius: 8,
-                  border: '1px solid #CBD5E1',
-                  backgroundColor: '#F8FAFC',
-                  fontSize: '0.76rem',
-                  color: '#0F172A',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                }}
-              />
-            </div>
-
-            {/* Lista de Corridas Finalizadas Auditadas */}
-            {filteredCompletedRides.length === 0 ? (
-              <div
-                style={{
-                  padding: '28px 16px',
-                  textAlign: 'center',
-                  backgroundColor: '#F8FAFC',
-                  borderRadius: 12,
-                  border: '1px dashed #CBD5E1',
-                  color: '#64748B',
-                  fontSize: '0.8rem',
-                }}
-              >
-                {completedRides.length === 0
-                  ? 'Nenhuma corrida finalizada registrada até o momento. Assim que o motorista concluir corridas, elas aparecerão automaticamente nesta auditoria pública.'
-                  : 'Nenhuma corrida encontrada para esta busca.'}
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {filteredCompletedRides.map((r) => {
-                  const formattedDate = r.date ? r.date.split('-').reverse().join('/') : '';
-                  return (
-                    <div
-                      key={r.id}
-                      style={{
-                        backgroundColor: '#F8FAFC',
-                        borderRadius: 12,
-                        padding: '10px 12px',
-                        border: '1px solid #E2E8F0',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 6,
-                      }}
-                    >
-                      {/* Topo do item auditado */}
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span
-                            style={{
-                              backgroundColor: '#121A21',
-                              color: '#76D800',
-                              fontSize: '0.66rem',
-                              fontWeight: 900,
-                              padding: '2px 7px',
-                              borderRadius: 6,
-                            }}
-                          >
-                            {formatRideCode(r)}
-                          </span>
-                          <span
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              backgroundColor: '#DCFCE7',
-                              color: '#15803D',
-                              fontSize: '0.64rem',
-                              fontWeight: 800,
-                              padding: '2px 7px',
-                              borderRadius: 999,
-                            }}
-                          >
-                            <CheckCircle2 size={11} />
-                            <span>Concluída & Auditada</span>
-                          </span>
-                        </div>
-
-                        <div
-                          style={{
-                            fontSize: '0.68rem',
-                            color: '#64748B',
-                            fontWeight: 700,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <Calendar size={11} />
-                          <span>
-                            {formattedDate} • {r.time}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Trajeto Origem -> Destino */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, fontSize: '0.75rem' }}>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            color: '#334155',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: 7,
-                              height: 7,
-                              borderRadius: '50%',
-                              backgroundColor: '#76D800',
-                              flexShrink: 0,
-                            }}
-                          />
-                          <strong style={{ color: '#0F172A' }}>Partida:</strong>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.origin.address}</span>
-                        </div>
-
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 6,
-                            color: '#334155',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                          }}
-                        >
-                          <MapPin size={11} color="#0F172A" style={{ flexShrink: 0 }} />
-                          <strong style={{ color: '#0F172A' }}>Destino:</strong>
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.destination.address}</span>
-                        </div>
-                      </div>
-
-                      {/* Rodapé do item: Passageiro (mascarado no público), Distância e Duração */}
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          borderTop: '1px solid #E2E8F0',
-                          paddingTop: 5,
-                          fontSize: '0.68rem',
-                          color: '#64748B',
-                          fontWeight: 600,
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                          <User size={11} color="#64748B" />
-                          <span>Passageiro: {maskClientNameForAudit(r.clientName, isAdminView)}</span>
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <span>📍 {r.distanceKm} km</span>
-                          <span>
-                            <Clock size={10} style={{ display: 'inline', marginRight: 2 }} />
-                            ~{r.durationMin} min
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+            Por privacidade e segurança (LGPD), rotas, endereços e horários de viagens anteriores não são exibidos publicamente — apenas a ficha verificada do motorista e seu veículo da frota.
           </div>
         </div>
       </div>

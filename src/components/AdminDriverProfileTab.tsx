@@ -258,7 +258,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
   );
 
   const handleCopyAuditUrl = () => {
-    const url = `${window.location.origin}/auditoria`;
+    const url = `${window.location.origin}/frotas`;
     navigator.clipboard.writeText(url);
     setCopiedPublicUrl(true);
     setTimeout(() => setCopiedPublicUrl(false), 2500);
@@ -394,7 +394,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
                     borderRadius: 999,
                   }}
                 >
-                  ✓ Auditado
+                  ✓ Verificado
                 </span>
               </div>
               <h2 style={{ fontSize: '1.15rem', fontWeight: 900, margin: '2px 0 0 0', color: '#FFFFFF' }}>
@@ -446,7 +446,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
               }}
             >
               {copiedPublicUrl ? <Check size={14} /> : <Share2 size={14} />}
-              <span>{copiedPublicUrl ? 'Link da Auditoria Copiado!' : 'Copiar Link da Auditoria'}</span>
+              <span>{copiedPublicUrl ? 'Link da Frota Copiado!' : 'Copiar Link da Frota'}</span>
             </button>
           </div>
         </div>
@@ -474,7 +474,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
             <div style={{ fontSize: '1.25rem', fontWeight: 900, color: '#FFFFFF', marginTop: 2 }}>
               {totalCompletedCount}
             </div>
-            <div style={{ fontSize: '0.58rem', color: '#94A3B8' }}>Na auditoria</div>
+            <div style={{ fontSize: '0.58rem', color: '#94A3B8' }}>Concluídas</div>
           </div>
 
           <div
@@ -523,7 +523,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
             }}
           >
             <div style={{ fontSize: '0.58rem', color: '#94A3B8', fontWeight: 800, textTransform: 'uppercase' }}>
-              Total Auditado
+              Total Faturado
             </div>
             <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#4ADE80', marginTop: 4 }}>
               R$ {totalRevenueCompleted.toFixed(0)}
@@ -561,7 +561,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
                 Dados do Perfil do Motorista
               </h3>
               <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                Estes dados aparecem no GPS ao vivo, no comprovante e na Auditoria Pública para seus clientes
+                Estes dados aparecem no GPS ao vivo, no comprovante e na Frota Verificada para seus clientes
               </span>
             </div>
           </div>
@@ -1340,7 +1340,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
         </button>
       </form>
 
-      {/* ── AUDITORIA PÚBLICA DE CORRIDAS FINALIZADAS (PAINEL DO MOTORISTA) ── */}
+      {/* ── HISTÓRICO PRIVADO DE CORRIDAS FINALIZADAS (PAINEL DO MOTORISTA) ── */}
       <div
         className="card-glass"
         style={{
@@ -1377,10 +1377,10 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
             </div>
             <div>
               <h3 style={{ fontSize: '0.95rem', fontWeight: 900, color: '#0F172A', margin: 0 }}>
-                Auditoria Pública de Corridas Finalizadas ({completedRides.length})
+                Histórico de Corridas Finalizadas ({completedRides.length})
               </h3>
               <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                Todas as corridas concluídas ficam auditadas para comprovar sua credibilidade e segurança aos clientes
+                Registro privado das viagens concluídas com segurança na plataforma
               </span>
             </div>
           </div>
@@ -1443,7 +1443,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
             }}
           >
             {completedRides.length === 0
-              ? 'Ainda não há corridas com status "Finalizada". Assim que você concluir corridas no painel, elas serão listadas automaticamente aqui e na auditoria pública dos clientes.'
+              ? 'Ainda não há corridas com status "Finalizada". Assim que você concluir corridas no painel, elas serão listadas automaticamente no seu histórico.'
               : 'Nenhuma corrida finalizada encontrada para o filtro informado.'}
           </div>
         ) : (
@@ -1492,7 +1492,7 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
                         }}
                       >
                         <CheckCircle2 size={11} />
-                        <span>Finalizada & Auditada</span>
+                        <span>Finalizada ✓</span>
                       </span>
                     </div>
 

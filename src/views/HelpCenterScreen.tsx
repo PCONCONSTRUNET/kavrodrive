@@ -87,9 +87,9 @@ const HELP_FAQS: HelpFaqItem[] = [
     categoryLabel: 'Passageiros',
     question: 'Esqueci um objeto dentro do veículo. Como recupero?',
     answer:
-      'Acesse a lista de "Minhas Corridas" para identificar a placa e o código da viagem, ou consulte o motorista na Auditoria Pública para acionar o contato oficial ou o suporte Kavro via WhatsApp imediatamente.',
-    actionLabel: 'Consultar Auditoria Pública',
-    actionRoute: '/auditoria',
+      'Acesse a lista de "Minhas Corridas" para identificar a placa e o código da viagem, ou confira os veículos na página de Frota Verificada e acione o suporte Kavro via WhatsApp imediatamente.',
+    actionLabel: 'Ver Frota Verificada',
+    actionRoute: '/frotas',
   },
   {
     id: 'faq-driver-docs',
@@ -146,11 +146,11 @@ const HELP_FAQS: HelpFaqItem[] = [
     id: 'faq-kyc-lgpd',
     category: 'security',
     categoryLabel: 'Segurança & LGPD',
-    question: 'Como funcionam a biometria KYC, a Auditoria Pública e o botão SOS?',
+    question: 'Como funcionam a biometria KYC, a verificação da frota e o botão SOS?',
     answer:
-      'Todos os motoristas passam por comparação facial biométrica contra a CNH e assinatura digital com hash de integridade. Durante viagens ativas, tanto o passageiro quanto o motorista têm acesso ao botão SOS de emergência com link ao vivo e à página de Auditoria Pública.',
-    actionLabel: 'Abrir Transparência & Auditoria',
-    actionRoute: '/auditoria',
+      'Todos os motoristas passam por comparação facial biométrica contra a CNH e assinatura digital com hash de integridade. Durante viagens ativas, tanto o passageiro quanto o motorista têm acesso ao botão SOS de emergência com link ao vivo.',
+    actionLabel: 'Ver Frota Verificada',
+    actionRoute: '/frotas',
   },
   {
     id: 'faq-data-privacy',
@@ -303,7 +303,7 @@ export const HelpCenterScreen: React.FC<HelpCenterScreenProps> = ({ config }) =>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <button
               type="button"
-              onClick={() => navigate('/auditoria')}
+              onClick={() => navigate('/frotas')}
               style={{
                 height: 34,
                 padding: isMobile ? '0 10px' : '0 13px',
@@ -319,8 +319,8 @@ export const HelpCenterScreen: React.FC<HelpCenterScreenProps> = ({ config }) =>
                 gap: 6,
               }}
             >
-              <ShieldCheck size={14} color="#8CE826" />
-              <span>{isMobile ? 'Auditoria' : 'Auditoria Pública'}</span>
+              <Car size={14} color="#8CE826" />
+              <span>{isMobile ? 'Frotas' : 'Frota Verificada'}</span>
             </button>
 
             <button
@@ -502,10 +502,10 @@ export const HelpCenterScreen: React.FC<HelpCenterScreenProps> = ({ config }) =>
             {
               icon: <ShieldCheck size={19} color="#15803D" />,
               bg: '#F0FDF4',
-              title: 'Auditoria & Segurança',
-              desc: 'Frota verificada, veículos inspecionados e termos formais LGPD.',
-              btnText: 'Abrir Auditoria',
-              route: '/auditoria',
+              title: 'Frota Verificada',
+              desc: 'Motoristas habilitados, veículos vistoriados e categorias disponíveis.',
+              btnText: 'Ver Frotas',
+              route: '/frotas',
             },
           ].map((card) => (
             <button
@@ -987,7 +987,7 @@ export const HelpCenterScreen: React.FC<HelpCenterScreenProps> = ({ config }) =>
 
             <button
               type="button"
-              onClick={() => navigate('/auditoria')}
+              onClick={() => navigate('/frotas')}
               style={{
                 width: '100%',
                 height: 40,
@@ -1005,7 +1005,7 @@ export const HelpCenterScreen: React.FC<HelpCenterScreenProps> = ({ config }) =>
               }}
             >
               <FileText size={15} color="#15803D" />
-              <span>Ver Termos Formais &amp; Auditoria Pública</span>
+              <span>Conhecer Frota Verificada</span>
             </button>
           </div>
         </section>

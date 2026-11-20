@@ -13,7 +13,7 @@ import { DriverPortalScreen } from './views/DriverPortalScreen';
 import { LandingScreen } from './views/LandingScreen';
 import { PassengerTrackingScreen } from './views/PassengerTrackingScreen';
 import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
-import { PublicAuditScreen } from './views/PublicAuditScreen';
+import { PublicFleetScreen } from './views/PublicFleetScreen';
 import { HelpCenterScreen } from './views/HelpCenterScreen';
 import { FamilyInviteScreen } from './views/FamilyInviteScreen';
 import { CitiesServedScreen } from './views/CitiesServedScreen';
@@ -1040,10 +1040,14 @@ export const App: React.FC = () => {
         element={<PassengerTrackingScreen config={config} rides={rides} refreshData={refreshData} />}
       />
 
-      {/* Rota pública de Transparência & Auditoria Multi-Motoristas */}
+      {/* Rota pública de Frota Verificada Multi-Motoristas (somente frota, sem exposição de localizações) */}
       <Route
-        path="/auditoria"
-        element={<PublicAuditScreen config={config} rides={rides} />}
+        path="/frotas"
+        element={<PublicFleetScreen config={config} />}
+      />
+      <Route
+        path="/frota"
+        element={<PublicFleetScreen config={config} />}
       />
 
       {/* Rota pública da Central de Ajuda Clean e Guia de Segurança no PWA */}

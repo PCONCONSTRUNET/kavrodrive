@@ -3656,3 +3656,22 @@ test('Parceiros e Patrocinadores da Home: auditoria registra diff e GET /api/con
   const diff = audit.buildConfigChangesDiff({ ...prevCfg, partnerBanners: [] }, { ...prevCfg, partnerBanners: sampleBanners });
   assert.ok(diff.some(d => d.field === 'partnerBanners' && d.after === '2 item(ns)'));
 });
+
+test('Auditoria publica desativada (410) e /api/public/fleet expoe somente frota aprovada sem localizacoes', async () => {
+  const oldAudit = await apiJson('/api/public/audit');
+  assert.equal(oldAudit.status, 410);
+  assert.equal(oldAudit.json.ok, false);
+
+  const fleet = await apiJson('/api/public/fleet');
+  assert.equal(fleet.status, 200);
+  assert.equal(fleet.json.ok, true);
+  assert.equal(fleet.json.rides, undefined);
+  assert.ok(fleet.json.summary && typeof fleet.json.summary.totalApprovedDrivers === 'number');
+  assert.ok(Array.isArray(fleet.json.drivers));
+  for (const drv of fleet.json.drivers) {
+    assert.equal(drv.originAddress, undefined);
+    assert.equal(drv.destinationAddress, undefined);
+    assert.equal(drv.auditedRidesCount, undefined);
+    assert.equal(drv.crlvNumber, undefined);
+  }
+});

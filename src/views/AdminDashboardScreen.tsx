@@ -7326,7 +7326,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           </div>
         )}
 
-        {/* ================= ABA 6: PERFIL DO MOTORISTA & AUDITORIA PÚBLICA ================= */}
+        {/* ================= ABA 6: PERFIL DO MOTORISTA & FROTA ================= */}
         {activeTab === 'perfil' && (
           <AdminDriverProfileTab
             config={currentConfig}

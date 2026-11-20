@@ -2132,7 +2132,7 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
                 </div>
                 <div>
                   <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#0F172A' }}>
-                    Resumo de Privacidade &amp; Auditoria GPS (LGPD)
+                    Resumo de Privacidade &amp; Segurança (LGPD)
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
                     Tratamento de dados em conformidade com a Lei 13.709/2018
@@ -2142,7 +2142,7 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
               <ChevronRight size={17} color="#94A3B8" />
             </button>
 
-            <button type="button" onClick={() => onNavigateRoute('/auditoria')} style={pillActionStyle}>
+            <button type="button" onClick={() => onNavigateRoute('/frotas')} style={pillActionStyle}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <div
                   style={{
@@ -2160,10 +2160,10 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
                 </div>
                 <div>
                   <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#0F172A' }}>
-                    Portal de Auditoria Pública
+                    Frota Verificada Kavro
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                    Consulte viagens, motoristas e comprovantes verificados
+                    Consulte os motoristas parceiros e veículos aprovados
                   </div>
                 </div>
               </div>
