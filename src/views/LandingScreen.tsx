@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import {
@@ -155,9 +155,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
   const [isMobile, setIsMobile] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth < 960 : false
   );
-  const [showStickyMobileCta, setShowStickyMobileCta] = useState<boolean>(false);
-
-  const heroCtaRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (config.driverCarCity?.trim()) {
@@ -215,20 +212,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
     const onResize = () => setIsMobile(window.innerWidth < 960);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
-
-  useEffect(() => {
-    const onScroll = () => {
-      if (!heroCtaRef.current) {
-        setShowStickyMobileCta(window.scrollY > 380);
-        return;
-      }
-      const rect = heroCtaRef.current.getBoundingClientRect();
-      setShowStickyMobileCta(rect.bottom < 70);
-    };
-    window.addEventListener('scroll', onScroll, { passive: true });
-    onScroll();
-    return () => window.removeEventListener('scroll', onScroll);
   }, []);
 
   const baseUrl =
@@ -1132,7 +1115,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
 
               {/* Botão Principal do Simulador */}
               <div
-                ref={heroCtaRef}
                 style={{
                   display: 'flex',
                 }}
@@ -2302,7 +2284,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           borderTop: '1px solid rgba(118, 216, 0, 0.18)',
           color: '#FFFFFF',
           paddingTop: isMobile ? 44 : 64,
-          paddingBottom: isMobile ? 104 : 52,
+          paddingBottom: isMobile ? 44 : 52,
         }}
       >
         <div style={containerStyle}>
@@ -2407,61 +2389,6 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           </div>
         </div>
       </footer>
-
-      {/* ═══ BARRA INFERIOR FIXA MOBILE DUAL ("Simular viagem" + "Dirigir") ═══ */}
-      {isMobile && showStickyMobileCta && !mobileDrawerOpen && (
-        <div
-          style={{
-            position: 'fixed',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: 'rgba(11, 18, 24, 0.96)',
-            backdropFilter: 'blur(12px)',
-            WebkitBackdropFilter: 'blur(12px)',
-            padding: '10px 14px',
-            borderTop: '1px solid rgba(118, 216, 0, 0.24)',
-            boxShadow: '0 -10px 26px rgba(0,0,0,0.35)',
-            zIndex: 115,
-            display: 'grid',
-            gridTemplateColumns: '1.35fr 0.85fr',
-            gap: 10,
-          }}
-        >
-          <button
-            type="button"
-            onClick={() => openClientFlow()}
-            style={{
-              height: 46,
-              borderRadius: 11,
-              border: 'none',
-              backgroundColor: '#76D800',
-              color: '#0B1218',
-              fontSize: '0.92rem',
-              fontWeight: 800,
-              cursor: 'pointer',
-            }}
-          >
-            Simular viagem
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/kavro-drive')}
-            style={{
-              height: 46,
-              borderRadius: 11,
-              border: '1px solid rgba(118, 216, 0, 0.35)',
-              backgroundColor: '#131E26',
-              color: '#FFFFFF',
-              fontSize: '0.88rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Dirigir
-          </button>
-        </div>
-      )}
 
       {/* ═══ MODAL DE CIDADE ═══ */}
       {cityModalOpen && (
