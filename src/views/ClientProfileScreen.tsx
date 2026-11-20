@@ -1,72 +1,155 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { 
-  User, Phone, Mail, LogOut, 
-  MapPin, Trash2, Home, Briefcase, Star,
-  LogIn, UserPlus, Smartphone, Download,
-  CheckCircle2, ShieldCheck, Car, Clock,
-  Save, Check, Plus, CreditCard, ChevronRight,
-  Headphones, Sparkles, Bell,
-  Camera, Lock, Send, XCircle, HelpCircle, Users, Wallet
+import {
+  BadgeCheck,
+  BookUser,
+  Bookmark,
+  Briefcase,
+  Camera,
+  Car,
+  ChevronRight,
+  Gift,
+  HelpCircle,
+  Info,
+  Leaf,
+  LogIn,
+  LogOut,
+  Mail,
+  MapPin,
+  Settings,
+  ShieldCheck,
+  Smartphone,
+  Star,
+  User,
+  UserPlus,
+  Users,
+  Wallet
 } from 'lucide-react';
-import { ClientProfile, SystemConfig } from '../types';
+import { ClientProfile, LocationPoint, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
 import { AuthModal } from '../components/AuthModal';
-import { PassengerFeatureCarousel } from '../components/PassengerFeatureCarousel';
-import { PushToggleButton } from '../components/PushNotifications';
-import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { TrustedContactsModal } from '../components/TrustedContactsModal';
 import { FamilyProfileFlowModal } from '../components/FamilyProfileFlowModal';
 import { NotificationsModal } from '../components/NotificationsModal';
 import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from '../components/PassengerTermsContractModal';
 import { PassengerWalletModal } from '../components/PassengerWalletModal';
-import { clientExternalId } from '../services/push';
-import { formatPhone, formatCPF, isValidCPF, getCleanWhatsappNumber } from '../utils/format';
-import { searchAddressGeocode } from '../utils/geo';
+import { SafetyCenterInitialView, SafetyCenterModal } from '../components/SafetyCenterModal';
+import { RideReceiptModal } from '../components/RideReceiptModal';
+import {
+  AccountSubView,
+  AccountSubViews,
+  SafetyCheckupRing,
+  computeSafetyCheckItems,
+  formatCo2Saved
+} from '../components/AccountSubViews';
+import { formatCurrency, formatPhone, formatCPF, isValidCPF, getCleanWhatsappNumber } from '../utils/format';
+
+export const SIMPLE_MODE_STORAGE_KEY = 'kavro_simple_mode';
 
 interface ClientProfileScreenProps {
   onOpenAdminLogin?: () => void;
   currentUser?: ClientProfile | null;
+  rides?: Ride[];
+  resetKey?: number;
   onUserChange?: (user: ClientProfile | null) => void;
+  onGoToMyRides?: () => void;
+  onBookDestination?: (point: LocationPoint) => void;
 }
 
 export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   currentUser: propUser,
-  onUserChange
+  rides: propRides,
+  resetKey = 0,
+  onUserChange,
+  onGoToMyRides,
+  onBookDestination
 }) => {
   const navigate = useNavigate();
   const [currentUser, setCurrentUser] = useState<ClientProfile | null>(
     propUser !== undefined ? propUser : StorageService.getCurrentUser()
   );
   const [config] = useState<SystemConfig>(StorageService.getConfig());
+  const [subView, setSubView] = useState<AccountSubView>('hub');
+
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authInitialMode, setAuthInitialMode] = useState<'register' | 'login'>('register');
   const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
   const [isFamilyFlowOpen, setIsFamilyFlowOpen] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [isWalletOpen, setIsWalletOpen] = useState(false);
+  const [walletModalConfig, setWalletModalConfig] = useState<{
+    open: boolean;
+    initialMode: 'overview' | 'deposit' | 'statement';
+  }>({ open: false, initialMode: 'overview' });
+  const [safetyModalConfig, setSafetyModalConfig] = useState<{
+    open: boolean;
+    initialView: SafetyCenterInitialView;
+  }>({ open: false, initialView: 'hub' });
+  const [isTermsOpen, setIsTermsOpen] = useState(false);
+  const [isSignedContractOpen, setIsSignedContractOpen] = useState(false);
+  const [receiptRide, setReceiptRide] = useState<Ride | null>(null);
+
   const [walletBalance, setWalletBalance] = useState<number>(Number(currentUser?.walletBalance || 0));
-  const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() => {
-    return StorageService.getNotifications().filter(n => !n.read).length;
+  const [allRides, setAllRides] = useState<Ride[]>(() => propRides || StorageService.getRides());
+  const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() =>
+    StorageService.getNotifications().filter((n) => !n.read).length
+  );
+  const [simpleMode, setSimpleMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(SIMPLE_MODE_STORAGE_KEY) === '1';
+    } catch {
+      return false;
+    }
   });
 
+  // Reset to hub when user taps Conta in bottom navigation bar
   useEffect(() => {
-    const updateCount = () => {
-      setUnreadNotifCount(StorageService.getNotifications().filter(n => !n.read).length);
+    if (resetKey > 0) {
+      setSubView('hub');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [resetKey]);
+
+  // Apply simple mode class to <html>
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.document) return;
+    window.document.documentElement.classList.toggle('kavro-simple-mode', simpleMode);
+    try {
+      localStorage.setItem(SIMPLE_MODE_STORAGE_KEY, simpleMode ? '1' : '0');
+    } catch {
+      // ignore storage quota errors
+    }
+  }, [simpleMode]);
+
+  useEffect(() => {
+    if (Array.isArray(propRides)) {
+      setAllRides(propRides);
+    }
+  }, [propRides]);
+
+  useEffect(() => {
+    const updateNotifications = () => {
+      setUnreadNotifCount(StorageService.getNotifications().filter((n) => !n.read).length);
     };
-    window.addEventListener('up_notifications_updated', updateCount);
-    window.addEventListener('up_database_synced', updateCount);
-    window.addEventListener('up_push_received', updateCount);
+    const updateRides = () => {
+      setAllRides(StorageService.getRides());
+    };
+    window.addEventListener('up_notifications_updated', updateNotifications);
+    window.addEventListener('up_database_synced', updateNotifications);
+    window.addEventListener('up_push_received', updateNotifications);
+    window.addEventListener('up_rides_updated', updateRides);
+    window.addEventListener('up_database_synced', updateRides);
     return () => {
-      window.removeEventListener('up_notifications_updated', updateCount);
-      window.removeEventListener('up_database_synced', updateCount);
-      window.removeEventListener('up_push_received', updateCount);
+      window.removeEventListener('up_notifications_updated', updateNotifications);
+      window.removeEventListener('up_database_synced', updateNotifications);
+      window.removeEventListener('up_push_received', updateNotifications);
+      window.removeEventListener('up_rides_updated', updateRides);
+      window.removeEventListener('up_database_synced', updateRides);
     };
   }, []);
 
-  // Formulário de edição (enviado ao Admin Master para aprovação)
+  // Formulário de edição cadastral (Admin Master approval)
   const [name, setName] = useState(currentUser?.name || '');
   const [phone, setPhone] = useState(currentUser?.phone ? formatPhone(currentUser.phone) : '');
   const [email, setEmail] = useState(currentUser?.email || '');
@@ -125,13 +208,14 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
 
   useEffect(() => {
     if (!currentUser) return;
-    const pending = currentUser.profileChangeRequest?.status === 'pendente'
-      ? currentUser.profileChangeRequest.requestedFields
-      : null;
+    const pending =
+      currentUser.profileChangeRequest?.status === 'pendente'
+        ? currentUser.profileChangeRequest.requestedFields
+        : null;
     setName(pending?.name || currentUser.name || '');
     setPhone(formatPhone(pending?.phone || currentUser.phone || ''));
-    setEmail(pending?.email !== undefined ? pending.email : (currentUser.email || ''));
-    setDocument(formatCPF(pending?.document !== undefined ? pending.document : (currentUser.document || '')));
+    setEmail(pending?.email !== undefined ? pending.email : currentUser.email || '');
+    setDocument(formatCPF(pending?.document !== undefined ? pending.document : currentUser.document || ''));
   }, [
     currentUser?.id,
     currentUser?.name,
@@ -141,10 +225,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     currentUser?.profileChangeRequest?.id,
     currentUser?.profileChangeRequest?.status
   ]);
-  const [isTermsOpen, setIsTermsOpen] = useState(false);
-  const [isSignedContractOpen, setIsSignedContractOpen] = useState(false);
 
-  // Sincroniza com propUser
   useEffect(() => {
     if (propUser !== undefined) {
       setCurrentUser(propUser);
@@ -155,31 +236,49 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     }
   }, [propUser]);
 
-  // Contagem de viagens concluídas pelo cliente para badge e estatísticas VIP
-  const completedRidesCount = useMemo(() => {
-    if (!currentUser) return 0;
+  const completedRides = useMemo(() => {
+    if (!currentUser) return [] as Ride[];
     try {
-      const allRides = StorageService.getRides();
       const uPhoneClean = (currentUser.phone || '').replace(/\D/g, '');
-      const clientRides = allRides.filter(r => 
-        (currentUser.id && r.clientId === currentUser.id) ||
-        (uPhoneClean && r.clientPhone && r.clientPhone.replace(/\D/g, '').includes(uPhoneClean.slice(-8))) ||
-        (currentUser.name && r.clientName && r.clientName.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
-      );
-      return clientRides.filter(r => r.status === 'finalizada').length;
+      return allRides.filter((r) => {
+        if (r.status !== 'finalizada') return false;
+        const rPhoneClean = (r.clientPhone || '').replace(/\D/g, '');
+        return (
+          (currentUser.id && r.clientId === currentUser.id) ||
+          (uPhoneClean && rPhoneClean && rPhoneClean.includes(uPhoneClean.slice(-8))) ||
+          (currentUser.name &&
+            r.clientName &&
+            r.clientName.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
+        );
+      });
     } catch {
-      return 0;
+      return [] as Ride[];
     }
-  }, [currentUser]);
+  }, [currentUser, allRides]);
 
-  // Detecta se houve alteração nos campos em relação aos dados salvos
+  const totalCompletedKm = useMemo(
+    () => completedRides.reduce((sum, r) => sum + Math.max(0, Number(r.distanceKm || 0)), 0),
+    [completedRides]
+  );
+
+  // Conservative estimate: ~45g CO2 saved per km via optimized dispatch vs idle cruising
+  const estimatedCo2Grams = useMemo(
+    () => (completedRides.length > 0 ? Math.round(totalCompletedKm * 45) : 0),
+    [completedRides.length, totalCompletedKm]
+  );
+
+  const safetyItems = useMemo(() => computeSafetyCheckItems(currentUser), [currentUser]);
+  const safetyScore = useMemo(
+    () => safetyItems.filter((item) => item.completed).length,
+    [safetyItems]
+  );
+
   const hasChanges = useMemo(() => {
     if (!currentUser) return false;
     const currentName = currentUser.name || '';
     const currentPhone = formatPhone(currentUser.phone || '');
     const currentEmail = currentUser.email || '';
     const currentDoc = currentUser.document ? formatCPF(currentUser.document) : '';
-
     return (
       name.trim() !== currentName.trim() ||
       phone.trim() !== currentPhone.trim() ||
@@ -188,19 +287,22 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     );
   }, [currentUser, name, phone, email, document]);
 
-  // Endereços salvos (Casa, Trabalho, Favoritos)
-  const [newAddrLabel, setNewAddrLabel] = useState('');
-  const [newAddrText, setNewAddrText] = useState('');
-  const [showAddAddress, setShowAddAddress] = useState(false);
-  const [isGeocoding, setIsGeocoding] = useState(false);
+  const openSubView = (target: AccountSubView) => {
+    setSubView(target);
+    window.scrollTo({ top: 0, behavior: 'auto' });
+  };
+
+  const syncUser = (updated: ClientProfile) => {
+    setCurrentUser(updated);
+    if (onUserChange) onUserChange(updated);
+  };
 
   const handleAuthSuccess = (client: ClientProfile) => {
-    setCurrentUser(client);
+    syncUser(client);
     setName(client.name);
     setPhone(client.phone ? formatPhone(client.phone) : '');
     setEmail(client.email || '');
     setDocument(client.document ? formatCPF(client.document) : '');
-    if (onUserChange) onUserChange(client);
   };
 
   const handleClientPhotoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -219,8 +321,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
       const compressed = await compressDataUrlForUpload(dataUrl, 640, 0.82);
       const res = await StorageService.uploadClientPhoto(currentUser.id, compressed);
       if (res.ok && res.client) {
-        setCurrentUser(res.client);
-        if (onUserChange) onUserChange(res.client);
+        syncUser(res.client);
         setPhotoFeedback('Foto atualizada!');
         setTimeout(() => setPhotoFeedback(''), 3000);
       } else {
@@ -253,8 +354,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
       setProfileReqError(res.error || 'Não foi possível enviar a solicitação.');
       return;
     }
-    setCurrentUser(res.client);
-    if (onUserChange) onUserChange(res.client);
+    syncUser(res.client);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3500);
   };
@@ -267,71 +367,155 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
       setPhone('');
       setEmail('');
       setDocument('');
+      setSubView('hub');
       if (onUserChange) onUserChange(null);
     }
   };
 
-  const handleAddSavedAddress = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser || !newAddrLabel.trim() || !newAddrText.trim()) return;
-
-    setIsGeocoding(true);
-    let lat = -28.3878;
-    let lng = -49.3977;
-    try {
-      const geo = await searchAddressGeocode(newAddrText.trim());
-      if (geo.length > 0) {
-        lat = geo[0].lat;
-        lng = geo[0].lng;
-      }
-    } catch {
-      // fallback
-    } finally {
-      setIsGeocoding(false);
-    }
-
-    const list = currentUser.savedAddresses || [];
-    const updatedList = [
-      ...list,
-      {
-        id: `addr-${Date.now()}`,
-        label: newAddrLabel.trim(),
-        address: newAddrText.trim(),
-        lat,
-        lng,
-      }
-    ];
-
-    const updatedUser = { ...currentUser, savedAddresses: updatedList };
-    StorageService.setCurrentUser(updatedUser);
-    StorageService.saveClient(updatedUser);
-    setCurrentUser(updatedUser);
-    if (onUserChange) onUserChange(updatedUser);
-    setNewAddrLabel('');
-    setNewAddrText('');
-    setShowAddAddress(false);
-  };
-
-  const handleDeleteAddress = (id: string) => {
-    if (!currentUser) return;
-    const updatedList = (currentUser.savedAddresses || []).filter(a => a.id !== id);
-    const updatedUser = { ...currentUser, savedAddresses: updatedList };
-    StorageService.setCurrentUser(updatedUser);
-    StorageService.saveClient(updatedUser);
-    setCurrentUser(updatedUser);
-    if (onUserChange) onUserChange(updatedUser);
-  };
-
-  const startAddPredefined = (label: string) => {
-    setNewAddrLabel(label);
-    setShowAddAddress(true);
-  };
-
   const supportWhatsapp = getCleanWhatsappNumber(config.companyWhatsapp || config.companyPhone || '48996915303');
-  const supportUrl = `https://wa.me/${supportWhatsapp}?text=${encodeURIComponent(`Olá! Sou o cliente ${currentUser?.name || ''} da Kavro Drive e gostaria de tirar uma dúvida.`)}`;
+  const supportUrl = `https://wa.me/${supportWhatsapp}?text=${encodeURIComponent(
+    `Olá! Sou o cliente ${currentUser?.name || ''} da ${config.companyName || 'Kavro Drive'} e gostaria de tirar uma dúvida.`
+  )}`;
+
+  const savedCount = currentUser?.savedAddresses?.length || 0;
+  const brandName = config.companyName || 'Kavro Drive';
+
+  const quickTiles = [
+    {
+      key: 'help',
+      label: 'Ajuda',
+      sublabel: 'Suporte & FAQ',
+      icon: <HelpCircle size={20} strokeWidth={2.2} color="#0F172A" />,
+      badge: null as string | null,
+      onClick: () => openSubView('help')
+    },
+    {
+      key: 'wallet',
+      label: 'Carteira',
+      sublabel: formatCurrency(walletBalance),
+      sublabelColor: '#15803D',
+      icon: <Wallet size={20} strokeWidth={2.2} color="#0F172A" />,
+      badge: null as string | null,
+      onClick: () => setWalletModalConfig({ open: true, initialMode: 'overview' })
+    },
+    {
+      key: 'safety',
+      label: 'Segurança',
+      sublabel: `${safetyScore}/${safetyItems.length} ativos`,
+      icon: <ShieldCheck size={20} strokeWidth={2.2} color="#0F172A" />,
+      badge: null as string | null,
+      onClick: () => setSafetyModalConfig({ open: true, initialView: 'hub' })
+    },
+    {
+      key: 'messages',
+      label: 'Mensagens',
+      sublabel: unreadNotifCount > 0 ? `${unreadNotifCount} nova(s)` : 'Avisos do app',
+      icon: <Mail size={20} strokeWidth={2.2} color="#0F172A" />,
+      badge: unreadNotifCount > 0 ? (unreadNotifCount > 9 ? '9+' : String(unreadNotifCount)) : null,
+      onClick: () => setIsNotificationsOpen(true)
+    }
+  ];
+
+  const menuRows: Array<{
+    key: string;
+    icon: React.ReactNode;
+    title: string;
+    subtitle?: string;
+    onClick: () => void;
+  }> = [
+    {
+      key: 'family',
+      icon: <Users size={20} strokeWidth={2} />,
+      title: 'Família',
+      subtitle:
+        currentUser?.accountType === 'teen'
+          ? `Supervisionado por ${currentUser.safetyPreferences?.familyGuardianName || 'Responsável Legal'}`
+          : 'Gerencie contas para adolescentes (12 a 18 anos)',
+      onClick: () => setIsFamilyFlowOpen(true)
+    },
+    {
+      key: 'addresses',
+      icon: <MapPin size={20} strokeWidth={2} />,
+      title: 'Endereços salvos',
+      subtitle: savedCount > 0 ? `${savedCount} local(is) salvo(s) — Casa, trabalho e favoritos` : 'Salve Casa, Trabalho e favoritos',
+      onClick: () => openSubView('addresses')
+    },
+    {
+      key: 'settings',
+      icon: <Settings size={20} strokeWidth={2} />,
+      title: 'Configurações',
+      subtitle: 'Notificações push, instalar app e conta',
+      onClick: () => openSubView('settings')
+    },
+    {
+      key: 'simple_mode',
+      icon: <Smartphone size={20} strokeWidth={2} />,
+      title: 'Modo simples',
+      subtitle: simpleMode ? 'Ativo — textos maiores e alvos ampliados' : 'Um app simplificado com leitura ampliada',
+      onClick: () => openSubView('simple_mode')
+    },
+    {
+      key: 'gift',
+      icon: <Gift size={20} strokeWidth={2} />,
+      title: 'Adicionar saldo na Carteira',
+      subtitle: 'Recarga mínima de R$ 20,00 via PIX, cartão ou Apple Pay',
+      onClick: () => setWalletModalConfig({ open: true, initialMode: 'deposit' })
+    },
+    {
+      key: 'contacts',
+      icon: <BookUser size={20} strokeWidth={2} />,
+      title: 'Contatos',
+      subtitle: 'Gerencie contatos de confiança e emergência SOS',
+      onClick: () => openSubView('contacts')
+    },
+    {
+      key: 'partner',
+      icon: <Car size={20} strokeWidth={2} />,
+      title: 'Ganhe dinheiro dirigindo ou fazendo entregas',
+      onClick: () => openSubView('partner_driver')
+    },
+    {
+      key: 'saved_routes',
+      icon: <Bookmark size={20} strokeWidth={2} />,
+      title: 'Grupos e rotas salvas',
+      onClick: () => openSubView('saved_routes')
+    },
+    {
+      key: 'corporate',
+      icon: <Briefcase size={20} strokeWidth={2} />,
+      title: 'Perfil Corporativo e Recibos',
+      subtitle: 'Comprovantes de viagens e e-mail de recibos',
+      onClick: () => openSubView('corporate')
+    },
+    {
+      key: 'manage_account',
+      icon: <User size={20} strokeWidth={2} />,
+      title: `Gerenciar conta da ${brandName}`,
+      subtitle: 'Nome, CPF, WhatsApp, foto de perfil e sair',
+      onClick: () => openSubView('manage_account')
+    },
+    {
+      key: 'legal',
+      icon: <Info size={20} strokeWidth={2} />,
+      title: 'Jurídico',
+      subtitle: currentUser?.termsSignature?.signed
+        ? `Termo assinado (${currentUser.termsSignature.validationCode}) e LGPD`
+        : 'Termos de uso, contrato e privacidade LGPD',
+      onClick: () => openSubView('legal')
+    }
+  ];
 
   return (
-    <div className="animate-fade-in" style={{ padding: '16px 18px 95px 18px', maxWidth: 480, margin: '0 auto' }}>
+    <div style={{ backgroundColor: '#FFFFFF', minHeight: '100%', maxWidth: 480, margin: '0 auto' }}>
+      {/* Hidden input para alteração de foto de perfil acessível em qualquer sub-aba */}
+      <input
+        ref={clientPhotoInputRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={handleClientPhotoChange}
+      />
+
       {/* Modal de Cadastro / Login */}
       <AuthModal
         isOpen={isAuthModalOpen}
@@ -340,1513 +524,561 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         initialMode={authInitialMode}
       />
 
-      {/* Cabeçalho da Página */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-        <div>
-          <h2 style={{ fontSize: '1.35rem', fontWeight: 900, color: '#121A21', letterSpacing: '-0.02em', margin: 0 }}>
-            Meu Perfil
-          </h2>
-          <p style={{ fontSize: '0.78rem', color: '#64748B', marginTop: 2 }}>
-            Cadastro, endereços salvos e preferências
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Botão de Notificações */}
-          <button
-            type="button"
-            onClick={() => setIsNotificationsOpen(true)}
+      {/* CASO NÃO ESTEJA LOGADO */}
+      {!currentUser ? (
+        <div className="animate-fade-in" style={{ padding: '24px 16px 96px 16px' }}>
+          <h1 style={{ fontSize: '1.8rem', fontWeight: 900, color: '#0F172A', margin: '0 0 14px 0', letterSpacing: '-0.03em' }}>
+            Conta
+          </h1>
+          <div
             style={{
-              width: 30,
-              height: 30,
-              borderRadius: '50%',
-              backgroundColor: '#FFFFFF',
-              border: '1.5px solid #E2E8F0',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#121A21',
-              cursor: 'pointer',
-              position: 'relative',
-              flexShrink: 0,
-              boxShadow: '0 2px 5px rgba(0,0,0,0.04)'
+              padding: '24px 18px',
+              backgroundColor: '#F8FAFC',
+              border: '1px solid #E5E7EB',
+              borderRadius: 20,
+              textAlign: 'center'
             }}
-            title="Notificações e Avisos"
           >
-            <Bell size={15} strokeWidth={2.4} />
-            {unreadNotifCount > 0 && (
-              <span style={{
-                position: 'absolute',
-                top: -3,
-                right: -3,
-                backgroundColor: '#EF4444',
-                color: '#FFFFFF',
-                fontSize: '0.58rem',
-                fontWeight: 900,
-                minWidth: 15,
-                height: 15,
-                borderRadius: 8,
+            <div
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: '50%',
+                backgroundColor: 'rgba(118, 216, 0, 0.16)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                padding: '0 3px',
-                border: '1.5px solid #FFFFFF'
-              }}>
-                {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
-              </span>
-            )}
-          </button>
-
-          {currentUser && (
-            <span style={{
-              fontSize: '0.72rem',
-              fontWeight: 800,
-              padding: '4px 9px',
-              borderRadius: 20,
-              backgroundColor: 'rgba(118, 216, 0, 0.14)',
-              color: '#3B7300',
-              border: '1px solid rgba(118, 216, 0, 0.35)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4
-            }}>
-              <Sparkles size={11} color="#4D9400" />
-              <span>UP VIP</span>
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* CASO NÃO ESTEJA LOGADO / CADASTRADO */}
-      {!currentUser ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          <div style={{
-            padding: '24px 20px',
-            background: 'linear-gradient(145deg, #ffffff 0%, #F8FAFC 100%)',
-            border: '1.5px solid rgba(118, 216, 0, 0.4)',
-            borderRadius: 20,
-            boxShadow: '0 10px 30px rgba(0,0,0,0.05)',
-            textAlign: 'center'
-          }}>
-            <div style={{
-              width: 58,
-              height: 58,
-              borderRadius: '50%',
-              backgroundColor: 'rgba(118, 216, 0, 0.16)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              margin: '0 auto 14px auto',
-              color: '#4D9400'
-            }}>
-              <UserPlus size={28} />
+                margin: '0 auto 12px auto',
+                color: '#3F6212'
+              }}
+            >
+              <UserPlus size={26} />
             </div>
-
-            <h3 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#121A21', marginBottom: 6 }}>
-              Acesse seu Perfil Kavro Drive
+            <h3 style={{ fontSize: '1.1rem', fontWeight: 800, color: '#0F172A', margin: '0 0 6px 0' }}>
+              Acesse sua conta {brandName}
             </h3>
-            <p style={{ fontSize: '0.82rem', color: '#64748B', marginBottom: 20, lineHeight: 1.4 }}>
-              Cadastre-se para salvar seus locais favoritos, agendar corridas com 1 toque e receber recibos automáticos por e-mail.
+            <p style={{ fontSize: '0.82rem', color: '#64748B', margin: '0 0 18px 0', lineHeight: 1.45 }}>
+              Entre ou crie sua conta para gerenciar carteira, contatos de segurança, recibos e endereços favoritos.
             </p>
-
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button
+                type="button"
                 onClick={() => {
                   setAuthInitialMode('register');
                   setIsAuthModalOpen(true);
                 }}
                 className="btn-ios-primary"
-                style={{ padding: '14px 20px', fontSize: '0.95rem' }}
+                style={{ padding: '13px 18px', fontSize: '0.92rem' }}
               >
-                <UserPlus size={18} />
+                <UserPlus size={17} />
                 <span>Criar Conta em 1 Minuto</span>
               </button>
-
               <button
+                type="button"
                 onClick={() => {
                   setAuthInitialMode('login');
                   setIsAuthModalOpen(true);
                 }}
                 className="btn-ios-secondary"
-                style={{ padding: '12px 20px', fontSize: '0.88rem' }}
+                style={{ padding: '12px 18px', fontSize: '0.88rem' }}
               >
                 <LogIn size={16} />
                 <span>Já tenho conta — Entrar</span>
               </button>
             </div>
           </div>
-
-          <PassengerFeatureCarousel
-            config={config}
-            currentUser={null}
-            recentDestinations={StorageService.getRecentDestinations()}
-            onUserChange={(updatedUser) => {
-              setCurrentUser(updatedUser);
-              if (onUserChange) onUserChange(updatedUser);
-            }}
-            onRequireAuth={() => {
-              setAuthInitialMode('login');
-              setIsAuthModalOpen(true);
-            }}
-          />
         </div>
+      ) : subView !== 'hub' ? (
+        /* SUB-ABAS DEDICADAS PARA GERENCIAMENTO (ESTILO NAVEGAÇÃO UBER) */
+        <AccountSubViews
+          subView={subView}
+          currentUser={currentUser}
+          config={config}
+          walletBalance={walletBalance}
+          completedRides={completedRides}
+          totalCompletedKm={totalCompletedKm}
+          estimatedCo2Grams={estimatedCo2Grams}
+          safetyItems={safetyItems}
+          simpleMode={simpleMode}
+          supportUrl={supportUrl}
+          name={name}
+          phone={phone}
+          email={email}
+          documentValue={document}
+          hasChanges={hasChanges}
+          savedSuccess={savedSuccess}
+          isSubmittingProfileReq={isSubmittingProfileReq}
+          profileReqError={profileReqError}
+          isUploadingPhoto={isUploadingPhoto}
+          photoFeedback={photoFeedback}
+          onNameChange={setName}
+          onPhoneChange={setPhone}
+          onEmailChange={setEmail}
+          onDocumentChange={setDocument}
+          onSubmitProfile={handleSaveProfile}
+          onTriggerPhotoPick={() => clientPhotoInputRef.current?.click()}
+          onBackToHub={() => openSubView('hub')}
+          onNavigateSubView={(view) => openSubView(view)}
+          onNavigateRoute={(path) => navigate(path)}
+          onUpdateUser={syncUser}
+          onOpenWallet={(mode) => setWalletModalConfig({ open: true, initialMode: mode })}
+          onOpenSafetyCenter={(initialView) => setSafetyModalConfig({ open: true, initialView })}
+          onOpenTrustedContacts={() => setIsTrustedContactsOpen(true)}
+          onOpenSignedContract={() => setIsSignedContractOpen(true)}
+          onOpenTermsPrivacy={() => setIsTermsOpen(true)}
+          onOpenReceipt={(ride) => setReceiptRide(ride)}
+          onToggleSimpleMode={() => setSimpleMode((prev) => !prev)}
+          onLogout={handleLogout}
+          onBookDestination={onBookDestination}
+          onGoToMyRides={onGoToMyRides}
+        />
       ) : (
-        /* CASO ESTEJA CADASTRADO: PAINEL EXECUTIVO OTIMIZADO */
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {/* 1. Card de Identificação VIP do Cliente */}
-          <div style={{
-            background: '#FFFFFF',
-            borderRadius: 20,
-            padding: '18px 18px 16px 18px',
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 4px 20px -2px rgba(18, 26, 33, 0.05)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 14
-          }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
-                {/* Avatar com foto de perfil editável estilo Uber */}
-                <input
-                  ref={clientPhotoInputRef}
-                  type="file"
-                  accept="image/*"
-                  style={{ display: 'none' }}
-                  onChange={handleClientPhotoChange}
-                />
-                <div style={{ position: 'relative', flexShrink: 0 }}>
-                  {currentUser.photo ? (
-                    <img
-                      src={currentUser.photo}
-                      alt={currentUser.name}
-                      style={{
-                        width: 60,
-                        height: 60,
-                        borderRadius: '50%',
-                        objectFit: 'cover',
-                        border: '2px solid #111111'
-                      }}
-                    />
-                  ) : (
-                    <div style={{
-                      width: 60,
-                      height: 60,
+        /* HUB PRINCIPAL DA ABA CONTA (ESTRUTURA OFICIAL UBER) */
+        <div className="animate-fade-in" style={{ padding: '18px 16px 96px 16px' }}>
+          {/* 1. Cabeçalho Uber: Nome em destaque à esquerda + Avaliação/Verificado + Foto circular à direita */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 14,
+              marginBottom: 18
+            }}
+          >
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={() => openSubView('manage_account')}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openSubView('manage_account');
+                }
+              }}
+              style={{ minWidth: 0, flex: 1, cursor: 'pointer' }}
+            >
+              <h1
+                style={{
+                  margin: 0,
+                  fontSize: '1.68rem',
+                  fontWeight: 900,
+                  color: '#0F172A',
+                  letterSpacing: '-0.03em',
+                  lineHeight: 1.15,
+                  wordBreak: 'break-word'
+                }}
+              >
+                {currentUser.name}
+              </h1>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    backgroundColor: '#F3F4F6',
+                    color: '#0F172A',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: '0.76rem',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  <Star size={12} color="#0F172A" fill="#0F172A" />
+                  <span>5.00</span>
+                </span>
+
+                <span
+                  style={{
+                    backgroundColor: '#EFF6FF',
+                    color: '#1D4ED8',
+                    border: '1px solid #DBEAFE',
+                    borderRadius: 999,
+                    padding: '4px 10px',
+                    fontSize: '0.75rem',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4
+                  }}
+                >
+                  <BadgeCheck size={13} color="#2563EB" />
+                  <span>Verificado</span>
+                </span>
+
+                {currentUser.accountType === 'teen' && (
+                  <span
+                    style={{
+                      backgroundColor: '#F3E8FF',
+                      color: '#7E22CE',
+                      borderRadius: 999,
+                      padding: '4px 9px',
+                      fontSize: '0.72rem',
+                      fontWeight: 800
+                    }}
+                  >
+                    Adolescente
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => openSubView('manage_account')}
+                aria-label="Gerenciar perfil e foto"
+                style={{
+                  padding: 0,
+                  border: 'none',
+                  background: 'none',
+                  cursor: 'pointer',
+                  display: 'block'
+                }}
+              >
+                {currentUser.photo ? (
+                  <img
+                    src={currentUser.photo}
+                    alt={currentUser.name}
+                    style={{
+                      width: 64,
+                      height: 64,
                       borderRadius: '50%',
-                      background: '#111111',
+                      objectFit: 'cover',
+                      border: '2px solid #E5E7EB'
+                    }}
+                  />
+                ) : (
+                  <div
+                    style={{
+                      width: 64,
+                      height: 64,
+                      borderRadius: '50%',
+                      backgroundColor: '#111111',
                       color: '#FFFFFF',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      fontSize: '1.4rem',
+                      fontSize: '1.5rem',
                       fontWeight: 900,
                       border: '2px solid #E5E7EB'
-                    }}>
-                      {currentUser.name.charAt(0).toUpperCase()}
-                    </div>
-                  )}
-                  <button
-                    type="button"
-                    disabled={isUploadingPhoto}
-                    onClick={() => clientPhotoInputRef.current?.click()}
-                    title="Adicionar ou trocar foto de perfil"
-                    style={{
-                      position: 'absolute',
-                      bottom: -2,
-                      right: -2,
-                      width: 24,
-                      height: 24,
-                      borderRadius: '50%',
-                      backgroundColor: '#FFFFFF',
-                      border: '1.5px solid #D1D5DB',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: '#111111',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.16)',
-                      cursor: 'pointer'
                     }}
                   >
-                    <Camera size={12} />
-                  </button>
-                </div>
-
-                {/* Nome, telefone e badges */}
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{
-                    fontSize: '1.08rem',
-                    fontWeight: 800,
-                    color: '#121A21',
-                    lineHeight: 1.25,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis'
-                  }}>
-                    {currentUser.name}
+                    {currentUser.name.charAt(0).toUpperCase()}
                   </div>
-
-                  <div style={{
-                    fontSize: '0.8rem',
-                    color: '#475569',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    marginTop: 3,
-                    fontWeight: 600
-                  }}>
-                    <WhatsAppIcon size={13} />
-                    <span>{currentUser.phone}</span>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-                    <span style={{
-                      backgroundColor: '#DCFCE7',
-                      color: '#15803D',
-                      padding: '2px 8px',
-                      borderRadius: 12,
-                      fontSize: '0.68rem',
-                      fontWeight: 800,
-                      border: '1px solid #BBF7D0',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 3
-                    }}>
-                      <ShieldCheck size={11} />
-                      Cliente Verificado
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Botão Sair da Conta (Clean e Discreto) */}
-              <button
-                type="button"
-                onClick={handleLogout}
-                style={{
-                  background: '#F8FAFC',
-                  border: '1px solid #E2E8F0',
-                  borderRadius: 10,
-                  padding: '7px 11px',
-                  color: '#64748B',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  fontSize: '0.74rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                  transition: 'all 0.15s ease'
-                }}
-                title="Sair desta conta no aparelho"
-              >
-                <LogOut size={13} color="#EF4444" />
-                <span>Sair</span>
+                )}
               </button>
-            </div>
-
-            {/* Métricas Rápidas do Passageiro */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr 1fr',
-              gap: 8,
-              paddingTop: 12,
-              borderTop: '1px solid #F1F5F9'
-            }}>
-              <div style={{
-                background: '#F8FAFC',
-                borderRadius: 12,
-                padding: '8px 10px',
-                textAlign: 'center',
-                border: '1px solid #F1F5F9'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: '#3B82F6', marginBottom: 2 }}>
-                  <Car size={13} />
-                  <span style={{ fontSize: '0.98rem', fontWeight: 900, color: '#121A21' }}>
-                    {completedRidesCount}
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: 600 }}>
-                  {completedRidesCount === 1 ? 'Viagem' : 'Viagens'}
-                </div>
-              </div>
-
-              <div style={{
-                background: '#F8FAFC',
-                borderRadius: 12,
-                padding: '8px 10px',
-                textAlign: 'center',
-                border: '1px solid #F1F5F9'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: '#10B981', marginBottom: 2 }}>
-                  <Clock size={13} />
-                  <span style={{ fontSize: '0.92rem', fontWeight: 900, color: '#121A21' }}>
-                    100%
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: 600 }}>
-                  Pontualidade
-                </div>
-              </div>
-
-              <div style={{
-                background: '#F8FAFC',
-                borderRadius: 12,
-                padding: '8px 10px',
-                textAlign: 'center',
-                border: '1px solid #F1F5F9'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, color: '#F59E0B', marginBottom: 2 }}>
-                  <Star size={13} />
-                  <span style={{ fontSize: '0.92rem', fontWeight: 900, color: '#121A21' }}>
-                    5.0
-                  </span>
-                </div>
-                <div style={{ fontSize: '0.68rem', color: '#64748B', fontWeight: 600 }}>
-                  Passageiro VIP
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Atalhos Rápidos Estilo Uber (Ajuda, Carteira, Segurança, Mensagens/Avisos) */}
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 1fr',
-            gap: 10
-          }}>
-            <button
-              type="button"
-              onClick={() => navigate('/ajuda')}
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderRadius: 16,
-                padding: '13px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                cursor: 'pointer',
-                textAlign: 'left',
-                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)'
-              }}
-            >
-              <div style={{
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                backgroundColor: '#F1F5F9',
-                color: '#0F172A',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                <HelpCircle size={18} />
-              </div>
-              <div>
-                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A' }}>Ajuda</div>
-                <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Suporte &amp; FAQ</div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsWalletOpen(true)}
-              style={{
-                background: 'linear-gradient(145deg, #0B1117 0%, #16222E 100%)',
-                border: '1px solid #1E293B',
-                borderRadius: 16,
-                padding: '13px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                cursor: 'pointer',
-                textAlign: 'left',
-                boxShadow: '0 6px 16px rgba(15, 23, 42, 0.14)'
-              }}
-            >
-              <div style={{
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                backgroundColor: 'rgba(118, 216, 0, 0.16)',
-                border: '1px solid rgba(118, 216, 0, 0.35)',
-                color: '#76D800',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                <Wallet size={18} />
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>Carteira</div>
-                <div style={{ fontSize: '0.72rem', color: '#BEF264', fontWeight: 800 }}>
-                  {walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                </div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsTrustedContactsOpen(true)}
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderRadius: 16,
-                padding: '13px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                cursor: 'pointer',
-                textAlign: 'left',
-                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)'
-              }}
-            >
-              <div style={{
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                backgroundColor: '#EFF6FF',
-                color: '#1D4ED8',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                <ShieldCheck size={18} />
-              </div>
-              <div>
-                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A' }}>Segurança</div>
-                <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>Contatos &amp; SOS</div>
-              </div>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setIsNotificationsOpen(true)}
-              style={{
-                background: '#FFFFFF',
-                border: '1px solid #E2E8F0',
-                borderRadius: 16,
-                padding: '13px 14px',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-                cursor: 'pointer',
-                textAlign: 'left',
-                boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)'
-              }}
-            >
-              <div style={{
-                width: 34,
-                height: 34,
-                borderRadius: 10,
-                backgroundColor: '#F0FDF4',
-                color: '#15803D',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                flexShrink: 0
-              }}>
-                <Bell size={18} />
-              </div>
-              <div>
-                <div style={{ fontSize: '0.86rem', fontWeight: 800, color: '#0F172A' }}>Mensagens</div>
-                <div style={{ fontSize: '0.67rem', color: '#64748B', fontWeight: 600 }}>
-                  {unreadNotifCount > 0 ? `${unreadNotifCount} novo(s)` : 'Avisos do app'}
-                </div>
-              </div>
-            </button>
-          </div>
-
-          {/* Carrossel horizontal estilo Uber (Favoritos <-> Recursos de Segurança) dentro da área do cliente */}
-          <PassengerFeatureCarousel
-            config={config}
-            currentUser={currentUser}
-            recentDestinations={StorageService.getRecentDestinations()}
-            onUserChange={(updatedUser) => {
-              setCurrentUser(updatedUser);
-              if (onUserChange) onUserChange(updatedUser);
-            }}
-            onRequireAuth={() => {
-              setAuthInitialMode('login');
-              setIsAuthModalOpen(true);
-            }}
-          />
-
-          {/* 1.5 Segurança & Contatos de Confiança (visível logo no topo do Menu/Perfil para configurar antes da corrida) */}
-          <div style={{
-            background: '#FFFFFF',
-            borderRadius: 20,
-            padding: '15px 18px',
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 4px 20px -2px rgba(18, 26, 33, 0.05)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                <div style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: '50%',
-                  backgroundColor: '#EFF6FF',
-                  color: '#276EF1',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <ShieldCheck size={18} />
-                </div>
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontSize: '0.92rem', fontWeight: 900, color: '#0F172A' }}>
-                    Contatos de Confiança
-                  </div>
-                  <div style={{ fontSize: '0.73rem', color: '#64748B', fontWeight: 600, marginTop: 1 }}>
-                    {currentUser.trustedContacts && currentUser.trustedContacts.length > 0
-                      ? `${currentUser.trustedContacts.length} contato(s) configurado(s) para envio automático`
-                      : 'Configure quem recebe sua rota ao vivo antes da corrida'}
-                  </div>
-                </div>
-              </div>
 
               <button
                 type="button"
-                onClick={() => setIsTrustedContactsOpen(true)}
-                style={{
-                  backgroundColor: '#111111',
-                  border: 'none',
-                  color: '#FFFFFF',
-                  padding: '8px 14px',
-                  borderRadius: 999,
-                  fontSize: '0.76rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 5,
-                  flexShrink: 0
+                disabled={isUploadingPhoto}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  clientPhotoInputRef.current?.click();
                 }}
-              >
-                <Plus size={13} />
-                <span>{currentUser.trustedContacts && currentUser.trustedContacts.length > 0 ? 'Gerenciar' : 'Configurar'}</span>
-              </button>
-            </div>
-
-            {currentUser.trustedContacts && currentUser.trustedContacts.length > 0 && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 12 }}>
-                {currentUser.trustedContacts.map((tc) => (
-                  <div
-                    key={tc.id}
-                    onClick={() => setIsTrustedContactsOpen(true)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setIsTrustedContactsOpen(true);
-                      }
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 11px',
-                      borderRadius: 12,
-                      backgroundColor: '#F8FAFC',
-                      border: '1px solid #E5E7EB',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: '0.8rem', fontWeight: 800, color: '#0F172A' }}>
-                        {tc.name} • {tc.relationship || 'Familiar'}
-                      </div>
-                      <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
-                        {formatPhone(tc.phone)} • {tc.autoShareAllRides ? 'Automático em todas as corridas' : tc.autoShareNightOnly ? 'Automático à noite (20h-06h)' : 'Alertas SOS'}
-                      </div>
-                    </div>
-                    <Check size={15} color="#16A34A" style={{ flexShrink: 0 }} />
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Atalho Perfil Familiar / Conta para Adolescentes (12-18 anos) */}
-            <div style={{
-              marginTop: 12,
-              paddingTop: 12,
-              borderTop: '1px solid #F1F5F9',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 10
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
+                aria-label="Trocar foto de perfil"
+                title="Adicionar ou trocar foto"
+                style={{
+                  position: 'absolute',
+                  bottom: -2,
+                  right: -2,
+                  width: 24,
+                  height: 24,
                   borderRadius: '50%',
-                  backgroundColor: '#F3E8FF',
-                  color: '#7E22CE',
+                  backgroundColor: '#FFFFFF',
+                  border: '1.5px solid #D1D5DB',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <Users size={16} />
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
-                    {currentUser.accountType === 'teen'
-                      ? 'Conta Adolescente (Perfil Familiar)'
-                      : 'Perfil Familiar (12 a 18 anos)'}
-                  </div>
-                  <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
-                    {currentUser.accountType === 'teen'
-                      ? `Supervisionado por ${currentUser.safetyPreferences?.familyGuardianName || 'Responsável Legal'}`
-                      : 'Convide adolescentes, acompanhe status e rastreie viagens'}
-                  </div>
-                </div>
-              </div>
-
-              {currentUser.accountType !== 'teen' && (
-                <button
-                  type="button"
-                  onClick={() => setIsFamilyFlowOpen(true)}
-                  style={{
-                    backgroundColor: '#F1F5F9',
-                    border: '1px solid #CBD5E1',
-                    color: '#0F172A',
-                    padding: '6px 12px',
-                    borderRadius: 999,
-                    fontSize: '0.73rem',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    flexShrink: 0
-                  }}
-                >
-                  Gerenciar
-                </button>
-              )}
+                  color: '#111111',
+                  boxShadow: '0 2px 6px rgba(0,0,0,0.14)',
+                  cursor: 'pointer'
+                }}
+              >
+                <Camera size={12} />
+              </button>
             </div>
           </div>
 
-          {/* 2. Formulário Otimizado de Dados Pessoais */}
-          <div style={{
-            background: '#FFFFFF',
-            borderRadius: 20,
-            padding: '16px 18px',
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 4px 20px -2px rgba(18, 26, 33, 0.05)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{
-                  width: 30,
-                  height: 30,
-                  borderRadius: 8,
-                  backgroundColor: '#111111',
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <User size={15} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 900, color: '#111111' }}>
-                    Dados do Cadastro
-                  </div>
-                  <div style={{ fontSize: '0.70rem', color: '#6B7280' }}>
-                    Troca de nome, telefone ou e-mail requer aprovação do Admin Master
-                  </div>
-                </div>
-              </div>
-
-              {photoFeedback && (
-                <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#15803D' }}>
-                  {photoFeedback}
-                </span>
-              )}
-              {!photoFeedback && hasChanges && (
-                <span style={{
-                  fontSize: '0.68rem',
-                  fontWeight: 800,
-                  color: '#B45309',
-                  backgroundColor: '#FEF3C7',
-                  padding: '3px 8px',
-                  borderRadius: 8,
-                  border: '1px solid #FDE68A'
-                }}>
-                  Alterações não enviadas
-                </span>
-              )}
-            </div>
-
-            {currentUser.profileChangeRequest?.status === 'pendente' && (
-              <div style={{
-                padding: '10px 12px',
-                borderRadius: 10,
-                backgroundColor: '#FFFBEB',
-                border: '1px solid #FDE68A',
-                color: '#92400E',
-                fontSize: '0.76rem',
-                marginBottom: 12
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800 }}>
-                  <Clock size={14} />
-                  <span>Solicitação em análise pelo Admin Master</span>
-                </div>
-                <div style={{ marginTop: 3 }}>
-                  Seus dados atuais permanecem ativos até a aprovação.
-                </div>
-              </div>
-            )}
-
-            {currentUser.profileChangeRequest?.status === 'aprovado' && (
-              <div style={{
-                padding: '9px 12px',
-                borderRadius: 10,
+          {photoFeedback && (
+            <div
+              style={{
+                marginBottom: 12,
+                padding: '8px 12px',
+                borderRadius: 12,
                 backgroundColor: '#F0FDF4',
                 border: '1px solid #BBF7D0',
-                color: '#166534',
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                marginBottom: 12
-              }}>
-                <CheckCircle2 size={14} />
-                <span>Sua última solicitação de alteração cadastral foi aprovada.</span>
-              </div>
-            )}
-
-            {currentUser.profileChangeRequest?.status === 'recusado' && (
-              <div style={{
-                padding: '10px 12px',
-                borderRadius: 10,
-                backgroundColor: '#FEF2F2',
-                border: '1px solid #FECACA',
-                color: '#991B1B',
-                fontSize: '0.76rem',
-                marginBottom: 12
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 800 }}>
-                  <XCircle size={14} />
-                  <span>Alteração recusada pelo Admin Master</span>
-                </div>
-                <div style={{ marginTop: 3 }}>
-                  {currentUser.profileChangeRequest.rejectionReason || 'A troca de dados não foi autorizada pela central.'}
-                </div>
-              </div>
-            )}
-
-            {profileReqError && (
-              <div style={{
-                padding: '8px 10px',
-                borderRadius: 8,
-                backgroundColor: '#FEF2F2',
-                border: '1px solid #FECACA',
-                color: '#DC2626',
-                fontSize: '0.76rem',
-                fontWeight: 700,
-                marginBottom: 10
-              }}>
-                {profileReqError}
-              </div>
-            )}
-
-            <form onSubmit={handleSaveProfile} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {/* Nome */}
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                  Nome Completo
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <User size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '9px 12px 9px 36px',
-                      borderRadius: 12,
-                      border: '1.5px solid #CBD5E1',
-                      fontSize: '0.86rem',
-                      color: '#121A21',
-                      fontWeight: 600,
-                      backgroundColor: '#F8FAFC'
-                    }}
-                    required
-                  />
-                </div>
-              </div>
-
-              {/* Linha com WhatsApp e CPF */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 8 }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                    WhatsApp / Celular
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <Phone size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-                    <input
-                      type="tel"
-                      value={phone}
-                      inputMode="numeric"
-                      onChange={(e) => setPhone(formatPhone(e.target.value))}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px 9px 34px',
-                        borderRadius: 12,
-                        border: '1.5px solid #CBD5E1',
-                        fontSize: '0.84rem',
-                        color: '#121A21',
-                        fontWeight: 600,
-                        backgroundColor: '#F8FAFC'
-                      }}
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                    CPF *
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <CreditCard size={15} color="#94A3B8" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)' }} />
-                    <input
-                      type="text"
-                      placeholder="000.000.000-00"
-                      value={document}
-                      inputMode="numeric"
-                      maxLength={14}
-                      onChange={(e) => setDocument(formatCPF(e.target.value))}
-                      style={{
-                        width: '100%',
-                        padding: '9px 10px 9px 33px',
-                        borderRadius: 12,
-                        border: '1.5px solid #CBD5E1',
-                        fontSize: '0.84rem',
-                        color: '#121A21',
-                        fontWeight: 600,
-                        backgroundColor: '#F8FAFC'
-                      }}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              {/* E-mail para Recibos */}
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                  E-mail para Recibos <span style={{ color: '#94A3B8', fontWeight: 500 }}>(opcional)</span>
-                </label>
-                <div style={{ position: 'relative' }}>
-                  <Mail size={15} color="#94A3B8" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="exemplo@gmail.com"
-                    style={{
-                      width: '100%',
-                      padding: '9px 12px 9px 36px',
-                      borderRadius: 12,
-                      border: '1.5px solid #CBD5E1',
-                      fontSize: '0.86rem',
-                      color: '#121A21',
-                      fontWeight: 600,
-                      backgroundColor: '#F8FAFC'
-                    }}
-                  />
-                </div>
-              </div>
-
-              {/* Botão de Solicitação ao Admin Master */}
-              <button
-                type="submit"
-                disabled={isSubmittingProfileReq || (!hasChanges && !savedSuccess)}
-                style={{
-                  height: 44,
-                  borderRadius: 10,
-                  marginTop: 4,
-                  fontSize: '0.85rem',
-                  fontWeight: 800,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 7,
-                  cursor: hasChanges && !isSubmittingProfileReq ? 'pointer' : 'default',
-                  transition: 'all 0.2s ease',
-                  border: savedSuccess ? '1px solid #86EFAC' : hasChanges ? 'none' : '1px solid #E5E7EB',
-                  backgroundColor: savedSuccess
-                    ? '#DCFCE7'
-                    : hasChanges
-                    ? '#111111'
-                    : '#F3F4F6',
-                  color: savedSuccess
-                    ? '#15803D'
-                    : hasChanges
-                    ? '#FFFFFF'
-                    : '#6B7280'
-                }}
-              >
-                {savedSuccess ? (
-                  <>
-                    <Check size={16} color="#15803D" />
-                    <span>Solicitação Enviada ao Admin Master!</span>
-                  </>
-                ) : isSubmittingProfileReq ? (
-                  <span>Enviando solicitação...</span>
-                ) : hasChanges ? (
-                  <>
-                    <Send size={15} />
-                    <span>Solicitar Alteração ao Admin Master</span>
-                  </>
-                ) : (
-                  <>
-                    <Lock size={14} color="#9CA3AF" />
-                    <span>Dados Protegidos (Sem Alterações)</span>
-                  </>
-                )}
-              </button>
-            </form>
-          </div>
-
-          {/* 3. Card de Endereços Salvos / Favoritos */}
-          <div style={{
-            background: '#FFFFFF',
-            borderRadius: 20,
-            padding: '16px 18px',
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 4px 20px -2px rgba(18, 26, 33, 0.05)'
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <div style={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: 8,
-                  backgroundColor: 'rgba(118, 216, 0, 0.16)',
-                  color: '#4D9400',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  <MapPin size={16} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#121A21' }}>
-                    Endereços Salvos
-                  </div>
-                  <div style={{ fontSize: '0.70rem', color: '#64748B' }}>
-                    Agilize seus agendamentos com 1 toque
-                  </div>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowAddAddress(!showAddAddress)}
-                style={{
-                  background: showAddAddress ? '#F1F5F9' : 'rgba(118, 216, 0, 0.16)',
-                  border: 'none',
-                  color: showAddAddress ? '#475569' : '#3B7300',
-                  padding: '6px 11px',
-                  borderRadius: 9,
-                  fontSize: '0.74rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4
-                }}
-              >
-                {showAddAddress ? 'Fechar' : (
-                  <>
-                    <Plus size={13} />
-                    <span>Adicionar</span>
-                  </>
-                )}
-              </button>
+                color: '#15803D',
+                fontSize: '0.78rem',
+                fontWeight: 700
+              }}
+            >
+              {photoFeedback}
             </div>
+          )}
 
-            {/* Formulário de Adicionar Endereço */}
-            {showAddAddress && (
-              <form onSubmit={handleAddSavedAddress} style={{
-                background: '#F8FAFC',
-                padding: 13,
-                borderRadius: 14,
-                marginBottom: 12,
-                border: '1.5px solid #E2E8F0',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 9
-              }}>
-                <div>
-                  <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 5 }}>
-                    Escolha um apelido rápido:
+          {/* 2. Grade 2x2 de Ações Rápidas (Ajuda, Carteira, Segurança, Mensagens) */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 1fr',
+              gap: 10,
+              marginBottom: 14
+            }}
+          >
+            {quickTiles.map((tile) => (
+              <button
+                key={tile.key}
+                type="button"
+                onClick={tile.onClick}
+                style={{
+                  width: '100%',
+                  minWidth: 0,
+                  backgroundColor: '#F3F4F6',
+                  border: '1px solid #E5E7EB',
+                  borderRadius: 16,
+                  padding: '13px 14px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  position: 'relative',
+                  boxSizing: 'border-box'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 11, minWidth: 0, flex: 1 }}>
+                  <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center' }}>
+                    {tile.icon}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {['Casa', 'Trabalho', 'Aeroporto', 'Academia'].map((lbl) => (
-                      <button
-                        key={lbl}
-                        type="button"
-                        onClick={() => setNewAddrLabel(lbl)}
-                        style={{
-                          padding: '4px 9px',
-                          borderRadius: 8,
-                          fontSize: '0.72rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                          border: newAddrLabel === lbl ? '1.5px solid #76D800' : '1px solid #CBD5E1',
-                          backgroundColor: newAddrLabel === lbl ? '#DCFCE7' : '#FFFFFF',
-                          color: newAddrLabel === lbl ? '#15803D' : '#475569'
-                        }}
-                      >
-                        {lbl === 'Casa' ? '🏠 Casa' : lbl === 'Trabalho' ? '💼 Trabalho' : lbl === 'Aeroporto' ? '✈️ Aeroporto' : '💪 Academia'}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Ou digite outro apelido (Ex: Casa de Praia)"
-                    value={newAddrLabel}
-                    onChange={(e) => setNewAddrLabel(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px 10px',
-                      borderRadius: 10,
-                      border: '1px solid #CBD5E1',
-                      fontSize: '0.82rem',
-                      backgroundColor: '#FFFFFF'
-                    }}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <input
-                    type="text"
-                    placeholder="Endereço completo (Rua, nº, bairro e cidade)"
-                    value={newAddrText}
-                    onChange={(e) => setNewAddrText(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '8px 10px',
-                      borderRadius: 10,
-                      border: '1px solid #CBD5E1',
-                      fontSize: '0.82rem',
-                      backgroundColor: '#FFFFFF'
-                    }}
-                    required
-                  />
-                </div>
-
-                <div style={{ display: 'flex', gap: 7, marginTop: 2 }}>
-                  <button
-                    type="submit"
-                    disabled={isGeocoding}
-                    className="btn-ios-primary"
-                    style={{
-                      flex: 1,
-                      padding: '10px 14px',
-                      fontSize: '0.80rem',
-                      borderRadius: 10,
-                      boxShadow: 'none'
-                    }}
-                  >
-                    <Check size={14} />
-                    <span>{isGeocoding ? 'Localizando...' : 'Salvar Local'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddAddress(false);
-                      setNewAddrLabel('');
-                      setNewAddrText('');
-                    }}
-                    style={{
-                      padding: '10px 14px',
-                      borderRadius: 10,
-                      border: '1px solid #CBD5E1',
-                      backgroundColor: '#FFFFFF',
-                      color: '#475569',
-                      fontSize: '0.78rem',
-                      fontWeight: 700,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    Cancelar
-                  </button>
-                </div>
-              </form>
-            )}
-
-            {/* Lista de Endereços Salvos ou Atalhos Rápidos */}
-            {(!currentUser.savedAddresses || currentUser.savedAddresses.length === 0) ? (
-              <div>
-                <p style={{ fontSize: '0.78rem', color: '#64748B', marginBottom: 10, lineHeight: 1.35 }}>
-                  Você ainda não cadastrou locais salvos. Use os atalhos rápidos abaixo:
-                </p>
-
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <button
-                    type="button"
-                    onClick={() => startAddPredefined('Casa')}
-                    style={{
-                      background: '#F8FAFC',
-                      border: '1px dashed #CBD5E1',
-                      borderRadius: 12,
-                      padding: '10px',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    <div style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
-                      backgroundColor: '#DCFCE7',
-                      color: '#15803D',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
-                    }}>
-                      <Home size={16} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#0F172A', lineHeight: 1.2 }}>
+                      {tile.label}
                     </div>
-                    <div>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#121A21' }}>+ Adicionar Casa</div>
-                      <div style={{ fontSize: '0.67rem', color: '#64748B' }}>Sua residência</div>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => startAddPredefined('Trabalho')}
-                    style={{
-                      background: '#F8FAFC',
-                      border: '1px dashed #CBD5E1',
-                      borderRadius: 12,
-                      padding: '10px',
-                      textAlign: 'left',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 8,
-                      transition: 'all 0.15s ease'
-                    }}
-                  >
-                    <div style={{
-                      width: 32,
-                      height: 32,
-                      borderRadius: 8,
-                      backgroundColor: '#DBEAFE',
-                      color: '#1E40AF',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
-                    }}>
-                      <Briefcase size={16} />
-                    </div>
-                    <div>
-                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#121A21' }}>+ Trabalho</div>
-                      <div style={{ fontSize: '0.67rem', color: '#64748B' }}>Empresa / escritório</div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-                {currentUser.savedAddresses.map((addr) => {
-                  const isHome = addr.label.toLowerCase().includes('casa') || addr.label.toLowerCase().includes('residencia');
-                  const isWork = addr.label.toLowerCase().includes('trabalho') || addr.label.toLowerCase().includes('empresa') || addr.label.toLowerCase().includes('escritorio');
-
-                  return (
                     <div
-                      key={addr.id}
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        padding: '10px 12px',
-                        backgroundColor: '#F8FAFC',
-                        borderRadius: 12,
-                        border: '1px solid #E2E8F0',
-                        gap: 10
+                        fontSize: '0.72rem',
+                        fontWeight: 700,
+                        color: tile.sublabelColor || '#64748B',
+                        marginTop: 2,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
                       }}
                     >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: 1 }}>
-                        <div style={{
-                          width: 32,
-                          height: 32,
-                          borderRadius: 8,
-                          backgroundColor: isHome ? '#DCFCE7' : isWork ? '#DBEAFE' : 'rgba(118, 216, 0, 0.18)',
-                          color: isHome ? '#15803D' : isWork ? '#1E40AF' : '#4D9400',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          flexShrink: 0
-                        }}>
-                          {isHome ? <Home size={16} /> : isWork ? <Briefcase size={16} /> : <MapPin size={16} />}
-                        </div>
-                        <div style={{ minWidth: 0, flex: 1 }}>
-                          <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#121A21', lineHeight: 1.2 }}>
-                            {addr.label}
-                          </div>
-                          <div style={{
-                            fontSize: '0.72rem',
-                            color: '#64748B',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            marginTop: 2
-                          }}>
-                            {addr.address}
-                          </div>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteAddress(addr.id)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#94A3B8',
-                          cursor: 'pointer',
-                          padding: 6,
-                          borderRadius: 6
-                        }}
-                        title="Excluir endereço"
-                      >
-                        <Trash2 size={15} color="#EF4444" />
-                      </button>
+                      {tile.sublabel}
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  </div>
+                </div>
+
+                {tile.badge && (
+                  <span
+                    style={{
+                      backgroundColor: '#DC2626',
+                      color: '#FFFFFF',
+                      fontSize: '0.64rem',
+                      fontWeight: 900,
+                      minWidth: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '0 5px',
+                      flexShrink: 0
+                    }}
+                  >
+                    {tile.badge}
+                  </span>
+                )}
+              </button>
+            ))}
           </div>
 
-          {/* 4. Notificações Push (Direto, sem borda dupla) */}
-          <PushToggleButton role="cliente" externalId={clientExternalId(currentUser?.phone)} />
-
-          {/* 5. Suporte VIP & Central de Ajuda */}
-          <div style={{
-            background: '#FFFFFF',
-            borderRadius: 20,
-            padding: '14px 16px',
-            border: '1px solid #E2E8F0',
-            boxShadow: '0 4px 20px -2px rgba(18, 26, 33, 0.05)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 10
-          }}>
-            {/* Suporte WhatsApp */}
-            <a
-              href={supportUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '10px 12px',
-                borderRadius: 12,
-                backgroundColor: '#F0FDF4',
-                border: '1px solid #BBF7D0',
-                textDecoration: 'none'
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  backgroundColor: '#25D366',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0
-                }}>
-                  <WhatsAppIcon size={19} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#166534' }}>
-                    Suporte Direto no WhatsApp
-                  </div>
-                  <div style={{ fontSize: '0.70rem', color: '#15803D' }}>
-                    Fale com a central Kavro Drive a qualquer momento
-                  </div>
-                </div>
-              </div>
-              <ChevronRight size={16} color="#16A34A" />
-            </a>
-
-            {/* Central de Ajuda Clean */}
+          {/* 3. Cartões de Destaque (Kavro VIP, Checagem de Segurança X/5, Redução CO2) */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 18 }}>
+            {/* Card 1: Kavro VIP & Benefícios */}
             <button
               type="button"
-              onClick={() => navigate('/ajuda')}
+              onClick={() => openSubView('vip')}
               style={{
+                width: '100%',
+                backgroundColor: '#F3F4F6',
+                border: '1px solid #E5E7EB',
+                borderRadius: 16,
+                padding: '15px 16px',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '10px 12px',
-                borderRadius: 12,
-                backgroundColor: '#F8FAFC',
-                border: '1px solid #E2E8F0',
+                gap: 14,
                 cursor: 'pointer',
-                textAlign: 'left',
-                width: '100%'
+                textAlign: 'left'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  backgroundColor: '#0F172A',
-                  color: '#8CE826',
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0F172A' }}>
+                  {brandName} VIP &amp; Benefícios
+                </div>
+                <div style={{ fontSize: '0.77rem', color: '#64748B', marginTop: 3, lineHeight: 1.35 }}>
+                  {completedRides.length} {completedRides.length === 1 ? 'viagem' : 'viagens'} • Cartões, saldo e vantagens
+                </div>
+              </div>
+              <div
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: 14,
+                  backgroundColor: '#111111',
+                  color: '#76D800',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   flexShrink: 0
-                }}>
-                  <HelpCircle size={17} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.84rem', fontWeight: 800, color: '#0F172A' }}>
-                    Central de Ajuda &amp; FAQ
-                  </div>
-                  <div style={{ fontSize: '0.70rem', color: '#64748B' }}>
-                    Dúvidas sobre corridas, Pix, perfil e segurança
-                  </div>
-                </div>
-              </div>
-              <ChevronRight size={16} color="#64748B" />
-            </button>
-
-            {/* Instalação do Aplicativo (PWA) */}
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              padding: '8px 12px',
-              borderRadius: 12,
-              backgroundColor: '#F8FAFC',
-              border: '1px solid #E2E8F0'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
-                <Smartphone size={18} color="#64748B" />
-                <div>
-                  <div style={{ fontSize: '0.80rem', fontWeight: 700, color: '#121A21' }}>
-                    Instalar Aplicativo UP
-                  </div>
-                  <div style={{ fontSize: '0.68rem', color: '#64748B' }}>
-                    Adicione o ícone na tela inicial do seu celular
-                  </div>
-                </div>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => {
-                  localStorage.removeItem('up_pwa_dismissed_until');
-                  window.location.reload();
-                }}
-                style={{
-                  backgroundColor: '#111111',
-                  color: '#FFFFFF',
-                  border: 'none',
-                  padding: '7px 12px',
-                  borderRadius: 8,
-                  fontSize: '0.74rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4
                 }}
               >
-                <Download size={13} />
-                <span>Instalar</span>
+                <Gift size={24} />
+              </div>
+            </button>
+
+            {/* Card 2: Checagem de segurança (X/5 real) */}
+            <button
+              type="button"
+              onClick={() => openSubView('safety_checkup')}
+              style={{
+                width: '100%',
+                backgroundColor: '#F3F4F6',
+                border: '1px solid #E5E7EB',
+                borderRadius: 16,
+                padding: '15px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 14,
+                cursor: 'pointer',
+                textAlign: 'left'
+              }}
+            >
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0F172A' }}>
+                  Checagem de segurança
+                </div>
+                <div style={{ fontSize: '0.77rem', color: '#64748B', marginTop: 3, lineHeight: 1.35 }}>
+                  Saiba como fazer viagens mais seguras
+                </div>
+              </div>
+              <SafetyCheckupRing completed={safetyScore} total={safetyItems.length} />
+            </button>
+
+            {/* Card 3: Redução estimada de CO2 */}
+            <button
+              type="button"
+              onClick={() => openSubView('sustainability')}
+              style={{
+                width: '100%',
+                backgroundColor: '#F3F4F6',
+                border: '1px solid #E5E7EB',
+                borderRadius: 16,
+                padding: '14px 16px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                cursor: 'pointer',
+                textAlign: 'left'
+              }}
+            >
+              <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
+                Redução estimada de CO₂
+              </span>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: '0.98rem',
+                  fontWeight: 900,
+                  color: '#0F172A',
+                  flexShrink: 0
+                }}
+              >
+                <Leaf size={17} color="#16A34A" fill="#22C55E" />
+                <span>{formatCo2Saved(estimatedCo2Grams)}</span>
+              </span>
+            </button>
+          </div>
+
+          {/* 4. Lista Vertical Organizada Estilo Uber (cada item abre sua própria aba/modal) */}
+          <div style={{ borderTop: '1px solid #F1F5F9' }}>
+            {menuRows.map((row) => (
+              <button
+                key={row.key}
+                type="button"
+                onClick={row.onClick}
+                style={{
+                  width: '100%',
+                  background: 'none',
+                  border: 'none',
+                  borderBottom: '1px solid #F1F5F9',
+                  padding: '15px 4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 14,
+                  cursor: 'pointer',
+                  textAlign: 'left'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 15, minWidth: 0, flex: 1 }}>
+                  <span style={{ color: '#0F172A', display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+                    {row.icon}
+                  </span>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 700, color: '#0F172A', lineHeight: 1.28 }}>
+                      {row.title}
+                    </div>
+                    {row.subtitle && (
+                      <div style={{ fontSize: '0.76rem', color: '#64748B', marginTop: 2, lineHeight: 1.35 }}>
+                        {row.subtitle}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <ChevronRight size={17} color="#94A3B8" style={{ flexShrink: 0 }} />
               </button>
-            </div>
+            ))}
+          </div>
+
+          {/* 5. Rodapé discreto com Sair da conta */}
+          <div style={{ marginTop: 18, display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px' }}>
+            <span style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>
+              {brandName} • Conta do Passageiro
+            </span>
+            <button
+              type="button"
+              onClick={handleLogout}
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: '6px 8px',
+                fontSize: '0.78rem',
+                fontWeight: 800,
+                color: '#DC2626',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5
+              }}
+            >
+              <LogOut size={14} />
+              <span>Sair da conta</span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* Termos de Uso & Assinatura Digital + Privacidade LGPD */}
-      <div style={{ marginTop: 16, textAlign: 'center', paddingBottom: 12, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-        <button
-          type="button"
-          onClick={() => setIsSignedContractOpen(true)}
-          style={{
-            background: currentUser?.termsSignature?.signed ? '#F0FDF4' : '#F8FAFC',
-            border: currentUser?.termsSignature?.signed ? '1.5px solid #86EFAC' : '1.5px solid #E2E8F0',
-            borderRadius: 12,
-            padding: '10px 16px',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            color: currentUser?.termsSignature?.signed ? '#15803D' : '#334155',
-            cursor: 'pointer',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 8,
-            boxShadow: '0 2px 6px rgba(0,0,0,0.03)',
-          }}
-        >
-          <ShieldCheck size={16} color="#16A34A" />
-          <span>
-            {currentUser?.termsSignature?.signed
-              ? `Ver Termo Assinado (${currentUser.termsSignature.validationCode})`
-              : 'Termos e Condições Gerais de Uso — Passageiro'}
-          </span>
-        </button>
-
-        {currentUser?.termsSignature?.signed && (
-          <div style={{ fontSize: '0.7rem', color: '#15803D', fontWeight: 600 }}>
-            Assinado digitalmente em {currentUser.termsSignature.signedAtBrasilia} (Brasília)
-          </div>
-        )}
-
-        <button
-          type="button"
-          onClick={() => setIsTermsOpen(true)}
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: '4px 8px',
-            fontSize: '0.72rem',
-            fontWeight: 600,
-            color: '#64748B',
-            textDecoration: 'underline',
-            cursor: 'pointer',
-          }}
-        >
-          Resumo de Privacidade & Auditoria GPS (LGPD)
-        </button>
-        <div style={{ fontSize: '0.66rem', color: '#94A3B8' }}>
-          🔒 Dados cadastrais e rotas GPS protegidos conforme a Lei 13.709/2018
-        </div>
-      </div>
-
-      {/* Modal de Contrato & Termo Assinado Digitalmente do Passageiro */}
+      {/* MODAIS DE GERENCIAMENTO CONECTADOS */}
       <PassengerTermsContractModal
         isOpen={isSignedContractOpen}
         onClose={() => setIsSignedContractOpen(false)}
@@ -1855,27 +1087,21 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         client={currentUser}
       />
 
-      {/* Modal de Resumo de Privacidade (LGPD) */}
       <TermsPrivacyModal
         isOpen={isTermsOpen}
         onClose={() => setIsTermsOpen(false)}
         config={config}
       />
 
-      {/* Contatos de Confiança */}
       <TrustedContactsModal
         isOpen={isTrustedContactsOpen}
         onClose={() => setIsTrustedContactsOpen(false)}
         currentUser={currentUser}
         onUpdated={(_, updatedClient) => {
-          if (updatedClient) {
-            setCurrentUser(updatedClient);
-            if (onUserChange) onUserChange(updatedClient);
-          }
+          if (updatedClient) syncUser(updatedClient);
         }}
       />
 
-      {/* Perfil Familiar / Segurança para Adolescentes */}
       <FamilyProfileFlowModal
         isOpen={isFamilyFlowOpen}
         onClose={() => setIsFamilyFlowOpen(false)}
@@ -1885,25 +1111,21 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
           setAuthInitialMode('login');
           setIsAuthModalOpen(true);
         }}
-        onUserChange={(updatedClient) => {
-          setCurrentUser(updatedClient);
-          if (onUserChange) onUserChange(updatedClient);
-        }}
+        onUserChange={(updatedClient) => syncUser(updatedClient)}
       />
 
-      {/* Central de Notificações */}
       <NotificationsModal
         isOpen={isNotificationsOpen}
         onClose={() => setIsNotificationsOpen(false)}
         userRole="client"
       />
 
-      {/* Carteira Digital Kavro Drive (Depósito Mínimo R$ 20,00 + Formas de Pagamento) */}
       <PassengerWalletModal
-        isOpen={isWalletOpen}
-        onClose={() => setIsWalletOpen(false)}
+        isOpen={walletModalConfig.open}
+        onClose={() => setWalletModalConfig((prev) => ({ ...prev, open: false }))}
         currentUser={currentUser}
         config={config}
+        initialMode={walletModalConfig.initialMode}
         onRequireAuth={() => {
           setAuthInitialMode('login');
           setIsAuthModalOpen(true);
@@ -1911,12 +1133,33 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
         onWalletUpdated={(w) => {
           setWalletBalance(w.balance);
           if (currentUser) {
-            const nextUser = { ...currentUser, walletBalance: w.balance };
-            setCurrentUser(nextUser);
-            if (onUserChange) onUserChange(nextUser);
+            syncUser({ ...currentUser, walletBalance: w.balance });
           }
         }}
       />
+
+      <SafetyCenterModal
+        isOpen={safetyModalConfig.open}
+        onClose={() => setSafetyModalConfig((prev) => ({ ...prev, open: false }))}
+        config={config}
+        currentUser={currentUser}
+        initialView={safetyModalConfig.initialView}
+        onUserChange={(updatedClient) => syncUser(updatedClient)}
+        onRequireAuth={() => {
+          setAuthInitialMode('login');
+          setIsAuthModalOpen(true);
+        }}
+        onOpenTerms={() => setIsTermsOpen(true)}
+      />
+
+      {receiptRide && (
+        <RideReceiptModal
+          isOpen={true}
+          onClose={() => setReceiptRide(null)}
+          ride={receiptRide}
+          config={config}
+        />
+      )}
     </div>
   );
 };

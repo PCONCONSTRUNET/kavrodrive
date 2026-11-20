@@ -180,6 +180,17 @@ const ClientApp: React.FC<{
   const [initialBookingDestination, setInitialBookingDestination] = useState<LocationPoint | null>(null);
   const [initialBookingCategoryId, setInitialBookingCategoryId] = useState<string | null>(null);
   const [resumedBookingRide, setResumedBookingRide] = useState<Ride | null>(null);
+  const [profileResetKey, setProfileResetKey] = useState<number>(0);
+
+  // Restaura Modo Simples na inicialização do app do passageiro
+  useEffect(() => {
+    try {
+      const enabled = localStorage.getItem('kavro_simple_mode') === '1';
+      document.documentElement.classList.toggle('kavro-simple-mode', enabled);
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Controle do modal de Autenticação (Login / Cadastro)
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -369,6 +380,10 @@ const ClientApp: React.FC<{
         {currentTab === 'perfil' && (
           <ClientProfileScreen
             currentUser={currentUser}
+            rides={userRides}
+            resetKey={profileResetKey}
+            onGoToMyRides={() => setCurrentTab('minhas_corridas')}
+            onBookDestination={(dest) => handleStartBookingFromHome(undefined, dest)}
             onUserChange={(user) => {
               if (!user) {
                 handleLogout();
@@ -478,7 +493,13 @@ const ClientApp: React.FC<{
         </button>
 
         <button
-          onClick={() => setCurrentTab('perfil')}
+          onClick={() => {
+            if (currentTab === 'perfil') {
+              setProfileResetKey((k) => k + 1);
+            } else {
+              setCurrentTab('perfil');
+            }
+          }}
           style={{
             display: 'flex',
             flexDirection: 'column',

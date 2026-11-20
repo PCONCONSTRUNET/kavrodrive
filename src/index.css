@@ -832,4 +832,14 @@ input, select, textarea {
   }
 }
 
+/* Modo Simples (acessibilidade: textos mais legíveis e alvos de toque confortáveis) */
+html.kavro-simple-mode {
+  font-size: 17.5px;
+}
+
+html.kavro-simple-mode .app-container button {
+  min-height: 44px;
+}
+
+
 
