@@ -56,31 +56,32 @@ export function getGoogleMapsPlaceUrl(point: LocationPoint): string {
 }
 
 // Base de bairros, comunidades e locais de referência em Lauro Müller e região
-const LOCAL_POINTS_DATABASE = [
-  { name: 'Centro, Lauro Müller - SC', lat: -28.39123, lng: -49.39354, aliases: ['centro', 'lauro muller', 'laura muller', 'praça', 'matriz'] },
-  { name: 'Hospital Henrique Lage - Centro, Lauro Müller - SC', lat: -28.39201, lng: -49.39402, aliases: ['hospital', 'henrique lage', 'saude', 'pronto socorro'] },
-  { name: 'Prefeitura Municipal - Centro, Lauro Müller - SC', lat: -28.39260, lng: -49.39519, aliases: ['prefeitura', 'governo', 'municipal'] },
-  { name: 'Terminal Rodoviário Rolando Perico - Bela Vista, Lauro Müller - SC', lat: -28.38480, lng: -49.39050, aliases: ['rodoviaria', 'onibus', 'terminal'] },
-  { name: 'Coletora, Lauro Müller - SC', lat: -28.41697, lng: -49.40080, aliases: ['coletora', 'sc-440'] },
-  { name: 'Guatá, Lauro Müller - SC', lat: -28.37580, lng: -49.43250, aliases: ['guata', 'guatá'] },
-  { name: 'Barro Branco, Lauro Müller - SC', lat: -28.39650, lng: -49.41820, aliases: ['barro branco'] },
-  { name: 'Itanema, Lauro Müller - SC', lat: -28.36140, lng: -49.38720, aliases: ['itanema'] },
-  { name: 'Rua da Figueira - Itanema, Lauro Müller - SC', lat: -28.36200, lng: -49.38800, aliases: ['figueira', 'rua da figueira'] },
-  { name: 'Mina Nova, Lauro Müller - SC', lat: -28.38420, lng: -49.42150, aliases: ['mina nova'] },
-  { name: 'Bela Vista, Lauro Müller - SC', lat: -28.38520, lng: -49.39100, aliases: ['bela vista'] },
-  { name: 'Arizona, Lauro Müller - SC', lat: -28.39250, lng: -49.40720, aliases: ['arizona'] },
-  { name: 'Sumaré, Lauro Müller - SC', lat: -28.38050, lng: -49.40200, aliases: ['sumare', 'sumaré'] },
-  { name: 'Cairú, Lauro Müller - SC', lat: -28.39700, lng: -49.39500, aliases: ['cairu', 'cairú'] },
-  { name: 'Içarense, Lauro Müller - SC', lat: -28.38200, lng: -49.39950, aliases: ['içarense', 'icarense'] },
-  { name: 'Km 1, Lauro Müller - SC', lat: -28.39320, lng: -49.39850, aliases: ['km 1', 'km1', 'bruno benedet'] },
-  { name: 'Santa Bárbara, Lauro Müller - SC', lat: -28.37000, lng: -49.41000, aliases: ['santa barbara', 'santa bárbara'] },
-  { name: 'Serra do Rio do Rastro - SC-390, Lauro Müller - SC', lat: -28.38850, lng: -49.54800, aliases: ['serra', 'rio do rastro', 'mirante', 'sc-390'] },
-  { name: 'Centro, Orleans - SC', lat: -28.35890, lng: -49.29170, aliases: ['orleans', 'orleans centro'] },
-  { name: 'Centro, Criciúma - SC', lat: -28.67750, lng: -49.36950, aliases: ['criciuma', 'criciúma'] },
-  { name: 'Centro, Braço do Norte - SC', lat: -28.27360, lng: -49.16580, aliases: ['braço do norte', 'braco do norte'] },
-  { name: 'Centro, Urussanga - SC', lat: -28.52440, lng: -49.32110, aliases: ['urussanga'] },
-  { name: 'Centro, Tubarão - SC', lat: -28.47390, lng: -49.00690, aliases: ['tubarão', 'tubarao'] },
+export const POPULAR_LOCAL_POINTS: Array<{ name: string; subtitle: string; lat: number; lng: number; aliases: string[] }> = [
+  { name: 'Centro, Lauro Müller - SC', subtitle: 'Centro • Lauro Müller/SC', lat: -28.39123, lng: -49.39354, aliases: ['centro', 'lauro muller', 'laura muller', 'praça', 'matriz'] },
+  { name: 'Hospital Henrique Lage', subtitle: 'Centro • Lauro Müller/SC', lat: -28.39201, lng: -49.39402, aliases: ['hospital', 'henrique lage', 'saude', 'pronto socorro'] },
+  { name: 'Prefeitura Municipal', subtitle: 'Centro • Lauro Müller/SC', lat: -28.39260, lng: -49.39519, aliases: ['prefeitura', 'governo', 'municipal'] },
+  { name: 'Terminal Rodoviário Rolando Perico', subtitle: 'Bela Vista • Lauro Müller/SC', lat: -28.38480, lng: -49.39050, aliases: ['rodoviaria', 'onibus', 'terminal'] },
+  { name: 'Coletora, Lauro Müller - SC', subtitle: 'Coletora • SC-440', lat: -28.41697, lng: -49.40080, aliases: ['coletora', 'sc-440'] },
+  { name: 'Guatá, Lauro Müller - SC', subtitle: 'Distrito de Guatá • Lauro Müller/SC', lat: -28.37580, lng: -49.43250, aliases: ['guata', 'guatá'] },
+  { name: 'Barro Branco, Lauro Müller - SC', subtitle: 'Distrito de Barro Branco • Lauro Müller/SC', lat: -28.39650, lng: -49.41820, aliases: ['barro branco'] },
+  { name: 'Itanema, Lauro Müller - SC', subtitle: 'Itanema • Lauro Müller/SC', lat: -28.36140, lng: -49.38720, aliases: ['itanema'] },
+  { name: 'Rua da Figueira - Itanema', subtitle: 'Itanema • Lauro Müller/SC', lat: -28.36200, lng: -49.38800, aliases: ['figueira', 'rua da figueira'] },
+  { name: 'Mina Nova, Lauro Müller - SC', subtitle: 'Mina Nova • Lauro Müller/SC', lat: -28.38420, lng: -49.42150, aliases: ['mina nova'] },
+  { name: 'Bela Vista, Lauro Müller - SC', subtitle: 'Bela Vista • Lauro Müller/SC', lat: -28.38520, lng: -49.39100, aliases: ['bela vista'] },
+  { name: 'Arizona, Lauro Müller - SC', subtitle: 'Arizona • Lauro Müller/SC', lat: -28.39250, lng: -49.40720, aliases: ['arizona'] },
+  { name: 'Sumaré, Lauro Müller - SC', subtitle: 'Sumaré • Lauro Müller/SC', lat: -28.38050, lng: -49.40200, aliases: ['sumare', 'sumaré'] },
+  { name: 'Cairú, Lauro Müller - SC', subtitle: 'Cairú • Lauro Müller/SC', lat: -28.39700, lng: -49.39500, aliases: ['cairu', 'cairú'] },
+  { name: 'Içarense, Lauro Müller - SC', subtitle: 'Içarense • Lauro Müller/SC', lat: -28.38200, lng: -49.39950, aliases: ['içarense', 'icarense'] },
+  { name: 'Km 1, Lauro Müller - SC', subtitle: 'Km 1 • Lauro Müller/SC', lat: -28.39320, lng: -49.39850, aliases: ['km 1', 'km1', 'bruno benedet'] },
+  { name: 'Santa Bárbara, Lauro Müller - SC', subtitle: 'Santa Bárbara • Lauro Müller/SC', lat: -28.37000, lng: -49.41000, aliases: ['santa barbara', 'santa bárbara'] },
+  { name: 'Serra do Rio do Rastro', subtitle: 'Mirante • SC-390, Lauro Müller/SC', lat: -28.38850, lng: -49.54800, aliases: ['serra', 'rio do rastro', 'mirante', 'sc-390'] },
+  { name: 'Centro, Orleans - SC', subtitle: 'Centro • Orleans/SC', lat: -28.35890, lng: -49.29170, aliases: ['orleans', 'orleans centro'] },
+  { name: 'Centro, Criciúma - SC', subtitle: 'Centro • Criciúma/SC', lat: -28.67750, lng: -49.36950, aliases: ['criciuma', 'criciúma'] },
+  { name: 'Centro, Braço do Norte - SC', subtitle: 'Centro • Braço do Norte/SC', lat: -28.27360, lng: -49.16580, aliases: ['braço do norte', 'braco do norte'] },
+  { name: 'Centro, Urussanga - SC', subtitle: 'Centro • Urussanga/SC', lat: -28.52440, lng: -49.32110, aliases: ['urussanga'] },
+  { name: 'Centro, Tubarão - SC', subtitle: 'Centro • Tubarão/SC', lat: -28.47390, lng: -49.00690, aliases: ['tubarão', 'tubarao'] },
 ];
+const LOCAL_POINTS_DATABASE = POPULAR_LOCAL_POINTS;
 
 function normalizeText(text: string): string {
   return text
@@ -389,57 +390,79 @@ export async function searchAddressGeocode(
     lng: item.lng
   }));
 
-  // 2. Consulta Photon Geocoder com viés local nas coordenadas de Lauro Müller / mapa atual
+  // 2. Consulta Photon Geocoder com viés geográfico próximo ao ponto atual do mapa (sem travar em uma única cidade)
   let photonMatches: Array<{ display_name: string; lat: number; lng: number }> = [];
   try {
-    const photonQuery = normQ.includes('lauro muller') || normQ.includes('lauro') 
-      ? normQ 
-      : `${normQ} Lauro Müller`;
-    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(photonQuery)}&limit=8&lat=${userLat}&lon=${userLng}&lang=default`;
-    const res = await fetch(photonUrl);
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 3500);
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(rawClean.replace(/\blaura\b/gi, 'Lauro'))}&limit=10&lat=${userLat}&lon=${userLng}&location_bias_scale=0.35`;
+    const res = await fetch(photonUrl, { signal: controller.signal });
+    clearTimeout(tid);
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.features)) {
-        photonMatches = data.features.map((f: any) => {
-          const p = f.properties || {};
-          const parts: string[] = [];
-          if (p.name) parts.push(p.name);
-          if (p.street && p.street !== p.name) {
-            parts.push(p.housenumber ? `${p.street}, ${p.housenumber}` : p.street);
-          } else if (p.housenumber && parts.length > 0) {
-            parts[0] += `, ${p.housenumber}`;
-          }
-          if (p.district && p.district !== p.name) parts.push(p.district);
-          const city = p.city || p.town || p.municipality;
-          if (city && city !== p.name && city !== p.district) parts.push(city);
-          if (p.state) parts.push(p.state);
-
-          return {
-            display_name: parts.join(', '),
-            lat: Number(f.geometry.coordinates[1]),
-            lng: Number(f.geometry.coordinates[0])
-          };
+        const brFeatures = data.features.filter((f: any) => {
+          const cc = String(f?.properties?.countrycode || '').toUpperCase();
+          return !cc || cc === 'BR';
         });
+        photonMatches = brFeatures
+          .map((f: any) => {
+            const p = f.properties || {};
+            const parts: string[] = [];
+            if (p.name) parts.push(p.name);
+            if (p.street && p.street !== p.name) {
+              parts.push(p.housenumber ? `${p.street}, ${p.housenumber}` : p.street);
+            } else if (p.housenumber && parts.length > 0) {
+              parts[0] += `, ${p.housenumber}`;
+            }
+            if (p.district && p.district !== p.name) parts.push(p.district);
+            const city = p.city || p.town || p.municipality;
+            if (city && city !== p.name && city !== p.district) parts.push(city);
+            if (p.state) parts.push(p.state);
+
+            return {
+              display_name: parts.filter(Boolean).join(', '),
+              lat: Number(f.geometry.coordinates[1]),
+              lng: Number(f.geometry.coordinates[0])
+            };
+          })
+          .filter((item: { display_name: string }) => Boolean(item.display_name));
       }
     }
   } catch (err) {
     console.warn('Photon geocode error:', err);
   }
 
-  // 3. Fallback Nominatim se Photon não trouxer resultados
+  // 3. Fallback Nominatim Brasil se base local + Photon tiverem poucos resultados
   let nominatimMatches: Array<{ display_name: string; lat: number; lng: number }> = [];
-  if (localMatches.length === 0 && photonMatches.length === 0) {
+  if (localMatches.length + photonMatches.length < 2) {
     try {
-      const nomQuery = normQ.includes('sc') || normQ.includes('santa catarina') ? normQ : `${normQ}, Santa Catarina, Brasil`;
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(nomQuery)}&addressdetails=1&limit=6&countrycodes=br`;
-      const response = await fetch(url, { headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' } });
+      const controller = new AbortController();
+      const tid = setTimeout(() => controller.abort(), 3500);
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(rawClean.replace(/\blaura\b/gi, 'Lauro'))}&addressdetails=1&limit=6&countrycodes=br`;
+      const response = await fetch(url, { headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }, signal: controller.signal });
+      clearTimeout(tid);
       if (response.ok) {
         const data = await response.json();
-        nominatimMatches = data.map((item: any) => ({
-          display_name: item.display_name,
-          lat: parseFloat(item.lat),
-          lng: parseFloat(item.lon),
-        }));
+        nominatimMatches = (Array.isArray(data) ? data : []).map((item: any) => {
+          const a = item.address || {};
+          const road = a.road || a.pedestrian || item.name || '';
+          const num = a.house_number ? `, ${a.house_number}` : '';
+          const hood = a.suburb || a.neighbourhood || '';
+          const city = a.city || a.town || a.village || a.municipality || '';
+          const state = a.state || '';
+          const formatted = [
+            road ? `${road}${num}` : '',
+            hood && hood !== road ? hood : '',
+            city && city !== hood ? city : '',
+            state
+          ].filter(Boolean).join(', ');
+          return {
+            display_name: formatted || String(item.display_name || '').split(',').slice(0, 4).join(',').trim(),
+            lat: parseFloat(item.lat),
+            lng: parseFloat(item.lon),
+          };
+        });
       }
     } catch {
       // ignore
