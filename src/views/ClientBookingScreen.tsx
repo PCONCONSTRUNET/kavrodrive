@@ -3037,35 +3037,33 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                   </div>
                 ))
               ) : (
-                <div style={{ fontSize: '0.73rem', color: '#64748B', textAlign: 'center', padding: '4px 0 6px 0' }}>
-                  Nenhum cartão salvo — toque em <strong>Novo cartão</strong> ou pague com <strong>Apple Pay</strong>.
+                <div style={{ textAlign: 'center', padding: '8px 6px 4px 6px' }}>
+                  <div style={{ fontSize: '0.75rem', color: '#64748B', marginBottom: 8 }}>
+                    Nenhum cartão cadastrado ainda. Adicione um cartão de crédito ou débito com criptografia ponta a ponta.
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsAddingCardModal(true)}
+                    style={{
+                      width: '100%',
+                      padding: '10px 14px',
+                      borderRadius: 10,
+                      border: '1.5px dashed #94A3B8',
+                      backgroundColor: '#FFFFFF',
+                      color: '#0F172A',
+                      fontSize: '0.8rem',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 6
+                    }}
+                  >
+                    <Plus size={14} />
+                    <span>Cadastrar cartão de crédito ou débito</span>
+                  </button>
                 </div>
-              )}
-
-              {allowApplePay && (
-                <StripeWalletCheckout
-                  publishableKey={paymentsConfig.stripePublishableKey}
-                  amountBrl={pricing.totalPrice}
-                  category={selectedCategory}
-                  distanceKm={distanceKm}
-                  durationMin={durationMin}
-                  time={nowTimeStr}
-                  origin={origin}
-                  destination={destination}
-                  clientId={currentUser?.id}
-                  clientName={currentUser?.name}
-                  clientPhone={currentUser?.phone}
-                  clientEmail={currentUser?.email}
-                  onBeforeConfirm={validateBookingBeforePayment}
-                  onHostedCheckoutClick={handleStartApplePayCheckout}
-                  onWalletAuthorized={async ({ paymentIntentId, brand }) => {
-                    await submitBookingRequest({
-                      stripePaymentIntentId: paymentIntentId,
-                      paymentMethodOverride: 'apple_pay',
-                      cardBrandOverride: brand
-                    });
-                  }}
-                />
               )}
             </div>
           )}
