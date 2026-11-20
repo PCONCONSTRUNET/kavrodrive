@@ -168,13 +168,12 @@ export const DEFAULT_CONFIG: SystemConfig = {
   paymentMethodCommissionPercents: {
     pix: 20,
     cartao_credito: 20,
-    cartao_debito: 20,
+    carteira: 20,
     dinheiro: 20,
   },
   gatewayFeePercents: {
     pix: 0,
     cartao_credito: 0,
-    cartao_debito: 0,
   },
   withdrawalFeePercent: 0,
   withdrawalFeeFixed: 0,
@@ -186,7 +185,7 @@ export const DEFAULT_CONFIG: SystemConfig = {
   minWithdrawalAmount: 20.0,
   autoSplitPixEnabled: true,
   cardSettlementDays: 0,
-  activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'],
+  activePaymentMethods: ['pix', 'cartao_credito', 'carteira', 'dinheiro'],
   rideCategories: DEFAULT_RIDE_CATEGORIES,
   serviceCategories: DEFAULT_RIDE_CATEGORIES,
   pixKey: 'contato@upmobilidade.com.br',

@@ -286,7 +286,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   const [simMin, setSimMin] = useState<number>(15);
   const [simMinStr, setSimMinStr] = useState<string>('15');
   const [simNight, setSimNight] = useState<boolean>(false);
-  const [simPaymentMethod, setSimPaymentMethod] = useState<'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro'>('pix');
+  const [simPaymentMethod, setSimPaymentMethod] = useState<'pix' | 'cartao_credito' | 'carteira' | 'dinheiro'>('pix');
 
   // ==========================================
   // ESTADOS E HELPERS DA AGENDA ESTILO IOS
@@ -1289,8 +1289,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
                   {[
                     { id: 'pix' as const, label: 'PIX' },
-                    { id: 'cartao_credito' as const, label: 'Cartão' },
-                    { id: 'apple_pay' as const, label: 'Apple Pay' },
+                    { id: 'cartao_credito' as const, label: 'Cartão Crédito' },
+                    { id: 'carteira' as const, label: 'Carteira' },
                     { id: 'dinheiro' as const, label: 'Dinheiro' }
                   ].map(m => {
                     const isSelected = newTransactionPaymentMethod === m.id;
@@ -6405,10 +6405,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
 
           const basePlatformPct = Number(currentConfig.platformCommissionPercent ?? 20);
           const basePlatformFixed = Math.max(0, Number(currentConfig.platformCommissionFixed ?? 0) || 0);
-          const simCommByMethod: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'dinheiro', number> = {
+          const simCommByMethod: Record<'pix' | 'cartao_credito' | 'carteira' | 'dinheiro', number> = {
             pix: Number(currentConfig.paymentMethodCommissionPercents?.pix ?? basePlatformPct),
             cartao_credito: Number(currentConfig.paymentMethodCommissionPercents?.cartao_credito ?? basePlatformPct),
-            cartao_debito: Number(currentConfig.paymentMethodCommissionPercents?.cartao_debito ?? basePlatformPct),
+            carteira: Number(currentConfig.paymentMethodCommissionPercents?.carteira ?? basePlatformPct),
             dinheiro: Number(currentConfig.paymentMethodCommissionPercents?.dinheiro ?? basePlatformPct)
           };
           const commissionPct = simCommByMethod[simPaymentMethod] ?? basePlatformPct;
@@ -6576,10 +6576,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             inputMode="decimal"
                             value={baseFareStr}
                             onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d.,]/g, '');
+                              const formatted = parseCurrencyInput(e.target.value);
                               setIsConfigDirty(true);
-                              setBaseFareStr(raw);
-                              setCurrentConfig(prev => ({ ...prev, baseFare: parseCurrencyToFloat(raw) }));
+                              setBaseFareStr(formatted);
+                              setCurrentConfig(prev => ({ ...prev, baseFare: parseCurrencyToFloat(formatted) }));
                             }}
                             onBlur={() => {
                               const val = parseCurrencyToFloat(baseFareStr);
@@ -6613,10 +6613,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             inputMode="decimal"
                             value={pricePerKmStr}
                             onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d.,]/g, '');
+                              const formatted = parseCurrencyInput(e.target.value);
                               setIsConfigDirty(true);
-                              setPricePerKmStr(raw);
-                              setCurrentConfig(prev => ({ ...prev, pricePerKm: parseCurrencyToFloat(raw) }));
+                              setPricePerKmStr(formatted);
+                              setCurrentConfig(prev => ({ ...prev, pricePerKm: parseCurrencyToFloat(formatted) }));
                             }}
                             onBlur={() => {
                               const val = parseCurrencyToFloat(pricePerKmStr);
@@ -6650,10 +6650,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             inputMode="decimal"
                             value={pricePerMinuteStr}
                             onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d.,]/g, '');
+                              const formatted = parseCurrencyInput(e.target.value);
                               setIsConfigDirty(true);
-                              setPricePerMinuteStr(raw);
-                              setCurrentConfig(prev => ({ ...prev, pricePerMinute: parseCurrencyToFloat(raw) }));
+                              setPricePerMinuteStr(formatted);
+                              setCurrentConfig(prev => ({ ...prev, pricePerMinute: parseCurrencyToFloat(formatted) }));
                             }}
                             onBlur={() => {
                               const val = parseCurrencyToFloat(pricePerMinuteStr);
@@ -6687,10 +6687,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             inputMode="decimal"
                             value={minimumFareStr}
                             onChange={(e) => {
-                              const raw = e.target.value.replace(/[^\d.,]/g, '');
+                              const formatted = parseCurrencyInput(e.target.value);
                               setIsConfigDirty(true);
-                              setMinimumFareStr(raw);
-                              setCurrentConfig(prev => ({ ...prev, minimumFare: parseCurrencyToFloat(raw) }));
+                              setMinimumFareStr(formatted);
+                              setCurrentConfig(prev => ({ ...prev, minimumFare: parseCurrencyToFloat(formatted) }));
                             }}
                             onBlur={() => {
                               const val = parseCurrencyToFloat(minimumFareStr);
@@ -6882,8 +6882,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6 }}>
                         {[
                           { id: 'pix' as const, label: 'PIX' },
-                          { id: 'cartao_credito' as const, label: 'Crédito' },
-                          { id: 'cartao_debito' as const, label: 'Débito' },
+                          { id: 'cartao_credito' as const, label: 'Cartão de Crédito' },
+                          { id: 'carteira' as const, label: 'Saldo da Carteira' },
                           { id: 'dinheiro' as const, label: 'Dinheiro' }
                         ].map((pm) => {
                           const active = simPaymentMethod === pm.id;

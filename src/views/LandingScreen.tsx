@@ -541,7 +541,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           }}
         >
           {/* Esquerda: Marca + Seletor de Cidade Visível */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 10 : 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 18, minWidth: 0, flex: isMobile ? 1 : undefined }}>
             <button
               type="button"
               onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
@@ -552,13 +552,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 display: 'flex',
                 alignItems: 'center',
                 padding: 0,
+                flexShrink: 0,
               }}
             >
               <img
                 src="/logo-horizontal-white.png"
                 alt="Kavro Drive"
                 style={{
-                  height: isMobile ? 27 : 33,
+                  height: isMobile ? 25 : 33,
                   width: 'auto',
                   display: 'block',
                   objectFit: 'contain',
@@ -577,18 +578,22 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 border: '1px solid rgba(118, 216, 0, 0.28)',
                 backgroundColor: '#131E26',
                 color: '#E2E8F0',
-                fontSize: isMobile ? '0.75rem' : '0.8rem',
+                fontSize: isMobile ? '0.73rem' : '0.8rem',
                 fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 5,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
+                minWidth: 0,
+                maxWidth: isMobile ? 156 : 'none',
               }}
             >
-              <MapPin size={13} color="#76D800" />
-              <span>{selectedCity.replace(', BR', '')}</span>
-              <ChevronDown size={13} color="#94A3B8" />
+              <MapPin size={13} color="#76D800" style={{ flexShrink: 0 }} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {selectedCity.replace(', BR', '')}
+              </span>
+              <ChevronDown size={13} color="#94A3B8" style={{ flexShrink: 0 }} />
             </button>
           </div>
 
@@ -678,162 +683,325 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           )}
 
           {/* Direita: Ações */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 10 }}>
-            {!isMobile && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 8 : 10, flexShrink: 0 }}>
+            {!isMobile ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => navigate('/kavro-drive')}
+                  style={{
+                    ...navBtnStyle,
+                    color: '#8CE826',
+                    fontSize: '0.86rem',
+                  }}
+                >
+                  Portal Motorista
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openClientFlow('register')}
+                  style={{
+                    height: 36,
+                    padding: '0 14px',
+                    borderRadius: 10,
+                    border: '1px solid rgba(118, 216, 0, 0.35)',
+                    backgroundColor: '#131E26',
+                    color: '#FFFFFF',
+                    fontSize: '0.86rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Criar conta
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => openClientFlow('login')}
+                  style={{
+                    height: 36,
+                    padding: '0 16px',
+                    borderRadius: 10,
+                    border: 'none',
+                    backgroundColor: '#76D800',
+                    color: '#0B1218',
+                    fontSize: '0.86rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  Entrar
+                </button>
+              </>
+            ) : (
               <button
                 type="button"
-                onClick={() => navigate('/kavro-drive')}
-                style={{
-                  ...navBtnStyle,
-                  color: '#8CE826',
-                  fontSize: '0.86rem',
-                }}
-              >
-                Portal Motorista
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={() => openClientFlow('register')}
-              style={{
-                height: 36,
-                padding: isMobile ? '0 11px' : '0 14px',
-                borderRadius: 10,
-                border: '1px solid rgba(118, 216, 0, 0.35)',
-                backgroundColor: '#131E26',
-                color: '#FFFFFF',
-                fontSize: isMobile ? '0.8rem' : '0.86rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Criar conta
-            </button>
-
-            <button
-              type="button"
-              onClick={() => openClientFlow('login')}
-              style={{
-                height: 36,
-                padding: isMobile ? '0 13px' : '0 16px',
-                borderRadius: 10,
-                border: 'none',
-                backgroundColor: '#76D800',
-                color: '#0B1218',
-                fontSize: isMobile ? '0.8rem' : '0.86rem',
-                fontWeight: 800,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Entrar
-            </button>
-
-            {isMobile && (
-              <button
-                type="button"
-                aria-label="Abrir menu"
+                aria-label="Abrir menu e atalhos"
                 onClick={() => setMobileDrawerOpen((v) => !v)}
                 style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: 10,
-                  border: '1px solid rgba(118, 216, 0, 0.3)',
+                  width: 40,
+                  height: 38,
+                  borderRadius: 11,
+                  border: '1px solid rgba(118, 216, 0, 0.4)',
                   backgroundColor: '#131E26',
                   color: '#FFFFFF',
-                  display: 'flex',
+                  display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   cursor: 'pointer',
                   flexShrink: 0,
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.28)',
                 }}
               >
-                {mobileDrawerOpen ? <X size={18} /> : <Menu size={18} />}
+                {mobileDrawerOpen ? <X size={19} /> : <Menu size={20} />}
               </button>
             )}
           </div>
         </div>
       </header>
 
-      {/* Drawer Mobile Reorganizado em Grupos */}
+      {/* Modal Mobile de Atalhos Rápidos & Conta */}
       {isMobile && mobileDrawerOpen && (
         <div
+          onClick={() => setMobileDrawerOpen(false)}
           style={{
             position: 'fixed',
-            top: 68,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: '#0B1218',
-            zIndex: 118,
-            padding: '20px 18px 110px',
-            overflowY: 'auto',
+            inset: 0,
+            backgroundColor: 'rgba(6, 11, 15, 0.78)',
+            backdropFilter: 'blur(8px)',
+            WebkitBackdropFilter: 'blur(8px)',
+            zIndex: 190,
+            padding: 16,
             display: 'flex',
-            flexDirection: 'column',
-            gap: 18,
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
         >
-          <div>
-            <div style={drawerGroupLabelStyle}>Para Passageiros</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {[
-                { label: 'Simular e pedir corrida', action: () => openClientFlow('login') },
-                { label: 'Agendar horário', action: () => openClientFlow('schedule') },
-                { label: 'Explorar categorias', action: () => scrollToSection('servicos') },
-                { label: 'Como funciona em 5 passos', action: () => scrollToSection('como-funciona') },
-              ].map((item) => (
-                <button key={item.label} type="button" onClick={item.action} style={drawerRowBtnStyle}>
-                  <span>{item.label}</span>
-                  <ChevronRight size={17} color="#76D800" />
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div style={drawerGroupLabelStyle}>Motoristas &amp; Empresas</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {[
-                { label: 'Dirigir na Kavro Drive', action: () => navigate('/kavro-drive') },
-                { label: 'Vantagens para Parceiros', action: () => scrollToSection('motoristas') },
-                { label: 'Soluções Corporativas', action: () => scrollToSection('empresas') },
-                { label: 'Segurança & Auditoria', action: () => navigate('/auditoria') },
-              ].map((item) => (
-                <button key={item.label} type="button" onClick={item.action} style={drawerRowBtnStyle}>
-                  <span>{item.label}</span>
-                  <ChevronRight size={17} color="#76D800" />
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              setMobileDrawerOpen(false);
-              navigate('/ajuda');
-            }}
+          <div
+            onClick={(e) => e.stopPropagation()}
             style={{
               width: '100%',
-              padding: '14px 16px',
-              borderRadius: 12,
-              backgroundColor: 'rgba(118, 216, 0, 0.12)',
-              border: '1px solid rgba(118, 216, 0, 0.35)',
-              color: '#8CE826',
-              fontWeight: 700,
-              fontSize: '0.95rem',
-              cursor: 'pointer',
+              maxWidth: 400,
+              maxHeight: '88dvh',
+              overflowY: 'auto',
+              backgroundColor: '#0E171E',
+              border: '1px solid rgba(118, 216, 0, 0.28)',
+              borderRadius: 20,
+              padding: 18,
+              boxShadow: '0 24px 60px rgba(0, 0, 0, 0.55)',
               display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
+              flexDirection: 'column',
+              gap: 16,
             }}
           >
-            <HelpCircle size={18} />
-            <span>Central de Ajuda e WhatsApp</span>
-          </button>
+            {/* Cabeçalho do Modal */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                paddingBottom: 12,
+                borderBottom: '1px solid rgba(255,255,255,0.08)',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <img
+                  src="/logo-horizontal-white.png"
+                  alt="Kavro Drive"
+                  style={{ height: 24, width: 'auto', objectFit: 'contain' }}
+                />
+                <span
+                  style={{
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    color: '#8CE826',
+                    backgroundColor: 'rgba(118, 216, 0, 0.12)',
+                    border: '1px solid rgba(118, 216, 0, 0.3)',
+                    padding: '3px 8px',
+                    borderRadius: 999,
+                  }}
+                >
+                  Atalhos
+                </span>
+              </div>
+              <button
+                type="button"
+                aria-label="Fechar menu"
+                onClick={() => setMobileDrawerOpen(false)}
+                style={{
+                  width: 34,
+                  height: 34,
+                  borderRadius: 10,
+                  border: '1px solid rgba(255,255,255,0.14)',
+                  backgroundColor: '#131E26',
+                  color: '#CBD5E1',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Ações Principais de Acesso */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileDrawerOpen(false);
+                  openClientFlow('login');
+                }}
+                style={{
+                  height: 44,
+                  borderRadius: 12,
+                  border: 'none',
+                  backgroundColor: '#76D800',
+                  color: '#0B1218',
+                  fontSize: '0.9rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                Entrar
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileDrawerOpen(false);
+                  openClientFlow('register');
+                }}
+                style={{
+                  height: 44,
+                  borderRadius: 12,
+                  border: '1px solid rgba(118, 216, 0, 0.45)',
+                  backgroundColor: '#131E26',
+                  color: '#FFFFFF',
+                  fontSize: '0.9rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                Criar conta
+              </button>
+            </div>
+
+            {/* Cidade Atual */}
+            <button
+              type="button"
+              onClick={() => {
+                setMobileDrawerOpen(false);
+                setCityModalOpen(true);
+              }}
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                borderRadius: 12,
+                backgroundColor: '#131E26',
+                border: '1px solid rgba(118, 216, 0, 0.2)',
+                color: '#E2E8F0',
+                fontSize: '0.84rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                <MapPin size={15} color="#76D800" />
+                <span>Cidade: <strong>{selectedCity.replace(', BR', '')}</strong></span>
+              </span>
+              <span style={{ color: '#8CE826', fontSize: '0.76rem', fontWeight: 700 }}>Alterar</span>
+            </button>
+
+            <div>
+              <div style={drawerGroupLabelStyle}>Para Passageiros</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[
+                  { label: 'Simular e pedir corrida', action: () => openClientFlow('login') },
+                  { label: 'Agendar horário', action: () => openClientFlow('schedule') },
+                  { label: 'Explorar categorias', action: () => scrollToSection('servicos') },
+                  { label: 'Como funciona em 5 passos', action: () => scrollToSection('como-funciona') },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={() => {
+                      setMobileDrawerOpen(false);
+                      item.action();
+                    }}
+                    style={drawerRowBtnStyle}
+                  >
+                    <span>{item.label}</span>
+                    <ChevronRight size={17} color="#76D800" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={drawerGroupLabelStyle}>Motoristas &amp; Transparência</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[
+                  { label: 'Portal do Motorista', action: () => navigate('/kavro-drive') },
+                  { label: 'Vantagens para Parceiros', action: () => scrollToSection('motoristas') },
+                  { label: 'Soluções Corporativas', action: () => scrollToSection('empresas') },
+                  { label: 'Segurança & Auditoria Pública', action: () => navigate('/auditoria') },
+                ].map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    onClick={() => {
+                      setMobileDrawerOpen(false);
+                      item.action();
+                    }}
+                    style={drawerRowBtnStyle}
+                  >
+                    <span>{item.label}</span>
+                    <ChevronRight size={17} color="#76D800" />
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setMobileDrawerOpen(false);
+                navigate('/ajuda');
+              }}
+              style={{
+                width: '100%',
+                padding: '13px 16px',
+                borderRadius: 12,
+                backgroundColor: 'rgba(118, 216, 0, 0.12)',
+                border: '1px solid rgba(118, 216, 0, 0.35)',
+                color: '#8CE826',
+                fontWeight: 700,
+                fontSize: '0.9rem',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              <HelpCircle size={18} />
+              <span>Central de Ajuda e WhatsApp</span>
+            </button>
+          </div>
         </div>
       )}
 

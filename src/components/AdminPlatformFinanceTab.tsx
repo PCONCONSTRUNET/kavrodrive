@@ -3264,10 +3264,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                 >
                   <option value="todos">Todos os Métodos</option>
                   <option value="pix">PIX</option>
-                  <option value="dinheiro">Dinheiro</option>
                   <option value="cartao_credito">Cartão de Crédito</option>
-                  <option value="cartao_debito">Cartão de Débito</option>
-                  <option value="apple_pay">Apple Pay</option>
+                  <option value="carteira">Saldo da Carteira</option>
+                  <option value="dinheiro">Dinheiro</option>
                 </select>
 
                 <select

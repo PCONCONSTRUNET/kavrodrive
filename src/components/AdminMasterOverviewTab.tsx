@@ -625,7 +625,7 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {[
               { method: 'pix', label: 'PIX Dinâmico (Gateway)', value: stats.pixTotal, pct: pixPct },
-              { method: 'cartao_credito', label: 'Cartão de Crédito / Débito • Apple Pay', value: stats.cardTotal, pct: cardPct },
+              { method: 'cartao_credito', label: 'Cartão de Crédito', value: stats.cardTotal, pct: cardPct },
               { method: 'dinheiro', label: 'Dinheiro (Comissão em Débito)', value: stats.cashTotal, pct: cashPct }
             ].map((item, idx) => (
               <div key={idx} style={{

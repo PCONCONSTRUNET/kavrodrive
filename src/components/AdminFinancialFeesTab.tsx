@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { PaymentMethod, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { formatCurrencyValue, parseCurrencyInput, parseCurrencyToFloat } from '../utils/format';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface AdminFinancialFeesTabProps {
@@ -38,14 +39,16 @@ const clampPct = (raw: string, fallback: number): number => {
 };
 
 const clampMoney = (raw: string, fallback: number, min = 0): number => {
-  const cleaned = String(raw ?? '').replace(',', '.').replace(/[^\d.]/g, '');
-  if (!cleaned) return fallback;
-  const n = parseFloat(cleaned);
+  const text = String(raw ?? '').trim();
+  if (!text) return fallback;
+  const n = text.includes(',')
+    ? parseCurrencyToFloat(text)
+    : parseFloat(text.replace(/[^\d.-]/g, ''));
   if (Number.isNaN(n)) return fallback;
   return Math.max(min, Math.round(n * 100) / 100);
 };
 
-const ALL_METHODS: PaymentMethod[] = ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'carteira', 'dinheiro'];
+const ALL_METHODS: PaymentMethod[] = ['pix', 'cartao_credito', 'carteira', 'dinheiro'];
 
 const calcPlatformFee = (gross: number, pct: number, fixed: number): number => {
   if (gross <= 0) return 0;
@@ -84,14 +87,14 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   const baseFixed = Math.max(0, Number(config.platformCommissionFixed ?? 0) || 0);
 
   // Sub-aba 1: Taxas Base das Corridas
-  const [baseFareStr, setBaseFareStr] = useState(String(config.baseFare ?? 8));
-  const [pricePerKmStr, setPricePerKmStr] = useState(String(config.pricePerKm ?? 3.2));
-  const [pricePerMinuteStr, setPricePerMinuteStr] = useState(String(config.pricePerMinute ?? 0.5));
-  const [minimumFareStr, setMinimumFareStr] = useState(String(config.minimumFare ?? 15));
+  const [baseFareStr, setBaseFareStr] = useState(formatCurrencyValue(config.baseFare ?? 8));
+  const [pricePerKmStr, setPricePerKmStr] = useState(formatCurrencyValue(config.pricePerKm ?? 3.2));
+  const [pricePerMinuteStr, setPricePerMinuteStr] = useState(formatCurrencyValue(config.pricePerMinute ?? 0.5));
+  const [minimumFareStr, setMinimumFareStr] = useState(formatCurrencyValue(config.minimumFare ?? 15));
   const [nightSurchargeStr, setNightSurchargeStr] = useState(String(config.nightSurchargePercent ?? 20));
-  const [cancellationFeeStr, setCancellationFeeStr] = useState(String(config.cancellationFeeAmount ?? 0));
+  const [cancellationFeeStr, setCancellationFeeStr] = useState(formatCurrencyValue(config.cancellationFeeAmount ?? 0));
   const [globalCommStr, setGlobalCommStr] = useState(String(baseComm));
-  const [globalFixedStr, setGlobalFixedStr] = useState(String(baseFixed));
+  const [globalFixedStr, setGlobalFixedStr] = useState(formatCurrencyValue(baseFixed));
   const [useCategoryOverride, setUseCategoryOverride] = useState<boolean>(
     Boolean(config.useCategoryCommissionOverride)
   );
@@ -100,12 +103,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   const [pixGatewayStr, setPixGatewayStr] = useState(String(config.gatewayFeePercents?.pix ?? 0));
   const [creditGatewayStr, setCreditGatewayStr] = useState(
     String(config.gatewayFeePercents?.cartao_credito ?? 0)
-  );
-  const [debitGatewayStr, setDebitGatewayStr] = useState(
-    String(config.gatewayFeePercents?.cartao_debito ?? 0)
-  );
-  const [applePayGatewayStr, setApplePayGatewayStr] = useState(
-    String(config.gatewayFeePercents?.apple_pay ?? config.gatewayFeePercents?.cartao_credito ?? 0)
   );
   const [paymentsStatus, setPaymentsStatus] = useState<{
     gatewayProvider: 'efibank' | 'stripe' | 'mercadopago' | 'sandbox';
@@ -145,30 +142,30 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     String(config.withdrawalFeePercent ?? 0)
   );
   const [withdrawalFeeFixedStr, setWithdrawalFeeFixedStr] = useState(
-    String(config.withdrawalFeeFixed ?? 0)
+    formatCurrencyValue(config.withdrawalFeeFixed ?? 0)
   );
   const [minWithdrawalStr, setMinWithdrawalStr] = useState(
-    String(config.minWithdrawalAmount ?? 20)
+    formatCurrencyValue(config.minWithdrawalAmount ?? 20)
   );
   const [maxDebtLimitStr, setMaxDebtLimitStr] = useState(
-    String(config.maxDriverDebtLimit ?? 100)
+    formatCurrencyValue(config.maxDriverDebtLimit ?? 100)
   );
   const [cardSettlementDaysStr, setCardSettlementDaysStr] = useState(
     String(config.cardSettlementDays ?? 0)
   );
 
   const resolveInitialMethods = (cfg: SystemConfig): PaymentMethod[] => {
-    const base: PaymentMethod[] =
+    const raw =
       Array.isArray(cfg.activePaymentMethods) && cfg.activePaymentMethods.length > 0
-        ? [...cfg.activePaymentMethods]
-        : [...ALL_METHODS];
-    if (!cfg.applePayDisabled && base.includes('cartao_credito') && !base.includes('apple_pay')) {
-      base.push('apple_pay');
-    }
+        ? cfg.activePaymentMethods
+        : ALL_METHODS;
+    const base: PaymentMethod[] = raw.filter((m): m is PaymentMethod =>
+      ALL_METHODS.includes(m)
+    );
     if (!cfg.walletPaymentDisabled && !base.includes('carteira')) {
       base.push('carteira');
     }
-    return base;
+    return base.length > 0 ? base : [...ALL_METHODS];
   };
 
   const [activeMethods, setActiveMethods] = useState<PaymentMethod[]>(() => resolveInitialMethods(config));
@@ -187,32 +184,30 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   const [saveFeedback, setSaveFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
   // Simuladores
-  const [simRideAmountStr, setSimRideAmountStr] = useState('50');
-  const [simMethod, setSimMethod] = useState<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro'>('pix');
-  const [simWithdrawAmountStr, setSimWithdrawAmountStr] = useState('100');
+  const [simRideAmountStr, setSimRideAmountStr] = useState(formatCurrencyValue(50));
+  const [simMethod, setSimMethod] = useState<'pix' | 'cartao_credito' | 'carteira' | 'dinheiro'>('pix');
+  const [simWithdrawAmountStr, setSimWithdrawAmountStr] = useState(formatCurrencyValue(100));
 
   useEffect(() => {
     if (isDirty) return;
     const base = Number(config.platformCommissionPercent ?? 20);
     const fixed = Math.max(0, Number(config.platformCommissionFixed ?? 0) || 0);
-    setBaseFareStr(String(config.baseFare ?? 8));
-    setPricePerKmStr(String(config.pricePerKm ?? 3.2));
-    setPricePerMinuteStr(String(config.pricePerMinute ?? 0.5));
-    setMinimumFareStr(String(config.minimumFare ?? 15));
+    setBaseFareStr(formatCurrencyValue(config.baseFare ?? 8));
+    setPricePerKmStr(formatCurrencyValue(config.pricePerKm ?? 3.2));
+    setPricePerMinuteStr(formatCurrencyValue(config.pricePerMinute ?? 0.5));
+    setMinimumFareStr(formatCurrencyValue(config.minimumFare ?? 15));
     setNightSurchargeStr(String(config.nightSurchargePercent ?? 20));
-    setCancellationFeeStr(String(config.cancellationFeeAmount ?? 0));
+    setCancellationFeeStr(formatCurrencyValue(config.cancellationFeeAmount ?? 0));
     setGlobalCommStr(String(base));
-    setGlobalFixedStr(String(fixed));
+    setGlobalFixedStr(formatCurrencyValue(fixed));
     setUseCategoryOverride(Boolean(config.useCategoryCommissionOverride));
 
     setPixGatewayStr(String(config.gatewayFeePercents?.pix ?? 0));
     setCreditGatewayStr(String(config.gatewayFeePercents?.cartao_credito ?? 0));
-    setDebitGatewayStr(String(config.gatewayFeePercents?.cartao_debito ?? 0));
-    setApplePayGatewayStr(String(config.gatewayFeePercents?.apple_pay ?? config.gatewayFeePercents?.cartao_credito ?? 0));
     setWithdrawalFeePercentStr(String(config.withdrawalFeePercent ?? 0));
-    setWithdrawalFeeFixedStr(String(config.withdrawalFeeFixed ?? 0));
-    setMinWithdrawalStr(String(config.minWithdrawalAmount ?? 20));
-    setMaxDebtLimitStr(String(config.maxDriverDebtLimit ?? 100));
+    setWithdrawalFeeFixedStr(formatCurrencyValue(config.withdrawalFeeFixed ?? 0));
+    setMinWithdrawalStr(formatCurrencyValue(config.minWithdrawalAmount ?? 20));
+    setMaxDebtLimitStr(formatCurrencyValue(config.maxDriverDebtLimit ?? 100));
     setCardSettlementDaysStr(String(config.cardSettlementDays ?? 0));
     setActiveMethods(resolveInitialMethods(config));
     setAutoBlockDelinquent(config.autoBlockDelinquentDrivers !== false);
@@ -251,8 +246,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
     const parsedPixGw = clampPct(pixGatewayStr, 0);
     const parsedCreditGw = clampPct(creditGatewayStr, 0);
-    const parsedDebitGw = clampPct(debitGatewayStr, 0);
-    const parsedApplePayGw = clampPct(applePayGatewayStr, 0);
 
     const parsedWdPct = clampPct(withdrawalFeePercentStr, 0);
     const parsedWdFixed = clampMoney(withdrawalFeeFixedStr, 0, 0);
@@ -260,7 +253,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     const parsedMaxDebt = clampMoney(maxDebtLimitStr, 100, 0);
     const parsedCardDays = Math.min(60, Math.max(0, parseInt(cardSettlementDaysStr.replace(/\D/g, ''), 10) || 0));
 
-    const finalMethods = activeMethods.length > 0 ? activeMethods : ALL_METHODS;
+    const filteredActive = activeMethods.filter((m) => ALL_METHODS.includes(m));
+    const finalMethods = filteredActive.length > 0 ? filteredActive : ALL_METHODS;
     const latestConfig = StorageService.getConfig();
     const nextConfig: SystemConfig = {
       ...latestConfig,
@@ -276,16 +270,12 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       paymentMethodCommissionPercents: {
         pix: parsedGlobal,
         cartao_credito: parsedGlobal,
-        cartao_debito: parsedGlobal,
-        apple_pay: parsedGlobal,
         carteira: parsedGlobal,
         dinheiro: parsedGlobal
       },
       gatewayFeePercents: {
         pix: parsedPixGw,
-        cartao_credito: parsedCreditGw,
-        cartao_debito: parsedDebitGw,
-        apple_pay: parsedApplePayGw
+        cartao_credito: parsedCreditGw
       },
       withdrawalFeePercent: parsedWdPct,
       withdrawalFeeFixed: parsedWdFixed,
@@ -296,7 +286,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       autoBlockDelinquentDrivers: autoBlockDelinquent,
       cashDeductFromBalanceFirst: cashDeductFirst,
       autoSplitPixEnabled: autoSplitPix,
-      applePayDisabled: !finalMethods.includes('apple_pay'),
+      applePayDisabled: true,
       walletPaymentDisabled: !finalMethods.includes('carteira'),
       activePaymentMethods: finalMethods
     };
@@ -312,22 +302,20 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       return;
     }
 
-    setBaseFareStr(String(parsedBaseFare));
-    setPricePerKmStr(String(parsedPerKm));
-    setPricePerMinuteStr(String(parsedPerMin));
-    setMinimumFareStr(String(parsedMinFare));
+    setBaseFareStr(formatCurrencyValue(parsedBaseFare));
+    setPricePerKmStr(formatCurrencyValue(parsedPerKm));
+    setPricePerMinuteStr(formatCurrencyValue(parsedPerMin));
+    setMinimumFareStr(formatCurrencyValue(parsedMinFare));
     setNightSurchargeStr(String(parsedNight));
-    setCancellationFeeStr(String(parsedCancelFee));
+    setCancellationFeeStr(formatCurrencyValue(parsedCancelFee));
     setGlobalCommStr(String(parsedGlobal));
-    setGlobalFixedStr(String(parsedGlobalFixed));
+    setGlobalFixedStr(formatCurrencyValue(parsedGlobalFixed));
     setPixGatewayStr(String(parsedPixGw));
     setCreditGatewayStr(String(parsedCreditGw));
-    setDebitGatewayStr(String(parsedDebitGw));
-    setApplePayGatewayStr(String(parsedApplePayGw));
     setWithdrawalFeePercentStr(String(parsedWdPct));
-    setWithdrawalFeeFixedStr(String(parsedWdFixed));
-    setMinWithdrawalStr(String(parsedMinWd));
-    setMaxDebtLimitStr(String(parsedMaxDebt));
+    setWithdrawalFeeFixedStr(formatCurrencyValue(parsedWdFixed));
+    setMinWithdrawalStr(formatCurrencyValue(parsedMinWd));
+    setMaxDebtLimitStr(formatCurrencyValue(parsedMaxDebt));
     setCardSettlementDaysStr(String(parsedCardDays));
 
     setIsDirty(false);
@@ -357,7 +345,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
   // Prévia de Pagamentos / Gateways / Saques
   const methodRows: Array<{
-    id: 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro';
+    id: 'pix' | 'cartao_credito' | 'carteira' | 'dinheiro';
     title: string;
     subtitle: string;
     accent: string;
@@ -390,28 +378,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       icon: <PaymentMethodIcon method="cartao_credito" size={22} />
     },
     {
-      id: 'cartao_debito',
-      title: 'Cartão de Débito',
-      subtitle: 'Pagamento online no app',
-      accent: '#4338CA',
-      bgAccent: '#EEF2FF',
-      hasGateway: true,
-      gwStr: debitGatewayStr,
-      setGwStr: setDebitGatewayStr,
-      icon: <PaymentMethodIcon method="cartao_debito" size={22} />
-    },
-    {
-      id: 'apple_pay',
-      title: 'Apple Pay',
-      subtitle: 'Carteira digital Apple Express & Checkout (pré-autorização manual)',
-      accent: '#0F172A',
-      bgAccent: '#F1F5F9',
-      hasGateway: true,
-      gwStr: applePayGatewayStr,
-      setGwStr: setApplePayGatewayStr,
-      icon: <PaymentMethodIcon method="apple_pay" size={18} />
-    },
-    {
       id: 'carteira',
       title: 'Saldo da Carteira Kavro',
       subtitle: 'Crédito pré-pago depositado pelo passageiro (mín. R$ 20,00)',
@@ -431,11 +397,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     }
   ];
 
-  const gwPctMap: Record<'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro', number> = {
+  const gwPctMap: Record<'pix' | 'cartao_credito' | 'carteira' | 'dinheiro', number> = {
     pix: clampPct(pixGatewayStr, 0),
     cartao_credito: clampPct(creditGatewayStr, 0),
-    cartao_debito: clampPct(debitGatewayStr, 0),
-    apple_pay: clampPct(applePayGatewayStr, 0),
     carteira: 0,
     dinheiro: 0
   };
@@ -636,64 +600,80 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                 <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Bandeirada / Tarifa Base (R$)
                 </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={baseFareStr}
-                  onChange={(e) => {
-                    markDirty();
-                    setBaseFareStr(e.target.value.replace(/[^\d.,]/g, ''));
-                  }}
-                  style={inputStyle}
-                />
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.76rem', fontWeight: 700, color: '#64748B', pointerEvents: 'none' }}>R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={baseFareStr}
+                    onChange={(e) => {
+                      markDirty();
+                      setBaseFareStr(parseCurrencyInput(e.target.value));
+                    }}
+                    placeholder="0,00"
+                    style={{ ...inputStyle, paddingLeft: 32 }}
+                  />
+                </div>
               </div>
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Valor por KM (R$)
                 </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={pricePerKmStr}
-                  onChange={(e) => {
-                    markDirty();
-                    setPricePerKmStr(e.target.value.replace(/[^\d.,]/g, ''));
-                  }}
-                  style={inputStyle}
-                />
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.76rem', fontWeight: 700, color: '#64748B', pointerEvents: 'none' }}>R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={pricePerKmStr}
+                    onChange={(e) => {
+                      markDirty();
+                      setPricePerKmStr(parseCurrencyInput(e.target.value));
+                    }}
+                    placeholder="0,00"
+                    style={{ ...inputStyle, paddingLeft: 32 }}
+                  />
+                </div>
               </div>
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Valor por Minuto (R$)
                 </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={pricePerMinuteStr}
-                  onChange={(e) => {
-                    markDirty();
-                    setPricePerMinuteStr(e.target.value.replace(/[^\d.,]/g, ''));
-                  }}
-                  style={inputStyle}
-                />
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.76rem', fontWeight: 700, color: '#64748B', pointerEvents: 'none' }}>R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={pricePerMinuteStr}
+                    onChange={(e) => {
+                      markDirty();
+                      setPricePerMinuteStr(parseCurrencyInput(e.target.value));
+                    }}
+                    placeholder="0,00"
+                    style={{ ...inputStyle, paddingLeft: 32 }}
+                  />
+                </div>
               </div>
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Tarifa Mínima (R$)
                 </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={minimumFareStr}
-                  onChange={(e) => {
-                    markDirty();
-                    setMinimumFareStr(e.target.value.replace(/[^\d.,]/g, ''));
-                  }}
-                  style={inputStyle}
-                />
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.76rem', fontWeight: 700, color: '#64748B', pointerEvents: 'none' }}>R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={minimumFareStr}
+                    onChange={(e) => {
+                      markDirty();
+                      setMinimumFareStr(parseCurrencyInput(e.target.value));
+                    }}
+                    placeholder="0,00"
+                    style={{ ...inputStyle, paddingLeft: 32 }}
+                  />
+                </div>
               </div>
 
               <div>
@@ -716,17 +696,20 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                 <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Multa de Cancelamento (R$)
                 </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={cancellationFeeStr}
-                  onChange={(e) => {
-                    markDirty();
-                    setCancellationFeeStr(e.target.value.replace(/[^\d.,]/g, ''));
-                  }}
-                  placeholder="0.00"
-                  style={inputStyle}
-                />
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', fontSize: '0.76rem', fontWeight: 700, color: '#64748B', pointerEvents: 'none' }}>R$</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={cancellationFeeStr}
+                    onChange={(e) => {
+                      markDirty();
+                      setCancellationFeeStr(parseCurrencyInput(e.target.value));
+                    }}
+                    placeholder="0,00"
+                    style={{ ...inputStyle, paddingLeft: 32 }}
+                  />
+                </div>
               </div>
             </div>
           </div>
@@ -816,9 +799,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     value={globalFixedStr}
                     onChange={(e) => {
                       markDirty();
-                      setGlobalFixedStr(e.target.value.replace(/[^\d.,]/g, ''));
+                      setGlobalFixedStr(parseCurrencyInput(e.target.value));
                     }}
-                    placeholder="0.00"
+                    placeholder="0,00"
                     style={inputStyle}
                   />
                 </div>
@@ -906,9 +889,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
               <div style={{ fontSize: '0.86rem', fontWeight: 800 }}>
                 Gateway Ativo:{' '}
                 {paymentsStatus.efiPixActive
-                  ? `Efí Bank PIX (${paymentsStatus.efiSandbox ? 'Homologação' : 'Produção'})${paymentsStatus.stripeEnabled ? ' + Cartões/Apple Pay' : ''}`
+                  ? `Efí Bank PIX (${paymentsStatus.efiSandbox ? 'Homologação' : 'Produção'})${paymentsStatus.stripeEnabled ? ' + Cartão de Crédito' : ''}`
                   : paymentsStatus.stripeEnabled
-                    ? 'Pagamento Online Ativo (PIX • Cartão • Apple Pay)'
+                    ? 'Pagamento Online Ativo (PIX • Cartão de Crédito)'
                     : paymentsStatus.gatewayProvider === 'mercadopago'
                       ? 'Gateway Conectado'
                       : 'Modo Sandbox / Manual'}
@@ -917,7 +900,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                 {paymentsStatus.efiPixActive
                   ? `PIX e Carteira pela Efí Bank${paymentsStatus.efiDriverPixSendEnabled ? ' • Envio de Saque PIX API ativo' : ''}${paymentsStatus.efiSplitEnabled ? ' • Split Efí ativo' : ''}.`
                   : paymentsStatus.stripeEnabled
-                    ? 'Pré-autorização de cartão, PIX dinâmico com confirmação automática e carteira Apple Pay ativos.'
+                    ? 'Pré-autorização de Cartão de Crédito e PIX dinâmico com confirmação automática ativos.'
                     : 'Configure a Efí Bank (Certificado .p12, PIX, Split e Repasses) na aba dedicada do Painel Master.'}
               </div>
             </div>
@@ -953,25 +936,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   Configurar Efí Bank / Certificado
                 </button>
               )}
-              {paymentsStatus.stripeEnabled && activeMethods.includes('apple_pay') && (
-                <span
-                  style={{
-                    fontSize: '0.7rem',
-                    fontWeight: 800,
-                    padding: '4px 10px',
-                    borderRadius: 999,
-                    backgroundColor: '#000000',
-                    border: '1px solid rgba(255, 255, 255, 0.25)',
-                    color: '#FFFFFF',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5
-                  }}
-                >
-                  <PaymentMethodIcon method="apple_pay" size={14} />
-                  <span>Apple Pay Ativo</span>
-                </span>
-              )}
             </div>
           </div>
 
@@ -990,7 +954,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   Meios de Pagamento &amp; Taxas de Gateway
                 </div>
                 <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
-                  Ative ou desative formas de pagamento e configure o custo interno de cada meio (PIX / Cartão / Apple Pay / Dinheiro)
+                  Ative ou desative os 4 meios aceitos (PIX / Cartão de Crédito / Dinheiro / Saldo da Carteira)
                 </div>
               </div>
               <span
@@ -1158,9 +1122,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     value={withdrawalFeeFixedStr}
                     onChange={(e) => {
                       markDirty();
-                      setWithdrawalFeeFixedStr(e.target.value.replace(/[^\d.,]/g, ''));
+                      setWithdrawalFeeFixedStr(parseCurrencyInput(e.target.value));
                     }}
-                    placeholder="0.00"
+                    placeholder="0,00"
                     style={inputStyle}
                   />
                 </div>
@@ -1192,8 +1156,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     value={minWithdrawalStr}
                     onChange={(e) => {
                       markDirty();
-                      setMinWithdrawalStr(e.target.value.replace(/[^\d.,]/g, ''));
+                      setMinWithdrawalStr(parseCurrencyInput(e.target.value));
                     }}
+                    placeholder="0,00"
                     style={inputStyle}
                   />
                 </div>
@@ -1250,8 +1215,9 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   value={maxDebtLimitStr}
                   onChange={(e) => {
                     markDirty();
-                    setMaxDebtLimitStr(e.target.value.replace(/[^\d.,]/g, ''));
+                    setMaxDebtLimitStr(parseCurrencyInput(e.target.value));
                   }}
+                  placeholder="0,00"
                   style={inputStyle}
                 />
               </div>
@@ -1320,25 +1286,23 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#0F172A' }}>Corrida por Meio</span>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={simRideAmountStr}
-                      onChange={(e) => setSimRideAmountStr(e.target.value.replace(/[^\d.,]/g, ''))}
-                      style={{ width: 68, height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.76rem', fontWeight: 700 }}
-                    />
-                    <select
-                      value={simMethod}
-                      onChange={(e) => setSimMethod(e.target.value as 'pix' | 'cartao_credito' | 'cartao_debito' | 'apple_pay' | 'carteira' | 'dinheiro')}
-                      style={{ height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.74rem', fontWeight: 600 }}
-                    >
-                      <option value="pix">PIX</option>
-                      <option value="cartao_credito">Cartão de Crédito</option>
-                      <option value="cartao_debito">Cartão de Débito</option>
-                      <option value="apple_pay">Apple Pay</option>
-                      <option value="carteira">Saldo da Carteira</option>
-                      <option value="dinheiro">Dinheiro</option>
-                    </select>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={simRideAmountStr}
+                        onChange={(e) => setSimRideAmountStr(parseCurrencyInput(e.target.value))}
+                        style={{ width: 88, height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.76rem', fontWeight: 700 }}
+                      />
+                      <select
+                        value={simMethod}
+                        onChange={(e) => setSimMethod(e.target.value as 'pix' | 'cartao_credito' | 'carteira' | 'dinheiro')}
+                        style={{ height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.74rem', fontWeight: 600 }}
+                      >
+                        <option value="pix">PIX</option>
+                        <option value="cartao_credito">Cartão de Crédito</option>
+                        <option value="carteira">Saldo da Carteira</option>
+                        <option value="dinheiro">Dinheiro</option>
+                      </select>
                   </div>
                 </div>
                 <div style={{ fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1368,8 +1332,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     type="text"
                     inputMode="decimal"
                     value={simWithdrawAmountStr}
-                    onChange={(e) => setSimWithdrawAmountStr(e.target.value.replace(/[^\d.,]/g, ''))}
-                    style={{ width: 76, height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.76rem', fontWeight: 700 }}
+                    onChange={(e) => setSimWithdrawAmountStr(parseCurrencyInput(e.target.value))}
+                    style={{ width: 88, height: 28, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.76rem', fontWeight: 700 }}
                   />
                 </div>
                 <div style={{ fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: 4 }}>

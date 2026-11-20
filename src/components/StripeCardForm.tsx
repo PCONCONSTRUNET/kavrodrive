@@ -252,7 +252,7 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
         </div>
       </div>
 
-      {/* Pills compactas Crédito / Débito */}
+      {/* Pill Cartão de Crédito */}
       <div style={{ display: 'flex', justifyContent: 'center', gap: 8 }}>
         <button
           type="button"
@@ -260,31 +260,15 @@ const StripeCardInnerForm: React.FC<StripeCardInnerProps> = ({
           style={{
             padding: '7px 18px',
             borderRadius: 999,
-            border: cardType === 'cartao_credito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
-            backgroundColor: cardType === 'cartao_credito' ? '#0F172A' : '#F8FAFC',
-            color: cardType === 'cartao_credito' ? '#FFFFFF' : '#475569',
+            border: '1.5px solid #0F172A',
+            backgroundColor: '#0F172A',
+            color: '#FFFFFF',
             fontWeight: 800,
             fontSize: '0.76rem',
             cursor: 'pointer'
           }}
         >
-          Crédito
-        </button>
-        <button
-          type="button"
-          onClick={() => onChangeCardType('cartao_debito')}
-          style={{
-            padding: '7px 18px',
-            borderRadius: 999,
-            border: cardType === 'cartao_debito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
-            backgroundColor: cardType === 'cartao_debito' ? '#0F172A' : '#F8FAFC',
-            color: cardType === 'cartao_debito' ? '#FFFFFF' : '#475569',
-            fontWeight: 800,
-            fontSize: '0.76rem',
-            cursor: 'pointer'
-          }}
-        >
-          Débito
+          Cartão de Crédito
         </button>
       </div>
 

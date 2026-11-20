@@ -458,7 +458,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
       key: 'gift',
       icon: <Gift size={20} strokeWidth={2} />,
       title: 'Adicionar saldo na Carteira',
-      subtitle: 'Recarga mínima de R$ 20,00 via PIX, cartão ou Apple Pay',
+      subtitle: 'Recarga mínima de R$ 20,00 via PIX ou Cartão de Crédito',
       onClick: () => setWalletModalConfig({ open: true, initialMode: 'deposit' })
     },
     {

@@ -354,17 +354,17 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 10,
+            gap: 8,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 7 : 10, minWidth: 0 }}>
             <button
               type="button"
               onClick={() => navigate('/')}
               title="Voltar para a Home"
               style={{
-                width: 34,
-                height: 34,
+                width: 32,
+                height: 32,
                 borderRadius: 9,
                 border: '1px solid rgba(255,255,255,0.16)',
                 backgroundColor: '#131E26',
@@ -384,11 +384,12 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               alt="Kavro Drive"
               onClick={() => navigate('/')}
               style={{
-                height: isMobile ? 23 : 28,
+                height: isMobile ? 20 : 28,
                 width: 'auto',
                 objectFit: 'contain',
                 cursor: 'pointer',
-                flexShrink: 0,
+                flexShrink: 1,
+                minWidth: 0,
               }}
             />
 
@@ -408,14 +409,14 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
             )}
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: isMobile ? 5 : 6, flexShrink: 0 }}>
             <button
               type="button"
               onClick={fetchPublicAudit}
               title="Atualizar dados"
               style={{
-                height: 34,
-                padding: isMobile ? '0 9px' : '0 12px',
+                height: 32,
+                padding: isMobile ? '0 8px' : '0 12px',
                 borderRadius: 9,
                 border: '1px solid rgba(118, 216, 0, 0.25)',
                 backgroundColor: '#131E26',
@@ -436,17 +437,17 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               type="button"
               onClick={handleShare}
               style={{
-                height: 34,
-                padding: isMobile ? '0 9px' : '0 12px',
+                height: 32,
+                padding: isMobile ? '0 8px' : '0 12px',
                 borderRadius: 9,
                 border: '1px solid rgba(255,255,255,0.16)',
                 backgroundColor: '#131E26',
                 color: copiedLink ? '#76D800' : '#FFFFFF',
-                fontSize: '0.78rem',
+                fontSize: isMobile ? '0.74rem' : '0.78rem',
                 fontWeight: 700,
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
+                gap: 4,
                 cursor: 'pointer',
               }}
             >
@@ -458,13 +459,13 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               type="button"
               onClick={() => navigate('/cliente')}
               style={{
-                height: 34,
-                padding: isMobile ? '0 11px' : '0 14px',
+                height: 32,
+                padding: isMobile ? '0 9px' : '0 14px',
                 borderRadius: 9,
                 border: 'none',
                 backgroundColor: '#76D800',
                 color: '#0B1218',
-                fontSize: '0.78rem',
+                fontSize: isMobile ? '0.74rem' : '0.78rem',
                 fontWeight: 800,
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
@@ -716,10 +717,10 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
       </div>
 
       {/* ═══ CONTEÚDO DAS ABAS ═══ */}
-      <main style={{ ...containerStyle, paddingTop: isMobile ? 16 : 26, paddingBottom: 56 }}>
+      <main style={{ ...containerStyle, paddingTop: isMobile ? 16 : 26, paddingBottom: 56, minWidth: 0 }}>
         {/* ─── ABA 1: FROTA MULTI-MOTORISTAS COMPACTA COM CARROS ELÉTRICOS DE ESTÚDIO ─── */}
         {activeTab === 'drivers' && (
-          <div>
+          <div style={{ minWidth: 0 }}>
             {/* Barra de Busca e Filtro */}
             <div
               style={{
@@ -733,9 +734,12 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                 alignItems: isMobile ? 'stretch' : 'center',
                 justifyContent: 'space-between',
                 gap: 10,
+                width: '100%',
+                minWidth: 0,
+                boxSizing: 'border-box',
               }}
             >
-              <div style={{ position: 'relative', flex: 1 }}>
+              <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                 <Search
                   size={16}
                   color="#64748B"
@@ -768,6 +772,8 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                   gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : undefined,
                   gap: 6,
                   flexShrink: 0,
+                  width: isMobile ? '100%' : undefined,
+                  minWidth: 0,
                 }}
               >
                 {[
@@ -837,8 +843,9 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                  gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
                   gap: isMobile ? 12 : 16,
+                  width: '100%',
                 }}
               >
                 {filteredDrivers.map((drv) => {
@@ -854,23 +861,29 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                         backgroundColor: '#FFFFFF',
                         border: '1px solid #DCE5DF',
                         borderRadius: 16,
-                        padding: isMobile ? 13 : 16,
+                        padding: isMobile ? 12 : 16,
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: 12,
+                        gap: 11,
                         boxShadow: '0 4px 16px rgba(11, 18, 24, 0.04)',
+                        minWidth: 0,
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        overflow: 'hidden',
                       }}
                     >
                       {/* Linha 1: Motorista + Nota + Status */}
                       <div
                         style={{
                           display: 'flex',
-                          alignItems: 'center',
+                          alignItems: isMobile ? 'flex-start' : 'center',
                           justifyContent: 'space-between',
-                          gap: 10,
+                          flexWrap: 'wrap',
+                          gap: 8,
+                          minWidth: 0,
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flex: '1 1 170px' }}>
                           {drv.photo ? (
                             <img
                               src={drv.photo}
@@ -987,14 +1000,18 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                           padding: isMobile ? 10 : 12,
                           display: 'flex',
                           alignItems: 'center',
-                          gap: 12,
+                          flexWrap: isMobile ? 'wrap' : 'nowrap',
+                          gap: isMobile ? 10 : 12,
                           border: '1px solid #1E293B',
+                          minWidth: 0,
+                          width: '100%',
+                          boxSizing: 'border-box',
                         }}
                       >
                         <div
                           style={{
-                            width: isMobile ? 96 : 122,
-                            height: isMobile ? 64 : 76,
+                            width: isMobile ? 84 : 122,
+                            height: isMobile ? 58 : 76,
                             borderRadius: 9,
                             overflow: 'hidden',
                             flexShrink: 0,
@@ -1013,7 +1030,7 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                           />
                         </div>
 
-                        <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ flex: '1 1 130px', minWidth: 0 }}>
                           <div
                             style={{
                               fontSize: '0.64rem',
@@ -1028,12 +1045,13 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                           </div>
                           <div
                             style={{
-                              fontSize: isMobile ? '0.86rem' : '0.94rem',
+                              fontSize: isMobile ? '0.84rem' : '0.94rem',
                               fontWeight: 800,
                               color: '#FFFFFF',
-                              whiteSpace: 'nowrap',
+                              whiteSpace: isMobile ? 'normal' : 'nowrap',
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
+                              lineHeight: 1.2,
                               marginTop: 1,
                               marginBottom: 4,
                             }}
@@ -1065,7 +1083,12 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                         </div>
 
                         {drv.vehiclePlate && (
-                          <div style={{ flexShrink: 0 }}>
+                          <div
+                            style={{
+                              flexShrink: 0,
+                              marginLeft: isMobile ? 'auto' : 0,
+                            }}
+                          >
                             <MercosulPlateBadge plate={drv.vehiclePlate} size="sm" />
                           </div>
                         )}
@@ -1077,12 +1100,14 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'space-between',
-                          gap: 10,
+                          flexWrap: 'wrap',
+                          gap: 8,
                           borderTop: '1px solid #E2E8F0',
                           paddingTop: 10,
+                          minWidth: 0,
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 14, fontSize: '0.78rem' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: isMobile ? 10 : 14, fontSize: isMobile ? '0.74rem' : '0.78rem' }}>
                           <div>
                             <span style={{ color: '#64748B' }}>Corridas: </span>
                             <strong style={{ color: '#0B1218' }}>{drv.completedRidesCount}</strong>
@@ -1098,18 +1123,19 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                           onClick={() => setSelectedDriver(drv)}
                           style={{
                             height: 34,
-                            padding: '0 13px',
+                            padding: '0 12px',
                             borderRadius: 9,
                             border: 'none',
                             backgroundColor: '#121A21',
                             color: '#76D800',
-                            fontSize: '0.78rem',
+                            fontSize: '0.76rem',
                             fontWeight: 800,
                             cursor: 'pointer',
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: 5,
                             whiteSpace: 'nowrap',
+                            marginLeft: 'auto',
                           }}
                         >
                           <span>Ficha &amp; Termo</span>
@@ -1276,8 +1302,9 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
               <div
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+                  gridTemplateColumns: isMobile ? 'minmax(0, 1fr)' : 'repeat(2, minmax(0, 1fr))',
                   gap: 12,
+                  width: '100%',
                 }}
               >
                 {filteredRides.map((r) => (
@@ -1291,6 +1318,8 @@ export const PublicAuditScreen: React.FC<PublicAuditScreenProps> = ({ config, ri
                       display: 'flex',
                       flexDirection: 'column',
                       gap: 10,
+                      minWidth: 0,
+                      boxSizing: 'border-box',
                     }}
                   >
                     <div

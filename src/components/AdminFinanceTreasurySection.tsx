@@ -637,8 +637,8 @@ export const AdminFinanceTreasurySection: React.FC<AdminFinanceTreasurySectionPr
                   style={{ height: 36, padding: '0 6px', borderRadius: 7, border: '1px solid #CBD5E1', fontSize: '0.74rem', backgroundColor: '#FFFFFF' }}
                 >
                   <option value="pix">PIX</option>
-                  <option value="cartao_credito">Cartão</option>
-                  <option value="apple_pay">Apple Pay</option>
+                  <option value="cartao_credito">Cartão de Crédito</option>
+                  <option value="carteira">Saldo da Carteira</option>
                   <option value="dinheiro">Dinheiro</option>
                 </select>
               </div>

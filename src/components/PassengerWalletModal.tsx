@@ -80,7 +80,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   const [addCardType, setAddCardType] = useState<'cartao_credito' | 'cartao_debito'>('cartao_credito');
 
   const [depositAmountStr, setDepositAmountStr] = useState('20');
-  const [depositMethod, setDepositMethod] = useState<'pix' | 'cartao_credito' | 'apple_pay'>('pix');
+  const [depositMethod, setDepositMethod] = useState<'pix' | 'cartao_credito'>('pix');
   const [depositError, setDepositError] = useState('');
   const [depositSuccessMsg, setDepositSuccessMsg] = useState('');
   const [isProcessingDeposit, setIsProcessingDeposit] = useState(false);
@@ -89,10 +89,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   const [copiedPix, setCopiedPix] = useState(false);
   const [isConfirmingPix, setIsConfirmingPix] = useState(false);
 
-  const allowApplePay =
-    paymentsConfig.stripeEnabled &&
-    Boolean(paymentsConfig.stripePublishableKey) &&
-    !config.applePayDisabled;
+  const allowApplePay = false;
 
   const refreshAll = useCallback(async () => {
     if (!currentUser?.id) return;
@@ -165,7 +162,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleOpenDeposit = (method: 'pix' | 'cartao_credito' | 'apple_pay' = 'pix') => {
+  const handleOpenDeposit = (method: 'pix' | 'cartao_credito' = 'pix') => {
     if (!currentUser) {
       onClose();
       onRequireAuth?.();
@@ -397,7 +394,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                 Entre na sua conta para usar a Carteira
               </div>
               <p style={{ fontSize: '0.8rem', color: '#64748B', marginTop: 6, marginBottom: 16 }}>
-                Deposite a partir de R$ 20,00 via PIX, Cartão ou Apple Pay e pague suas corridas com 1 toque.
+                Deposite a partir de R$ 20,00 via PIX ou Cartão de Crédito e pague suas corridas com 1 toque.
               </p>
               <button
                 type="button"
@@ -763,33 +760,8 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                           }}
                         >
                           <PaymentMethodIcon method="cartao_credito" size={16} />
-                          <span>Cartão</span>
+                          <span>Cartão de Crédito</span>
                         </button>
-
-                        {allowApplePay && (
-                          <button
-                            type="button"
-                            onClick={() => setDepositMethod('apple_pay')}
-                            style={{
-                              flex: '1 1 auto',
-                              padding: '8px 10px',
-                              borderRadius: 999,
-                              border: depositMethod === 'apple_pay' ? '1.5px solid #76D800' : '1px solid #1E293B',
-                              backgroundColor: depositMethod === 'apple_pay' ? '#000000' : '#FFFFFF',
-                              color: depositMethod === 'apple_pay' ? '#FFFFFF' : '#0F172A',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 6,
-                              fontSize: '0.76rem',
-                              fontWeight: 800,
-                              cursor: 'pointer'
-                            }}
-                          >
-                            <PaymentMethodIcon method="apple_pay" size={16} />
-                            <span>Apple Pay</span>
-                          </button>
-                        )}
                       </div>
 
                       {depositMethod === 'cartao_credito' && (
@@ -857,62 +829,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                         </div>
                       )}
 
-                      {depositMethod === 'apple_pay' && allowApplePay ? (
-                        isAmountValid ? (
-                          <StripeWalletCheckout
-                            publishableKey={paymentsConfig.stripePublishableKey}
-                            amountBrl={parsedAmount}
-                            clientId={currentUser.id}
-                            clientName={currentUser.name}
-                            clientPhone={currentUser.phone}
-                            clientEmail={currentUser.email}
-                            captureMethod="automatic"
-                            hostedButtonText={`Depositar ${formatBRL(parsedAmount)} com Apple Pay`}
-                            onBeforeConfirm={() =>
-                              isAmountValid
-                                ? { ok: true }
-                                : { ok: false, error: 'Valor mínimo de depósito: R$ 20,00.' }
-                            }
-                            onCreateIntentOverride={() => StorageService.createWalletTopupIntent(parsedAmount)}
-                            onWalletAuthorized={async ({ paymentIntentId }) => {
-                              setIsProcessingDeposit(true);
-                              const finish = await StorageService.topupClientWallet({
-                                amount: parsedAmount,
-                                method: 'apple_pay',
-                                stripePaymentIntentId: paymentIntentId
-                              });
-                              setIsProcessingDeposit(false);
-                              if (!finish.ok) {
-                                setDepositError(finish.error || 'Erro ao creditar depósito na carteira.');
-                                return;
-                              }
-                              if (finish.wallet) {
-                                setWallet(finish.wallet);
-                                onWalletUpdated?.(finish.wallet);
-                              }
-                              setShowDepositPanel(false);
-                              setDepositSuccessMsg(`Depósito de ${formatBRL(parsedAmount)} via Apple Pay confirmado!`);
-                            }}
-                            onHostedCheckoutClick={async () => {
-                              setDepositError('');
-                              const csRes = await StorageService.createWalletTopupCheckoutSession(
-                                parsedAmount,
-                                window.location.pathname || '/'
-                              );
-                              if (!csRes.ok || !csRes.checkoutUrl) {
-                                setDepositError(csRes.error || 'Não foi possível abrir o checkout Apple Pay.');
-                                return;
-                              }
-                              window.location.assign(csRes.checkoutUrl);
-                            }}
-                          />
-                        ) : (
-                          <div style={{ fontSize: '0.76rem', color: '#DC2626', fontWeight: 700 }}>
-                            Informe no mínimo R$ 20,00 para depositar com Apple Pay.
-                          </div>
-                        )
-                      ) : (
-                        <button
+                      <button
                           type="button"
                           onClick={handleCreateDeposit}
                           disabled={isProcessingDeposit || !isAmountValid}
@@ -945,7 +862,6 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                             </span>
                           )}
                         </button>
-                      )}
                     </>
                   )}
 
@@ -1003,35 +919,6 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                   </div>
                   <ChevronRight size={17} color="#94A3B8" />
                 </button>
-
-                {/* Apple Pay */}
-                {allowApplePay && (
-                  <button
-                    type="button"
-                    onClick={() => handleOpenDeposit('apple_pay')}
-                    style={{
-                      width: '100%',
-                      padding: '12px 4px',
-                      border: 'none',
-                      borderBottom: '1px solid #F1F5F9',
-                      background: 'transparent',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      cursor: 'pointer',
-                      textAlign: 'left'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <PaymentMethodIcon method="apple_pay" size={20} />
-                      <div>
-                        <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Apple Pay</div>
-                        <div style={{ fontSize: '0.72rem', color: '#64748B' }}>Recarga rápida ou pré-autorização</div>
-                      </div>
-                    </div>
-                    <ChevronRight size={17} color="#94A3B8" />
-                  </button>
-                )}
 
                 {/* Dinheiro */}
                 <div

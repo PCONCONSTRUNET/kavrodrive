@@ -72,19 +72,22 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isPickingOrigin, setIsPickingOrigin] = useState(false);
   const [isPickingDestination, setIsPickingDestination] = useState(false);
 
-  const allowedMethods: PaymentMethod[] =
+  const rawAllowedMethods: PaymentMethod[] =
     Array.isArray(config.activePaymentMethods) && config.activePaymentMethods.length > 0
-      ? config.activePaymentMethods
-      : ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro'];
+      ? config.activePaymentMethods.filter(
+          (m): m is PaymentMethod =>
+            m === 'pix' || m === 'cartao_credito' || m === 'carteira' || m === 'dinheiro'
+        )
+      : ['pix', 'cartao_credito', 'carteira', 'dinheiro'];
+  const allowedMethods: PaymentMethod[] =
+    rawAllowedMethods.length > 0 ? rawAllowedMethods : ['pix', 'cartao_credito', 'carteira', 'dinheiro'];
   const allowPix = allowedMethods.includes('pix');
   const allowCreditCard = allowedMethods.includes('cartao_credito');
-  const allowDebitCard = allowedMethods.includes('cartao_debito');
-  const allowAnyCard = allowCreditCard || allowDebitCard;
+  const allowAnyCard = allowCreditCard;
   const allowCash = allowedMethods.includes('dinheiro');
-  const allowApplePayConfig =
-    allowedMethods.includes('apple_pay') || (allowCreditCard && !config.applePayDisabled);
+  const allowApplePay = false;
   const allowWallet =
-    allowedMethods.includes('carteira') || !config.walletPaymentDisabled;
+    config.walletPaymentDisabled ? false : (allowedMethods.includes('carteira') || config.walletPaymentDisabled === undefined);
 
   const [passengers, setPassengers] = useState<number>(1);
   const [hasLuggage, setHasLuggage] = useState<boolean>(false);
@@ -102,7 +105,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [deliveryDropoffMode, setDeliveryDropoffMode] = useState<'porta_mao' | 'portaria' | 'recepcao'>('porta_mao');
   const [deliveryInstructions, setDeliveryInstructions] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() =>
-    allowPix ? 'pix' : allowCreditCard ? 'cartao_credito' : allowDebitCard ? 'cartao_debito' : 'dinheiro'
+    allowPix ? 'pix' : allowCreditCard ? 'cartao_credito' : allowWallet ? 'carteira' : 'dinheiro'
   );
   const [notes, setNotes] = useState<string>('');
   const [showExtraOptions, setShowExtraOptions] = useState<boolean>(false);
@@ -126,31 +129,23 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
     autoPixPayoutEnabled: false
   });
-  const allowApplePay =
-    paymentsConfig.stripeEnabled && Boolean(paymentsConfig.stripePublishableKey) && allowApplePayConfig;
 
   useEffect(() => {
     const isCurrentlyAllowed =
-      paymentMethod === 'apple_pay'
-        ? allowApplePay
-        : paymentMethod === 'carteira'
-          ? allowWallet
-          : allowedMethods.includes(paymentMethod);
+      paymentMethod === 'carteira'
+        ? allowWallet
+        : allowedMethods.includes(paymentMethod);
     if (!isCurrentlyAllowed) {
       const nextMethod: PaymentMethod = allowPix
         ? 'pix'
         : allowCreditCard
           ? 'cartao_credito'
-          : allowDebitCard
-            ? 'cartao_debito'
-            : allowApplePay
-              ? 'apple_pay'
-              : allowWallet
-                ? 'carteira'
-                : 'dinheiro';
+          : allowWallet
+            ? 'carteira'
+            : 'dinheiro';
       setPaymentMethod(nextMethod);
     }
-  }, [allowedMethods.join(','), paymentMethod, allowApplePay, allowWallet]);
+  }, [allowedMethods.join(','), paymentMethod, allowWallet]);
 
   const [walletBalance, setWalletBalance] = useState<number>(Number(currentUser?.walletBalance || 0));
   const [isWalletModalOpen, setIsWalletModalOpen] = useState(false);
@@ -2127,31 +2122,15 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                       style={{
                         padding: '7px 18px',
                         borderRadius: 999,
-                        border: cardType === 'cartao_credito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
-                        backgroundColor: cardType === 'cartao_credito' ? '#0F172A' : '#F8FAFC',
-                        color: cardType === 'cartao_credito' ? '#FFFFFF' : '#475569',
+                        border: '1.5px solid #0F172A',
+                        backgroundColor: '#0F172A',
+                        color: '#FFFFFF',
                         fontWeight: 800,
                         fontSize: '0.76rem',
                         cursor: 'pointer'
                       }}
                     >
-                      Crédito
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setCardType('cartao_debito')}
-                      style={{
-                        padding: '7px 18px',
-                        borderRadius: 999,
-                        border: cardType === 'cartao_debito' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
-                        backgroundColor: cardType === 'cartao_debito' ? '#0F172A' : '#F8FAFC',
-                        color: cardType === 'cartao_debito' ? '#FFFFFF' : '#475569',
-                        fontWeight: 800,
-                        fontSize: '0.76rem',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Débito
+                      Cartão de Crédito
                     </button>
                   </div>
 
@@ -2763,14 +2742,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             {allowAnyCard && (
               <button
                 type="button"
-                onClick={() => setPaymentMethod(allowCreditCard ? 'cartao_credito' : 'cartao_debito')}
+                onClick={() => setPaymentMethod('cartao_credito')}
                 style={{
                   flex: '1 1 auto',
                   padding: '8px 12px',
                   borderRadius: 999,
-                  border: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
-                  backgroundColor: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#0F172A' : '#FFFFFF',
-                  color: (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') ? '#FFFFFF' : '#111111',
+                  border: paymentMethod === 'cartao_credito' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
+                  backgroundColor: paymentMethod === 'cartao_credito' ? '#0F172A' : '#FFFFFF',
+                  color: paymentMethod === 'cartao_credito' ? '#FFFFFF' : '#111111',
                   display: 'inline-flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -2780,32 +2759,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               >
                 <PaymentMethodIcon method="cartao_credito" size={18} />
                 <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                  Cartão
-                </span>
-              </button>
-            )}
-
-            {allowApplePay && (
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('apple_pay')}
-                style={{
-                  flex: '1 1 auto',
-                  padding: '8px 12px',
-                  borderRadius: 999,
-                  border: paymentMethod === 'apple_pay' ? '1.5px solid #76D800' : '1px solid #1E293B',
-                  backgroundColor: paymentMethod === 'apple_pay' ? '#000000' : '#FFFFFF',
-                  color: paymentMethod === 'apple_pay' ? '#FFFFFF' : '#0F172A',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                <PaymentMethodIcon method="apple_pay" size={16} />
-                <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                  Apple Pay
+                  Cartão de Crédito
                 </span>
               </button>
             )}
@@ -2967,68 +2921,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             </div>
           )}
 
-          {/* Painel Dedicado: Apple Pay Stripe */}
-          {paymentMethod === 'apple_pay' && allowApplePay && (
-            <div style={{
-              backgroundColor: '#F8FAFC',
-              borderRadius: 14,
-              padding: 12,
-              border: '1px solid #E2E8F0',
-              marginBottom: 8
-            }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginBottom: 6
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <PaymentMethodIcon method="apple_pay" size={18} />
-                  <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#0F172A' }}>
-                    Kavro Pay • Apple Pay
-                  </span>
-                </div>
-                <span style={{
-                  fontSize: '0.64rem',
-                  fontWeight: 800,
-                  color: '#15803D',
-                  backgroundColor: '#DCFCE7',
-                  padding: '2px 8px',
-                  borderRadius: 999
-                }}>
-                  Ativo
-                </span>
-              </div>
-
-              <StripeWalletCheckout
-                publishableKey={paymentsConfig.stripePublishableKey}
-                amountBrl={pricing.totalPrice}
-                category={selectedCategory}
-                distanceKm={distanceKm}
-                durationMin={durationMin}
-                time={nowTimeStr}
-                origin={origin}
-                destination={destination}
-                clientId={currentUser?.id}
-                clientName={currentUser?.name}
-                clientPhone={currentUser?.phone}
-                clientEmail={currentUser?.email}
-                onBeforeConfirm={validateBookingBeforePayment}
-                onHostedCheckoutClick={handleStartApplePayCheckout}
-                onWalletAuthorized={async ({ paymentIntentId, brand }) => {
-                  await submitBookingRequest({
-                    stripePaymentIntentId: paymentIntentId,
-                    paymentMethodOverride: 'apple_pay',
-                    cardBrandOverride: brand || 'Apple Pay'
-                  });
-                }}
-              />
-            </div>
-          )}
-
-          {/* Cartões tokenizados e Apple Pay / Carteiras Stripe */}
-          {(paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') && (
+          {/* Cartões de Crédito tokenizados */}
+          {paymentMethod === 'cartao_credito' && (
             <div style={{
               backgroundColor: '#F8FAFC',
               borderRadius: 14,
@@ -3497,13 +3391,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             height: 44,
             borderRadius: 999,
             backgroundColor:
-              paymentMethod === 'apple_pay'
-                ? '#000000'
-                : serviceMode === 'entregas'
-                  ? '#15803D'
-                  : '#0F172A',
+              serviceMode === 'entregas'
+                ? '#15803D'
+                : '#0F172A',
             color: '#FFFFFF',
-            border: paymentMethod === 'apple_pay' ? '1.5px solid #76D800' : 'none',
+            border: 'none',
             fontSize: '0.88rem',
             fontWeight: 800,
             display: 'flex',
@@ -3524,11 +3416,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             <span>
               {isSubmitting
                 ? 'Conectando motorista...'
-                : paymentMethod === 'apple_pay'
-                  ? 'Pagar com Apple Pay'
-                  : serviceMode === 'entregas'
-                    ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
-                    : `Confirmar ${selectedCatObj.name || 'Padrão'}`}
+                : serviceMode === 'entregas'
+                  ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
+                  : `Confirmar ${selectedCatObj.name || 'Padrão'}`}
             </span>
           </span>
           <span style={{
