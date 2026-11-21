@@ -8,8 +8,6 @@ import {
   CheckCircle2,
   Copy,
   Download,
-  Laptop,
-  MonitorDown,
   MoreVertical,
   PlusSquare,
   Share,
@@ -22,7 +20,7 @@ interface InstallPwaTutorialScreenProps {
 }
 
 type AppTarget = 'passageiro' | 'motorista';
-type PlatformTab = 'android' | 'ios' | 'desktop';
+type PlatformTab = 'android' | 'ios';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
@@ -40,10 +38,7 @@ function detectInitialPlatform(): PlatformTab {
   ) {
     return 'ios';
   }
-  if (/android/.test(ua)) {
-    return 'android';
-  }
-  return 'desktop';
+  return 'android';
 }
 
 function parseAppTargetFromSearch(search: string): AppTarget {
@@ -224,27 +219,6 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
       steps: Array<{ num: string; title: string; sub: string }>;
     }
   > = {
-    desktop: {
-      label: 'Computador (Chrome / Edge)',
-      hint: 'Cria atalho direto na Área de Trabalho e Menu Iniciar.',
-      steps: [
-        {
-          num: '1',
-          title: `Abra ${appMeta.displayUrl} no Chrome ou Edge`,
-          sub: 'Acesse direto pelo navegador do Windows ou Mac.',
-        },
-        {
-          num: '2',
-          title: 'Clique em Instalar na barra de endereços',
-          sub: 'Ícone de monitor no canto direito do link (ou menu ⋮ → Instalar página como aplicativo).',
-        },
-        {
-          num: '3',
-          title: 'Confirme em "Instalar"',
-          sub: 'O aplicativo vai aparecer com ícone na sua Área de Trabalho.',
-        },
-      ],
-    },
     android: {
       label: 'Celular Android (Chrome)',
       hint: 'Se veio pelo WhatsApp/Instagram, toque em ⋮ → Abrir no navegador primeiro.',
@@ -446,7 +420,7 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
                 }}
               >
                 Operamos direto na Web e via Web App (PWA), sem baixar em loja. Instale na tela
-                inicial ou na área de trabalho em 3 passos.
+                inicial do seu celular em 3 passos.
               </p>
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
@@ -565,26 +539,22 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
         }}
       >
         <div style={containerStyle}>
-          {/* 3 Abas em uma única linha horizontal */}
+          {/* 2 Abas em uma única linha horizontal (Android e iOS) */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
               gap: 6,
               backgroundColor: '#F1F5F9',
               padding: 4,
               borderRadius: 10,
               marginBottom: 18,
+              maxWidth: isMobile ? '100%' : 420,
             }}
           >
             {[
               { key: 'android' as const, label: 'Android', icon: <Smartphone size={15} /> },
-              { key: 'ios' as const, label: 'iPhone', icon: <Share size={15} /> },
-              {
-                key: 'desktop' as const,
-                label: isMobile ? 'PC / Desktop' : 'Computador (Área de Trabalho)',
-                icon: <Laptop size={15} />,
-              },
+              { key: 'ios' as const, label: 'iPhone (iOS)', icon: <Share size={15} /> },
             ].map((tab) => {
               const active = platformTab === tab.key;
               return (
@@ -709,52 +679,8 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
                     marginBottom: 8,
                   }}
                 >
-                  Botão para clicar
+                  Botão para tocar
                 </div>
-
-                {platformTab === 'desktop' && (
-                  <div
-                    style={{
-                      backgroundColor: '#0A0F14',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: 8,
-                      padding: '8px 10px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                    }}
-                  >
-                    <span
-                      style={{
-                        fontSize: '0.76rem',
-                        color: '#CBD5E1',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {appMeta.displayUrl}
-                    </span>
-                    <span
-                      style={{
-                        padding: '4px 8px',
-                        borderRadius: 6,
-                        backgroundColor: '#76D800',
-                        color: '#0A0F14',
-                        fontSize: '0.72rem',
-                        fontWeight: 800,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        flexShrink: 0,
-                      }}
-                    >
-                      <MonitorDown size={13} />
-                      <span>Instalar</span>
-                    </span>
-                  </div>
-                )}
 
                 {platformTab === 'android' && (
                   <div

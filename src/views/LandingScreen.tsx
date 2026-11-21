@@ -2131,7 +2131,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               Acesso Web App e instalação na tela inicial
             </h2>
             <p style={{ fontSize: '0.94rem', color: '#475569' }}>
-              Operamos via navegador e PWA Web oficial. Toque abaixo para ver o guia de instalação no celular ou área de trabalho e acessar.
+              Operamos via navegador e PWA Web oficial. Toque abaixo para ver o guia de instalação no Android ou iPhone e acessar.
             </p>
           </div>
 
@@ -2179,7 +2179,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   App Kavro Passageiro
                 </div>
                 <div style={{ fontSize: '0.84rem', color: '#94A3B8' }}>
-                  {isMobile ? 'Tutorial PWA + acesso rápido para pedir corrida' : 'Tutorial para área de trabalho, celular ou QR Code'}
+                  {isMobile ? 'Tutorial Android/iOS + acesso rápido para pedir corrida' : 'Tutorial para Android ou iPhone e QR Code'}
                 </div>
               </div>
               <ArrowRight size={20} color="#76D800" />
@@ -2222,7 +2222,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   App Parceiro Kavro
                 </div>
                 <div style={{ fontSize: '0.84rem', color: '#475569' }}>
-                  {isMobile ? 'Tutorial PWA + acesso ao Portal do Motorista' : 'Tutorial para área de trabalho, celular ou QR Code'}
+                  {isMobile ? 'Tutorial Android/iOS + acesso ao Portal do Motorista' : 'Tutorial para Android ou iPhone e QR Code'}
                 </div>
               </div>
               <ArrowRight size={20} color="#0A0F14" />
