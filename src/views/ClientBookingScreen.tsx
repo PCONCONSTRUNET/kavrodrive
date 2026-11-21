@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
-  MapPin, Users, Luggage, CreditCard,
-  ArrowLeft, ShieldCheck, Check, Car, Navigation,
-  Copy, QrCode, Plus, RefreshCw, AlertCircle, Lock, Sparkles, Banknote, Clock,
-  Phone, MessageSquare, ChevronDown, Sliders, Maximize2, Minimize2, Share2, Pencil, Package
+  Users, CreditCard,
+  ArrowLeft, ShieldCheck, Check, Car,
+  Copy, Plus, RefreshCw, AlertCircle, Lock, Sparkles, Clock,
+  Phone, MessageSquare, ChevronRight, Maximize2, Minimize2, Share2, Pencil, Package, Calendar, X
 } from 'lucide-react';
 import { LocationPoint, PaymentMethod, Ride, RideDeliveryDetails, SavedCard, ServiceCategoryType, SystemConfig } from '../types';
-import { calculateHaversineDistance, estimateDurationMinutes, reverseGeocode } from '../utils/geo';
+import { calculateHaversineDistance, estimateDurationMinutes } from '../utils/geo';
 import {
   calculateRidePrice,
   StorageService,
@@ -16,6 +16,8 @@ import {
 } from '../services/storage';
 import { RealtimeService } from '../services/realtime';
 import { AddressPickerModal } from '../components/AddressPickerModal';
+import { UberPlanTripModal } from '../components/UberPlanTripModal';
+import { UberPaymentMethodModal } from '../components/UberPaymentMethodModal';
 import { PassengerLiveMap, OnlineDriverMapDot } from '../components/PassengerLiveMap';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { RideChatModal } from '../components/DriverChatModal';
@@ -67,8 +69,22 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [origin, setOrigin] = useState<LocationPoint | null>(initialOrigin || null);
   const [destination, setDestination] = useState<LocationPoint | null>(initialDestination || null);
 
-  const [isPickingOrigin, setIsPickingOrigin] = useState(false);
-  const [isPickingDestination, setIsPickingDestination] = useState(false);
+  const [bookingStep, setBookingStep] = useState<'plan' | 'choose'>(() =>
+    initialOrigin && initialDestination ? 'choose' : 'plan'
+  );
+  const [mapPickerField, setMapPickerField] = useState<'origin' | 'destination' | null>(null);
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
+  const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now');
+  const [scheduledDate, setScheduledDate] = useState<string>(() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  });
+  const [scheduledTime, setScheduledTime] = useState<string>(() => {
+    const d = new Date(Date.now() + 20 * 60 * 1000);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  });
 
   const rawAllowedMethods: PaymentMethod[] =
     Array.isArray(config.activePaymentMethods) && config.activePaymentMethods.length > 0
@@ -76,14 +92,12 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           (m): m is PaymentMethod =>
             m === 'pix' || m === 'cartao_credito' || m === 'carteira' || m === 'dinheiro'
         )
-      : ['pix', 'cartao_credito', 'carteira', 'dinheiro'];
+      : ['pix', 'carteira', 'dinheiro'];
   const allowedMethods: PaymentMethod[] =
-    rawAllowedMethods.length > 0 ? rawAllowedMethods : ['pix', 'cartao_credito', 'carteira', 'dinheiro'];
+    rawAllowedMethods.length > 0 ? rawAllowedMethods : ['pix', 'carteira', 'dinheiro'];
   const allowPix = allowedMethods.includes('pix');
   const allowCreditCard = allowedMethods.includes('cartao_credito');
-  const allowAnyCard = allowCreditCard;
   const allowCash = allowedMethods.includes('dinheiro');
-  const allowApplePay = false;
   const allowWallet =
     config.walletPaymentDisabled ? false : (allowedMethods.includes('carteira') || config.walletPaymentDisabled === undefined);
 
@@ -103,10 +117,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [deliveryDropoffMode, setDeliveryDropoffMode] = useState<'porta_mao' | 'portaria' | 'recepcao'>('porta_mao');
   const [deliveryInstructions, setDeliveryInstructions] = useState<string>('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>(() =>
-    allowPix ? 'pix' : allowCreditCard ? 'cartao_credito' : allowWallet ? 'carteira' : 'dinheiro'
+    allowCash ? 'dinheiro' : allowPix ? 'pix' : allowWallet ? 'carteira' : 'dinheiro'
   );
   const [notes, setNotes] = useState<string>('');
-  const [showExtraOptions, setShowExtraOptions] = useState<boolean>(false);
 
   const [paymentsConfig, setPaymentsConfig] = useState<{
     gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
@@ -203,7 +216,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [isSimulatingWebhook, setIsSimulatingWebhook] = useState(false);
   const [isCheckingEfiPix, setIsCheckingEfiPix] = useState(false);
   const [efiCheckNotice, setEfiCheckNotice] = useState('');
-  const [locatingOriginGps, setLocatingOriginGps] = useState(false);
+  const [isCheckReady, setIsCheckReady] = useState(false);
   const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
   const [isSafetyCenterOpen, setIsSafetyCenterOpen] = useState(false);
   const [isSosOpen, setIsSosOpen] = useState(false);
@@ -264,32 +277,10 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     return () => window.clearInterval(timerId);
   }, [pixExpiresAtRaw]);
 
-  const handleUseCurrentGpsForOrigin = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (!navigator.geolocation) {
-      setIsPickingOrigin(true);
-      return;
-    }
-    setLocatingOriginGps(true);
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        let resolvedAddr = 'Minha localização atual (GPS)';
-        try {
-          const rev = await reverseGeocode(lat, lng);
-          if (rev) resolvedAddr = rev;
-        } catch {}
-        setOrigin({ address: resolvedAddr, lat, lng });
-        setLocatingOriginGps(false);
-      },
-      () => {
-        setLocatingOriginGps(false);
-        setIsPickingOrigin(true);
-      },
-      { enableHighAccuracy: true, timeout: 7000 }
-    );
-  };
+  useEffect(() => {
+    void isCheckReady;
+    setIsCheckReady(true);
+  }, []);
 
   // Detecta GPS atual para preencher embarque automaticamente se vazio
   useEffect(() => {
@@ -415,6 +406,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const d = new Date();
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
   }, []);
+  const effectiveTimeStr = scheduleMode === 'later' && scheduledTime ? scheduledTime : nowTimeStr;
 
   const distanceKm = origin && destination
     ? calculateHaversineDistance(origin.lat, origin.lng, destination.lat, destination.lng)
@@ -427,24 +419,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     () => normalizeCategoriesFromConfig(config).filter(c => c.active),
     [config]
   );
-  const padraoCategories = React.useMemo(
-    () => activeCategories.filter(c => resolveCategoryType(c) !== 'entregas'),
-    [activeCategories]
-  );
-  const entregasCategories = React.useMemo(
-    () => activeCategories.filter(c => resolveCategoryType(c) === 'entregas'),
-    [activeCategories]
-  );
-  const visibleModeCategories = React.useMemo(() => {
-    const bucket = serviceMode === 'entregas' ? entregasCategories : padraoCategories;
-    return bucket.length > 0 ? bucket : activeCategories;
-  }, [serviceMode, entregasCategories, padraoCategories, activeCategories]);
+  const orderedCategories = React.useMemo(() => {
+    return [...activeCategories].sort((a, b) => {
+      const aDel = resolveCategoryType(a) === 'entregas' ? 1 : 0;
+      const bDel = resolveCategoryType(b) === 'entregas' ? 1 : 0;
+      return aDel - bDel;
+    });
+  }, [activeCategories]);
 
   useEffect(() => {
-    if (visibleModeCategories.length > 0 && !visibleModeCategories.some(c => c.id === selectedCategory)) {
-      setSelectedCategory(visibleModeCategories[0].id);
+    if (orderedCategories.length > 0 && !orderedCategories.some(c => c.id === selectedCategory)) {
+      setSelectedCategory(orderedCategories[0].id);
     }
-  }, [visibleModeCategories, selectedCategory]);
+  }, [orderedCategories, selectedCategory]);
 
   useEffect(() => {
     if (initialCategoryId) {
@@ -454,16 +441,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     }
   }, [initialCategoryId]);
 
-  const handleSwitchServiceMode = (mode: ServiceCategoryType) => {
-    setServiceMode(mode);
-    setRequestError('');
-    const list = mode === 'entregas' ? entregasCategories : padraoCategories;
-    if (list.length > 0) {
-      setSelectedCategory(list[0].id);
-    }
-  };
-
-  const pricing = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, selectedCategory, undefined, paymentMethod);
+  const pricing = calculateRidePrice(distanceKm, durationMin, effectiveTimeStr, config, selectedCategory, undefined, paymentMethod);
   const onlineDrivers = React.useMemo(() => {
     void driversSyncTick;
     return StorageService.getOnlineDrivers();
@@ -579,13 +557,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     deliveryDetails?: RideDeliveryDetails;
   } => {
     setRequestError('');
-    if (!origin) {
-      setIsPickingOrigin(true);
-      return { ok: false, error: 'Selecione o local de partida.', isDeliveryOrder: false };
-    }
-    if (!destination) {
-      setIsPickingDestination(true);
-      return { ok: false, error: 'Selecione o destino da viagem.', isDeliveryOrder: false };
+    if (!origin || !destination) {
+      setBookingStep('plan');
+      return { ok: false, error: 'Selecione partida e destino para continuar.', isDeliveryOrder: false };
     }
 
     const isDeliveryOrder =
@@ -597,19 +571,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       const cleanPhone = deliveryRecipientPhone.trim();
       const phoneDigits = cleanPhone.replace(/\D/g, '');
       const cleanItem = deliveryItemDesc.trim();
-      if (cleanName.length < 2) {
-        const msg = `Informe o nome completo de quem vai ${deliveryRole === 'sender' ? 'receber' : 'entregar'} o pacote.`;
+      if (cleanName.length < 2 || phoneDigits.length < 10 || cleanItem.length < 2) {
+        const msg = cleanName.length < 2
+          ? `Informe o nome completo de quem vai ${deliveryRole === 'sender' ? 'receber' : 'entregar'} o pacote.`
+          : phoneDigits.length < 10
+            ? 'Informe um WhatsApp ou telefone válido com DDD para a entrega.'
+            : 'Descreva o produto ou item que será enviado na entrega.';
         setRequestError(msg);
-        return { ok: false, error: msg, isDeliveryOrder };
-      }
-      if (phoneDigits.length < 10) {
-        const msg = 'Informe um WhatsApp ou telefone válido com DDD para a entrega.';
-        setRequestError(msg);
-        return { ok: false, error: msg, isDeliveryOrder };
-      }
-      if (cleanItem.length < 2) {
-        const msg = 'Descreva o produto ou item que será enviado na entrega.';
-        setRequestError(msg);
+        setIsDeliveryModalOpen(true);
         return { ok: false, error: msg, isDeliveryOrder };
       }
       normalizedDeliveryPayload = {
@@ -640,6 +609,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   }) => {
     const now = new Date();
     const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const effDate = scheduleMode === 'later' && scheduledDate ? scheduledDate : todayStr;
     const v = cardMeta?.validation || { isDeliveryOrder: false, deliveryDetails: null };
     return {
       clientId: currentUser?.id,
@@ -647,8 +617,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       clientPhone: currentUser?.phone || '',
       origin: origin!,
       destination: destination!,
-      date: todayStr,
-      time: nowTimeStr,
+      date: effDate,
+      time: effectiveTimeStr,
       passengers: v.isDeliveryOrder ? 0 : passengers,
       hasLuggage: v.isDeliveryOrder ? deliveryPackageSize === 'grande' : hasLuggage,
       distanceKm,
@@ -803,7 +773,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           width: '100%',
           maxWidth: 480,
           margin: '0 auto',
-          minHeight: 'calc(100dvh - 60px - env(safe-area-inset-bottom, 0px))',
+          minHeight: '100dvh',
           backgroundColor: '#FFFFFF',
           display: 'flex',
           flexDirection: 'column',
@@ -1196,7 +1166,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
 
     return (
       <div className="animate-fade-in" style={{
-        height: 'calc(100dvh - 60px)',
+        height: '100dvh',
         backgroundColor: '#E8EDF3',
         display: 'flex',
         flexDirection: 'column',
@@ -1878,31 +1848,126 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   // ============================================================================
   // TELA PRINCIPAL: PEDIR CORRIDA AGORA (100% IMEDIATO ESTILO UBER)
   // ============================================================================
+  const shortOriginLabel = origin?.reference || (origin?.address ? origin.address.split(',')[0].trim() : 'Partida');
+  const shortDestLabel = destination?.reference || (destination?.address ? destination.address.split(',')[0].trim() : 'Destino');
+  const effectivePaymentLabel =
+    paymentMethod === 'carteira'
+      ? `Saldo Kavro (${walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})`
+      : getPaymentMethodLabel(paymentMethod, true);
+  const selectedIsDelivery =
+    serviceMode === 'entregas' || resolveCategoryType(selectedCatObj) === 'entregas';
+  const isDeliveryReady =
+    deliveryRecipientName.trim().length >= 2 &&
+    deliveryRecipientPhone.replace(/\D/g, '').length >= 10 &&
+    deliveryItemDesc.trim().length >= 2;
+  const allowCardModal = allowCreditCard && (paymentsConfig.mercadopagoEnabled || savedCards.length > 0);
+
   return (
     <div className="animate-fade-in" style={{
-      minHeight: '100dvh',
+      height: '100dvh',
       backgroundColor: '#E8EDF3',
       display: 'flex',
       flexDirection: 'column',
       maxWidth: 480,
       margin: '0 auto',
       position: 'relative',
-      paddingBottom: 'calc(154px + env(safe-area-inset-bottom, 0px))'
+      overflow: 'hidden'
     }}>
-      <AddressPickerModal
-        isOpen={isPickingOrigin}
-        onClose={() => setIsPickingOrigin(false)}
-        title="Onde o motorista busca você?"
-        initialPoint={origin || undefined}
-        onSelect={(p) => setOrigin(p)}
+      {/* ═══ ETAPA 1 ESTILO UBER: MODAL "PLANEJE SUA PRÓXIMA VIAGEM" ═══ */}
+      <UberPlanTripModal
+        isOpen={bookingStep === 'plan' && mapPickerField === null}
+        origin={origin}
+        destination={destination}
+        serviceMode={serviceMode}
+        currentUser={currentUser}
+        scheduleMode={scheduleMode}
+        scheduledDate={scheduledDate}
+        scheduledTime={scheduledTime}
+        passengers={passengers}
+        hasLuggage={hasLuggage}
+        notes={notes}
+        onBack={() => {
+          if (origin && destination) {
+            setBookingStep('choose');
+          } else {
+            onBackToHome();
+          }
+        }}
+        onChangeSchedule={(mode, date, time) => {
+          setScheduleMode(mode);
+          setScheduledDate(date);
+          setScheduledTime(time);
+        }}
+        onChangePassengers={(count, lug, obs) => {
+          setPassengers(count);
+          setHasLuggage(lug);
+          setNotes(obs);
+        }}
+        onOpenMapPicker={(field) => setMapPickerField(field)}
+        onSelectOrigin={(pt) => setOrigin(pt)}
+        onSwapOriginDest={() => {
+          const prevOrigin = origin;
+          setOrigin(destination);
+          setDestination(prevOrigin);
+        }}
+        onCompleteRoute={(orig, dest) => {
+          setOrigin(orig);
+          setDestination(dest);
+          setRequestError('');
+          setBookingStep('choose');
+        }}
       />
 
+      {/* Seletor visual de Pin no Mapa (ativado apenas via "Defina a localização no mapa") */}
       <AddressPickerModal
-        isOpen={isPickingDestination}
-        onClose={() => setIsPickingDestination(false)}
-        title="Para onde vamos agora?"
-        initialPoint={destination || undefined}
-        onSelect={(p) => setDestination(p)}
+        isOpen={mapPickerField !== null}
+        onClose={() => setMapPickerField(null)}
+        title={mapPickerField === 'origin' ? 'Onde o motorista busca você?' : 'Definir destino no mapa'}
+        initialPoint={mapPickerField === 'origin' ? (origin || undefined) : (destination || undefined)}
+        onSelect={(p) => {
+          if (mapPickerField === 'origin') {
+            setOrigin(p);
+            if (destination) {
+              setBookingStep('choose');
+            }
+          } else if (mapPickerField === 'destination') {
+            setDestination(p);
+            StorageService.addRecentDestination(p);
+            if (origin) {
+              setBookingStep('choose');
+            }
+          }
+          setMapPickerField(null);
+        }}
+      />
+
+      {/* ═══ ETAPA 3 ESTILO UBER: MODAL "PAGUE COM" ═══ */}
+      <UberPaymentMethodModal
+        isOpen={isPaymentModalOpen}
+        paymentMethod={paymentMethod}
+        totalPrice={pricing.totalPrice}
+        walletBalance={walletBalance}
+        isLoggedIn={Boolean(currentUser?.id)}
+        allowCash={allowCash}
+        allowPix={allowPix}
+        allowWallet={allowWallet}
+        allowCreditCard={allowCardModal}
+        savedCards={savedCards}
+        selectedCardId={selectedCardId}
+        onClose={() => setIsPaymentModalOpen(false)}
+        onSelectMethod={(method, cardId) => {
+          setPaymentMethod(method);
+          if (cardId) setSelectedCardId(cardId);
+          setRequestError('');
+        }}
+        onOpenWalletDeposit={() => {
+          setIsPaymentModalOpen(false);
+          setIsWalletModalOpen(true);
+        }}
+        onOpenAddCard={() => {
+          setIsPaymentModalOpen(false);
+          setIsAddingCardModal(true);
+        }}
       />
 
       {/* Tela Cheia de Cadastro Seguro de Cartão (Kavro Pay) */}
@@ -2089,1230 +2154,813 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       )}
 
       {/* =====================================================================
-          MAPA EM TELA CHEIA ESTILO UBER PASSAGEIRO + CONTROLES FLUTUANTES
+          ETAPA 2 ESTILO UBER: MAPA + BOTTOM SHEET "ESCOLHER UMA VIAGEM" (PRINT 3)
          ===================================================================== */}
-      <div style={{ position: 'relative', height: origin && destination ? '38dvh' : '42dvh', minHeight: 225, width: '100%' }}>
+      <div style={{ position: 'relative', flex: '0 0 42dvh', minHeight: 215, width: '100%' }}>
         <PassengerLiveMap
           origin={origin}
           destination={destination}
           nearbyDrivers={nearbyMapDrivers}
         />
 
-        {/* Botão Voltar & Badge de Motoristas Flutuantes */}
+        {/* Topo Flutuante: Voltar + Pílula da Rota (Partida → Destino) + Motoristas */}
         <div style={{
           position: 'absolute',
           top: 'calc(12px + env(safe-area-inset-top, 0px))',
-          left: 14,
-          right: 14,
+          left: 12,
+          right: 12,
           zIndex: 400,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
+          gap: 8,
           pointerEvents: 'none'
         }}>
           <button
             type="button"
-            onClick={onBackToHome}
-            aria-label="Voltar"
+            onClick={() => setBookingStep('plan')}
+            aria-label="Voltar para editar endereços"
             style={{
-              width: 42,
-              height: 42,
+              width: 40,
+              height: 40,
               borderRadius: '50%',
-              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.56) 0%, rgba(255, 255, 255, 0.28) 100%)',
               backdropFilter: 'blur(24px) saturate(210%)',
               WebkitBackdropFilter: 'blur(24px) saturate(210%)',
-              border: '1px solid rgba(255, 255, 255, 0.72)',
+              border: '1px solid rgba(255, 255, 255, 0.75)',
               color: '#0F172A',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 6px 18px rgba(15, 23, 42, 0.16), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)',
+              boxShadow: '0 6px 18px rgba(15, 23, 42, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.9)',
               cursor: 'pointer',
-              pointerEvents: 'auto'
+              pointerEvents: 'auto',
+              flexShrink: 0
             }}
           >
-            <ArrowLeft size={20} />
+            <ArrowLeft size={19} />
           </button>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
-            {origin && destination && (
-              <div style={{
-                backgroundColor: '#111111',
-                color: '#FFFFFF',
-                padding: '7px 12px',
-                borderRadius: 999,
-                fontSize: '0.74rem',
-                fontWeight: 800,
-                boxShadow: '0 4px 14px rgba(0,0,0,0.22)'
-              }}>
-                {distanceKm.toFixed(1)} km • ~{durationMin} min
-              </div>
-            )}
-
+          {/* Pílula Central Clicável com Rota (igual Print 3) */}
+          <button
+            type="button"
+            onClick={() => setBookingStep('plan')}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              maxWidth: 250,
+              padding: '6px 14px',
+              borderRadius: 18,
+              backgroundColor: 'rgba(15, 23, 42, 0.9)',
+              backdropFilter: 'blur(16px)',
+              WebkitBackdropFilter: 'blur(16px)',
+              border: '1px solid rgba(255, 255, 255, 0.14)',
+              color: '#FFFFFF',
+              textAlign: 'center',
+              cursor: 'pointer',
+              pointerEvents: 'auto',
+              boxShadow: '0 6px 20px rgba(15, 23, 42, 0.28)'
+            }}
+          >
             <div style={{
-              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
-              backdropFilter: 'blur(24px) saturate(210%)',
-              WebkitBackdropFilter: 'blur(24px) saturate(210%)',
-              color: '#0F172A',
-              border: '1px solid rgba(255, 255, 255, 0.72)',
-              padding: '7px 12px',
-              borderRadius: 999,
-              fontSize: '0.74rem',
-              fontWeight: 800,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-              boxShadow: '0 6px 18px rgba(15, 23, 42, 0.14), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)'
+              fontSize: '0.72rem',
+              color: '#CBD5E1',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
             }}>
-              <span style={{
-                width: 8,
-                height: 8,
-                borderRadius: '50%',
-                backgroundColor: onlineDriversCount > 0 ? '#16A34A' : '#9CA3AF'
-              }} />
-              <span>{onlineDriversCount} disp.</span>
+              • {shortOriginLabel}
             </div>
+            <div style={{
+              fontSize: '0.82rem',
+              color: '#FFFFFF',
+              fontWeight: 800,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}>
+              {shortDestLabel}
+            </div>
+          </button>
+
+          <div style={{
+            background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.56) 0%, rgba(255, 255, 255, 0.28) 100%)',
+            backdropFilter: 'blur(24px) saturate(210%)',
+            WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+            color: '#0F172A',
+            border: '1px solid rgba(255, 255, 255, 0.75)',
+            padding: '7px 10px',
+            borderRadius: 999,
+            fontSize: '0.72rem',
+            fontWeight: 800,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
+            boxShadow: '0 6px 18px rgba(15, 23, 42, 0.14)',
+            pointerEvents: 'auto',
+            flexShrink: 0
+          }}>
+            <span style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              backgroundColor: onlineDriversCount > 0 ? '#16A34A' : '#9CA3AF'
+            }} />
+            <span>{onlineDriversCount}</span>
           </div>
         </div>
+
+        {/* Badge discreta de distância e duração */}
+        {origin && destination && (
+          <div style={{
+            position: 'absolute',
+            bottom: 28,
+            right: 12,
+            zIndex: 400,
+            backgroundColor: 'rgba(15, 23, 42, 0.86)',
+            color: '#FFFFFF',
+            padding: '5px 10px',
+            borderRadius: 999,
+            fontSize: '0.7rem',
+            fontWeight: 800,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+            pointerEvents: 'none'
+          }}>
+            {distanceKm.toFixed(1)} km • ~{durationMin} min
+          </div>
+        )}
       </div>
 
       {/* =====================================================================
-          BOTTOM SHEET BRANCA GLASS ESTILO UBER PASSAGEIRO
+          BOTTOM SHEET "ESCOLHER UMA VIAGEM" (2 MODALIDADES + PAGAMENTO + CTA)
          ===================================================================== */}
       <div style={{
         flex: 1,
-        backgroundColor: 'rgba(255, 255, 255, 0.88)',
-        backdropFilter: 'blur(18px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(18px) saturate(180%)',
-        borderTop: '1px solid rgba(255, 255, 255, 0.75)',
+        minHeight: 0,
+        backgroundColor: '#FFFFFF',
         borderRadius: '24px 24px 0 0',
-        marginTop: -22,
-        zIndex: 10,
+        marginTop: -20,
+        zIndex: 20,
         position: 'relative',
-        padding: '10px 16px 18px 16px',
-        boxShadow: '0 -8px 28px rgba(15, 23, 42, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.8)'
+        display: 'flex',
+        flexDirection: 'column',
+        boxShadow: '0 -10px 30px rgba(15, 23, 42, 0.14)'
       }}>
-        {/* Handle cinza */}
-        <div style={{
-          width: 38,
-          height: 4,
-          borderRadius: 999,
-          backgroundColor: '#D1D5DB',
-          margin: '0 auto 12px auto'
-        }} />
-
-        {/* Bloco Conectado Partida / Chegada estilo Uber Clean */}
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-            <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 900, color: '#111111', letterSpacing: '-0.02em' }}>
-              {origin && destination ? 'Escolha uma viagem' : 'Para onde vamos?'}
+        {/* Handle + Título Central */}
+        <div style={{ padding: '10px 16px 8px 16px', flexShrink: 0 }}>
+          <div style={{
+            width: 38,
+            height: 4,
+            borderRadius: 999,
+            backgroundColor: '#CBD5E1',
+            margin: '0 auto 10px auto'
+          }} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <h2 style={{ margin: 0, fontSize: '1.14rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+              Escolher uma viagem
             </h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button
-                type="button"
-                onClick={() => setIsTrustedContactsOpen(true)}
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  backgroundColor: '#DCFCE7',
-                  color: '#15803D',
-                  border: '1px solid #BBF7D0',
-                  borderRadius: 999,
-                  padding: '5px 10px',
-                  fontSize: '0.72rem',
-                  fontWeight: 800,
-                  cursor: 'pointer'
-                }}
-              >
-                <ShieldCheck size={13} />
-                <span>Contatos ({trustedCount})</span>
-              </button>
-              <div style={{
+            <button
+              type="button"
+              onClick={() => setIsTrustedContactsOpen(true)}
+              style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 5,
-                backgroundColor: '#F3F4F6',
-                color: '#111111',
+                gap: 4,
+                backgroundColor: '#F0FDF4',
+                color: '#15803D',
+                border: '1px solid #BBF7D0',
                 borderRadius: 999,
-                padding: '5px 11px',
-                fontSize: '0.74rem',
-                fontWeight: 700
-              }}>
-                <Clock size={13} strokeWidth={2.3} />
-                <span>Agora</span>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ position: 'relative' }}>
-            {/* Linha conectora */}
-            <div style={{
-              position: 'absolute',
-              left: 20,
-              top: 28,
-              bottom: 28,
-              width: 1.5,
-              backgroundColor: '#111111',
-              zIndex: 3,
-              pointerEvents: 'none'
-            }} />
-
-            {/* Local de partida */}
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={() => setIsPickingOrigin(true)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  setIsPickingOrigin(true);
-                }
-              }}
-              style={{
-                position: 'relative',
-                backgroundColor: '#F3F4F6',
-                borderRadius: 12,
-                height: 46,
-                display: 'flex',
-                alignItems: 'center',
-                paddingLeft: 38,
-                paddingRight: 44,
-                marginBottom: 8,
+                padding: '4px 9px',
+                fontSize: '0.7rem',
+                fontWeight: 800,
                 cursor: 'pointer'
               }}
             >
-              <span style={{
-                position: 'absolute',
-                left: 15,
-                width: 10,
-                height: 10,
-                borderRadius: '50%',
-                border: '3px solid #111111',
-                backgroundColor: '#FFFFFF',
-                zIndex: 4,
-                boxSizing: 'border-box'
-              }} />
-              <span style={{
-                flex: 1,
-                minWidth: 0,
-                fontSize: '0.88rem',
-                fontWeight: origin ? 600 : 500,
-                color: origin ? '#111111' : '#6B7280',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis'
-              }}>
-                {origin ? origin.address : 'Local de partida'}
-              </span>
-              <button
-                type="button"
-                title="Usar minha localização atual"
-                onClick={handleUseCurrentGpsForOrigin}
-                style={{
-                  position: 'absolute',
-                  right: 8,
-                  width: 30,
-                  height: 30,
-                  borderRadius: '50%',
-                  border: 'none',
-                  backgroundColor: '#FFFFFF',
-                  color: '#111111',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'pointer',
-                  boxShadow: '0 1px 4px rgba(0,0,0,0.1)',
-                  opacity: locatingOriginGps ? 0.45 : 1
-                }}
-              >
-                <Navigation size={14} fill="#111111" color="#111111" />
-              </button>
-            </div>
+              <ShieldCheck size={12} />
+              <span>Contatos ({trustedCount})</span>
+            </button>
+          </div>
 
-            {/* Local de chegada */}
+          {scheduleMode === 'later' && (
+            <div style={{
+              marginTop: 8,
+              padding: '6px 10px',
+              borderRadius: 10,
+              backgroundColor: '#F0FDF4',
+              border: '1px solid #BBF7D0',
+              color: '#15803D',
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6
+            }}>
+              <Calendar size={13} />
+              <span>Agendado para {scheduledDate.split('-').reverse().join('/')} às {scheduledTime}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Lista Rolável com as 2 Opções do Sistema (Padrão & Entregas) */}
+        <div style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: 'auto',
+          WebkitOverflowScrolling: 'touch',
+          padding: '4px 16px 10px 16px'
+        }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {orderedCategories.map((cat) => {
+              const catPrice = calculateRidePrice(distanceKm, durationMin, effectiveTimeStr, config, cat.id, undefined, paymentMethod);
+              const isSelected = selectedCategory === cat.id;
+              const stats = categoryStats[cat.id] || { availableDriversCount: 0, etaMin: 4 };
+              const hasNoDriverInCat = onlineDrivers.length > 0 && stats.availableDriversCount === 0;
+              const isCatDelivery = resolveCategoryType(cat) === 'entregas';
+
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => {
+                    setSelectedCategory(cat.id);
+                    setServiceMode(isCatDelivery ? 'entregas' : 'padrao');
+                    setRequestError('');
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '13px 14px',
+                    borderRadius: 16,
+                    border: isSelected
+                      ? `2px solid ${isCatDelivery ? '#15803D' : '#0F172A'}`
+                      : '1px solid #E2E8F0',
+                    backgroundColor: isSelected ? (isCatDelivery ? '#F0FDF4' : '#F8FAFC') : '#FFFFFF',
+                    opacity: hasNoDriverInCat && !isSelected ? 0.65 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all 0.15s ease'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                    <div style={{
+                      width: 52,
+                      height: 40,
+                      borderRadius: 12,
+                      backgroundColor: isSelected
+                        ? (isCatDelivery ? '#15803D' : '#0F172A')
+                        : (isCatDelivery ? '#DCFCE7' : '#F1F5F9'),
+                      color: isSelected ? '#FFFFFF' : (isCatDelivery ? '#15803D' : '#0F172A'),
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      {isCatDelivery ? <Package size={22} /> : <Car size={22} />}
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ fontSize: '1rem', fontWeight: 900, color: '#0F172A' }}>
+                          {cat.name}
+                        </span>
+                        {isCatDelivery ? (
+                          <span style={{
+                            fontSize: '0.66rem',
+                            color: '#166534',
+                            backgroundColor: '#DCFCE7',
+                            padding: '1px 7px',
+                            borderRadius: 999,
+                            fontWeight: 800
+                          }}>
+                            Encomenda
+                          </span>
+                        ) : (
+                          <span style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            fontSize: '0.74rem',
+                            color: '#475569',
+                            fontWeight: 700
+                          }}>
+                            <Users size={12} />{cat.maxPassengers || 4}
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ fontSize: '0.74rem', color: hasNoDriverInCat ? '#DC2626' : '#64748B', fontWeight: 600, marginTop: 2 }}>
+                        {hasNoDriverInCat
+                          ? 'Sem motoristas nessa categoria agora'
+                          : `Chega em ~${stats.etaMin} min • ${cat.description}`}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                    <div style={{ fontSize: '1.12rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+                      R$ {catPrice.totalPrice.toFixed(2).replace('.', ',')}
+                    </div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Card compacto de Destinatário somente quando Entregas está selecionada */}
+          {selectedIsDelivery && (
             <button
               type="button"
-              onClick={() => setIsPickingDestination(true)}
+              onClick={() => setIsDeliveryModalOpen(true)}
               style={{
                 width: '100%',
-                position: 'relative',
-                backgroundColor: '#F3F4F6',
-                border: destination ? '1.5px solid #111111' : '1.5px solid transparent',
-                borderRadius: 12,
-                height: 46,
+                marginTop: 10,
+                padding: '11px 14px',
+                borderRadius: 14,
+                border: isDeliveryReady ? '1px solid #BBF7D0' : '1.5px dashed #16A34A',
+                backgroundColor: '#F0FDF4',
+                color: '#14532D',
                 display: 'flex',
                 alignItems: 'center',
-                paddingLeft: 38,
-                paddingRight: 14,
+                justifyContent: 'space-between',
+                gap: 10,
                 textAlign: 'left',
                 cursor: 'pointer'
               }}
             >
-              <span style={{
-                position: 'absolute',
-                left: 15,
-                width: 10,
-                height: 10,
-                borderRadius: 2,
-                border: '3px solid #111111',
-                backgroundColor: '#FFFFFF',
-                zIndex: 4,
-                boxSizing: 'border-box'
-              }} />
-              <span style={{
-                flex: 1,
-                minWidth: 0,
-                fontSize: '0.88rem',
-                fontWeight: destination ? 700 : 500,
-                color: destination ? '#111111' : '#6B7280',
-                whiteSpace: 'nowrap',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis'
-              }}>
-                {destination
-                  ? destination.address
-                  : serviceMode === 'entregas'
-                    ? 'Endereço de entrega (destino)?'
-                    : 'Para onde você vai?'}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <Package size={18} color="#15803D" style={{ flexShrink: 0 }} />
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 800 }}>
+                    {isDeliveryReady ? `Entrega para ${deliveryRecipientName}` : 'Informar dados da entrega *'}
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#166534', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {isDeliveryReady
+                      ? `${deliveryItemDesc} • ${deliveryRecipientPhone}`
+                      : 'Toque para preencher destinatário, WhatsApp e pacote'}
+                  </div>
+                </div>
+              </div>
+              <ChevronRight size={17} color="#15803D" style={{ flexShrink: 0 }} />
+            </button>
+          )}
+
+          {/* Alerta se não houver motoristas na categoria escolhida */}
+          {onlineDrivers.length > 0 && selectedCatStats.availableDriversCount === 0 && (
+            <div style={{
+              marginTop: 10,
+              padding: '10px 12px',
+              borderRadius: 12,
+              backgroundColor: '#FFFBEB',
+              border: '1px solid #FDE68A',
+              color: '#92400E',
+              fontSize: '0.76rem'
+            }}>
+              <div style={{ fontWeight: 800, marginBottom: 4 }}>
+                Sem motoristas disponíveis em {selectedCatObj.name} agora.
+              </div>
+              {alternativeAvailableCategories.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {alternativeAvailableCategories.map(alt => {
+                    const altPrice = calculateRidePrice(distanceKm, durationMin, effectiveTimeStr, config, alt.id, undefined, paymentMethod);
+                    return (
+                      <button
+                        key={alt.id}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory(alt.id);
+                          setServiceMode(resolveCategoryType(alt));
+                          setRequestError('');
+                        }}
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 8,
+                          border: 'none',
+                          backgroundColor: '#0F172A',
+                          color: '#FFFFFF',
+                          fontSize: '0.72rem',
+                          fontWeight: 800,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Mudar p/ {alt.name} (R$ {altPrice.totalPrice.toFixed(2).replace('.', ',')})
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Rodapé Fixo do Checkout: Linha de Pagamento (Print 3) + Botão Principal + Agendar */}
+        <div style={{
+          flexShrink: 0,
+          borderTop: '1px solid #F1F5F9',
+          backgroundColor: '#FFFFFF',
+          padding: '10px 16px calc(16px + env(safe-area-inset-bottom, 0px)) 16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10
+        }}>
+          {/* Linha de Pagamento Clicável -> abre Modal "Pague com" (Print 4) */}
+          <button
+            type="button"
+            onClick={() => setIsPaymentModalOpen(true)}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              padding: '10px 12px',
+              borderRadius: 14,
+              border: '1px solid #E2E8F0',
+              backgroundColor: '#F8FAFC',
+              color: '#0F172A',
+              cursor: 'pointer'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+              <PaymentMethodIcon method={paymentMethod} size={22} />
+              <span style={{ fontSize: '0.9rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {effectivePaymentLabel}
               </span>
+            </div>
+            <ChevronRight size={18} color="#475569" style={{ flexShrink: 0 }} />
+          </button>
+
+          {requestError && (
+            <div style={{
+              backgroundColor: '#FEF2F2',
+              border: '1px solid #FECACA',
+              borderRadius: 12,
+              padding: '9px 12px',
+              color: '#DC2626',
+              fontSize: '0.76rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
+            }}>
+              <AlertCircle size={15} style={{ flexShrink: 0 }} />
+              <span>{requestError}</span>
+            </div>
+          )}
+
+          {/* Botão CTA + Botão Calendário ao lado (igual Print 3) */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <button
+              type="button"
+              onClick={handleRequestRideNow}
+              disabled={isSubmitting}
+              style={{
+                flex: 1,
+                height: 50,
+                borderRadius: 999,
+                backgroundColor: selectedIsDelivery ? '#15803D' : '#0F172A',
+                color: '#FFFFFF',
+                border: 'none',
+                fontSize: '0.95rem',
+                fontWeight: 800,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                cursor: 'pointer',
+                boxShadow: '0 8px 22px rgba(15, 23, 42, 0.2)'
+              }}
+            >
+              {isSubmitting && <RefreshCw size={16} className="animate-spin" />}
+              <span>
+                {isSubmitting
+                  ? 'Conectando motorista...'
+                  : `Escolha ${selectedCatObj.name} • R$ ${pricing.totalPrice.toFixed(2).replace('.', ',')}`}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsScheduleModalOpen(true)}
+              title="Agendar horário"
+              aria-label="Agendar horário"
+              style={{
+                width: 50,
+                height: 50,
+                borderRadius: 16,
+                border: scheduleMode === 'later' ? '1.5px solid #16A34A' : '1px solid #E2E8F0',
+                backgroundColor: scheduleMode === 'later' ? '#F0FDF4' : '#F1F5F9',
+                color: scheduleMode === 'later' ? '#15803D' : '#0F172A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexShrink: 0
+              }}
+            >
+              <Calendar size={20} />
             </button>
           </div>
         </div>
+      </div>
 
-        {/* 2 Modalidades do Sistema: Viagem Padrão vs Entregas */}
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 6,
-          backgroundColor: '#F3F4F6',
-          padding: 4,
-          borderRadius: 14,
-          marginBottom: 12
-        }}>
-          <button
-            type="button"
-            onClick={() => handleSwitchServiceMode('padrao')}
+      {/* Modal Rápido de Agendamento (botão calendário ao lado do CTA) */}
+      {isScheduleModalOpen && (
+        <div
+          onClick={() => setIsScheduleModalOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 120,
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
             style={{
-              height: 40,
-              borderRadius: 10,
-              border: 'none',
-              backgroundColor: serviceMode === 'padrao' ? '#111111' : 'transparent',
-              color: serviceMode === 'padrao' ? '#FFFFFF' : '#4B5563',
-              fontSize: '0.82rem',
-              fontWeight: 800,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              boxShadow: serviceMode === 'padrao' ? '0 2px 8px rgba(0,0,0,0.14)' : 'none'
+              width: '100%',
+              maxWidth: 480,
+              backgroundColor: '#FFFFFF',
+              borderRadius: '22px 22px 0 0',
+              padding: '18px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
             }}
           >
-            <Car size={15} />
-            <span>Padrão</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => handleSwitchServiceMode('entregas')}
-            style={{
-              height: 40,
-              borderRadius: 10,
-              border: 'none',
-              backgroundColor: serviceMode === 'entregas' ? '#15803D' : 'transparent',
-              color: serviceMode === 'entregas' ? '#FFFFFF' : '#4B5563',
-              fontSize: '0.82rem',
-              fontWeight: 800,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 6,
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              boxShadow: serviceMode === 'entregas' ? '0 2px 8px rgba(21,128,61,0.22)' : 'none'
-            }}
-          >
-            <Package size={15} />
-            <span>Entregas</span>
-          </button>
-        </div>
-
-        {/* Categorias estilo Uber Passageiro */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 12 }}>
-          {visibleModeCategories.map((cat) => {
-            const catPrice = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, cat.id);
-            const isSelected = selectedCategory === cat.id;
-            const stats = categoryStats[cat.id] || { availableDriversCount: 0, etaMin: 4 };
-            const hasNoDriverInCat = onlineDrivers.length > 0 && stats.availableDriversCount === 0;
-            const isCatDelivery = resolveCategoryType(cat) === 'entregas';
-
-            return (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+              <h3 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 900, color: '#0F172A' }}>
+                Quando você quer ir?
+              </h3>
               <button
-                key={cat.id}
+                type="button"
+                onClick={() => setIsScheduleModalOpen(false)}
+                style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
+              <button
                 type="button"
                 onClick={() => {
-                  setSelectedCategory(cat.id);
-                  setServiceMode(isCatDelivery ? 'entregas' : 'padrao');
-                  setRequestError('');
+                  setScheduleMode('now');
+                  setIsScheduleModalOpen(false);
                 }}
                 style={{
-                  width: '100%',
-                  padding: '12px 14px',
-                  borderRadius: 14,
-                  border: isSelected
-                    ? `2px solid ${isCatDelivery ? '#15803D' : '#111111'}`
-                    : '1px solid #E5E7EB',
-                  backgroundColor: isSelected ? (isCatDelivery ? '#F0FDF4' : '#F9FAFB') : '#FFFFFF',
-                  opacity: hasNoDriverInCat && !isSelected ? 0.65 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 12,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  transition: 'all 0.15s ease'
+                  height: 42,
+                  borderRadius: 12,
+                  border: scheduleMode === 'now' ? '2px solid #0F172A' : '1px solid #CBD5E1',
+                  backgroundColor: scheduleMode === 'now' ? '#0F172A' : '#FFFFFF',
+                  color: scheduleMode === 'now' ? '#FFFFFF' : '#0F172A',
+                  fontWeight: 800,
+                  cursor: 'pointer'
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                  <div style={{
-                    width: 46,
-                    height: 36,
-                    borderRadius: 10,
-                    backgroundColor: isSelected
-                      ? (isCatDelivery ? '#15803D' : '#111111')
-                      : (isCatDelivery ? '#DCFCE7' : '#F3F4F6'),
-                    color: isSelected ? '#FFFFFF' : (isCatDelivery ? '#15803D' : '#111111'),
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0
-                  }}>
-                    {isCatDelivery ? <Package size={20} /> : <Car size={20} />}
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontSize: '0.96rem', fontWeight: 800, color: '#111111' }}>
-                        {cat.name}
-                      </span>
-                      {isCatDelivery ? (
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 3,
-                          fontSize: '0.68rem',
-                          color: '#166534',
-                          backgroundColor: '#DCFCE7',
-                          padding: '1px 7px',
-                          borderRadius: 999,
-                          fontWeight: 800
-                        }}>
-                          Encomenda
-                        </span>
-                      ) : (
-                        <span style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 2,
-                          fontSize: '0.72rem',
-                          color: '#4B5563',
-                          fontWeight: 700
-                        }}>
-                          <Users size={11} />{cat.maxPassengers || 4}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.74rem', color: hasNoDriverInCat ? '#DC2626' : '#4B5563', fontWeight: 600, marginTop: 1 }}>
-                      {hasNoDriverInCat
-                        ? 'Sem motoristas nessa categoria agora'
-                        : `Chega em ~${stats.etaMin} min • ${cat.description}`}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                  <div style={{ fontSize: '1.05rem', fontWeight: 900, color: '#111111' }}>
-                    R$ {catPrice.totalPrice.toFixed(2).replace('.', ',')}
-                  </div>
-                </div>
+                Ir agora
               </button>
-            );
-          })}
-        </div>
-
-        {/* Alerta caso não haja motoristas disponíveis para a categoria escolhida */}
-        {onlineDrivers.length > 0 && selectedCatStats.availableDriversCount === 0 && (
-          <div style={{
-            marginBottom: 12,
-            padding: '10px 12px',
-            borderRadius: 12,
-            backgroundColor: '#FFFBEB',
-            border: '1px solid #FDE68A',
-            color: '#92400E',
-            fontSize: '0.76rem'
-          }}>
-            <div style={{ fontWeight: 800, marginBottom: 4 }}>
-              Sem motoristas disponíveis em {selectedCatObj.name} agora.
+              <button
+                type="button"
+                onClick={() => setScheduleMode('later')}
+                style={{
+                  height: 42,
+                  borderRadius: 12,
+                  border: scheduleMode === 'later' ? '2px solid #16A34A' : '1px solid #CBD5E1',
+                  backgroundColor: scheduleMode === 'later' ? '#16A34A' : '#FFFFFF',
+                  color: scheduleMode === 'later' ? '#FFFFFF' : '#0F172A',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                Agendar horário
+              </button>
             </div>
-            {alternativeAvailableCategories.length > 0 && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {alternativeAvailableCategories.map(alt => {
-                  const altPrice = calculateRidePrice(distanceKm, durationMin, nowTimeStr, config, alt.id);
-                  return (
-                    <button
-                      key={alt.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedCategory(alt.id);
-                        setServiceMode(resolveCategoryType(alt));
-                        setRequestError('');
-                      }}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: 'none',
-                        backgroundColor: '#111111',
-                        color: '#FFFFFF',
-                        fontSize: '0.72rem',
-                        fontWeight: 800,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      Mudar p/ {alt.name} (R$ {altPrice.totalPrice.toFixed(2).replace('.', ',')})
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
 
-        {/* Pagamento & Opções em Linha Limpa */}
-        <div style={{
-          borderTop: '1px solid #F3F4F6',
-          paddingTop: 12,
-          marginBottom: 8
-        }}>
-          <div style={{
-            display: 'flex',
-            flexWrap: 'wrap',
-            gap: 6,
-            marginBottom: 10
-          }}>
-            {allowPix && (
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('pix')}
-                style={{
-                  flex: '1 1 auto',
-                  padding: '8px 12px',
-                  borderRadius: 999,
-                  border: paymentMethod === 'pix' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
-                  backgroundColor: paymentMethod === 'pix' ? '#0F172A' : '#FFFFFF',
-                  color: paymentMethod === 'pix' ? '#FFFFFF' : '#111111',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                <PaymentMethodIcon method="pix" size={16} />
-                <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>PIX</span>
-              </button>
-            )}
-
-            {allowAnyCard && (
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('cartao_credito')}
-                style={{
-                  flex: '1 1 auto',
-                  padding: '8px 12px',
-                  borderRadius: 999,
-                  border: paymentMethod === 'cartao_credito' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
-                  backgroundColor: paymentMethod === 'cartao_credito' ? '#0F172A' : '#FFFFFF',
-                  color: paymentMethod === 'cartao_credito' ? '#FFFFFF' : '#111111',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                <PaymentMethodIcon method="cartao_credito" size={18} />
-                <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                  Cartão de Crédito
-                </span>
-              </button>
-            )}
-
-            {allowCash && (
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('dinheiro')}
-                style={{
-                  flex: '1 1 auto',
-                  padding: '8px 12px',
-                  borderRadius: 999,
-                  border: paymentMethod === 'dinheiro' ? '1.5px solid #0F172A' : '1px solid #E5E7EB',
-                  backgroundColor: paymentMethod === 'dinheiro' ? '#0F172A' : '#FFFFFF',
-                  color: paymentMethod === 'dinheiro' ? '#FFFFFF' : '#111111',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                <PaymentMethodIcon method="dinheiro" size={17} />
-                <span style={{ fontSize: '0.76rem', fontWeight: 800 }}>Dinheiro</span>
-              </button>
-            )}
-
-            {allowWallet && (
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('carteira')}
-                style={{
-                  flex: '1 1 auto',
-                  padding: '8px 12px',
-                  borderRadius: 999,
-                  border: paymentMethod === 'carteira' ? '1.5px solid #76D800' : '1px solid #E5E7EB',
-                  backgroundColor: paymentMethod === 'carteira' ? '#0F172A' : '#FFFFFF',
-                  color: paymentMethod === 'carteira' ? '#FFFFFF' : '#111111',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  cursor: 'pointer'
-                }}
-              >
-                <PaymentMethodIcon method="carteira" size={16} />
-                <span style={{ fontSize: '0.76rem', fontWeight: 800, whiteSpace: 'nowrap' }}>
-                  Carteira{walletBalance > 0 ? ` • R$ ${walletBalance.toFixed(0)}` : ''}
-                </span>
-              </button>
-            )}
-          </div>
-
-          {/* Painel Carteira Kavro Drive */}
-          {paymentMethod === 'carteira' && allowWallet && (
-            <div style={{
-              backgroundColor: '#F8FAFC',
-              borderRadius: 14,
-              padding: 12,
-              border: '1px solid #E2E8F0',
-              marginBottom: 8
-            }}>
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginBottom: 8
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <PaymentMethodIcon method="carteira" size={18} />
-                  <div>
-                    <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>
-                      Saldo na Carteira Kavro
-                    </div>
-                    <div style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 600 }}>
-                      Disponível: <strong style={{ color: '#0F172A' }}>{walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</strong>
-                    </div>
-                  </div>
+            {scheduleMode === 'later' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <input
+                    type="date"
+                    value={scheduledDate}
+                    onChange={(e) => setScheduledDate(e.target.value)}
+                    style={{ height: 42, padding: '0 10px', borderRadius: 10, border: '1px solid #CBD5E1', fontWeight: 700 }}
+                  />
+                  <input
+                    type="time"
+                    value={scheduledTime}
+                    onChange={(e) => setScheduledTime(e.target.value)}
+                    style={{ height: 42, padding: '0 10px', borderRadius: 10, border: '1px solid #CBD5E1', fontWeight: 700 }}
+                  />
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsWalletModalOpen(true)}
+                  onClick={() => setIsScheduleModalOpen(false)}
                   style={{
-                    padding: '6px 11px',
+                    height: 44,
                     borderRadius: 999,
                     border: 'none',
                     backgroundColor: '#0F172A',
-                    color: '#76D800',
-                    fontSize: '0.72rem',
-                    fontWeight: 800,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4
-                  }}
-                >
-                  <Plus size={12} />
-                  <span>Depositar</span>
-                </button>
-              </div>
-
-              {!currentUser?.id ? (
-                <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#B45309' }}>
-                  Entre na sua conta para pagar corridas com o saldo da carteira.
-                </div>
-              ) : walletBalance + 0.001 >= pricing.totalPrice ? (
-                <div style={{
-                  padding: '8px 10px',
-                  borderRadius: 10,
-                  backgroundColor: '#F0FDF4',
-                  border: '1px solid #BBF7D0',
-                  color: '#15803D',
-                  fontSize: '0.74rem',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between'
-                }}>
-                  <span>Pagamento instantâneo na confirmação</span>
-                  <span>Restará {Math.max(0, walletBalance - pricing.totalPrice).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                </div>
-              ) : (
-                <div style={{
-                  padding: '9px 10px',
-                  borderRadius: 10,
-                  backgroundColor: '#FFFBEB',
-                  border: '1px solid #FDE68A',
-                  color: '#92400E',
-                  fontSize: '0.73rem',
-                  fontWeight: 700,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                  flexWrap: 'wrap'
-                }}>
-                  <span>
-                    Saldo insuficiente (faltam {(pricing.totalPrice - walletBalance).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })})
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setIsWalletModalOpen(true)}
-                    style={{
-                      padding: '5px 10px',
-                      borderRadius: 8,
-                      border: 'none',
-                      backgroundColor: '#76D800',
-                      color: '#0B1117',
-                      fontSize: '0.72rem',
-                      fontWeight: 900,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    + Adicionar saldo (mín. R$ 20)
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Cartões de Crédito tokenizados */}
-          {paymentMethod === 'cartao_credito' && (
-            <div style={{
-              backgroundColor: '#F8FAFC',
-              borderRadius: 14,
-              padding: 10,
-              border: '1px solid #E2E8F0',
-              marginBottom: 8
-            }}>
-              {/* Mini cabeçalho personalizado Kavro Pay */}
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 8,
-                marginBottom: 8,
-                paddingBottom: 6,
-                borderBottom: '1px solid #E2E8F0'
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <img src="/logo-icon.png" alt="Kavro" style={{ width: 18, height: 18, borderRadius: 4, objectFit: 'contain' }} />
-                  <span style={{ fontSize: '0.73rem', fontWeight: 800, color: '#0F172A' }}>
-                    Kavro Pay • Cartão Salvo
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAddingCardModal(true)}
-                  style={{
-                    padding: '5px 11px',
-                    borderRadius: 999,
-                    border: '1px solid #0F172A',
-                    backgroundColor: '#0F172A',
                     color: '#FFFFFF',
-                    fontWeight: 700,
-                    fontSize: '0.71rem',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
+                    fontWeight: 800,
                     cursor: 'pointer'
                   }}
                 >
-                  <Plus size={12} />
-                  <span>Novo cartão</span>
+                  Confirmar agendamento
                 </button>
               </div>
+            )}
+          </div>
+        </div>
+      )}
 
-              {savedCards.length > 0 ? (
-                savedCards.map(c => (
-                  <div
-                    key={c.id}
-                    onClick={() => {
-                      setSelectedCardId(c.id);
-                      setPaymentMethod(c.cardType);
-                    }}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '8px 10px',
-                      borderRadius: 10,
-                      backgroundColor: selectedCardId === c.id ? '#EFF6FF' : '#FFFFFF',
-                      border: selectedCardId === c.id ? '1.5px solid #2563EB' : '1px solid #E2E8F0',
-                      marginBottom: 6,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <div style={{
-                        padding: '3px 7px',
-                        borderRadius: 6,
-                        backgroundColor: '#0F172A',
-                        color: '#FFFFFF',
-                        fontSize: '0.62rem',
-                        fontWeight: 800
-                      }}>
-                        {String(c.brand || 'CARD').toUpperCase()}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#0F172A' }}>
-                          •••• {c.last4}
-                        </div>
-                        <div style={{ fontSize: '0.67rem', color: '#64748B' }}>
-                          {c.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val {c.expMonth}/{c.expYear}
-                        </div>
-                      </div>
-                    </div>
-                    {selectedCardId === c.id && <Check size={15} color="#2563EB" />}
-                  </div>
-                ))
-              ) : (
-                <div style={{ textAlign: 'center', padding: '8px 6px 4px 6px' }}>
-                  <div style={{ fontSize: '0.75rem', color: '#64748B', marginBottom: 8 }}>
-                    Nenhum cartão cadastrado ainda. Adicione um cartão de crédito ou débito com criptografia ponta a ponta.
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsAddingCardModal(true)}
-                    style={{
-                      width: '100%',
-                      padding: '10px 14px',
-                      borderRadius: 10,
-                      border: '1.5px dashed #94A3B8',
-                      backgroundColor: '#FFFFFF',
-                      color: '#0F172A',
-                      fontSize: '0.8rem',
-                      fontWeight: 800,
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6
-                    }}
-                  >
-                    <Plus size={14} />
-                    <span>Cadastrar cartão de crédito ou débito</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          )}
-
-          {serviceMode === 'entregas' ? (
-            /* Formulário Completo de Entrega (Destinatário, Produto/Pacote e Instruções) */
-            <div style={{
-              backgroundColor: '#F0FDF4',
-              borderRadius: 14,
-              padding: 12,
-              border: '1px solid #BBF7D0',
-              marginTop: 8,
+      {/* Modal Limpo de Detalhes da Entrega */}
+      {isDeliveryModalOpen && (
+        <div
+          onClick={() => setIsDeliveryModalOpen(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 120,
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 480,
+              maxHeight: '85dvh',
+              overflowY: 'auto',
+              backgroundColor: '#FFFFFF',
+              borderRadius: '22px 22px 0 0',
+              padding: '18px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
               display: 'flex',
               flexDirection: 'column',
               gap: 10
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <Package size={16} color="#15803D" />
-                  <span style={{ fontSize: '0.84rem', fontWeight: 800, color: '#14532D' }}>
-                    Detalhes da Entrega
-                  </span>
-                </div>
-                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#15803D' }}>
-                  Obrigatório
-                </span>
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Package size={18} color="#15803D" />
+                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
+                  Detalhes da Entrega
+                </h3>
               </div>
-
-              {/* Enviar vs Receber */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                <button
-                  type="button"
-                  onClick={() => setDeliveryRole('sender')}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 10,
-                    border: deliveryRole === 'sender' ? '2px solid #15803D' : '1px solid #D1FAE5',
-                    backgroundColor: deliveryRole === 'sender' ? '#15803D' : '#FFFFFF',
-                    color: deliveryRole === 'sender' ? '#FFFFFF' : '#166534',
-                    fontSize: '0.75rem',
-                    fontWeight: 800,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Estou enviando
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDeliveryRole('receiver')}
-                  style={{
-                    padding: '8px 10px',
-                    borderRadius: 10,
-                    border: deliveryRole === 'receiver' ? '2px solid #15803D' : '1px solid #D1FAE5',
-                    backgroundColor: deliveryRole === 'receiver' ? '#15803D' : '#FFFFFF',
-                    color: deliveryRole === 'receiver' ? '#FFFFFF' : '#166534',
-                    fontSize: '0.75rem',
-                    fontWeight: 800,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Vou receber
-                </button>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <input
-                  type="text"
-                  placeholder={deliveryRole === 'sender' ? 'Nome de quem recebe *' : 'Nome de quem envia *'}
-                  value={deliveryRecipientName}
-                  onChange={(e) => setDeliveryRecipientName(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '9px 10px',
-                    borderRadius: 10,
-                    border: '1px solid #A7F3D0',
-                    backgroundColor: '#FFFFFF',
-                    fontSize: '0.79rem',
-                    fontWeight: 600,
-                    color: '#0F172A',
-                    boxSizing: 'border-box'
-                  }}
-                />
-                <input
-                  type="tel"
-                  placeholder="WhatsApp c/ DDD *"
-                  value={deliveryRecipientPhone}
-                  onChange={(e) => setDeliveryRecipientPhone(e.target.value)}
-                  style={{
-                    width: '100%',
-                    padding: '9px 10px',
-                    borderRadius: 10,
-                    border: '1px solid #A7F3D0',
-                    backgroundColor: '#FFFFFF',
-                    fontSize: '0.79rem',
-                    fontWeight: 600,
-                    color: '#0F172A',
-                    boxSizing: 'border-box'
-                  }}
-                />
-              </div>
-
-              <input
-                type="text"
-                placeholder="O que está sendo enviado? (ex: Caixa de produtos, chave, compra...) *"
-                value={deliveryItemDesc}
-                onChange={(e) => setDeliveryItemDesc(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '9px 11px',
-                  borderRadius: 10,
-                  border: '1px solid #A7F3D0',
-                  backgroundColor: '#FFFFFF',
-                  fontSize: '0.8rem',
-                  fontWeight: 600,
-                  color: '#0F172A',
-                  boxSizing: 'border-box'
-                }}
-              />
-
-              {/* Porte + Modo de Entrega */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#166534' }}>
-                  Porte do pacote
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-                  {([
-                    { id: 'pequeno', label: 'Pequeno' },
-                    { id: 'medio', label: 'Médio (Caixa)' },
-                    { id: 'grande', label: 'Grande' }
-                  ] as const).map((sz) => (
-                    <button
-                      key={sz.id}
-                      type="button"
-                      onClick={() => setDeliveryPackageSize(sz.id)}
-                      style={{
-                        padding: '6px 6px',
-                        borderRadius: 8,
-                        border: deliveryPackageSize === sz.id ? '1.5px solid #15803D' : '1px solid #D1FAE5',
-                        backgroundColor: deliveryPackageSize === sz.id ? '#DCFCE7' : '#FFFFFF',
-                        color: '#14532D',
-                        fontSize: '0.71rem',
-                        fontWeight: 800,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {sz.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#166534' }}>
-                  Como entregar no endereço
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-                  {([
-                    { id: 'porta_mao', label: 'Em mãos' },
-                    { id: 'portaria', label: 'Na portaria' },
-                    { id: 'recepcao', label: 'Recepção/Loja' }
-                  ] as const).map((dm) => (
-                    <button
-                      key={dm.id}
-                      type="button"
-                      onClick={() => setDeliveryDropoffMode(dm.id)}
-                      style={{
-                        padding: '6px 6px',
-                        borderRadius: 8,
-                        border: deliveryDropoffMode === dm.id ? '1.5px solid #15803D' : '1px solid #D1FAE5',
-                        backgroundColor: deliveryDropoffMode === dm.id ? '#DCFCE7' : '#FFFFFF',
-                        color: '#14532D',
-                        fontSize: '0.71rem',
-                        fontWeight: 800,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {dm.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <input
-                type="text"
-                placeholder="Instruções de retirada ou entrega (bloco, apto, contato na loja...)"
-                value={deliveryInstructions}
-                onChange={(e) => setDeliveryInstructions(e.target.value)}
-                style={{
-                  width: '100%',
-                  padding: '8px 11px',
-                  borderRadius: 10,
-                  border: '1px solid #A7F3D0',
-                  backgroundColor: '#FFFFFF',
-                  fontSize: '0.78rem',
-                  color: '#0F172A',
-                  boxSizing: 'border-box'
-                }}
-              />
-            </div>
-          ) : (
-            <>
-              {/* Toggle compacto para Passageiros, Malas e Observação */}
               <button
                 type="button"
-                onClick={() => setShowExtraOptions(v => !v)}
+                onClick={() => setIsDeliveryModalOpen(false)}
+                style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <button
+                type="button"
+                onClick={() => setDeliveryRole('sender')}
                 style={{
-                  width: '100%',
-                  background: 'none',
-                  border: 'none',
-                  padding: '6px 2px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  color: '#4B5563',
+                  padding: '9px 10px',
+                  borderRadius: 10,
+                  border: deliveryRole === 'sender' ? '2px solid #15803D' : '1px solid #D1FAE5',
+                  backgroundColor: deliveryRole === 'sender' ? '#15803D' : '#FFFFFF',
+                  color: deliveryRole === 'sender' ? '#FFFFFF' : '#166534',
                   fontSize: '0.78rem',
-                  fontWeight: 700,
+                  fontWeight: 800,
                   cursor: 'pointer'
                 }}
               >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <Sliders size={13} />
-                  <span>{passengers} passageiro(s){hasLuggage ? ' • Com malas' : ''}{notes ? ' • Obs. adicionada' : ''}</span>
-                </span>
-                <ChevronDown size={15} style={{ transform: showExtraOptions ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s' }} />
+                Estou enviando
               </button>
+              <button
+                type="button"
+                onClick={() => setDeliveryRole('receiver')}
+                style={{
+                  padding: '9px 10px',
+                  borderRadius: 10,
+                  border: deliveryRole === 'receiver' ? '2px solid #15803D' : '1px solid #D1FAE5',
+                  backgroundColor: deliveryRole === 'receiver' ? '#15803D' : '#FFFFFF',
+                  color: deliveryRole === 'receiver' ? '#FFFFFF' : '#166534',
+                  fontSize: '0.78rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                Vou receber
+              </button>
+            </div>
 
-              {showExtraOptions && (
-                <div style={{
-                  backgroundColor: '#F9FAFB',
-                  borderRadius: 12,
-                  padding: 10,
-                  border: '1px solid #E5E7EB',
-                  marginTop: 6,
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 8
-                }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <Users size={15} color="#4B5563" />
-                      {[1, 2, 3, 4].map(n => (
-                        <button
-                          key={n}
-                          type="button"
-                          onClick={() => setPassengers(n)}
-                          style={{
-                            width: 28,
-                            height: 28,
-                            borderRadius: 8,
-                            border: passengers === n ? '2px solid #111111' : '1px solid #D1D5DB',
-                            backgroundColor: passengers === n ? '#111111' : '#FFFFFF',
-                            color: passengers === n ? '#FFFFFF' : '#4B5563',
-                            fontWeight: 800,
-                            fontSize: '0.78rem',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          {n}
-                        </button>
-                      ))}
-                    </div>
+            <input
+              type="text"
+              placeholder={deliveryRole === 'sender' ? 'Nome completo de quem recebe *' : 'Nome completo de quem envia *'}
+              value={deliveryRecipientName}
+              onChange={(e) => setDeliveryRecipientName(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
+            />
+            <input
+              type="tel"
+              placeholder="WhatsApp com DDD *"
+              value={deliveryRecipientPhone}
+              onChange={(e) => setDeliveryRecipientPhone(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
+            />
+            <input
+              type="text"
+              placeholder="O que está sendo enviado? (ex: Caixa, chave, documentos...) *"
+              value={deliveryItemDesc}
+              onChange={(e) => setDeliveryItemDesc(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
+            />
 
-                    <button
-                      type="button"
-                      onClick={() => setHasLuggage(!hasLuggage)}
-                      style={{
-                        padding: '5px 10px',
-                        borderRadius: 8,
-                        border: hasLuggage ? '1.5px solid #111111' : '1px solid #D1D5DB',
-                        backgroundColor: hasLuggage ? '#111111' : '#FFFFFF',
-                        color: hasLuggage ? '#FFFFFF' : '#4B5563',
-                        fontSize: '0.74rem',
-                        fontWeight: 700,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        cursor: 'pointer'
-                      }}
-                    >
-                      <Luggage size={14} />
-                      <span>Malas</span>
-                    </button>
-                  </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              {([
+                { id: 'pequeno', label: 'Pequeno' },
+                { id: 'medio', label: 'Médio' },
+                { id: 'grande', label: 'Grande' }
+              ] as const).map((sz) => (
+                <button
+                  key={sz.id}
+                  type="button"
+                  onClick={() => setDeliveryPackageSize(sz.id)}
+                  style={{
+                    padding: '8px 6px',
+                    borderRadius: 9,
+                    border: deliveryPackageSize === sz.id ? '1.5px solid #15803D' : '1px solid #E2E8F0',
+                    backgroundColor: deliveryPackageSize === sz.id ? '#DCFCE7' : '#FFFFFF',
+                    color: '#14532D',
+                    fontSize: '0.76rem',
+                    fontWeight: 800,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {sz.label}
+                </button>
+              ))}
+            </div>
 
-                  <input
-                    type="text"
-                    placeholder="Observação para o motorista (ex: portão branco, com pet...)"
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
-                    style={{
-                      width: '100%',
-                      padding: '9px 11px',
-                      borderRadius: 10,
-                      border: '1px solid #D1D5DB',
-                      backgroundColor: '#FFFFFF',
-                      fontSize: '0.8rem',
-                      boxSizing: 'border-box'
-                    }}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+              {([
+                { id: 'porta_mao', label: 'Em mãos' },
+                { id: 'portaria', label: 'Portaria' },
+                { id: 'recepcao', label: 'Recepção' }
+              ] as const).map((dm) => (
+                <button
+                  key={dm.id}
+                  type="button"
+                  onClick={() => setDeliveryDropoffMode(dm.id)}
+                  style={{
+                    padding: '8px 6px',
+                    borderRadius: 9,
+                    border: deliveryDropoffMode === dm.id ? '1.5px solid #15803D' : '1px solid #E2E8F0',
+                    backgroundColor: deliveryDropoffMode === dm.id ? '#DCFCE7' : '#FFFFFF',
+                    color: '#14532D',
+                    fontSize: '0.76rem',
+                    fontWeight: 800,
+                    cursor: 'pointer'
+                  }}
+                >
+                  {dm.label}
+                </button>
+              ))}
+            </div>
 
-        {requestError && (
-          <div style={{
-            backgroundColor: '#FEF2F2',
-            border: '1px solid #FECACA',
-            borderRadius: 12,
-            padding: '10px 12px',
-            color: '#DC2626',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8
-          }}>
-            <AlertCircle size={16} />
-            <span>{requestError}</span>
+            <input
+              type="text"
+              placeholder="Instruções extras (bloco, apto, contato...)"
+              value={deliveryInstructions}
+              onChange={(e) => setDeliveryInstructions(e.target.value)}
+              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.82rem', boxSizing: 'border-box' }}
+            />
+
+            <button
+              type="button"
+              onClick={() => {
+                setRequestError('');
+                setIsDeliveryModalOpen(false);
+              }}
+              style={{
+                height: 46,
+                borderRadius: 999,
+                border: 'none',
+                backgroundColor: '#15803D',
+                color: '#FFFFFF',
+                fontSize: '0.9rem',
+                fontWeight: 800,
+                cursor: 'pointer'
+              }}
+            >
+              Salvar detalhes da entrega
+            </button>
           </div>
-        )}
-      </div>
-
-      {/* CTA Flutuante Elegante acima da barra inferior transparente */}
-      <div style={{
-        position: 'fixed',
-        bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        width: 'calc(100% - 28px)',
-        maxWidth: 432,
-        padding: 0,
-        zIndex: 45,
-        boxSizing: 'border-box',
-        display: 'flex',
-        justifyContent: 'center',
-        pointerEvents: 'none'
-      }}>
-        <button
-          type="button"
-          onClick={handleRequestRideNow}
-          disabled={isSubmitting}
-          style={{
-            width: '100%',
-            height: 46,
-            borderRadius: 999,
-            backgroundColor:
-              serviceMode === 'entregas'
-                ? '#15803D'
-                : '#0F172A',
-            color: '#FFFFFF',
-            border: '1px solid rgba(255, 255, 255, 0.18)',
-            fontSize: '0.88rem',
-            fontWeight: 800,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0 8px 0 18px',
-            cursor: 'pointer',
-            letterSpacing: '-0.01em',
-            boxShadow: '0 10px 26px rgba(15, 23, 42, 0.24)',
-            pointerEvents: 'auto'
-          }}
-        >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
-            {isSubmitting ? (
-              <RefreshCw size={15} className="animate-spin" />
-            ) : (
-              <PaymentMethodIcon method={paymentMethod} size={16} />
-            )}
-            <span>
-              {isSubmitting
-                ? 'Conectando motorista...'
-                : serviceMode === 'entregas'
-                  ? `Solicitar ${selectedCatObj.name || 'Entregas'}`
-                  : `Confirmar ${selectedCatObj.name || 'Padrão'}`}
-            </span>
-          </span>
-          <span style={{
-            backgroundColor: 'rgba(255, 255, 255, 0.16)',
-            padding: '5px 12px',
-            borderRadius: 999,
-            fontSize: '0.86rem',
-            fontWeight: 900
-          }}>
-            R$ {pricing.totalPrice.toFixed(2).replace('.', ',')}
-          </span>
-        </button>
-      </div>
+        </div>
+      )}
 
       <TrustedContactsModal
         isOpen={isTrustedContactsOpen}

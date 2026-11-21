@@ -374,8 +374,9 @@ const ClientApp: React.FC<{
         )}
       </div>
 
-      {/* BARRA DE NAVEGAÇÃO INFERIOR FLUTUANTE (Vidro Transparente Glassmorphism Estilo Apple / Uber) */}
-      <nav style={{
+      {/* BARRA DE NAVEGAÇÃO INFERIOR FLUTUANTE (ocultada durante o fluxo de Viagem/Checkout igual Uber) */}
+      {currentTab !== 'agendar' && (
+        <nav style={{
         position: 'fixed',
         bottom: 'calc(14px + env(safe-area-inset-bottom, 0px))',
         left: '50%',
@@ -436,20 +437,18 @@ const ClientApp: React.FC<{
             flexDirection: 'column',
             alignItems: 'center',
             gap: 2,
-            backgroundColor: currentTab === 'agendar' ? 'rgba(255, 255, 255, 0.64)' : 'transparent',
+            backgroundColor: 'transparent',
             borderRadius: 22,
             padding: '6px 4px',
-            boxShadow: currentTab === 'agendar'
-              ? '0 2px 10px rgba(15, 23, 42, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.9)'
-              : 'none',
+            boxShadow: 'none',
             border: 'none',
-            color: currentTab === 'agendar' ? '#0F172A' : '#334155',
+            color: '#334155',
             cursor: 'pointer',
             transition: 'all 0.18s ease'
           }}
         >
-          <MapPin size={20} strokeWidth={currentTab === 'agendar' ? 2.5 : 2} />
-          <span style={{ fontSize: '0.67rem', fontWeight: currentTab === 'agendar' ? 800 : 600 }}>
+          <MapPin size={20} strokeWidth={2} />
+          <span style={{ fontSize: '0.67rem', fontWeight: 600 }}>
             Viagem
           </span>
         </button>
@@ -523,10 +522,11 @@ const ClientApp: React.FC<{
             Conta
           </span>
         </button>
-      </nav>
+        </nav>
+      )}
 
       {/* Banner Inteligente de Instalação PWA (fixado acima da barra flutuante) */}
-      <PwaInstallBanner customBottomOffset={92} />
+      {currentTab !== 'agendar' && <PwaInstallBanner customBottomOffset={92} />}
 
       {/* Pop-up de notificações push do cliente (só com cadastro/telefone) */}
       <PushPermissionPrompt role="cliente" externalId={clientExternalId(currentUser?.phone)} delayMs={4000} />

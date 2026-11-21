@@ -544,10 +544,10 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
 
         {/* Barra de Pesquisa Icônica Estilo Uber */}
         <div
-          onClick={() => setPickingType('destination')}
+          onClick={() => onStartBooking(origin || undefined, undefined)}
           role="button"
           tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setPickingType('destination'); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onStartBooking(origin || undefined, undefined); }}
           style={{
             display: 'flex',
             alignItems: 'center',
