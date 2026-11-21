@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { Home, Calendar, Clock, User, MapPin, PhoneCall, ArrowRight, Sparkles, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 import { SystemConfig, Ride, LocationPoint, ClientProfile } from './types';
@@ -8,15 +8,6 @@ import { ClientHomeScreen } from './views/ClientHomeScreen';
 import { ClientBookingScreen } from './views/ClientBookingScreen';
 import { ClientMyRidesScreen } from './views/ClientMyRidesScreen';
 import { ClientProfileScreen } from './views/ClientProfileScreen';
-import { AdminDashboardScreen } from './views/AdminDashboardScreen';
-import { DriverPortalScreen } from './views/DriverPortalScreen';
-import { LandingScreen } from './views/LandingScreen';
-import { PassengerTrackingScreen } from './views/PassengerTrackingScreen';
-import { SosLiveTrackingScreen } from './views/SosLiveTrackingScreen';
-import { PublicFleetScreen } from './views/PublicFleetScreen';
-import { HelpCenterScreen } from './views/HelpCenterScreen';
-import { FamilyInviteScreen } from './views/FamilyInviteScreen';
-import { CitiesServedScreen } from './views/CitiesServedScreen';
 import { KavroSecurityGuideModal } from './components/KavroSecurityGuideModal';
 import { AdminLoginModal } from './components/AdminLoginModal';
 import { PwaInstallBanner } from './components/PwaInstallBanner';
@@ -29,6 +20,42 @@ import { TermsPrivacyModal } from './components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from './components/PassengerTermsContractModal';
 import { TurnstileWidget, isTurnstileEnabled } from './components/TurnstileWidget';
 import { getCleanWhatsappNumber } from './utils/format';
+
+function lazyNamed<T extends React.ComponentType<any>>(
+  loader: () => Promise<Record<string, any>>,
+  exportName: string
+): React.LazyExoticComponent<T> {
+  return lazy(() => loader().then((m) => ({ default: m[exportName] as T })));
+}
+
+const AdminDashboardScreen = lazyNamed(() => import('./views/AdminDashboardScreen'), 'AdminDashboardScreen');
+const DriverPortalScreen = lazyNamed(() => import('./views/DriverPortalScreen'), 'DriverPortalScreen');
+const LandingScreen = lazyNamed(() => import('./views/LandingScreen'), 'LandingScreen');
+const PassengerTrackingScreen = lazyNamed(() => import('./views/PassengerTrackingScreen'), 'PassengerTrackingScreen');
+const SosLiveTrackingScreen = lazyNamed(() => import('./views/SosLiveTrackingScreen'), 'SosLiveTrackingScreen');
+const PublicFleetScreen = lazyNamed(() => import('./views/PublicFleetScreen'), 'PublicFleetScreen');
+const HelpCenterScreen = lazyNamed(() => import('./views/HelpCenterScreen'), 'HelpCenterScreen');
+const FamilyInviteScreen = lazyNamed(() => import('./views/FamilyInviteScreen'), 'FamilyInviteScreen');
+const CitiesServedScreen = lazyNamed(() => import('./views/CitiesServedScreen'), 'CitiesServedScreen');
+
+const RouteLoadingFallback: React.FC = () => (
+  <div
+    style={{
+      minHeight: '100dvh',
+      display: 'flex',
+      flexDirection: 'column',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 12,
+      backgroundColor: '#0B1117',
+      color: '#FFFFFF',
+      fontFamily: "'Inter', sans-serif",
+    }}
+  >
+    <img src="/logo-horizontal-white.png" alt="KAVRO DRIVE" style={{ height: 28, objectFit: 'contain' }} />
+    <div style={{ fontSize: '0.82rem', color: '#94A3B8', fontWeight: 600 }}>Carregando...</div>
+  </div>
+);
 
 // ── TELA DE BOAS-VINDAS (ANTES DO LOGIN) ──────────────────────
 const WelcomeScreen: React.FC<{
@@ -1056,7 +1083,8 @@ export const App: React.FC = () => {
   }, []);
 
   return (
-    <Routes>
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <Routes>
       {/* Rota pública de Rastreamento de Emergência SOS em Tempo Real */}
       <Route
         path="/sos/:sosId"
@@ -1214,5 +1242,6 @@ export const App: React.FC = () => {
         )}
       />
     </Routes>
+    </Suspense>
   );
 };

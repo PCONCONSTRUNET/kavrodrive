@@ -1108,6 +1108,30 @@ export const StorageService = {
     }
   },
 
+  updateDriverLocation(
+    driverId: string,
+    location: { lat: number; lng: number; heading?: number; speedKmH?: number }
+  ): void {
+    const updatedLoc = {
+      lat: location.lat,
+      lng: location.lng,
+      heading: location.heading || 0,
+      speedKmH: location.speedKmH || 0,
+      updatedAt: new Date().toISOString()
+    };
+    const current = this.getCurrentDriver();
+    if (current && current.id === driverId) {
+      this.setCurrentDriver({ ...current, location: updatedLoc });
+    }
+
+    fetch(`/api/drivers/${encodeURIComponent(driverId)}/location`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+      body: JSON.stringify(updatedLoc),
+      keepalive: true
+    }).catch(() => {});
+  },
+
   async updateDriverProfile(driverId: string, updates: Partial<DriverProfile>): Promise<{ ok: boolean; driver?: DriverProfile; error?: string }> {
     try {
       const res = await fetch(`/api/drivers/${encodeURIComponent(driverId)}`, {
@@ -1609,7 +1633,8 @@ export const StorageService = {
     fetch(`/api/rides/${encodeURIComponent(rideId)}/location`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', 'x-admin-pin': this.getAdminPin() },
-      body: JSON.stringify({ role: 'driver', location: updatedLoc })
+      body: JSON.stringify({ role: 'driver', location: updatedLoc }),
+      keepalive: true
     })
       .then(r => (r.ok ? r.json() : null))
       .then(data => {
@@ -1643,7 +1668,8 @@ export const StorageService = {
     fetch(`/api/rides/${encodeURIComponent(rideId)}/location`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
-      body: JSON.stringify({ role: 'client', location: updatedLoc })
+      body: JSON.stringify({ role: 'client', location: updatedLoc }),
+      keepalive: true
     })
       .then(r => (r.ok ? r.json() : null))
       .then(data => {

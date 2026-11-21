@@ -213,6 +213,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
   const [isCancelModalOpen, setIsCancelModalOpen] = useState<boolean>(false);
   const [gpsFixed, setGpsFixed] = useState<boolean>(Boolean(liveRide.driverLocation?.lat));
   const [closingNotice, setClosingNotice] = useState<string | null>(null);
+  const [externalMapHint, setExternalMapHint] = useState<string | null>(null);
   const [isDriverHudExpanded, setIsDriverHudExpanded] = useState<boolean>(false);
   const hasAutoClosedRef = useRef(false);
 
@@ -637,9 +638,24 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           setLiveRide(refreshed);
         }
       };
+      const handleDriverResume = () => {
+        if (document.visibilityState === 'hidden') return;
+        StorageService.syncFromDatabase().catch(() => {});
+        StorageService.fetchRideLiveLocation(ride.id).catch(() => {});
+        if ('geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition(publishDriverGps, () => {}, {
+            enableHighAccuracy: true,
+            timeout: 8000,
+            maximumAge: 0
+          });
+        }
+      };
+
       window.addEventListener('up_client_location_update', handleClientLocEvent);
       window.addEventListener('up_rides_updated', syncDriverRideFromStore);
       window.addEventListener('up_database_synced', syncDriverRideFromStore);
+      document.addEventListener('visibilitychange', handleDriverResume);
+      window.addEventListener('focus', handleDriverResume);
 
       return () => {
         if (watchId !== null && 'geolocation' in navigator) {
@@ -649,6 +665,8 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         window.removeEventListener('up_client_location_update', handleClientLocEvent);
         window.removeEventListener('up_rides_updated', syncDriverRideFromStore);
         window.removeEventListener('up_database_synced', syncDriverRideFromStore);
+        document.removeEventListener('visibilitychange', handleDriverResume);
+        window.removeEventListener('focus', handleDriverResume);
       };
     } else {
       // CLIENTE / PASSAGEIRO: Recebe em tempo real a posição do motorista do banco Supabase + envia sua posição
@@ -755,8 +773,33 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         }
       };
 
+      const handleClientResume = () => {
+        if (document.visibilityState === 'hidden') return;
+        pullDriverLocation();
+        StorageService.syncFromDatabase().catch(() => {});
+        if ('geolocation' in navigator) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const cLat = pos.coords.latitude;
+              const cLng = pos.coords.longitude;
+              updateClientPosIfChanged(cLat, cLng);
+              StorageService.updateRideClientLocation(ride.id, {
+                lat: cLat,
+                lng: cLng,
+                heading: pos.coords.heading || 0,
+                speedKmH: pos.coords.speed && pos.coords.speed > 0.6 ? Math.round(pos.coords.speed * 3.6) : 0
+              });
+            },
+            () => {},
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }
+          );
+        }
+      };
+
       window.addEventListener('up_driver_location_update', handleDriverLocEvent);
       window.addEventListener('up_realtime_gps', handleRealtimeGps);
+      document.addEventListener('visibilitychange', handleClientResume);
+      window.addEventListener('focus', handleClientResume);
 
       return () => {
         clearInterval(pollInterval);
@@ -767,6 +810,8 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         window.removeEventListener('up_realtime_gps', handleRealtimeGps);
         window.removeEventListener('up_rides_updated', syncFromLocalRides);
         window.removeEventListener('up_database_synced', syncFromLocalRides);
+        document.removeEventListener('visibilitychange', handleClientResume);
+        window.removeEventListener('focus', handleClientResume);
       };
     }
   }, [isOpen, isDriver, ride.id]);
@@ -1547,6 +1592,10 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                     href={getGoogleMapsRouteUrl(ride.origin, ride.destination)}
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => {
+                      setExternalMapHint('Volte para o app Kavro ao navegar para manter seu GPS ao vivo.');
+                      setTimeout(() => setExternalMapHint(null), 6500);
+                    }}
                     style={{
                       borderRadius: 8,
                       backgroundColor: '#121A21',
@@ -1579,6 +1628,21 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                     Voltar
                   </button>
                 </div>
+                {externalMapHint && (
+                  <div style={{
+                    marginTop: 6,
+                    padding: '6px 9px',
+                    borderRadius: 8,
+                    backgroundColor: '#FFFBEB',
+                    border: '1px solid #FDE68A',
+                    color: '#92400E',
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    lineHeight: 1.35
+                  }}>
+                    {externalMapHint}
+                  </div>
+                )}
               </div>
             )}
 

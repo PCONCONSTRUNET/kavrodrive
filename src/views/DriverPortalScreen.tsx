@@ -15,7 +15,8 @@ import { PushPermissionPrompt } from '../components/PushNotifications';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
-import { playNewRideSound, stopNewRideSound, unlockNewRideAudio } from '../utils/soundAndVoice';
+import { ScreenWakeLockManager, playNewRideSound, stopNewRideSound, unlockNewRideAudio } from '../utils/soundAndVoice';
+import { calculateHaversineDistance } from '../utils/geo';
 import { formatRideCode, getCleanWhatsappNumber, formatPhone, formatCPF, formatMercosulPlate, formatCNH } from '../utils/format';
 import {
   normalizeCategoriesFromConfig,
@@ -369,6 +370,92 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
           (r.status === 'a_caminho' || r.status === 'no_local' || r.status === 'em_andamento')
       )?.id || null
     : null;
+
+  // PWA Radar Contínuo: mantém GPS ativo, Wake Lock e ressincronização imediata ao voltar para o app
+  const lastIdleGpsPushRef = useRef<{ lat: number; lng: number; ts: number }>({ lat: 0, lng: 0, ts: 0 });
+  const isDriverOnlineVerified = Boolean(
+    currentDriver?.id &&
+    currentDriver.isOnline &&
+    currentDriver.approvalStatus === 'aprovado' &&
+    !isLookupOnlySession
+  );
+
+  useEffect(() => {
+    if (!isDriverOnlineVerified || !currentDriver?.id) return;
+
+    const driverId = currentDriver.id;
+    const wakeLock = new ScreenWakeLockManager();
+    wakeLock.request();
+
+    let watchId: number | null = null;
+    const handleGpsPosition = (pos: GeolocationPosition, forcePush = false) => {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const heading =
+        typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)
+          ? Math.round(pos.coords.heading)
+          : 0;
+      const speedKmH =
+        pos.coords.speed && pos.coords.speed > 0.6 ? Math.round(pos.coords.speed * 3.6) : 0;
+
+      const now = Date.now();
+      const prev = lastIdleGpsPushRef.current;
+      const movedKm = prev.ts > 0 ? calculateHaversineDistance(prev.lat, prev.lng, lat, lng) : 99;
+      if (!forcePush && now - prev.ts < 5500 && movedKm < 0.03) {
+        return;
+      }
+
+      lastIdleGpsPushRef.current = { lat, lng, ts: now };
+      StorageService.updateDriverLocation(driverId, { lat, lng, heading, speedKmH });
+      setCurrentDriver((prevDrv) =>
+        prevDrv && prevDrv.id === driverId
+          ? {
+              ...prevDrv,
+              location: { lat, lng, heading, speedKmH, updatedAt: new Date().toISOString() }
+            }
+          : prevDrv
+      );
+    };
+
+    if (!topLevelActiveRideId && 'geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => handleGpsPosition(pos, true),
+        () => {},
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
+      );
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => handleGpsPosition(pos, false),
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      );
+    }
+
+    const handleResumeApp = () => {
+      if (document.visibilityState === 'hidden') return;
+      wakeLock.handleVisibilityChange();
+      loadDriverAndWallet(driverId);
+      StorageService.syncFromDatabase().catch(() => {});
+      if (!topLevelActiveRideId && 'geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => handleGpsPosition(pos, true),
+          () => {},
+          { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }
+        );
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleResumeApp);
+    window.addEventListener('focus', handleResumeApp);
+
+    return () => {
+      wakeLock.release();
+      if (watchId !== null && 'geolocation' in navigator) {
+        navigator.geolocation.clearWatch(watchId);
+      }
+      document.removeEventListener('visibilitychange', handleResumeApp);
+      window.removeEventListener('focus', handleResumeApp);
+    };
+  }, [isDriverOnlineVerified, currentDriver?.id, topLevelActiveRideId]);
 
   useEffect(() => {
     setUnreadChatCount(0);
@@ -2311,7 +2398,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </div>
                 <div style={{ fontSize: '0.75rem', color: '#334155', fontWeight: 600, marginTop: 1 }}>
                   {currentDriver.isOnline
-                    ? `Procurando chamadas • ${driverCatEval.enabledCategoryIds.length} categoria(s) ativa(s)`
+                    ? `GPS ativo no radar • ${driverCatEval.enabledCategoryIds.length} categoria(s)`
                     : 'Toque em INICIAR para receber viagens'}
                 </div>
               </div>

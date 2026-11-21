@@ -1,7 +1,7 @@
 // Service Worker do PWA + OneSignal Web Push (um único SW no escopo "/")
 importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
 
-const CACHE_NAME = 'up-mobilidade-v6';
+const CACHE_NAME = 'up-mobilidade-v7';
 const urlsToCache = [
   '/logo-horizontal.png',
   '/logo-icon.png',
@@ -44,12 +44,39 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   // Não interceptar outros domínios (OneSignal, Google, fontes...)
-  if (new URL(event.request.url).origin !== self.location.origin) return;
+  const reqUrl = new URL(event.request.url);
+  if (reqUrl.origin !== self.location.origin) return;
+
   // HTML sempre da rede primeiro (garante versão nova do app); cache só como fallback offline
   if (event.request.mode === 'navigate') {
     event.respondWith(fetch(event.request).catch(() => caches.match('/index.html')));
     return;
   }
+
+  // Chunks com hash (/assets/) e mídias locais usam Stale-While-Revalidate para abrir rápido no 4G
+  const shouldCacheStatic =
+    reqUrl.pathname.startsWith('/assets/') ||
+    /\.(png|jpg|jpeg|svg|webp|woff2|mp3|css|js)$/i.test(reqUrl.pathname);
+
+  if (shouldCacheStatic) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then((cache) =>
+        cache.match(event.request).then((cached) => {
+          const networkFetch = fetch(event.request)
+            .then((networkRes) => {
+              if (networkRes && networkRes.status === 200 && networkRes.type === 'basic') {
+                cache.put(event.request, networkRes.clone()).catch(() => {});
+              }
+              return networkRes;
+            })
+            .catch(() => cached);
+          return cached || networkFetch;
+        })
+      )
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((response) => {
       return response || fetch(event.request);
