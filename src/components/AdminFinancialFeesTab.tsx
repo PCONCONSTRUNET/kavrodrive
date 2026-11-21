@@ -19,6 +19,8 @@ import { PaymentMethod, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
 import { formatCurrencyValue, parseCurrencyInput, parseCurrencyToFloat } from '../utils/format';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
+import { WithdrawalScheduleControlCard } from './WithdrawalScheduleControlCard';
+import { normalizeWithdrawalWeekdays } from '../utils/withdrawalSchedule';
 
 interface AdminFinancialFeesTabProps {
   config: SystemConfig;
@@ -144,6 +146,12 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   const [minWithdrawalStr, setMinWithdrawalStr] = useState(
     formatCurrencyValue(config.minWithdrawalAmount ?? 20)
   );
+  const [withdrawalEnabled, setWithdrawalEnabled] = useState<boolean>(
+    config.driverWithdrawalEnabled !== false
+  );
+  const [withdrawalWeekdays, setWithdrawalWeekdays] = useState<number[]>(() =>
+    normalizeWithdrawalWeekdays(config.driverWithdrawalWeekdays)
+  );
   const [maxDebtLimitStr, setMaxDebtLimitStr] = useState(
     formatCurrencyValue(config.maxDriverDebtLimit ?? 100)
   );
@@ -204,6 +212,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setWithdrawalFeePercentStr(String(config.withdrawalFeePercent ?? 0));
     setWithdrawalFeeFixedStr(formatCurrencyValue(config.withdrawalFeeFixed ?? 0));
     setMinWithdrawalStr(formatCurrencyValue(config.minWithdrawalAmount ?? 20));
+    setWithdrawalEnabled(config.driverWithdrawalEnabled !== false);
+    setWithdrawalWeekdays(normalizeWithdrawalWeekdays(config.driverWithdrawalWeekdays));
     setMaxDebtLimitStr(formatCurrencyValue(config.maxDriverDebtLimit ?? 100));
     setCardSettlementDaysStr(String(config.cardSettlementDays ?? 0));
     setActiveMethods(resolveInitialMethods(config));
@@ -277,6 +287,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       withdrawalFeePercent: parsedWdPct,
       withdrawalFeeFixed: parsedWdFixed,
       minWithdrawalAmount: parsedMinWd,
+      driverWithdrawalEnabled: withdrawalEnabled,
+      driverWithdrawalWeekdays: normalizeWithdrawalWeekdays(withdrawalWeekdays),
       maxDriverDebtLimit: parsedMaxDebt,
       cardSettlementDays: parsedCardDays,
       useCategoryCommissionOverride: useCategoryOverride,
@@ -1257,6 +1269,20 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
               </div>
             </div>
           </div>
+
+          <WithdrawalScheduleControlCard
+            config={config}
+            controlledEnabled={withdrawalEnabled}
+            controlledWeekdays={withdrawalWeekdays}
+            onChangeEnabled={(next) => {
+              markDirty();
+              setWithdrawalEnabled(next);
+            }}
+            onChangeWeekdays={(next) => {
+              markDirty();
+              setWithdrawalWeekdays(next);
+            }}
+          />
 
           {/* Simulador compacto de Pagamento & Saque */}
           <div

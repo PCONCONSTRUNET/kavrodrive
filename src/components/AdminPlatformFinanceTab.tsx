@@ -20,6 +20,7 @@ import { AdminKycReviewModal } from './AdminKycReviewModal';
 import { AdminCrlvReviewModal } from './AdminCrlvReviewModal';
 import { AdminFinanceTreasurySection, TreasuryMetrics } from './AdminFinanceTreasurySection';
 import { AdminFinancialFeesTab } from './AdminFinancialFeesTab';
+import { WithdrawalScheduleControlCard } from './WithdrawalScheduleControlCard';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
 import { PaymentMethodBadge } from './PaymentMethodIcon';
 import {
@@ -109,6 +110,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     maxDriverDebtLimit: number;
     autoBlockDelinquentDrivers: boolean;
     minWithdrawalAmount: number;
+    driverWithdrawalEnabled?: boolean;
+    driverWithdrawalWeekdays?: number[];
     totalGrossVolume: number;
     totalPlatformCommission: number;
     totalPixVolume: number;
@@ -3614,6 +3617,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       {/* ═══ SUB-ABA 4: SAQUES & REPASSES PIX ═══ */}
       {subTab === 'saques' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <WithdrawalScheduleControlCard
+            config={config}
+            onConfigUpdated={onConfigUpdated}
+          />
+
           {!isPayoutsSplitView && (
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
               <div style={{ backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', borderRadius: 10, padding: '12px 16px' }}>

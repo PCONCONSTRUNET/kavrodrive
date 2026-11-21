@@ -3,11 +3,13 @@ import {
   X, User, Star, Wallet, DollarSign, Settings,
   Shield, Car, LogOut, ChevronRight
 } from 'lucide-react';
-import { DriverProfile } from '../types';
+import { DriverProfile, SystemConfig } from '../types';
+import { evaluateDriverWithdrawalRule } from '../utils/withdrawalSchedule';
 
 interface DriverDrawerMenuProps {
   isOpen: boolean;
   driver: DriverProfile;
+  config?: SystemConfig;
   activeTab?: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
   onClose: () => void;
   onSelectTab: (tab: 'radar' | 'ganhos' | 'carteira' | 'veiculos' | 'perfil') => void;
@@ -19,6 +21,7 @@ interface DriverDrawerMenuProps {
 export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
   isOpen,
   driver,
+  config,
   activeTab,
   onClose,
   onSelectTab,
@@ -27,6 +30,8 @@ export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
   onLogout,
 }) => {
   if (!isOpen) return null;
+
+  const withdrawalRule = evaluateDriverWithdrawalRule(config);
 
   const vehiclesList = Array.isArray(driver.vehicles) ? driver.vehicles : [];
   const vehiclesCount = vehiclesList.length || (driver.vehiclePlate ? 1 : 0);
@@ -62,8 +67,15 @@ export const DriverDrawerMenu: React.FC<DriverDrawerMenuProps> = ({
     },
     {
       id: 'carteira',
-      label: 'Carteira & PIX',
-      subtitle: 'Repasses PIX, chaves e histórico de saques',
+      label: 'Solicitar Saque & PIX',
+      subtitle: withdrawalRule.enabled
+        ? (withdrawalRule.isFridayOnlyDefault
+            ? 'Toda Sexta-feira é dia de saque'
+            : `${withdrawalRule.daysText} • Chaves PIX`)
+        : 'Saques pausados pela administração',
+      badge: withdrawalRule.canRequestNow
+        ? { text: 'Saque hoje', bg: '#DCFCE7', color: '#15803D' }
+        : { text: withdrawalRule.enabled ? 'Sexta-feira' : 'Pausado', bg: '#F1F5F9', color: '#475569' },
       icon: <Wallet size={20} color="currentColor" />,
       onClick: () => {
         onSelectTab('carteira');

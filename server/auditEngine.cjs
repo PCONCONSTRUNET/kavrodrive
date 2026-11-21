@@ -38,6 +38,8 @@ const CONFIG_FIELD_META = {
   withdrawalFeePercent: { label: 'Taxa Percentual sobre Saque', type: 'pct' },
   withdrawalFeeFixed: { label: 'Taxa Fixa por Transferência de Saque', type: 'brl' },
   minWithdrawalAmount: { label: 'Valor Mínimo para Saque', type: 'brl' },
+  driverWithdrawalEnabled: { label: 'Botão de Saque dos Motoristas', type: 'bool', defaultVal: true },
+  driverWithdrawalWeekdays: { label: 'Dias Permitidos para Saque PIX', type: 'weekdays', defaultVal: [5] },
   cancellationFeeAmount: { label: 'Multa de Cancelamento Pós-Aceite', type: 'brl' },
   maxDriverDebtLimit: { label: 'Teto Máximo de Dívida do Motorista', type: 'brl' },
   cardSettlementDays: { label: 'Prazo de Compensação no Cartão (D+N)', type: 'days' },
@@ -75,6 +77,8 @@ const FEE_FIELDS = new Set([
   'withdrawalFeePercent',
   'withdrawalFeeFixed',
   'minWithdrawalAmount',
+  'driverWithdrawalEnabled',
+  'driverWithdrawalWeekdays',
   'cancellationFeeAmount',
   'maxDriverDebtLimit',
   'cardSettlementDays',
@@ -90,6 +94,8 @@ function formatMoneyPt(value) {
   return `R$ ${n.toFixed(2).replace('.', ',')}`;
 }
 
+const WEEKDAY_NAMES_PT = ['Domingo', 'Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado'];
+
 function formatAuditValue(val, type, defaultVal) {
   const effective = val === undefined || val === null ? defaultVal : val;
   if (effective === undefined || effective === null || effective === '') return 'Não definido';
@@ -104,6 +110,15 @@ function formatAuditValue(val, type, defaultVal) {
       return `${String(effective).padStart(2, '0')}:00`;
     case 'bool':
       return effective ? 'Ativado (Sim)' : 'Desativado (Não)';
+    case 'weekdays':
+      return Array.isArray(effective)
+        ? effective
+            .map(d => Number(d))
+            .filter(d => Number.isInteger(d) && d >= 0 && d <= 6)
+            .sort((a, b) => a - b)
+            .map(d => WEEKDAY_NAMES_PT[d] || String(d))
+            .join(', ') || 'Nenhum dia'
+        : String(effective);
     case 'methods':
       return Array.isArray(effective)
         ? effective.map(m => PAYMENT_METHOD_LABELS[m] || String(m)).join(', ') || 'Nenhum'
@@ -121,6 +136,12 @@ function getNestedValue(obj, dottedPath) {
 function normalizeComparable(val, type, defaultVal) {
   if (type === 'methods') {
     return Array.isArray(val) ? [...val].map(String).sort().join('|') : '';
+  }
+  if (type === 'weekdays') {
+    const arr = Array.isArray(val) ? val : (Array.isArray(defaultVal) ? defaultVal : [5]);
+    return Array.from(new Set(arr.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6)))
+      .sort((a, b) => a - b)
+      .join('|');
   }
   if (type === 'bool') {
     if (val === undefined || val === null) return Boolean(defaultVal);

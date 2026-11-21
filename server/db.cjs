@@ -89,6 +89,8 @@ function getInitialStore() {
           maxDriverDebtLimit: 100.0,
           autoBlockDelinquentDrivers: true,
           minWithdrawalAmount: 20.0,
+          driverWithdrawalEnabled: true,
+          driverWithdrawalWeekdays: [5],
           autoSplitPixEnabled: true,
           cardSettlementDays: 0,
           activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'apple_pay', 'carteira', 'dinheiro'],

@@ -7,6 +7,89 @@ function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
 }
 
+const DEFAULT_WITHDRAWAL_WEEKDAYS = [5]; // Toda Sexta-feira
+const WITHDRAWAL_WEEKDAY_LABELS_PT = [
+  'Domingo',
+  'Segunda-feira',
+  'Terça-feira',
+  'Quarta-feira',
+  'Quinta-feira',
+  'Sexta-feira',
+  'Sábado'
+];
+const WITHDRAWAL_TZ_TO_INDEX = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6
+};
+
+function getBrazilWeekdayIndex(date = new Date()) {
+  try {
+    const short = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Sao_Paulo',
+      weekday: 'short'
+    }).format(date);
+    if (Object.prototype.hasOwnProperty.call(WITHDRAWAL_TZ_TO_INDEX, short)) {
+      return WITHDRAWAL_TZ_TO_INDEX[short];
+    }
+  } catch {
+    // fallback local
+  }
+  return date.getDay();
+}
+
+function normalizeWithdrawalWeekdays(raw) {
+  if (!Array.isArray(raw)) return [...DEFAULT_WITHDRAWAL_WEEKDAYS];
+  const valid = raw
+    .map(n => Number(n))
+    .filter(n => Number.isInteger(n) && n >= 0 && n <= 6);
+  return Array.from(new Set(valid)).sort((a, b) => a - b);
+}
+
+function formatWithdrawalWeekdaysPt(weekdays = DEFAULT_WITHDRAWAL_WEEKDAYS) {
+  const clean = normalizeWithdrawalWeekdays(weekdays);
+  if (clean.length === 0) return 'Nenhum dia configurado';
+  if (clean.length === 7) return 'Todos os dias';
+  if (clean.length === 1 && clean[0] === 5) return 'Somente Sexta-feira';
+  const names = clean.map(d => WITHDRAWAL_WEEKDAY_LABELS_PT[d] || String(d));
+  return names.length === 1 ? `Somente ${names[0]}` : names.join(', ');
+}
+
+function evaluateWithdrawalAvailability(cfg = {}, now = new Date()) {
+  const enabled = cfg?.driverWithdrawalEnabled !== false;
+  const allowedWeekdays = normalizeWithdrawalWeekdays(cfg?.driverWithdrawalWeekdays);
+  const currentWeekday = getBrazilWeekdayIndex(now);
+  const isFridayOnly = allowedWeekdays.length === 1 && allowedWeekdays[0] === 5;
+  const isAllowedToday = allowedWeekdays.includes(currentWeekday);
+  const canRequestNow = enabled && isAllowedToday;
+  const daysText = formatWithdrawalWeekdaysPt(allowedWeekdays);
+
+  let blockedReason = '';
+  if (!enabled) {
+    blockedReason = 'As solicitações de saque PIX estão temporariamente desabilitadas pela administração.';
+  } else if (allowedWeekdays.length === 0) {
+    blockedReason = 'Nenhum dia da semana está liberado para solicitação de saque no momento.';
+  } else if (!isAllowedToday) {
+    blockedReason = isFridayOnly
+      ? 'Saques liberados somente às Sextas-feiras (toda Sexta-feira é dia de fazer saque).'
+      : `Saques liberados apenas nos dias configurados: ${daysText}.`;
+  }
+
+  return {
+    enabled,
+    allowedWeekdays,
+    currentWeekday,
+    isAllowedToday,
+    canRequestNow,
+    daysText,
+    blockedReason
+  };
+}
+
 const MIN_CLIENT_WALLET_TOPUP_BRL = 20;
 const CARD_MAX_INSTALLMENTS = 1;
 
@@ -1791,6 +1874,11 @@ async function requestWithdrawal({ driverId, amount, pixKey, pixType }) {
       throw new Error('Funções financeiras temporariamente bloqueadas para esta conta.');
     }
 
+    const wdAvailability = evaluateWithdrawalAvailability(cfg);
+    if (!wdAvailability.canRequestNow) {
+      throw new Error(wdAvailability.blockedReason || 'Solicitação de saque indisponível no momento.');
+    }
+
     const reqAmount = round2(amount);
     const minAmount = round2(cfg.minWithdrawalAmount ?? 10);
     const feePct = Math.max(0, Math.min(100, Number(cfg.withdrawalFeePercent ?? 0) || 0));
@@ -3270,6 +3358,8 @@ async function getPlatformFinancialOverview() {
     maxDriverDebtLimit: Number(cfg.maxDriverDebtLimit ?? 100),
     autoBlockDelinquentDrivers: cfg.autoBlockDelinquentDrivers !== false,
     minWithdrawalAmount: Number(cfg.minWithdrawalAmount ?? 20),
+    driverWithdrawalEnabled: cfg.driverWithdrawalEnabled !== false,
+    driverWithdrawalWeekdays: normalizeWithdrawalWeekdays(cfg.driverWithdrawalWeekdays),
     totalGrossVolume: round2(totalGrossVolume),
     totalPlatformCommission: round2(totalPlatformCommission),
     totalPixVolume: round2(totalPixVolume),
@@ -4166,6 +4256,9 @@ module.exports = {
   listPaymentTransactions,
   getDriverWallet,
   listWithdrawals,
+  getBrazilWeekdayIndex,
+  normalizeWithdrawalWeekdays,
+  evaluateWithdrawalAvailability,
   requestWithdrawal,
   processWithdrawalAdmin,
   listSavedCards,

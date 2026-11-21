@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
+  Calendar,
   Camera,
   Car,
   Check,
@@ -47,6 +48,7 @@ import {
 import { VehiclePhotoPreview } from './VehiclePhotoPreview';
 import { readCrlvDocumentFile } from '../utils/crlvReader';
 import { PaymentMethodBadge } from './PaymentMethodIcon';
+import { evaluateDriverWithdrawalRule } from '../utils/withdrawalSchedule';
 
 interface DriverSecondaryTabsProps {
   activeTab: 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
@@ -1033,24 +1035,68 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                   </div>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => onChangeTab('carteira')}
-                style={{
-                  width: '100%',
-                  marginTop: 14,
-                  height: 44,
-                  borderRadius: 10,
-                  border: 'none',
-                  backgroundColor: '#111111',
-                  color: '#FFFFFF',
-                  fontWeight: 800,
-                  fontSize: '0.88rem',
-                  cursor: 'pointer'
-                }}
-              >
-                Abrir Carteira e Sacar via PIX
-              </button>
+              {(() => {
+                const liveCfg = propConfig || StorageService.getConfig();
+                const wdRule = evaluateDriverWithdrawalRule(liveCfg);
+                return (
+                  <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div
+                      style={{
+                        padding: '9px 12px',
+                        borderRadius: 10,
+                        backgroundColor: !wdRule.enabled ? '#FEF2F2' : wdRule.canRequestNow ? '#F0FDF4' : '#FFFBEB',
+                        border: `1px solid ${!wdRule.enabled ? '#FECACA' : wdRule.canRequestNow ? '#BBF7D0' : '#FDE68A'}`,
+                        fontSize: '0.75rem',
+                        fontWeight: 700,
+                        color: !wdRule.enabled ? '#B91C1C' : wdRule.canRequestNow ? '#15803D' : '#92400E',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 7,
+                      }}
+                    >
+                      <Calendar size={15} />
+                      <span>{wdRule.headline}</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        disabled={!wdRule.canRequestNow}
+                        onClick={onOpenWithdrawModal}
+                        style={{
+                          flex: 1,
+                          height: 44,
+                          borderRadius: 10,
+                          border: 'none',
+                          backgroundColor: wdRule.canRequestNow ? '#111111' : '#E2E8F0',
+                          color: wdRule.canRequestNow ? '#FFFFFF' : '#64748B',
+                          fontWeight: 800,
+                          fontSize: '0.84rem',
+                          cursor: wdRule.canRequestNow ? 'pointer' : 'not-allowed',
+                        }}
+                      >
+                        {wdRule.canRequestNow ? 'Solicitar Saque PIX' : wdRule.buttonText}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onChangeTab('carteira')}
+                        style={{
+                          height: 44,
+                          padding: '0 14px',
+                          borderRadius: 10,
+                          border: '1px solid #D1D5DB',
+                          backgroundColor: '#FFFFFF',
+                          color: '#111111',
+                          fontWeight: 800,
+                          fontSize: '0.8rem',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Carteira &amp; PIX
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div style={CARD_STYLE}>
@@ -1207,49 +1253,102 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
-                <button
-                  type="button"
-                  onClick={onOpenWithdrawModal}
-                  style={{
-                    flex: 1,
-                    height: 44,
-                    borderRadius: 10,
-                    border: 'none',
-                    backgroundColor: '#111111',
-                    color: '#FFFFFF',
-                    fontWeight: 800,
-                    fontSize: '0.88rem',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Solicitar Saque PIX
-                </button>
-                {wallet && wallet.debtBalance > 0 && (
-                  <button
-                    type="button"
-                    onClick={onOpenDebtPixModal}
-                    style={{
-                      flex: 1,
-                      height: 44,
-                      borderRadius: 10,
-                      border: 'none',
-                      backgroundColor: '#DC2626',
-                      color: '#FFFFFF',
-                      fontWeight: 800,
-                      fontSize: '0.86rem',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    <QrCode size={16} />
-                    <span>Quitar Dívida PIX</span>
-                  </button>
-                )}
-              </div>
+              {(() => {
+                const liveCfgForBtn = propConfig || StorageService.getConfig();
+                const wdRule = evaluateDriverWithdrawalRule(liveCfgForBtn);
+                return (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 14 }}>
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 11,
+                        backgroundColor: !wdRule.enabled ? '#FEF2F2' : wdRule.canRequestNow ? '#F0FDF4' : '#FFFBEB',
+                        border: `1.5px solid ${!wdRule.enabled ? '#FECACA' : wdRule.canRequestNow ? '#86EFAC' : '#FDE68A'}`,
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 9,
+                      }}
+                    >
+                      <Calendar
+                        size={17}
+                        color={!wdRule.enabled ? '#DC2626' : wdRule.canRequestNow ? '#15803D' : '#B45309'}
+                        style={{ marginTop: 1, flexShrink: 0 }}
+                      />
+                      <div>
+                        <div
+                          style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 800,
+                            color: !wdRule.enabled ? '#991B1B' : wdRule.canRequestNow ? '#166534' : '#92400E',
+                          }}
+                        >
+                          {wdRule.headline}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '0.72rem',
+                            color: !wdRule.enabled ? '#B91C1C' : wdRule.canRequestNow ? '#15803D' : '#B45309',
+                            marginTop: 2,
+                            lineHeight: 1.35,
+                          }}
+                        >
+                          {wdRule.subline}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button
+                        type="button"
+                        disabled={!wdRule.canRequestNow}
+                        onClick={onOpenWithdrawModal}
+                        style={{
+                          flex: 1,
+                          height: 46,
+                          borderRadius: 10,
+                          border: 'none',
+                          backgroundColor: wdRule.canRequestNow ? '#111111' : '#E2E8F0',
+                          color: wdRule.canRequestNow ? '#FFFFFF' : '#64748B',
+                          fontWeight: 800,
+                          fontSize: '0.86rem',
+                          cursor: wdRule.canRequestNow ? 'pointer' : 'not-allowed',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: 7,
+                        }}
+                      >
+                        {!wdRule.canRequestNow && <Lock size={15} />}
+                        <span>{wdRule.buttonText}</span>
+                      </button>
+                      {wallet && wallet.debtBalance > 0 && (
+                        <button
+                          type="button"
+                          onClick={onOpenDebtPixModal}
+                          style={{
+                            flex: 1,
+                            height: 46,
+                            borderRadius: 10,
+                            border: 'none',
+                            backgroundColor: '#DC2626',
+                            color: '#FFFFFF',
+                            fontWeight: 800,
+                            fontSize: '0.86rem',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 6,
+                            cursor: 'pointer'
+                          }}
+                        >
+                          <QrCode size={16} />
+                          <span>Quitar Dívida PIX</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               {(() => {
                 const liveCfg = propConfig || StorageService.getConfig();

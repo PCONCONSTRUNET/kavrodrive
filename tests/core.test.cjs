@@ -409,6 +409,8 @@ test('Taxas financeiras por meio de pagamento e saque são aplicadas em corridas
     withdrawalFeeFixed: 2,
     withdrawalFeePercent: 1,
     minWithdrawalAmount: 10,
+    driverWithdrawalEnabled: true,
+    driverWithdrawalWeekdays: [0, 1, 2, 3, 4, 5, 6],
     activePaymentMethods: ['pix', 'cartao_credito', 'cartao_debito', 'dinheiro']
   };
   await db.query(
@@ -966,6 +968,13 @@ test('Operacao Uber Real: trava atomica de aceite simultaneo, PIN de embarque 4 
     status: 'confirmado',
     description: 'Saldo teste concorrencia'
   });
+
+  const prevCfgConc = db.localStore.system_config?.default?.config || {};
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify({ ...prevCfgConc, driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [0, 1, 2, 3, 4, 5, 6] })]
+  );
 
   const [w1, w2] = await Promise.all([
     apiJson(`/api/drivers/${encodeURIComponent(winnerDrvId)}/withdrawals`, {
@@ -3498,6 +3507,13 @@ test('Gateway Efí Bank completo: config/certificado, PIX cobranca + Split, cart
       description: 'Saldo disponível para saque Efí Bank'
     });
 
+    const prevCfgEfi = db.localStore.system_config?.default?.config || {};
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({ ...prevCfgEfi, driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [0, 1, 2, 3, 4, 5, 6] })]
+    );
+
     const wdReq = await apiJson(`/api/drivers/${encodeURIComponent(drvSaved.id)}/withdrawals`, {
       method: 'POST',
       headers: { 'x-driver-token': drvToken },
@@ -4003,4 +4019,152 @@ test('Notificacoes segmentadas: Admin envia direto para passageiro/motorista e p
   assert.equal(cliNotifsAfterRide.status, 200);
   assert.ok(cliNotifsAfterRide.json.some(n => n.rideId === rideRes.json.ride.id));
   assert.ok(cliNotifsAfterRide.json.some(n => n.title === 'Kavro Drive' && n.message.includes('Comunicado geral')));
+});
+
+test('Regra de Saque PIX do Motorista: padrao somente Sexta-feira, edicao de dias no Admin e habilitar/desabilitar botao', async () => {
+  const prevCfg = db.localStore.system_config?.default?.config || {};
+  const ts = Date.now();
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '0').slice(-9);
+    const digits = base.split('').map(Number);
+    if (digits.every((d) => d === digits[0])) digits[8] = (digits[8] + 1) % 10;
+    const calc = (sliceLen) => {
+      let sum = 0;
+      for (let i = 0; i < sliceLen; i++) sum += digits[i] * (sliceLen + 1 - i);
+      const rem = (sum * 10) % 11;
+      return rem >= 10 ? 0 : rem;
+    };
+    digits.push(calc(9));
+    digits.push(calc(10));
+    return digits.join('');
+  };
+  const drvCpf = makeTestCpf(Math.floor((ts % 650000000) + 190000033));
+  const drvId = `drv-wd-sched-${ts}`;
+  const drvEmail = `wd.sched.${ts}@kavro.test`;
+
+  try {
+    // 1. Padrão do banco aponta somente Sexta-feira ([5]) e botão habilitado
+    assert.equal(originalStoreSnapshot.system_config.default.config.driverWithdrawalEnabled, true);
+    assert.deepEqual(originalStoreSnapshot.system_config.default.config.driverWithdrawalWeekdays, [5]);
+
+    const fridayCheck = finance.evaluateWithdrawalAvailability(
+      { driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [5] },
+      new Date('2026-11-20T15:00:00-03:00')
+    );
+    assert.equal(fridayCheck.canRequestNow, true);
+    assert.equal(fridayCheck.currentWeekday, 5);
+
+    const saturdayCheck = finance.evaluateWithdrawalAvailability(
+      { driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [5] },
+      new Date('2026-11-21T15:00:00-03:00')
+    );
+    assert.equal(saturdayCheck.canRequestNow, false);
+    assert.match(saturdayCheck.blockedReason, /Sexta-feira/i);
+
+    const disabledOnFriday = finance.evaluateWithdrawalAvailability(
+      { driverWithdrawalEnabled: false, driverWithdrawalWeekdays: [5] },
+      new Date('2026-11-20T15:00:00-03:00')
+    );
+    assert.equal(disabledOnFriday.canRequestNow, false);
+    assert.match(disabledOnFriday.blockedReason, /desabilitadas/i);
+
+    // 2. Motorista real com saldo disponível testa bloqueio por dia/botão e liberação após editar no Admin
+    db.localStore.drivers.push({
+      id: drvId,
+      name: 'Motorista Regra Saque',
+      phone: `(48) 99444-${String(ts).slice(-4)}`,
+      email: drvEmail,
+      document: drvCpf,
+      cnh: '77665544332',
+      password_hash: scryptHash('1234'),
+      pix_key: drvCpf,
+      pix_type: 'cpf',
+      approval_status: 'aprovado',
+      financial_blocked: false,
+      is_online: true,
+      created_at: new Date().toISOString()
+    });
+    await finance.recordLedgerEntry({
+      idempotencyKey: `wd_sched_credit_${ts}`,
+      driverId: drvId,
+      driverName: 'Motorista Regra Saque',
+      entryType: 'ride_earning_credit',
+      paymentMethod: 'pix',
+      grossAmount: 100,
+      commissionPercent: 20,
+      commissionAmount: 20,
+      driverNetAmount: 80,
+      balanceDelta: 80,
+      balanceBucket: 'available',
+      status: 'confirmado',
+      description: 'Saldo regra de dias de saque'
+    });
+
+    const loginDrv = await apiJson('/api/drivers/login', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.246' },
+      body: { identifier: drvEmail, password: '1234' }
+    });
+    assert.equal(loginDrv.status, 200);
+    const drvToken = loginDrv.json.driverToken;
+
+    const todayBr = finance.getBrazilWeekdayIndex(new Date());
+    const otherDay = (todayBr + 1) % 7;
+
+    // 2a) Dia diferente do configurado bloqueia saque via API (400)
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({ ...prevCfg, minWithdrawalAmount: 20, driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [otherDay] })]
+    );
+    const wrongDayRes = await apiJson(`/api/drivers/${encodeURIComponent(drvId)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { amount: 40, pixKey: drvCpf, pixType: 'cpf' }
+    });
+    assert.equal(wrongDayRes.status, 400);
+    assert.match(String(wrongDayRes.json.error || ''), /Saques liberados/i);
+
+    // 2b) Botão desabilitado pelo Admin bloqueia mesmo estando no dia permitido
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({ ...prevCfg, minWithdrawalAmount: 20, driverWithdrawalEnabled: false, driverWithdrawalWeekdays: [todayBr] })]
+    );
+    const disabledBtnRes = await apiJson(`/api/drivers/${encodeURIComponent(drvId)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { amount: 40, pixKey: drvCpf, pixType: 'cpf' }
+    });
+    assert.equal(disabledBtnRes.status, 400);
+    assert.match(String(disabledBtnRes.json.error || ''), /desabilitadas/i);
+
+    // 2c) Botão habilitado e dia atual incluído pelo Admin libera solicitação de saque (200)
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({ ...prevCfg, minWithdrawalAmount: 20, driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [todayBr, 5] })]
+    );
+    const okRes = await apiJson(`/api/drivers/${encodeURIComponent(drvId)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { amount: 40, pixKey: drvCpf, pixType: 'cpf' }
+    });
+    assert.equal(okRes.status, 200);
+    assert.equal(okRes.json.ok, true);
+
+    // 3) Auditoria registra alterações nos dias de saque e na habilitação do botão
+    const diff = audit.buildConfigChangesDiff(
+      { ...prevCfg, driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [5] },
+      { ...prevCfg, driverWithdrawalEnabled: false, driverWithdrawalWeekdays: [1, 5] }
+    );
+    assert.ok(diff.some(d => d.field === 'driverWithdrawalEnabled' && d.after.includes('Desativado')));
+    assert.ok(diff.some(d => d.field === 'driverWithdrawalWeekdays' && d.after.includes('Segunda-feira') && d.after.includes('Sexta-feira')));
+  } finally {
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(prevCfg)]
+    );
+  }
 });

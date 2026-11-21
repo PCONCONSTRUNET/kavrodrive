@@ -19,6 +19,7 @@ import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { ScreenWakeLockManager, playNewRideSound, stopNewRideSound, unlockNewRideAudio } from '../utils/soundAndVoice';
 import { calculateHaversineDistance } from '../utils/geo';
 import { formatRideCode, getCleanWhatsappNumber, formatPhone, formatCPF, formatMercosulPlate, formatCNH } from '../utils/format';
+import { evaluateDriverWithdrawalRule } from '../utils/withdrawalSchedule';
 import {
   normalizeCategoriesFromConfig,
   evaluateAllDriverCategories,
@@ -966,10 +967,30 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     }
   };
 
+  const handleOpenQuickWithdrawModal = () => {
+    if (!currentDriver) return;
+    const wdRule = evaluateDriverWithdrawalRule(config);
+    if (!wdRule.canRequestNow) {
+      setActiveTab('carteira');
+      return;
+    }
+    const list = Array.isArray(currentDriver.pixKeys) ? currentDriver.pixKeys : [];
+    const def = list.find(k => k.isDefault) || list[0];
+    setWithdrawPixKey(def?.pixKey || currentDriver.pixKey || '');
+    setWithdrawPixType(def?.pixType || currentDriver.pixType || 'cpf');
+    setWithdrawError('');
+    setIsWithdrawModalOpen(true);
+  };
+
   const handleRequestWithdrawal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!currentDriver) return;
     setWithdrawError('');
+    const wdRule = evaluateDriverWithdrawalRule(config);
+    if (!wdRule.canRequestNow) {
+      setWithdrawError(wdRule.blockedReason || 'Saque PIX indisponível no momento.');
+      return;
+    }
     const savedList = Array.isArray(currentDriver.pixKeys) ? currentDriver.pixKeys : [];
     const defaultSaved = savedList.find(k => k.isDefault) || savedList[0];
     const targetPixKey = (withdrawPixKey || defaultSaved?.pixKey || currentDriver.pixKey || '').trim();
@@ -2497,6 +2518,62 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 <List size={20} />
               </button>
             </div>
+
+            {(() => {
+              const wdRule = evaluateDriverWithdrawalRule(config);
+              const avail = Number(wallet?.availableBalance || 0);
+              return (
+                <div
+                  style={{
+                    marginTop: 10,
+                    padding: '9px 11px',
+                    borderRadius: 12,
+                    backgroundColor: !wdRule.enabled
+                      ? 'rgba(254, 242, 242, 0.92)'
+                      : wdRule.canRequestNow
+                        ? 'rgba(240, 253, 244, 0.92)'
+                        : 'rgba(255, 255, 255, 0.72)',
+                    border: `1px solid ${!wdRule.enabled ? 'rgba(252, 165, 165, 0.8)' : wdRule.canRequestNow ? 'rgba(134, 239, 172, 0.85)' : 'rgba(203, 213, 225, 0.9)'}`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: '0.73rem', fontWeight: 800, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <Wallet size={13} color={wdRule.enabled ? '#15803D' : '#DC2626'} />
+                      <span>Saldo R$ {avail.toFixed(2).replace('.', ',')}</span>
+                    </div>
+                    <div style={{ fontSize: '0.67rem', fontWeight: 700, color: !wdRule.enabled ? '#B91C1C' : wdRule.canRequestNow ? '#15803D' : '#475569', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {wdRule.enabled
+                        ? (wdRule.isFridayOnlyDefault
+                            ? 'Toda Sexta-feira é dia de fazer saque'
+                            : `Saque PIX: ${wdRule.daysText}`)
+                        : 'Solicitação de saque desabilitada'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenQuickWithdrawModal}
+                    style={{
+                      padding: '7px 11px',
+                      borderRadius: 9,
+                      border: 'none',
+                      backgroundColor: wdRule.canRequestNow ? '#0F172A' : '#E2E8F0',
+                      color: wdRule.canRequestNow ? '#FFFFFF' : '#334155',
+                      fontSize: '0.72rem',
+                      fontWeight: 800,
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {wdRule.canRequestNow ? 'Solicitar Saque' : 'Ver Saque'}
+                  </button>
+                </div>
+              );
+            })()}
           </div>
         </div>
       )}
@@ -2583,6 +2660,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       <DriverDrawerMenu
         isOpen={isDrawerOpen}
         driver={currentDriver}
+        config={config}
         activeTab={activeTab}
         onClose={() => setIsDrawerOpen(false)}
         onSelectTab={(tab) => setActiveTab(tab)}
@@ -2768,6 +2846,23 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             <h3 style={{ margin: '0 0 6px 0', fontSize: '1.15rem', fontWeight: 900, color: '#111111' }}>
               Solicitar Saque PIX
             </h3>
+            {(() => {
+              const modalRule = evaluateDriverWithdrawalRule(config);
+              return (
+                <div style={{
+                  marginBottom: 10,
+                  padding: '8px 10px',
+                  borderRadius: 9,
+                  backgroundColor: modalRule.canRequestNow ? '#F0FDF4' : '#FEF2F2',
+                  border: `1px solid ${modalRule.canRequestNow ? '#BBF7D0' : '#FECACA'}`,
+                  color: modalRule.canRequestNow ? '#15803D' : '#B91C1C',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                }}>
+                  {modalRule.headline}
+                </div>
+              );
+            })()}
             <div style={{ fontSize: '0.84rem', color: '#6B7280', marginBottom: 14 }}>
               Saldo Disponível: <strong style={{ color: '#16A34A' }}>R$ {wallet.availableBalance.toFixed(2).replace('.', ',')}</strong>
               <span style={{ marginLeft: 8, fontSize: '0.74rem' }}>
@@ -2878,16 +2973,16 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isRequestingWithdraw || modalPixKeys.length === 0}
+                  disabled={isRequestingWithdraw || modalPixKeys.length === 0 || !evaluateDriverWithdrawalRule(config).canRequestNow}
                   style={{
                     flex: 1,
                     padding: '12px',
                     borderRadius: 10,
-                    backgroundColor: modalPixKeys.length === 0 ? '#9CA3AF' : '#111111',
+                    backgroundColor: (modalPixKeys.length === 0 || !evaluateDriverWithdrawalRule(config).canRequestNow) ? '#9CA3AF' : '#111111',
                     color: '#FFFFFF',
                     border: 'none',
                     fontWeight: 800,
-                    cursor: modalPixKeys.length === 0 ? 'not-allowed' : 'pointer'
+                    cursor: (modalPixKeys.length === 0 || !evaluateDriverWithdrawalRule(config).canRequestNow) ? 'not-allowed' : 'pointer'
                   }}
                 >
                   {isRequestingWithdraw ? 'Solicitando...' : 'Confirmar Saque'}

@@ -183,6 +183,8 @@ export const DEFAULT_CONFIG: SystemConfig = {
   maxDriverDebtLimit: 100.0,
   autoBlockDelinquentDrivers: true,
   minWithdrawalAmount: 20.0,
+  driverWithdrawalEnabled: true,
+  driverWithdrawalWeekdays: [5],
   autoSplitPixEnabled: true,
   cardSettlementDays: 0,
   activePaymentMethods: ['pix', 'cartao_credito', 'carteira', 'dinheiro'],
@@ -1382,6 +1384,8 @@ export const StorageService = {
     maxDriverDebtLimit: number;
     autoBlockDelinquentDrivers: boolean;
     minWithdrawalAmount: number;
+    driverWithdrawalEnabled?: boolean;
+    driverWithdrawalWeekdays?: number[];
     totalGrossVolume: number;
     totalPlatformCommission: number;
     totalPixVolume: number;

@@ -839,6 +839,8 @@ export interface SystemConfig {
   maxDriverDebtLimit?: number;          // Ex: R$ 100,00 (limite de dívida em dinheiro)
   autoBlockDelinquentDrivers?: boolean; // Bloqueia motorista inadimplente de receber corridas em dinheiro
   minWithdrawalAmount?: number;         // Saque mínimo, ex: R$ 20,00
+  driverWithdrawalEnabled?: boolean;    // Habilita ou desabilita o botão de saque dos motoristas
+  driverWithdrawalWeekdays?: number[];  // Dias permitidos para saque (0=Dom..6=Sáb), padrão [5] = Sexta-feira
   autoSplitPixEnabled?: boolean;        // Split automático no gateway
   cardSettlementDays?: number;          // Dias para liberação de cartão (0 = imediato no disponível, >0 = saldo pendente)
   applePayDisabled?: boolean;
