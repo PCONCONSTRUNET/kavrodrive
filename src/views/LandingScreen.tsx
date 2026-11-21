@@ -150,6 +150,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
 
   // Etapa ativa do "Como funciona" (0 a 4)
   const [stepIndex, setStepIndex] = useState<number>(0);
+  const [mobileBannerIndex, setMobileBannerIndex] = useState<number>(0);
+  const [mobileTouchStartX, setMobileTouchStartX] = useState<number | null>(null);
   const [isMobile, setIsMobile] = useState<boolean>(() =>
     typeof window !== 'undefined' ? window.innerWidth < 960 : false
   );
@@ -226,6 +228,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       alt: 'Kavro Drive — Conectando motoristas e passageiros.',
     },
   ];
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const tid = window.setTimeout(() => {
+      setMobileBannerIndex((prev) => (prev + 1) % 3);
+    }, 3000);
+    return () => window.clearTimeout(tid);
+  }, [isMobile, mobileBannerIndex]);
 
   const baseUrl =
     typeof window !== 'undefined' && window.location.origin
@@ -930,47 +940,92 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       {/* Espaçamento para a navbar fixa */}
       <div style={{ height: 68 }} />
 
-      {/* Banners promocionais exclusivos da versão mobile em loop contínuo */}
+      {/* Banners promocionais exclusivos da versão mobile (troca a cada 3 segundos) */}
       {isMobile && (
         <div
           style={{
             backgroundColor: '#0A0F14',
-            padding: '12px 0 0 0',
+            padding: '12px 18px 0 18px',
           }}
         >
-          <div className="kavro-marquee">
+          <div
+            onTouchStart={(e) => setMobileTouchStartX(e.touches[0]?.clientX ?? null)}
+            onTouchEnd={(e) => {
+              if (mobileTouchStartX === null) return;
+              const endX = e.changedTouches[0]?.clientX ?? mobileTouchStartX;
+              const delta = endX - mobileTouchStartX;
+              setMobileTouchStartX(null);
+              if (Math.abs(delta) < 35) return;
+              if (delta < 0) {
+                setMobileBannerIndex((prev) => (prev + 1) % mobileHeroBanners.length);
+              } else {
+                setMobileBannerIndex((prev) => (prev - 1 + mobileHeroBanners.length) % mobileHeroBanners.length);
+              }
+            }}
+            style={{
+              width: '100%',
+              borderRadius: 10,
+              overflow: 'hidden',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              backgroundColor: '#0A0F14',
+            }}
+          >
             <div
-              className="kavro-marquee-track"
-              style={{ animationDuration: '24s' }}
+              style={{
+                display: 'flex',
+                width: '100%',
+                transform: `translate3d(-${mobileBannerIndex * 100}%, 0, 0)`,
+                transition: 'transform 450ms cubic-bezier(0.22, 1, 0.36, 1)',
+              }}
             >
-              {[0, 1].map((dupIdx) =>
-                mobileHeroBanners.map((banner) => (
-                  <div
-                    key={`${dupIdx}-${banner.src}`}
+              {mobileHeroBanners.map((banner) => (
+                <div key={banner.src} style={{ flex: '0 0 100%', width: '100%' }}>
+                  <img
+                    src={banner.src}
+                    alt={banner.alt}
                     style={{
-                      flex: '0 0 auto',
-                      width: 'min(86vw, 360px)',
-                      marginRight: 10,
-                      borderRadius: 10,
-                      overflow: 'hidden',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      backgroundColor: '#0A0F14',
+                      width: '100%',
+                      height: 'auto',
+                      display: 'block',
+                      aspectRatio: '2064 / 762',
                     }}
-                  >
-                    <img
-                      src={banner.src}
-                      alt={banner.alt}
-                      style={{
-                        width: '100%',
-                        height: 'auto',
-                        display: 'block',
-                        aspectRatio: '2064 / 762',
-                      }}
-                    />
-                  </div>
-                ))
-              )}
+                  />
+                </div>
+              ))}
             </div>
+          </div>
+
+          {/* Indicador discreto dos 3 banners */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 6,
+              marginTop: 8,
+            }}
+          >
+            {mobileHeroBanners.map((banner, idx) => {
+              const active = idx === mobileBannerIndex;
+              return (
+                <button
+                  key={banner.src}
+                  type="button"
+                  aria-label={`Ver banner ${idx + 1}`}
+                  onClick={() => setMobileBannerIndex(idx)}
+                  style={{
+                    width: active ? 22 : 8,
+                    height: 4,
+                    borderRadius: 999,
+                    border: 'none',
+                    padding: 0,
+                    backgroundColor: active ? '#76D800' : 'rgba(255, 255, 255, 0.24)',
+                    cursor: 'pointer',
+                    transition: 'all 0.25s ease',
+                  }}
+                />
+              );
+            })}
           </div>
         </div>
       )}
