@@ -302,7 +302,6 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                             handleItemClick(banner.linkUrl);
                           }
                         }}
-                        title={banner.subtitle ? `${banner.name} — ${banner.subtitle}` : banner.name}
                         style={{
                           position: 'relative',
                           flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 88%') : undefined,
@@ -318,7 +317,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                       >
                         <img
                           src={banner.imageUrl}
-                          alt={banner.name}
+                          alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
                           style={{
                             width: '100%',
                             height: '100%',
@@ -408,9 +407,9 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                         <div
                           style={{
                             width: '100%',
-                            height: 54,
+                            height: 62,
                             borderRadius: 10,
-                            backgroundColor: 'rgba(255, 255, 255, 0.94)',
+                            backgroundColor: 'rgba(255, 255, 255, 0.96)',
                             padding: '6px 10px',
                             display: 'flex',
                             alignItems: 'center',
@@ -420,7 +419,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                         >
                           <img
                             src={logo.imageUrl}
-                            alt={logo.name}
+                            alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
                             style={{
                               maxWidth: '100%',
                               maxHeight: '100%',
@@ -429,33 +428,20 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                             }}
                           />
                         </div>
-                        <div style={{ minWidth: 0, width: '100%' }}>
-                          <div
-                            style={{
-                              fontSize: '0.82rem',
-                              fontWeight: 700,
-                              color: '#FFFFFF',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                            }}
-                          >
-                            {logo.name}
-                          </div>
-                          {logo.subtitle && (
-                            <div
-                              style={{
-                                fontSize: '0.68rem',
-                                color: '#8CE826',
-                                marginTop: 1,
-                                whiteSpace: 'nowrap',
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                              }}
-                            >
-                              {logo.subtitle}
-                            </div>
-                          )}
+                        <div
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            fontSize: '0.62rem',
+                            fontWeight: 700,
+                            color: logo.kind === 'patrocinador' ? '#8CE826' : '#CBD5E1',
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                          }}
+                        >
+                          <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                          {safeHref && <ExternalLink size={10} />}
                         </div>
                       </div>
                     );
@@ -594,7 +580,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                   >
                     <img
                       src={banner.imageUrl}
-                      alt={banner.name}
+                      alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
                       style={{
                         width: '100%',
                         height: '100%',
@@ -673,10 +659,10 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                     <div
                       style={{
                         width: '100%',
-                        height: 46,
+                        height: 54,
                         borderRadius: 10,
                         backgroundColor: '#F8FAFC',
-                        padding: '4px 6px',
+                        padding: '5px 8px',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
@@ -685,7 +671,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                     >
                       <img
                         src={logo.imageUrl}
-                        alt={logo.name}
+                        alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
                         style={{
                           maxWidth: '100%',
                           maxHeight: '100%',
@@ -694,27 +680,20 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                         }}
                       />
                     </div>
-                    <div
-                      style={{
-                        width: '100%',
-                        fontSize: '0.73rem',
-                        fontWeight: 700,
-                        color: '#0F172A',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                      }}
-                    >
-                      {logo.name}
-                    </div>
                     <span
                       style={{
-                        fontSize: '0.6rem',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: '0.58rem',
                         fontWeight: 700,
                         color: logo.kind === 'patrocinador' ? '#15803D' : '#475569',
+                        textTransform: 'uppercase',
+                        letterSpacing: '0.03em',
                       }}
                     >
-                      {logo.subtitle || (logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro')}
+                      <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                      {safeHref && <ExternalLink size={9} />}
                     </span>
                   </div>
                 );

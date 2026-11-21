@@ -115,11 +115,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
   );
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [name, setName] = useState('');
   const [kind, setKind] = useState<'parceiro' | 'patrocinador'>('patrocinador');
   const [displayMode, setDisplayMode] = useState<'logo' | 'banner'>('logo');
   const [imageUrl, setImageUrl] = useState('');
-  const [subtitle, setSubtitle] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
   const [active, setActive] = useState(true);
   const [formError, setFormError] = useState('');
@@ -145,11 +143,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
 
   const resetForm = () => {
     setEditingId(null);
-    setName('');
     setKind('patrocinador');
     setDisplayMode('logo');
     setImageUrl('');
-    setSubtitle('');
     setLinkUrl('');
     setActive(true);
     setFormError('');
@@ -205,12 +201,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
   const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
-    const cleanName = name.trim();
     const cleanImage = imageUrl.trim();
-    if (!cleanName) {
-      setFormError('Informe o nome do parceiro ou patrocinador.');
-      return;
-    }
     if (
       !cleanImage ||
       (!cleanImage.startsWith('data:image/') &&
@@ -234,13 +225,11 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
 
     const nextRecord: HomePartnerBanner = {
       id: editingId || `prt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      name: cleanName,
       kind,
       displayMode,
       areas: itemAreas,
       placement: deriveLegacyPlacement(itemAreas),
       imageUrl: cleanImage,
-      subtitle: subtitle.trim(),
       linkUrl: normalizedLink,
       active,
       sortOrder: existingItem ? Number(existingItem.sortOrder ?? items.length + 1) : items.length + 1,
@@ -261,11 +250,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
 
   const handleEditItem = (item: HomePartnerBanner) => {
     setEditingId(item.id);
-    setName(item.name);
     setKind(item.kind);
     setDisplayMode(item.displayMode);
     setImageUrl(item.imageUrl);
-    setSubtitle(item.subtitle || '');
     setLinkUrl(item.linkUrl || '');
     setActive(item.active !== false);
     setFormError('');
@@ -572,21 +559,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
           )}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-              Nome da Empresa / Patrocinador *
-            </label>
-            <input
-              type="text"
-              placeholder="Ex: Auto Posto Serra"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              style={inputStyle}
-              required
-            />
-          </div>
-
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(195px, 1fr))', gap: 12 }}>
           <div>
             <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
               Classificação
@@ -613,19 +586,6 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
               <option value="logo">Logo (Card Compacto de Marca)</option>
               <option value="banner">Banner (Destaque Largo)</option>
             </select>
-          </div>
-
-          <div>
-            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-              Subtítulo / Benefício (opcional)
-            </label>
-            <input
-              type="text"
-              placeholder="Ex: 10% OFF para passageiros Kavro"
-              value={subtitle}
-              onChange={(e) => setSubtitle(e.target.value)}
-              style={inputStyle}
-            />
           </div>
 
           <div>
@@ -847,8 +807,8 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 220, flex: 1 }}>
                     <div
                       style={{
-                        width: item.displayMode === 'banner' ? 104 : 64,
-                        height: 46,
+                        width: item.displayMode === 'banner' ? 132 : 76,
+                        height: 48,
                         borderRadius: 8,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',
@@ -862,7 +822,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                     >
                       <img
                         src={item.imageUrl}
-                        alt={item.name}
+                        alt={item.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}
                         style={{
                           width: '100%',
                           height: '100%',
@@ -872,7 +832,18 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                     </div>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        <strong style={{ fontSize: '0.86rem', color: '#0F172A' }}>{item.name}</strong>
+                        <span
+                          style={{
+                            fontSize: '0.66rem',
+                            fontWeight: 800,
+                            padding: '2px 7px',
+                            borderRadius: 999,
+                            backgroundColor: '#F1F5F9',
+                            color: '#475569',
+                          }}
+                        >
+                          #{areaIdx + 1}
+                        </span>
                         <span
                           style={{
                             fontSize: '0.66rem',
@@ -910,11 +881,6 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                           {isInactive ? 'Inativo' : 'Ativo'}
                         </span>
                       </div>
-                      {item.subtitle && (
-                        <div style={{ fontSize: '0.74rem', color: '#64748B', marginTop: 2 }}>
-                          {item.subtitle}
-                        </div>
-                      )}
                       {item.linkUrl && (
                         <a
                           href={item.linkUrl}
@@ -926,7 +892,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                             gap: 4,
                             fontSize: '0.7rem',
                             color: '#2563EB',
-                            marginTop: 2,
+                            marginTop: 4,
                             textDecoration: 'none',
                           }}
                         >

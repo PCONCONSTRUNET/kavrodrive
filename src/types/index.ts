@@ -900,7 +900,7 @@ export type PartnerBannerArea = 'site' | 'client_home' | 'client_rides' | 'clien
 
 export interface HomePartnerBanner {
   id: string;
-  name: string;
+  name?: string;
   kind: 'parceiro' | 'patrocinador';
   displayMode: 'logo' | 'banner';
   placement?: 'both' | 'site' | 'client';
