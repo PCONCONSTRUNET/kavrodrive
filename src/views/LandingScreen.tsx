@@ -42,6 +42,7 @@ interface ServiceItem {
   title: string;
   shortLabel: string;
   desc: string;
+  shortDesc: string;
   modalDetails: string;
   actionLabel: string;
   targetRoute: string;
@@ -352,6 +353,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       title: 'Kavro Padrão',
       shortLabel: 'Kavro Padrão',
       desc: 'Corridas particulares ponto a ponto com valor exibido antes da confirmação e acompanhamento ao vivo no mapa.',
+      shortDesc: 'Corridas urbanas com tarifa informada antes de sair.',
       modalDetails:
         'Confira placa, modelo do veículo e nome do motorista antes do embarque, utilize código de segurança e pague via PIX, cartão à vista ou dinheiro.',
       actionLabel: 'Simular corrida',
@@ -365,6 +367,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       title: 'Viagens Regionais & Aeroporto',
       shortLabel: 'Traslados & Região',
       desc: 'Deslocamentos intermunicipais, terminais rodoviários e aeroportos com tarifa calculada antecipadamente.',
+      shortDesc: 'Trajetos intermunicipais, rodoviárias e aeroportos.',
       modalDetails:
         'Solicite sua saída imediata ou programe com antecedência trajetos entre cidades vizinhas com previsibilidade de horário.',
       actionLabel: 'Calcular trajeto',
@@ -378,6 +381,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       title: 'Kavro Entregas',
       shortLabel: 'Kavro Entregas',
       desc: 'Transporte urbano de documentos, encomendas e pacotes fechados com coleta na origem e registro na entrega.',
+      shortDesc: 'Envio local de pacotes e documentos no mesmo dia.',
       modalDetails:
         'Acompanhe o percurso do portador em tempo real do endereço de retirada até o destinatário na mesma cidade ou região.',
       actionLabel: 'Solicitar entrega',
@@ -391,6 +395,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       title: 'Agenda Programada',
       shortLabel: 'Agenda Programada',
       desc: 'Reserve seu horário com antecedência para embarques no início do dia, consultas clínicas e compromissos.',
+      shortDesc: 'Reserve dia e hora pelo app com antecedência.',
       modalDetails:
         'Defina endereço, data e horário pelo aplicativo e acompanhe a designação do motorista parceiro na sua conta.',
       actionLabel: 'Agendar horário',
@@ -1470,7 +1475,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             <div
               style={{
                 display: isMobile ? 'grid' : 'inline-flex',
-                gridTemplateColumns: isMobile ? 'repeat(3, minmax(0, 1fr))' : undefined,
+                gridTemplateColumns: isMobile
+                  ? 'minmax(0, 0.72fr) minmax(0, 1fr) minmax(0, 1.38fr)'
+                  : undefined,
                 alignItems: 'center',
                 gap: 4,
                 backgroundColor: '#121922',
@@ -1495,12 +1502,12 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                     onClick={() => setServiceFilter(tab.key as 'all' | 'mobilidade' | 'especial')}
                     style={{
                       height: 34,
-                      padding: isMobile ? '0 8px' : '0 16px',
+                      padding: isMobile ? '0 6px' : '0 16px',
                       borderRadius: 6,
                       border: 'none',
                       backgroundColor: active ? '#FFFFFF' : 'transparent',
                       color: active ? '#0A0F14' : '#94A3B8',
-                      fontSize: isMobile ? '0.76rem' : '0.82rem',
+                      fontSize: isMobile ? '0.73rem' : '0.82rem',
                       fontWeight: 700,
                       cursor: 'pointer',
                       whiteSpace: 'nowrap',
@@ -1517,8 +1524,8 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-              gap: isMobile ? 12 : 18,
+              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+              gap: isMobile ? 10 : 18,
             }}
           >
             {filteredServices.map((item) => (
@@ -1529,12 +1536,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   backgroundColor: '#121922',
                   border: '1px solid rgba(255, 255, 255, 0.09)',
                   borderRadius: 10,
-                  padding: isMobile ? '18px' : '24px',
+                  padding: isMobile ? '13px' : '24px',
                   display: 'flex',
                   flexDirection: 'column',
                   justifyContent: 'space-between',
-                  gap: 14,
+                  gap: isMobile ? 10 : 14,
                   cursor: 'pointer',
+                  minWidth: 0,
                 }}
               >
                 <div>
@@ -1543,32 +1551,35 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
-                      gap: 10,
-                      marginBottom: 14,
+                      gap: isMobile ? 6 : 10,
+                      marginBottom: isMobile ? 10 : 14,
                     }}
                   >
                     <div
                       style={{
-                        width: 40,
-                        height: 40,
+                        width: isMobile ? 34 : 40,
+                        height: isMobile ? 34 : 40,
                         borderRadius: 8,
                         backgroundColor: 'rgba(255, 255, 255, 0.05)',
                         border: '1px solid rgba(255, 255, 255, 0.1)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
+                        flexShrink: 0,
                       }}
                     >
                       {item.icon}
                     </div>
                     <span
                       style={{
-                        fontSize: '0.68rem',
+                        fontSize: isMobile ? '0.58rem' : '0.68rem',
                         fontWeight: 700,
-                        letterSpacing: '0.07em',
+                        letterSpacing: isMobile ? '0.04em' : '0.07em',
                         textTransform: 'uppercase',
                         color: '#94A3B8',
                         whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
                       }}
                     >
                       {item.badge}
@@ -1577,17 +1588,24 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
 
                   <h3
                     style={{
-                      fontSize: isMobile ? '1.04rem' : '1.14rem',
+                      fontSize: isMobile ? '0.92rem' : '1.14rem',
+                      lineHeight: 1.25,
                       fontWeight: 700,
                       color: '#FFFFFF',
-                      marginBottom: 6,
+                      marginBottom: isMobile ? 5 : 6,
                     }}
                   >
-                    {item.title}
+                    {isMobile ? item.shortLabel : item.title}
                   </h3>
 
-                  <p style={{ fontSize: '0.86rem', lineHeight: 1.55, color: '#94A3B8' }}>
-                    {item.desc}
+                  <p
+                    style={{
+                      fontSize: isMobile ? '0.75rem' : '0.86rem',
+                      lineHeight: isMobile ? 1.42 : 1.55,
+                      color: '#94A3B8',
+                    }}
+                  >
+                    {isMobile ? item.shortDesc : item.desc}
                   </p>
                 </div>
 
@@ -1595,15 +1613,15 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   style={{
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 6,
-                    fontSize: '0.82rem',
+                    gap: 5,
+                    fontSize: isMobile ? '0.76rem' : '0.82rem',
                     fontWeight: 600,
                     color: '#E2E8F0',
-                    paddingTop: 6,
+                    paddingTop: 4,
                   }}
                 >
-                  <span>{item.actionLabel}</span>
-                  <ArrowRight size={14} color="#76D800" />
+                  <span>{isMobile ? 'Detalhes' : item.actionLabel}</span>
+                  <ArrowRight size={13} color="#76D800" />
                 </div>
               </div>
             ))}
