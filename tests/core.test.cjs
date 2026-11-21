@@ -4170,3 +4170,32 @@ test('Regra de Saque PIX do Motorista: padrao somente Sexta-feira, edicao de dia
     );
   }
 });
+
+test('Tarifa unica 24h: corrida diurna e madrugada tem o mesmo valor (sem adicional noturno fixo)', () => {
+  const cfgWithLegacyNight = {
+    baseFare: 8,
+    pricePerKm: 3.2,
+    pricePerMinute: 0.5,
+    minimumFare: 15,
+    nightSurchargePercent: 20,
+    nightStartHour: 22,
+    nightEndHour: 6
+  };
+  const dayRes = security.calculateOfficialRidePriceServer({
+    cfg: cfgWithLegacyNight,
+    distanceKm: 8,
+    durationMin: 15,
+    timeStr: '14:00'
+  });
+  const nightRes = security.calculateOfficialRidePriceServer({
+    cfg: cfgWithLegacyNight,
+    distanceKm: 8,
+    durationMin: 15,
+    timeStr: '23:30'
+  });
+  assert.equal(dayRes.isNight, false);
+  assert.equal(nightRes.isNight, false);
+  assert.equal(dayRes.nightSurcharge, 0);
+  assert.equal(nightRes.nightSurcharge, 0);
+  assert.equal(nightRes.totalPrice, dayRes.totalPrice);
+});

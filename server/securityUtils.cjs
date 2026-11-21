@@ -432,27 +432,12 @@ function calculateOfficialRidePriceServer({
     ? Math.max(1, Math.round(effectiveDistanceKm * 1.8))
     : submittedMin;
 
-  let isNight = false;
-  const nightStart = Number(cfg.nightStartHour ?? 22);
-  const nightEnd = Number(cfg.nightEndHour ?? 6);
-  const nightPct = Math.max(0, Number(cfg.nightSurchargePercent ?? 0));
-  if (timeStr && String(timeStr).includes(':')) {
-    const hour = parseInt(String(timeStr).split(':')[0], 10);
-    if (!Number.isNaN(hour) && (hour >= nightStart || hour < nightEnd)) {
-      isNight = true;
-    }
-  }
-
-  let subtotal =
+  const isNight = false;
+  const nightSurcharge = 0;
+  const subtotal =
     pricing.baseFare +
     effectiveDistanceKm * pricing.pricePerKm +
     effectiveDurationMin * pricing.pricePerMinute;
-
-  let nightSurcharge = 0;
-  if (isNight && nightPct > 0) {
-    nightSurcharge = subtotal * (nightPct / 100);
-    subtotal += nightSurcharge;
-  }
 
   const officialPrice = Math.max(pricing.minimumFare, Math.round(subtotal * 10) / 10);
   return {

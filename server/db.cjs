@@ -61,7 +61,7 @@ function getInitialStore() {
           pricePerKm: 3.2,
           pricePerMinute: 0.5,
           minimumFare: 15.0,
-          nightSurchargePercent: 20,
+          nightSurchargePercent: 0,
           nightStartHour: 22,
           nightEndHour: 6,
           advanceNoticeHours: 0,

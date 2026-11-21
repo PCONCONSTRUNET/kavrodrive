@@ -94,7 +94,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   const [pricePerKmStr, setPricePerKmStr] = useState(formatCurrencyValue(config.pricePerKm ?? 3.2));
   const [pricePerMinuteStr, setPricePerMinuteStr] = useState(formatCurrencyValue(config.pricePerMinute ?? 0.5));
   const [minimumFareStr, setMinimumFareStr] = useState(formatCurrencyValue(config.minimumFare ?? 15));
-  const [nightSurchargeStr, setNightSurchargeStr] = useState(String(config.nightSurchargePercent ?? 20));
   const [cancellationFeeStr, setCancellationFeeStr] = useState(formatCurrencyValue(config.cancellationFeeAmount ?? 0));
   const [globalCommStr, setGlobalCommStr] = useState(String(baseComm));
   const [globalFixedStr, setGlobalFixedStr] = useState(formatCurrencyValue(baseFixed));
@@ -204,7 +203,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setPricePerKmStr(formatCurrencyValue(config.pricePerKm ?? 3.2));
     setPricePerMinuteStr(formatCurrencyValue(config.pricePerMinute ?? 0.5));
     setMinimumFareStr(formatCurrencyValue(config.minimumFare ?? 15));
-    setNightSurchargeStr(String(config.nightSurchargePercent ?? 20));
     setCancellationFeeStr(formatCurrencyValue(config.cancellationFeeAmount ?? 0));
     setGlobalCommStr(String(base));
     setGlobalFixedStr(formatCurrencyValue(fixed));
@@ -248,7 +246,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     const parsedPerKm = clampMoney(pricePerKmStr, 3.2, 0);
     const parsedPerMin = clampMoney(pricePerMinuteStr, 0.5, 0);
     const parsedMinFare = clampMoney(minimumFareStr, 15, 0);
-    const parsedNight = clampPct(nightSurchargeStr, 20);
     const parsedCancelFee = clampMoney(cancellationFeeStr, 0, 0);
 
     const parsedGlobal = clampPct(globalCommStr, 20);
@@ -273,7 +270,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
       pricePerKm: parsedPerKm,
       pricePerMinute: parsedPerMin,
       minimumFare: parsedMinFare,
-      nightSurchargePercent: parsedNight,
+      nightSurchargePercent: 0,
       cancellationFeeAmount: parsedCancelFee,
       platformCommissionPercent: parsedGlobal,
       platformCommissionFixed: parsedGlobalFixed,
@@ -318,7 +315,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setPricePerKmStr(formatCurrencyValue(parsedPerKm));
     setPricePerMinuteStr(formatCurrencyValue(parsedPerMin));
     setMinimumFareStr(formatCurrencyValue(parsedMinFare));
-    setNightSurchargeStr(String(parsedNight));
     setCancellationFeeStr(formatCurrencyValue(parsedCancelFee));
     setGlobalCommStr(String(parsedGlobal));
     setGlobalFixedStr(formatCurrencyValue(parsedGlobalFixed));
@@ -727,22 +723,6 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
               <div>
                 <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-                  Adicional Noturno (%)
-                </label>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  value={nightSurchargeStr}
-                  onChange={(e) => {
-                    markDirty();
-                    setNightSurchargeStr(e.target.value.replace(/[^\d.,]/g, ''));
-                  }}
-                  style={inputStyle}
-                />
-              </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
                   Multa de Cancelamento (R$)
                 </label>
                 <div style={{ position: 'relative' }}>
@@ -901,7 +881,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
             }}
           >
             <div style={{ fontSize: '0.78rem', color: '#475569', fontWeight: 600 }}>
-              Exemplo automático (corrida diurna de <strong>8 km</strong> e <strong>15 min</strong>):
+              Exemplo automático (corrida de <strong>8 km</strong> e <strong>15 min</strong>):
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', fontSize: '0.8rem' }}>
               <span>Passageiro: <strong style={{ color: '#0F172A' }}>{formatBRL(sampleRideGross)}</strong></span>

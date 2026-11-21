@@ -158,7 +158,7 @@ export const DEFAULT_CONFIG: SystemConfig = {
   pricePerKm: 3.2,
   pricePerMinute: 0.5,
   minimumFare: 15.0,
-  nightSurchargePercent: 20,
+  nightSurchargePercent: 0,
   nightStartHour: 22,
   nightEndHour: 6,
   advanceNoticeHours: 0,
@@ -3073,28 +3073,13 @@ export function calculateRidePrice(
   const category = getCategoryById(categoryId, config);
   const pricing = getEffectiveCategoryPricing(category, city);
 
-  let isNight = false;
-  if (timeStr) {
-    const [hour] = timeStr.split(':').map(Number);
-    if (hour >= config.nightStartHour || hour < config.nightEndHour) {
-      isNight = true;
-    }
-  }
-
-  // Cada categoria possui sua própria tarifa base, valor por KM, valor por minuto e tarifa mínima.
-  // Se o administrador usar apenas o multiplicador sobre a base padrão ou tarifas customizadas,
-  // aplicamos os parâmetros efetivos da categoria escolhida.
   const basePart = pricing.baseFare;
   const kmPart = distanceKm * pricing.pricePerKm;
   const timePart = durationMin * pricing.pricePerMinute;
 
-  let subtotal = basePart + kmPart + timePart;
-
-  let nightSurcharge = 0;
-  if (isNight && config.nightSurchargePercent > 0) {
-    nightSurcharge = subtotal * (config.nightSurchargePercent / 100);
-    subtotal += nightSurcharge;
-  }
+  const subtotal = basePart + kmPart + timePart;
+  const isNight = false;
+  const nightSurcharge = 0;
 
   const finalPrice = Math.max(pricing.minimumFare, Math.round(subtotal * 10) / 10);
   const commPct = resolveCommissionPercentForMethod(config, pricing.commissionPercent, paymentMethod);
@@ -3121,7 +3106,7 @@ export function calculateRidePrice(
       multiplier: pricing.multiplier,
       commissionPercent: commPct,
       commissionFixed: commFixed,
-      nightSurchargePercent: config.nightSurchargePercent,
+      nightSurchargePercent: 0,
       city
     },
     breakdown: {

@@ -47,7 +47,6 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   // Estados de Simulação Comparativa
   const [simKm, setSimKm] = useState<number>(8);
   const [simMin, setSimMin] = useState<number>(15);
-  const [simNight, setSimNight] = useState<boolean>(false);
   const [simCity, setSimCity] = useState<string>('');
 
   // Estados para Adicionar Modelo / Cidade / Override de Cidade
@@ -1119,24 +1118,6 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                     style={{ width: 130, height: 32, padding: '0 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.76rem' }}
                   />
                 </div>
-
-                <button
-                  type="button"
-                  onClick={() => setSimNight(!simNight)}
-                  style={{
-                    height: 32,
-                    padding: '0 10px',
-                    borderRadius: 6,
-                    border: '1px solid #CBD5E1',
-                    backgroundColor: simNight ? '#0F172A' : '#F8FAFC',
-                    color: simNight ? '#FFFFFF' : '#334155',
-                    fontSize: '0.72rem',
-                    fontWeight: 600,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {simNight ? `Noturno (+${config.nightSurchargePercent || 0}%)` : 'Diurno'}
-                </button>
               </div>
             </div>
 
@@ -1160,7 +1141,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                     const simResult = StorageService.calculateRidePrice(
                       simKm,
                       simMin,
-                      simNight ? '23:00' : '14:00',
+                      '14:00',
                       { ...config, rideCategories: categories },
                       cat.id,
                       simCity || undefined

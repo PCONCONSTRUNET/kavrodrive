@@ -266,7 +266,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   const [pricePerKmStr, setPricePerKmStr] = useState<string>(formatCurrencyValue(config.pricePerKm));
   const [pricePerMinuteStr, setPricePerMinuteStr] = useState<string>(formatCurrencyValue(config.pricePerMinute));
   const [minimumFareStr, setMinimumFareStr] = useState<string>(formatCurrencyValue(config.minimumFare));
-  const [nightSurchargeStr, setSetNightSurchargeStr] = useState<string>(String(config.nightSurchargePercent ?? 20));
   const [whatsappStr, setWhatsappStr] = useState<string>(formatPhone(config.companyWhatsapp));
 
   // Sincroniza estados formatados apenas se o usuário não estiver editando na aba de configuração
@@ -277,7 +276,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     setPricePerKmStr(formatCurrencyValue(config.pricePerKm));
     setPricePerMinuteStr(formatCurrencyValue(config.pricePerMinute));
     setMinimumFareStr(formatCurrencyValue(config.minimumFare));
-    setSetNightSurchargeStr(String(config.nightSurchargePercent ?? 20));
     setWhatsappStr(formatPhone(config.companyWhatsapp));
   }, [config, isConfigDirty, activeTab]);
 
@@ -286,7 +284,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   const [simKmStr, setSimKmStr] = useState<string>('10');
   const [simMin, setSimMin] = useState<number>(15);
   const [simMinStr, setSimMinStr] = useState<string>('15');
-  const [simNight, setSimNight] = useState<boolean>(false);
   const [simPaymentMethod, setSimPaymentMethod] = useState<'pix' | 'cartao_credito' | 'carteira' | 'dinheiro'>('pix');
 
   // ==========================================
@@ -937,7 +934,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     const parsedKm = parseCurrencyToFloat(pricePerKmStr);
     const parsedMin = parseCurrencyToFloat(pricePerMinuteStr);
     const parsedFloor = parseCurrencyToFloat(minimumFareStr);
-    const parsedNight = Math.min(100, Math.max(0, parseInt(nightSurchargeStr, 10) || 0));
     const latest = StorageService.getConfig();
 
     const toSave: SystemConfig = {
@@ -947,7 +943,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
       pricePerKm: parsedKm,
       pricePerMinute: parsedMin,
       minimumFare: parsedFloor,
-      nightSurchargePercent: parsedNight,
+      nightSurchargePercent: 0,
       companyWhatsapp: cleanWhatsapp,
       companyPhone: formatPhone(whatsappStr)
     };
@@ -955,7 +951,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     setPricePerKmStr(formatCurrencyValue(parsedKm));
     setPricePerMinuteStr(formatCurrencyValue(parsedMin));
     setMinimumFareStr(formatCurrencyValue(parsedFloor));
-    setSetNightSurchargeStr(String(parsedNight));
     setCurrentConfig(toSave);
     setIsConfigDirty(false);
     await StorageService.saveConfig(toSave);
@@ -6402,7 +6397,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           const simPrice = StorageService.calculateRidePrice(
             simKm,
             simMin,
-            simNight ? '23:00' : '14:00',
+            '14:00',
             currentConfig
           );
 
@@ -6510,18 +6505,18 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 </div>
 
                 <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '16px 18px', border: '1px solid #E2E8F0' }}>
-                  <div style={{ fontSize: '0.74rem', fontWeight: 500, color: '#64748B' }}>Adicional Noturno (22h às 06h)</div>
-                  <div style={{ fontSize: '1.45rem', fontWeight: 700, color: '#0F172A', marginTop: 6 }}>
-                    +{currentConfig.nightSurchargePercent || 0}%
+                  <div style={{ fontSize: '0.74rem', fontWeight: 500, color: '#64748B' }}>Tarifação 24 Horas</div>
+                  <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#0F172A', marginTop: 6 }}>
+                    Tarifa Única
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 6 }}>
-                    Aplicado automaticamente em viagens noturnas
+                    Mesmo cálculo durante o dia e madrugada (padrão Uber)
                   </div>
                 </div>
 
                 <div style={{ backgroundColor: '#FFFFFF', borderRadius: 10, padding: '16px 18px', border: '1px solid #E2E8F0' }}>
                   <div style={{ fontSize: '0.74rem', fontWeight: 500, color: '#64748B' }}>
-                    Projeção ({simKm} km / {simMin} min • {simNight ? 'Noturno' : 'Diurno'})
+                    Projeção ({simKm} km / {simMin} min • Tarifa Única)
                   </div>
                   <div style={{ fontSize: '1.45rem', fontWeight: 700, color: '#15803D', marginTop: 6 }}>
                     {formatCurrency(simPrice.totalPrice)}
@@ -6717,50 +6712,14 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                   </div>
 
                   <div style={{
-                    padding: '12px 14px',
+                    padding: '10px 12px',
                     borderRadius: 8,
                     backgroundColor: '#F8FAFC',
                     border: '1px solid #E2E8F0',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 12
+                    fontSize: '0.72rem',
+                    color: '#475569'
                   }}>
-                    <div>
-                      <div style={{ fontSize: '0.76rem', fontWeight: 600, color: '#0F172A' }}>
-                        Adicional Noturno Automático (22h às 06h)
-                      </div>
-                      <div style={{ fontSize: '0.7rem', color: '#64748B', marginTop: 1 }}>
-                        Acréscimo percentual aplicado sobre corridas solicitadas entre 22:00 e 05:59
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        value={nightSurchargeStr}
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/\D/g, '').slice(0, 3);
-                          setIsConfigDirty(true);
-                          setSetNightSurchargeStr(raw);
-                          const val = Math.min(100, Math.max(0, parseInt(raw, 10) || 0));
-                          setCurrentConfig(prev => ({ ...prev, nightSurchargePercent: val }));
-                        }}
-                        style={{
-                          width: 64,
-                          height: 34,
-                          padding: '0 8px',
-                          borderRadius: 6,
-                          border: '1px solid #CBD5E1',
-                          fontSize: '0.82rem',
-                          fontWeight: 600,
-                          textAlign: 'center',
-                          color: '#0F172A',
-                          backgroundColor: '#FFFFFF'
-                        }}
-                      />
-                      <span style={{ fontSize: '0.78rem', color: '#475569', fontWeight: 600 }}>%</span>
-                    </div>
+                    Tarifação unificada 24h (sem adicional noturno fixo por horário).
                   </div>
                 </div>
 
@@ -6784,40 +6743,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                         <div style={{ fontSize: '0.73rem', color: '#64748B', marginTop: 2 }}>
                           Audite o cálculo exato cobrado do passageiro e o repasse líquido do motorista
                         </div>
-                      </div>
-
-                      <div style={{ display: 'inline-flex', borderRadius: 6, border: '1px solid #CBD5E1', overflow: 'hidden' }}>
-                        <button
-                          type="button"
-                          onClick={() => setSimNight(false)}
-                          style={{
-                            padding: '5px 10px',
-                            border: 'none',
-                            backgroundColor: !simNight ? '#0F172A' : '#FFFFFF',
-                            color: !simNight ? '#FFFFFF' : '#475569',
-                            fontSize: '0.72rem',
-                            fontWeight: 600,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Diurno
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSimNight(true)}
-                          style={{
-                            padding: '5px 10px',
-                            border: 'none',
-                            borderLeft: '1px solid #CBD5E1',
-                            backgroundColor: simNight ? '#0F172A' : '#FFFFFF',
-                            color: simNight ? '#FFFFFF' : '#475569',
-                            fontSize: '0.72rem',
-                            fontWeight: 600,
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Noturno (+{currentConfig.nightSurchargePercent || 0}%)
-                        </button>
                       </div>
                     </div>
 
@@ -6935,14 +6860,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                           {formatCurrency(currentConfig.baseFare + simPrice.breakdown.distanceCost + simPrice.breakdown.timeCost)}
                         </strong>
                       </div>
-                      {simNight && (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', color: '#475569' }}>
-                          <span>Adicional Noturno (+{currentConfig.nightSurchargePercent || 0}%):</span>
-                          <strong style={{ color: '#0F172A' }}>
-                            +{formatCurrency(simPrice.breakdown.nightSurchargeAmount || 0)}
-                          </strong>
-                        </div>
-                      )}
                       <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px solid #E2E8F0', fontSize: '0.82rem' }}>
                         <span style={{ fontWeight: 600, color: '#0F172A' }}>Total Cobrado do Passageiro:</span>
                         <strong style={{ fontWeight: 700, color: '#0F172A' }}>{formatCurrency(simPrice.totalPrice)}</strong>
