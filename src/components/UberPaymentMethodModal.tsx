@@ -69,7 +69,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
         maxWidth: 480,
         margin: '0 auto',
         backgroundColor: '#FFFFFF',
-        zIndex: 110,
+        zIndex: 10050,
         display: 'flex',
         flexDirection: 'column',
         color: '#0F172A',

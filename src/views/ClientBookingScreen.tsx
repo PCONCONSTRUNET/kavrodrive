@@ -1905,6 +1905,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         }}
         onOpenMapPicker={(field) => setMapPickerField(field)}
         onSelectOrigin={(pt) => setOrigin(pt)}
+        onSelectDestination={(pt) => setDestination(pt)}
         onSwapOriginDest={() => {
           const prevOrigin = origin;
           setOrigin(destination);
@@ -1976,7 +1977,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           position: 'fixed',
           inset: 0,
           backgroundColor: '#FFFFFF',
-          zIndex: 9999,
+          zIndex: 10090,
           display: 'flex',
           justifyContent: 'center'
         }}>
@@ -2156,7 +2157,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       {/* =====================================================================
           ETAPA 2 ESTILO UBER: MAPA + BOTTOM SHEET "ESCOLHER UMA VIAGEM" (PRINT 3)
          ===================================================================== */}
-      <div style={{ position: 'relative', flex: '0 0 42dvh', minHeight: 215, width: '100%' }}>
+      <div style={{ position: 'relative', flex: '0 0 42dvh', minHeight: 215, width: '100%', isolation: 'isolate', zIndex: 1 }}>
         <PassengerLiveMap
           origin={origin}
           destination={destination}
@@ -2164,18 +2165,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         />
 
         {/* Topo Flutuante: Voltar + Pílula da Rota (Partida → Destino) + Motoristas */}
-        <div style={{
-          position: 'absolute',
-          top: 'calc(12px + env(safe-area-inset-top, 0px))',
-          left: 12,
-          right: 12,
-          zIndex: 400,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 8,
-          pointerEvents: 'none'
-        }}>
+        {bookingStep === 'choose' && (
+          <div style={{
+            position: 'absolute',
+            top: 'calc(12px + env(safe-area-inset-top, 0px))',
+            left: 12,
+            right: 12,
+            zIndex: 400,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            pointerEvents: 'none'
+          }}>
           <button
             type="button"
             onClick={() => setBookingStep('plan')}
@@ -2270,9 +2272,10 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             <span>{onlineDriversCount}</span>
           </div>
         </div>
+        )}
 
         {/* Badge discreta de distância e duração */}
-        {origin && destination && (
+        {bookingStep === 'choose' && origin && destination && (
           <div style={{
             position: 'absolute',
             bottom: 28,
@@ -2674,7 +2677,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             inset: 0,
             backgroundColor: 'rgba(15, 23, 42, 0.55)',
             backdropFilter: 'blur(4px)',
-            zIndex: 120,
+            zIndex: 10060,
             display: 'flex',
             alignItems: 'flex-end',
             justifyContent: 'center',
@@ -2785,7 +2788,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             inset: 0,
             backgroundColor: 'rgba(15, 23, 42, 0.55)',
             backdropFilter: 'blur(4px)',
-            zIndex: 120,
+            zIndex: 10060,
             display: 'flex',
             alignItems: 'flex-end',
             justifyContent: 'center',

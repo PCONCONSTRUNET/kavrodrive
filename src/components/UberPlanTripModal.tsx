@@ -17,7 +17,6 @@ import {
 import { ClientProfile, LocationPoint, ServiceCategoryType } from '../types';
 import {
   calculateHaversineDistance,
-  POPULAR_LOCAL_POINTS,
   reverseGeocode,
   searchAddressGeocode,
 } from '../utils/geo';
@@ -40,6 +39,7 @@ interface UberPlanTripModalProps {
   onChangePassengers: (count: number, luggage: boolean, notes: string) => void;
   onOpenMapPicker: (field: 'origin' | 'destination') => void;
   onSelectOrigin: (pt: LocationPoint | null) => void;
+  onSelectDestination?: (pt: LocationPoint | null) => void;
   onSwapOriginDest: () => void;
   onCompleteRoute: (orig: LocationPoint, dest: LocationPoint) => void;
 }
@@ -81,6 +81,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
   onChangePassengers,
   onOpenMapPicker,
   onSelectOrigin,
+  onSelectDestination,
   onSwapOriginDest,
   onCompleteRoute,
 }) => {
@@ -182,8 +183,10 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
     setGpsNotice('');
     if (field === 'origin') {
       setOriginInput(value);
+      if (!value.trim()) onSelectOrigin(null);
     } else {
       setDestInput(value);
+      if (!value.trim()) onSelectDestination?.(null);
     }
     runSearch(value);
   };
@@ -286,6 +289,8 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
       ) {
         return;
       }
+      if (activeField === 'destination' && origin && sa.address === origin.address) return;
+      if (activeField === 'origin' && destination && sa.address === destination.address) return;
       items.push({
         key: `saved-${sa.id}`,
         title: sa.label,
@@ -296,14 +301,20 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
       });
     });
 
-    recentDestinations.slice(0, 5).forEach((rec, idx) => {
+    const recentCap = normalizedFilter.length >= 2 ? 4 : 2;
+    let addedRecents = 0;
+    for (let idx = 0; idx < recentDestinations.length && addedRecents < recentCap; idx++) {
+      const rec = recentDestinations[idx];
       if (
         normalizedFilter.length >= 2 &&
         !rec.address.toLowerCase().includes(normalizedFilter) &&
         !(rec.reference || '').toLowerCase().includes(normalizedFilter)
       ) {
-        return;
+        continue;
       }
+      if (activeField === 'destination' && origin && rec.address === origin.address) continue;
+      if (activeField === 'origin' && destination && rec.address === destination.address) continue;
+      if (items.some((it) => it.point.address === rec.address)) continue;
       const { title, subtitle } = splitPlaceHeadline(rec.address);
       items.push({
         key: `recent-${idx}-${rec.address}`,
@@ -313,24 +324,11 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
         point: rec,
         kind: 'recent',
       });
-    });
-
-    if (items.length < 5) {
-      POPULAR_LOCAL_POINTS.slice(0, 6).forEach((p, idx) => {
-        if (items.some((it) => it.point.address === p.name)) return;
-        items.push({
-          key: `pop-${idx}`,
-          title: p.name,
-          subtitle: p.subtitle,
-          distanceKm: computeDist(p.lat, p.lng),
-          point: { address: p.name, lat: p.lat, lng: p.lng },
-          kind: 'popular',
-        });
-      });
+      addedRecents++;
     }
 
     return items;
-  }, [results, savedAddresses, recentDestinations, activeQuery, origin]);
+  }, [results, savedAddresses, recentDestinations, activeQuery, activeField, origin, destination]);
 
   const schedulePillLabel = useMemo(() => {
     if (scheduleMode !== 'later' || !scheduledDate || !scheduledTime) return 'Ir agora';
@@ -349,7 +347,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
         maxWidth: 480,
         margin: '0 auto',
         backgroundColor: '#FFFFFF',
-        zIndex: 90,
+        zIndex: 10040,
         display: 'flex',
         flexDirection: 'column',
         color: '#0F172A',
@@ -824,6 +822,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
                   type="button"
                   aria-label="Limpar destino"
                   onClick={() => {
+                    onSelectDestination?.(null);
                     setDestInput('');
                     setActiveField('destination');
                     setResults([]);
@@ -1032,15 +1031,17 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
           </button>
         ))}
 
-        {/* Opções fixas estilo Uber (Cidade diferente + Mapa) */}
+        {/* Opções fixas estilo Uber (Cidade diferente + Mais resultados + Mapa) */}
         <button
           type="button"
           onClick={() => {
             if (activeField === 'origin') {
               setOriginInput('');
+              onSelectOrigin(null);
               originRef.current?.focus();
             } else {
               setDestInput('');
+              onSelectDestination?.(null);
               destRef.current?.focus();
             }
           }}
@@ -1076,6 +1077,53 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
             Pesquisar em uma cidade diferente
           </span>
         </button>
+
+        {activeQuery.trim().length >= 2 && (
+          <button
+            type="button"
+            onClick={() => runSearch(activeQuery)}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '13px 4px',
+              background: 'none',
+              border: 'none',
+              borderBottom: '1px solid #F1F5F9',
+              textAlign: 'left',
+              cursor: 'pointer',
+            }}
+          >
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                backgroundColor: '#F1F5F9',
+                color: '#0F172A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <Search size={16} />
+            </div>
+            <span
+              style={{
+                fontSize: '0.9rem',
+                fontWeight: 700,
+                color: '#0F172A',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              Obtenha mais resultados para {activeQuery.trim()}
+            </span>
+          </button>
+        )}
 
         <button
           type="button"
