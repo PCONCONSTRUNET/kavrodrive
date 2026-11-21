@@ -78,6 +78,20 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
   const logos = activeItems.filter((item) => item.displayMode !== 'banner');
   const isDark = variant === 'dark';
 
+  const buildLoopHalf = <T,>(itemsList: T[], minItems: number): T[] => {
+    if (itemsList.length === 0) return [];
+    const out: T[] = [];
+    while (out.length < minItems) {
+      out.push(...itemsList);
+    }
+    return out;
+  };
+
+  const bannerLoopHalf = buildLoopHalf(banners, 4);
+  const logoLoopHalf = buildLoopHalf(logos, 8);
+  const bannerDurationSec = Math.max(22, bannerLoopHalf.length * 7);
+  const logoDurationSec = Math.max(22, logoLoopHalf.length * 3.5);
+
   const handleItemClick = (linkUrl?: string) => {
     const safeUrl = sanitizePartnerHref(linkUrl);
     if (!safeUrl) return;
@@ -216,206 +230,292 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
             </button>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              {/* Banners em Destaque (mesma proporção 9:2 / 4,5:1 em todas as áreas) */}
+              {/* Banners em Destaque (loop contínuo lento na Home oficial; estático apenas no preview do Admin) */}
               {banners.length > 0 && (
-                <div
-                  style={
-                    isMobile
-                      ? {
-                          display: 'flex',
-                          gap: banners.length === 1 ? 0 : 8,
-                          overflowX: 'auto',
-                          scrollSnapType: 'x mandatory',
-                          margin: '0 -8px',
-                          width: 'calc(100% + 16px)',
-                        }
-                      : compactPreview
-                        ? {
-                            display: 'grid',
-                            gridTemplateColumns:
-                              banners.length === 1
-                                ? 'minmax(0, 360px)'
-                                : 'repeat(auto-fill, minmax(220px, 1fr))',
-                            gap: 8,
-                          }
-                        : {
-                            display: 'grid',
-                            gridTemplateColumns:
-                              banners.length === 1
-                                ? 'minmax(0, 480px)'
-                                : banners.length === 2
-                                  ? 'repeat(2, minmax(0, 480px))'
-                                  : 'repeat(3, minmax(0, 1fr))',
-                            gap: 14,
-                          }
-                  }
-                >
-                  {banners.map((banner) => {
-                    const safeHref = sanitizePartnerHref(banner.linkUrl);
-                    return (
-                      <div
-                        key={banner.id}
-                        role={safeHref ? 'button' : undefined}
-                        tabIndex={safeHref ? 0 : undefined}
-                        onClick={() => handleItemClick(banner.linkUrl)}
-                        onKeyDown={(e) => {
-                          if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
-                            e.preventDefault();
-                            handleItemClick(banner.linkUrl);
-                          }
-                        }}
-                        style={{
-                          position: 'relative',
-                          flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 92%') : undefined,
-                          width: !isMobile || banners.length === 1 ? '100%' : undefined,
-                          aspectRatio: '9 / 2',
-                          scrollSnapAlign: 'start',
-                          borderRadius: compactPreview ? 10 : 12,
-                          overflow: 'hidden',
-                          backgroundColor: '#131B23',
-                          border: '1px solid rgba(255, 255, 255, 0.12)',
-                          boxShadow: '0 8px 22px rgba(0, 0, 0, 0.24)',
-                          cursor: safeHref ? 'pointer' : 'default',
-                        }}
-                      >
-                        <img
-                          src={banner.imageUrl}
-                          alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
-                          style={{
-                            width: '100%',
-                            height: '100%',
-                            objectFit: 'cover',
-                            objectPosition: 'center',
-                            display: 'block',
-                          }}
-                        />
+                compactPreview ? (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns:
+                        banners.length === 1
+                          ? 'minmax(0, 360px)'
+                          : 'repeat(auto-fill, minmax(220px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {banners.map((banner) => {
+                      const safeHref = sanitizePartnerHref(banner.linkUrl);
+                      return (
                         <div
-                          style={{
-                            position: 'absolute',
-                            top: 6,
-                            right: 8,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            padding: '2px 7px',
-                            borderRadius: 999,
-                            backgroundColor: 'rgba(11, 18, 24, 0.64)',
-                            backdropFilter: 'blur(6px)',
-                            border: '1px solid rgba(255, 255, 255, 0.14)',
-                            color: '#FFFFFF',
-                            fontSize: '0.54rem',
-                            fontWeight: 700,
-                            letterSpacing: '0.04em',
-                            textTransform: 'uppercase',
+                          key={banner.id}
+                          role={safeHref ? 'button' : undefined}
+                          tabIndex={safeHref ? 0 : undefined}
+                          onClick={() => handleItemClick(banner.linkUrl)}
+                          onKeyDown={(e) => {
+                            if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
+                              e.preventDefault();
+                              handleItemClick(banner.linkUrl);
+                            }
                           }}
-                        >
-                          <span>{banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
-                          {safeHref && <ExternalLink size={10} color="#76D800" />}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {/* Faixa de Logos de Parceiros & Patrocinadores */}
-              {logos.length > 0 && (
-                <div
-                  style={
-                    isMobile
-                      ? {
-                          display: 'flex',
-                          gap: 10,
-                          overflowX: 'auto',
-                          scrollSnapType: 'x mandatory',
-                          paddingBottom: 4,
-                        }
-                      : compactPreview
-                        ? {
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))',
-                            gap: 8,
-                          }
-                        : {
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 148px))',
-                            gap: 12,
-                          }
-                  }
-                >
-                  {logos.map((logo) => {
-                    const safeHref = sanitizePartnerHref(logo.linkUrl);
-                    return (
-                      <div
-                        key={logo.id}
-                        role={safeHref ? 'button' : undefined}
-                        tabIndex={safeHref ? 0 : undefined}
-                        onClick={() => handleItemClick(logo.linkUrl)}
-                        onKeyDown={(e) => {
-                          if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
-                            e.preventDefault();
-                            handleItemClick(logo.linkUrl);
-                          }
-                        }}
-                        style={{
-                          flex: isMobile ? '0 0 132px' : undefined,
-                          scrollSnapAlign: 'start',
-                          backgroundColor: '#131B23',
-                          border: '1px solid rgba(255, 255, 255, 0.1)',
-                          borderRadius: compactPreview ? 8 : 10,
-                          padding: compactPreview ? '8px' : '10px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          textAlign: 'center',
-                          gap: compactPreview ? 5 : 6,
-                          cursor: safeHref ? 'pointer' : 'default',
-                        }}
-                      >
-                        <div
                           style={{
+                            position: 'relative',
                             width: '100%',
-                            height: compactPreview ? 44 : 54,
-                            borderRadius: compactPreview ? 7 : 10,
-                            backgroundColor: 'rgba(255, 255, 255, 0.96)',
-                            padding: compactPreview ? '4px 6px' : '6px 10px',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
+                            aspectRatio: '9 / 2',
+                            borderRadius: 10,
                             overflow: 'hidden',
+                            backgroundColor: '#131B23',
+                            border: '1px solid rgba(255, 255, 255, 0.12)',
+                            boxShadow: '0 8px 22px rgba(0, 0, 0, 0.24)',
+                            cursor: safeHref ? 'pointer' : 'default',
                           }}
                         >
                           <img
-                            src={logo.imageUrl}
-                            alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
-                            style={{
-                              maxWidth: '100%',
-                              maxHeight: '100%',
-                              objectFit: 'contain',
-                              display: 'block',
-                            }}
+                            src={banner.imageUrl}
+                            alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
                           />
                         </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="kavro-marquee" style={{ borderRadius: 12 }}>
+                    <div
+                      className="kavro-marquee-track"
+                      style={{ animationDuration: `${bannerDurationSec}s` }}
+                    >
+                      {[0, 1].map((dupIdx) =>
+                        bannerLoopHalf.map((banner, idx) => {
+                          const safeHref = sanitizePartnerHref(banner.linkUrl);
+                          return (
+                            <div
+                              key={`${dupIdx}-${idx}-${banner.id}`}
+                              role={safeHref ? 'button' : undefined}
+                              tabIndex={safeHref ? 0 : undefined}
+                              onClick={() => handleItemClick(banner.linkUrl)}
+                              onKeyDown={(e) => {
+                                if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
+                                  e.preventDefault();
+                                  handleItemClick(banner.linkUrl);
+                                }
+                              }}
+                              style={{
+                                position: 'relative',
+                                flex: '0 0 auto',
+                                width: isMobile ? 'min(84vw, 350px)' : 420,
+                                marginRight: isMobile ? 10 : 14,
+                                aspectRatio: '9 / 2',
+                                borderRadius: 12,
+                                overflow: 'hidden',
+                                backgroundColor: '#131B23',
+                                border: '1px solid rgba(255, 255, 255, 0.12)',
+                                boxShadow: '0 8px 22px rgba(0, 0, 0, 0.24)',
+                                cursor: safeHref ? 'pointer' : 'default',
+                              }}
+                            >
+                              <img
+                                src={banner.imageUrl}
+                                alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
+                                style={{
+                                  width: '100%',
+                                  height: '100%',
+                                  objectFit: 'cover',
+                                  objectPosition: 'center',
+                                  display: 'block',
+                                }}
+                              />
+                              <div
+                                style={{
+                                  position: 'absolute',
+                                  top: 6,
+                                  right: 8,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  padding: '2px 7px',
+                                  borderRadius: 999,
+                                  backgroundColor: 'rgba(11, 18, 24, 0.64)',
+                                  backdropFilter: 'blur(6px)',
+                                  border: '1px solid rgba(255, 255, 255, 0.14)',
+                                  color: '#FFFFFF',
+                                  fontSize: '0.54rem',
+                                  fontWeight: 700,
+                                  letterSpacing: '0.04em',
+                                  textTransform: 'uppercase',
+                                }}
+                              >
+                                <span>{banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                                {safeHref && <ExternalLink size={10} color="#76D800" />}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )
+              )}
+
+              {/* Faixa de Logos de Parceiros & Patrocinadores (loop contínuo lento na Home) */}
+              {logos.length > 0 && (
+                compactPreview ? (
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))',
+                      gap: 8,
+                    }}
+                  >
+                    {logos.map((logo) => {
+                      const safeHref = sanitizePartnerHref(logo.linkUrl);
+                      return (
                         <div
+                          key={logo.id}
+                          role={safeHref ? 'button' : undefined}
+                          tabIndex={safeHref ? 0 : undefined}
+                          onClick={() => handleItemClick(logo.linkUrl)}
+                          onKeyDown={(e) => {
+                            if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
+                              e.preventDefault();
+                              handleItemClick(logo.linkUrl);
+                            }
+                          }}
                           style={{
-                            display: 'inline-flex',
+                            backgroundColor: '#131B23',
+                            border: '1px solid rgba(255, 255, 255, 0.1)',
+                            borderRadius: 8,
+                            padding: '8px',
+                            display: 'flex',
+                            flexDirection: 'column',
                             alignItems: 'center',
-                            gap: 4,
-                            fontSize: '0.62rem',
-                            fontWeight: 700,
-                            color: logo.kind === 'patrocinador' ? '#8CE826' : '#CBD5E1',
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.04em',
+                            justifyContent: 'center',
+                            textAlign: 'center',
+                            gap: 5,
+                            cursor: safeHref ? 'pointer' : 'default',
                           }}
                         >
-                          <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
-                          {safeHref && <ExternalLink size={10} />}
+                          <div
+                            style={{
+                              width: '100%',
+                              height: 44,
+                              borderRadius: 7,
+                              backgroundColor: 'rgba(255, 255, 255, 0.96)',
+                              padding: '4px 6px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <img
+                              src={logo.imageUrl}
+                              alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
+                              style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }}
+                            />
+                          </div>
+                          <div
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: '0.62rem',
+                              fontWeight: 700,
+                              color: logo.kind === 'patrocinador' ? '#8CE826' : '#CBD5E1',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.04em',
+                            }}
+                          >
+                            <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                            {safeHref && <ExternalLink size={10} />}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="kavro-marquee">
+                    <div
+                      className="kavro-marquee-track"
+                      style={{ animationDuration: `${logoDurationSec}s` }}
+                    >
+                      {[0, 1].map((dupIdx) =>
+                        logoLoopHalf.map((logo, idx) => {
+                          const safeHref = sanitizePartnerHref(logo.linkUrl);
+                          return (
+                            <div
+                              key={`${dupIdx}-${idx}-${logo.id}`}
+                              role={safeHref ? 'button' : undefined}
+                              tabIndex={safeHref ? 0 : undefined}
+                              onClick={() => handleItemClick(logo.linkUrl)}
+                              onKeyDown={(e) => {
+                                if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
+                                  e.preventDefault();
+                                  handleItemClick(logo.linkUrl);
+                                }
+                              }}
+                              style={{
+                                flex: '0 0 132px',
+                                width: 132,
+                                marginRight: 12,
+                                backgroundColor: '#131B23',
+                                border: '1px solid rgba(255, 255, 255, 0.1)',
+                                borderRadius: 10,
+                                padding: '10px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                textAlign: 'center',
+                                gap: 6,
+                                cursor: safeHref ? 'pointer' : 'default',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  width: '100%',
+                                  height: 54,
+                                  borderRadius: 10,
+                                  backgroundColor: 'rgba(255, 255, 255, 0.96)',
+                                  padding: '6px 10px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                  overflow: 'hidden',
+                                }}
+                              >
+                                <img
+                                  src={logo.imageUrl}
+                                  alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
+                                  style={{
+                                    maxWidth: '100%',
+                                    maxHeight: '100%',
+                                    objectFit: 'contain',
+                                    display: 'block',
+                                  }}
+                                />
+                              </div>
+                              <div
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  fontSize: '0.62rem',
+                                  fontWeight: 700,
+                                  color: logo.kind === 'patrocinador' ? '#8CE826' : '#CBD5E1',
+                                  textTransform: 'uppercase',
+                                  letterSpacing: '0.04em',
+                                }}
+                              >
+                                <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                                {safeHref && <ExternalLink size={10} />}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )
               )}
             </div>
           )}
@@ -510,166 +610,277 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           {banners.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                gap: banners.length === 1 ? 0 : 8,
-                overflowX: 'auto',
-                scrollSnapType: 'x mandatory',
-                width: '100%',
-                padding: compactPreview ? '0 8px' : '0 10px',
-                boxSizing: 'border-box',
-              }}
-            >
-              {banners.map((banner) => {
-                const safeHref = sanitizePartnerHref(banner.linkUrl);
-                return (
-                  <div
-                    key={banner.id}
-                    role={safeHref ? 'button' : undefined}
-                    tabIndex={safeHref ? 0 : undefined}
-                    onClick={() => handleItemClick(banner.linkUrl)}
-                    onKeyDown={(e) => {
-                      if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
-                        e.preventDefault();
-                        handleItemClick(banner.linkUrl);
-                      }
-                    }}
-                    style={{
-                      position: 'relative',
-                      flex: banners.length === 1 ? '0 0 100%' : '0 0 92%',
-                      width: banners.length === 1 ? '100%' : undefined,
-                      aspectRatio: '9 / 2',
-                      scrollSnapAlign: 'start',
-                      borderRadius: compactPreview ? 12 : 16,
-                      overflow: 'hidden',
-                      border: '1px solid #E2E8F0',
-                      boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
-                      cursor: safeHref ? 'pointer' : 'default',
-                      backgroundColor: '#0F172A',
-                    }}
-                  >
-                    <img
-                      src={banner.imageUrl}
-                      alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
-                      style={{
-                        width: '100%',
-                        height: '100%',
-                        objectFit: 'cover',
-                        objectPosition: 'center',
-                        display: 'block',
-                      }}
-                    />
+            compactPreview ? (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: banners.length === 1 ? 0 : 8,
+                  overflowX: 'auto',
+                  padding: '0 8px',
+                  boxSizing: 'border-box',
+                }}
+              >
+                {banners.map((banner) => {
+                  const safeHref = sanitizePartnerHref(banner.linkUrl);
+                  return (
                     <div
+                      key={banner.id}
+                      role={safeHref ? 'button' : undefined}
+                      tabIndex={safeHref ? 0 : undefined}
+                      onClick={() => handleItemClick(banner.linkUrl)}
                       style={{
-                        position: 'absolute',
-                        top: 5,
-                        right: 8,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        padding: '2px 7px',
-                        borderRadius: 999,
-                        backgroundColor: 'rgba(15, 23, 42, 0.56)',
-                        backdropFilter: 'blur(6px)',
-                        color: '#FFFFFF',
-                        fontSize: '0.54rem',
-                        fontWeight: 700,
-                        letterSpacing: '0.03em',
-                      }}
-                    >
-                      <span>{banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
-                      {safeHref && <ExternalLink size={9} color="#76D800" />}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-
-          {logos.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                gap: 10,
-                overflowX: 'auto',
-                scrollSnapType: 'x mandatory',
-                padding: '0 16px 2px 16px',
-              }}
-            >
-              {logos.map((logo) => {
-                const safeHref = sanitizePartnerHref(logo.linkUrl);
-                return (
-                  <div
-                    key={logo.id}
-                    role={safeHref ? 'button' : undefined}
-                    tabIndex={safeHref ? 0 : undefined}
-                    onClick={() => handleItemClick(logo.linkUrl)}
-                    onKeyDown={(e) => {
-                      if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
-                        e.preventDefault();
-                        handleItemClick(logo.linkUrl);
-                      }
-                    }}
-                    style={{
-                      flex: compactPreview ? '0 0 112px' : '0 0 132px',
-                      scrollSnapAlign: 'start',
-                      backgroundColor: '#FFFFFF',
-                      border: '1px solid #E2E8F0',
-                      borderRadius: 14,
-                      padding: compactPreview ? '8px' : '10px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      textAlign: 'center',
-                      gap: 6,
-                      boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)',
-                      cursor: safeHref ? 'pointer' : 'default',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: '100%',
-                        height: compactPreview ? 44 : 54,
-                        borderRadius: 10,
-                        backgroundColor: '#F8FAFC',
-                        padding: '5px 8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
+                        position: 'relative',
+                        flex: banners.length === 1 ? '0 0 100%' : '0 0 92%',
+                        width: banners.length === 1 ? '100%' : undefined,
+                        aspectRatio: '9 / 2',
+                        borderRadius: 12,
                         overflow: 'hidden',
+                        border: '1px solid #E2E8F0',
+                        boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
+                        cursor: safeHref ? 'pointer' : 'default',
+                        backgroundColor: '#0F172A',
                       }}
                     >
                       <img
-                        src={logo.imageUrl}
-                        alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
-                        style={{
-                          maxWidth: '100%',
-                          maxHeight: '100%',
-                          objectFit: 'contain',
-                          display: 'block',
-                        }}
+                        src={banner.imageUrl}
+                        alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'center', display: 'block' }}
                       />
                     </div>
-                    <span
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="kavro-marquee">
+                <div
+                  className="kavro-marquee-track"
+                  style={{ animationDuration: `${bannerDurationSec}s` }}
+                >
+                  {[0, 1].map((dupIdx) =>
+                    bannerLoopHalf.map((banner, idx) => {
+                      const safeHref = sanitizePartnerHref(banner.linkUrl);
+                      return (
+                        <div
+                          key={`${dupIdx}-${idx}-${banner.id}`}
+                          role={safeHref ? 'button' : undefined}
+                          tabIndex={safeHref ? 0 : undefined}
+                          onClick={() => handleItemClick(banner.linkUrl)}
+                          onKeyDown={(e) => {
+                            if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
+                              e.preventDefault();
+                              handleItemClick(banner.linkUrl);
+                            }
+                          }}
+                          style={{
+                            position: 'relative',
+                            flex: '0 0 auto',
+                            width: 'min(86vw, 360px)',
+                            marginRight: 10,
+                            aspectRatio: '9 / 2',
+                            borderRadius: 14,
+                            overflow: 'hidden',
+                            border: '1px solid #E2E8F0',
+                            boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
+                            cursor: safeHref ? 'pointer' : 'default',
+                            backgroundColor: '#0F172A',
+                          }}
+                        >
+                          <img
+                            src={banner.imageUrl}
+                            alt={banner.name?.trim() || (banner.kind === 'patrocinador' ? 'Banner Patrocinador' : 'Banner Parceiro')}
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                              objectPosition: 'center',
+                              display: 'block',
+                            }}
+                          />
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 5,
+                              right: 8,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              padding: '2px 7px',
+                              borderRadius: 999,
+                              backgroundColor: 'rgba(15, 23, 42, 0.56)',
+                              backdropFilter: 'blur(6px)',
+                              color: '#FFFFFF',
+                              fontSize: '0.54rem',
+                              fontWeight: 700,
+                              letterSpacing: '0.03em',
+                            }}
+                          >
+                            <span>{banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                            {safeHref && <ExternalLink size={9} color="#76D800" />}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )
+          )}
+
+          {logos.length > 0 && (
+            compactPreview ? (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 10,
+                  overflowX: 'auto',
+                  padding: '0 16px 2px 16px',
+                }}
+              >
+                {logos.map((logo) => {
+                  const safeHref = sanitizePartnerHref(logo.linkUrl);
+                  return (
+                    <div
+                      key={logo.id}
+                      role={safeHref ? 'button' : undefined}
+                      tabIndex={safeHref ? 0 : undefined}
+                      onClick={() => handleItemClick(logo.linkUrl)}
                       style={{
-                        display: 'inline-flex',
+                        flex: '0 0 112px',
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #E2E8F0',
+                        borderRadius: 14,
+                        padding: '8px',
+                        display: 'flex',
+                        flexDirection: 'column',
                         alignItems: 'center',
-                        gap: 4,
-                        fontSize: '0.58rem',
-                        fontWeight: 700,
-                        color: logo.kind === 'patrocinador' ? '#15803D' : '#475569',
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.03em',
+                        textAlign: 'center',
+                        gap: 6,
+                        boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)',
+                        cursor: safeHref ? 'pointer' : 'default',
                       }}
                     >
-                      <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
-                      {safeHref && <ExternalLink size={9} />}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+                      <div
+                        style={{
+                          width: '100%',
+                          height: 44,
+                          borderRadius: 10,
+                          backgroundColor: '#F8FAFC',
+                          padding: '5px 8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <img
+                          src={logo.imageUrl}
+                          alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
+                          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', display: 'block' }}
+                        />
+                      </div>
+                      <span
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
+                          fontSize: '0.58rem',
+                          fontWeight: 700,
+                          color: logo.kind === 'patrocinador' ? '#15803D' : '#475569',
+                          textTransform: 'uppercase',
+                          letterSpacing: '0.03em',
+                        }}
+                      >
+                        <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                        {safeHref && <ExternalLink size={9} />}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="kavro-marquee">
+                <div
+                  className="kavro-marquee-track"
+                  style={{ animationDuration: `${logoDurationSec}s` }}
+                >
+                  {[0, 1].map((dupIdx) =>
+                    logoLoopHalf.map((logo, idx) => {
+                      const safeHref = sanitizePartnerHref(logo.linkUrl);
+                      return (
+                        <div
+                          key={`${dupIdx}-${idx}-${logo.id}`}
+                          role={safeHref ? 'button' : undefined}
+                          tabIndex={safeHref ? 0 : undefined}
+                          onClick={() => handleItemClick(logo.linkUrl)}
+                          onKeyDown={(e) => {
+                            if (safeHref && (e.key === 'Enter' || e.key === ' ')) {
+                              e.preventDefault();
+                              handleItemClick(logo.linkUrl);
+                            }
+                          }}
+                          style={{
+                            flex: '0 0 132px',
+                            width: 132,
+                            marginRight: 10,
+                            backgroundColor: '#FFFFFF',
+                            border: '1px solid #E2E8F0',
+                            borderRadius: 14,
+                            padding: '10px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            textAlign: 'center',
+                            gap: 6,
+                            boxShadow: '0 2px 10px rgba(15, 23, 42, 0.04)',
+                            cursor: safeHref ? 'pointer' : 'default',
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: '100%',
+                              height: 54,
+                              borderRadius: 10,
+                              backgroundColor: '#F8FAFC',
+                              padding: '5px 8px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              overflow: 'hidden',
+                            }}
+                          >
+                            <img
+                              src={logo.imageUrl}
+                              alt={logo.name?.trim() || (logo.kind === 'patrocinador' ? 'Logo Patrocinador' : 'Logo Parceiro')}
+                              style={{
+                                maxWidth: '100%',
+                                maxHeight: '100%',
+                                objectFit: 'contain',
+                                display: 'block',
+                              }}
+                            />
+                          </div>
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: '0.58rem',
+                              fontWeight: 700,
+                              color: logo.kind === 'patrocinador' ? '#15803D' : '#475569',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.03em',
+                            }}
+                          >
+                            <span>{logo.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                            {safeHref && <ExternalLink size={9} />}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )
           )}
         </div>
       )}

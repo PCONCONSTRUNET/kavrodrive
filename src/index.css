@@ -615,6 +615,31 @@ input, select, textarea {
   animation: kavroTextSwap 0.32s ease-out;
 }
 
+/* Loop contínuo lento e suave para faixas de banners e logos de parceiros */
+@keyframes kavroMarqueeLoop {
+  0% { transform: translate3d(0, 0, 0); }
+  100% { transform: translate3d(-50%, 0, 0); }
+}
+
+.kavro-marquee {
+  overflow: hidden;
+  width: 100%;
+}
+
+.kavro-marquee-track {
+  display: flex;
+  width: max-content;
+  animation-name: kavroMarqueeLoop;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  will-change: transform;
+}
+
+.kavro-marquee:hover .kavro-marquee-track,
+.kavro-marquee:active .kavro-marquee-track {
+  animation-play-state: paused;
+}
+
 /* =========================================================
    BARRA LATERAL (DRAWER) & BARRA DE RODAPÉ (BOTTOM NAV)
    ========================================================= */
