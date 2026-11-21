@@ -17,13 +17,19 @@ import {
 import { ClientProfile, LocationPoint, ServiceCategoryType } from '../types';
 import {
   calculateHaversineDistance,
+  CityOrCepSuggestion,
   reverseGeocode,
   searchAddressGeocode,
+  searchCitiesAndViaCep,
 } from '../utils/geo';
 import { StorageService } from '../services/storage';
+import { InlineMapPinView } from './InlineMapPinView';
 
 interface UberPlanTripModalProps {
   isOpen: boolean;
+  embedded?: boolean;
+  initialFocusField?: 'origin' | 'destination';
+  initialOpenSchedule?: boolean;
   origin: LocationPoint | null;
   destination: LocationPoint | null;
   serviceMode: ServiceCategoryType;
@@ -37,7 +43,7 @@ interface UberPlanTripModalProps {
   onBack: () => void;
   onChangeSchedule: (mode: 'now' | 'later', date: string, time: string) => void;
   onChangePassengers: (count: number, luggage: boolean, notes: string) => void;
-  onOpenMapPicker: (field: 'origin' | 'destination') => void;
+  onOpenMapPicker?: (field: 'origin' | 'destination') => void;
   onSelectOrigin: (pt: LocationPoint | null) => void;
   onSelectDestination?: (pt: LocationPoint | null) => void;
   onSwapOriginDest: () => void;
@@ -66,6 +72,9 @@ function splitPlaceHeadline(raw: string): { title: string; subtitle: string } {
 
 export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
   isOpen,
+  embedded = false,
+  initialFocusField,
+  initialOpenSchedule = false,
   origin,
   destination,
   serviceMode,
@@ -85,13 +94,18 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
   onSwapOriginDest,
   onCompleteRoute,
 }) => {
+  const [subView, setSubView] = useState<'plan' | 'city_search' | 'map_pin'>('plan');
   const [activeField, setActiveField] = useState<'origin' | 'destination'>(() =>
-    origin && !destination ? 'destination' : !origin ? 'origin' : 'destination'
+    initialFocusField || (origin && !destination ? 'destination' : !origin ? 'origin' : 'destination')
   );
   const [originInput, setOriginInput] = useState<string>(origin?.address || '');
   const [destInput, setDestInput] = useState<string>(destination?.address || '');
 
-  const [showSchedulePopover, setShowSchedulePopover] = useState<boolean>(false);
+  const [cityQuery, setCityQuery] = useState<string>('');
+  const [cityResults, setCityResults] = useState<CityOrCepSuggestion[]>([]);
+  const [isCitySearching, setIsCitySearching] = useState<boolean>(false);
+
+  const [showSchedulePopover, setShowSchedulePopover] = useState<boolean>(initialOpenSchedule);
   const [showPassengerPopover, setShowPassengerPopover] = useState<boolean>(false);
   const [draftDate, setDraftDate] = useState<string>(scheduledDate);
   const [draftTime, setDraftTime] = useState<string>(scheduledTime);
@@ -121,14 +135,15 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
 
   useEffect(() => {
     if (!isOpen) return;
+    setSubView('plan');
     setResults([]);
     setIsSearching(false);
     setGpsNotice('');
-    setShowSchedulePopover(false);
+    setShowSchedulePopover(Boolean(initialOpenSchedule));
     setShowPassengerPopover(false);
 
     const timer = setTimeout(() => {
-      if (!origin) {
+      if (initialFocusField === 'origin' || !origin) {
         setActiveField('origin');
         originRef.current?.focus();
       } else {
@@ -137,7 +152,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
       }
     }, 80);
     return () => clearTimeout(timer);
-  }, [isOpen]);
+  }, [isOpen, initialFocusField, initialOpenSchedule]);
 
   const recentDestinations = useMemo(
     () => (isOpen ? StorageService.getRecentDestinations() : []),
@@ -193,7 +208,12 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
 
   const handleUseCurrentGps = () => {
     if (!navigator.geolocation) {
-      onOpenMapPicker('origin');
+      if (onOpenMapPicker) {
+        onOpenMapPicker('origin');
+      } else {
+        setActiveField('origin');
+        setSubView('map_pin');
+      }
       return;
     }
     setIsLocatingGps(true);
@@ -336,12 +356,83 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
     return `${d}/${m} • ${scheduledTime}`;
   }, [scheduleMode, scheduledDate, scheduledTime]);
 
+  const handleCitySearchChange = async (value: string) => {
+    setCityQuery(value);
+    if (value.trim().length < 2) {
+      setCityResults([]);
+      setIsCitySearching(false);
+      return;
+    }
+    setIsCitySearching(true);
+    try {
+      const list = await searchCitiesAndViaCep(value);
+      setCityResults(list);
+    } catch {
+      setCityResults([]);
+    } finally {
+      setIsCitySearching(false);
+    }
+  };
+
+  const applyCityChoice = (rawCityLabel: string) => {
+    const cleanCity = rawCityLabel.replace(/,\s*BR$/i, '').trim();
+    if (activeField === 'origin') {
+      setOriginInput(cleanCity);
+      onSelectOrigin(null);
+    } else {
+      setDestInput(cleanCity);
+      onSelectDestination?.(null);
+    }
+    setSubView('plan');
+    runSearch(cleanCity);
+    setTimeout(() => {
+      if (activeField === 'origin') {
+        originRef.current?.focus();
+      } else {
+        destRef.current?.focus();
+      }
+    }, 60);
+  };
+
+  const handleConfirmMapPin = (pt: LocationPoint) => {
+    if (activeField === 'origin') {
+      onSelectOrigin(pt);
+      setOriginInput(pt.address);
+      if (destination) {
+        onCompleteRoute(pt, destination);
+        return;
+      }
+      setSubView('plan');
+      setActiveField('destination');
+      setTimeout(() => destRef.current?.focus(), 60);
+      return;
+    }
+
+    StorageService.addRecentDestination(pt);
+    onSelectDestination?.(pt);
+    setDestInput(pt.address);
+    if (origin) {
+      onCompleteRoute(origin, pt);
+      return;
+    }
+    setSubView('plan');
+    setActiveField('origin');
+    setTimeout(() => originRef.current?.focus(), 60);
+  };
+
   if (!isOpen) return null;
 
-  return (
-    <div
-      className="animate-fade-in"
-      style={{
+  const containerStyle: React.CSSProperties = embedded
+    ? {
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        backgroundColor: '#FFFFFF',
+        color: '#0F172A',
+        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+      }
+    : {
         position: 'fixed',
         inset: 0,
         maxWidth: 480,
@@ -352,12 +443,206 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
         flexDirection: 'column',
         color: '#0F172A',
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-      }}
-    >
+      };
+
+  if (subView === 'map_pin') {
+    return (
+      <div className="animate-fade-in" style={containerStyle}>
+        <InlineMapPinView
+          field={activeField}
+          initialPoint={activeField === 'origin' ? origin : destination}
+          onBack={() => setSubView('plan')}
+          onConfirm={handleConfirmMapPin}
+        />
+      </div>
+    );
+  }
+
+  if (subView === 'city_search') {
+    const quickCities = [
+      'Lauro Müller - SC',
+      'Orleans - SC',
+      'Criciúma - SC',
+      'Tubarão - SC',
+      'Urussanga - SC',
+      'Braço do Norte - SC',
+      'Florianópolis - SC',
+      'Curitiba - PR',
+      'Porto Alegre - RS',
+    ];
+
+    return (
+      <div className="animate-fade-in" style={containerStyle}>
+        <div
+          style={{
+            padding: embedded
+              ? '6px 16px 12px 16px'
+              : 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
+            borderBottom: '1px solid #F1F5F9',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+            <button
+              type="button"
+              onClick={() => setSubView('plan')}
+              aria-label="Voltar"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: '50%',
+                backgroundColor: '#F1F5F9',
+                border: 'none',
+                color: '#0F172A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                cursor: 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              <ArrowLeft size={19} />
+            </button>
+            <h1 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 900, color: '#0F172A', letterSpacing: '-0.02em' }}>
+              Pesquisar em outra cidade
+            </h1>
+          </div>
+
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              height: 44,
+              padding: '0 14px',
+              borderRadius: 12,
+              backgroundColor: '#F1F5F9',
+              border: '1.5px solid #0F172A',
+            }}
+          >
+            <Search size={17} color="#0F172A" />
+            <input
+              type="text"
+              autoFocus
+              value={cityQuery}
+              onChange={(e) => handleCitySearchChange(e.target.value)}
+              placeholder="Digite a cidade ou CEP (ex: Orleans, Criciúma...)"
+              style={{
+                flex: 1,
+                border: 'none',
+                backgroundColor: 'transparent',
+                color: '#0F172A',
+                fontSize: '0.88rem',
+                fontWeight: 600,
+                outline: 'none',
+              }}
+            />
+            {cityQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setCityQuery('');
+                  setCityResults([]);
+                }}
+                style={{ background: 'none', border: 'none', color: '#475569', cursor: 'pointer', display: 'flex' }}
+              >
+                <X size={15} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '10px 16px 24px 16px' }}>
+          {isCitySearching && (
+            <div style={{ padding: '12px 4px', fontSize: '0.82rem', color: '#64748B', fontWeight: 600 }}>
+              Buscando municípios e CEP...
+            </div>
+          )}
+
+          {cityQuery.trim().length < 2 && (
+            <div>
+              <div style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748B', marginBottom: 8, textTransform: 'uppercase' }}>
+                Principais cidades atendidas
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {quickCities.map((city) => (
+                  <button
+                    key={city}
+                    type="button"
+                    onClick={() => applyCityChoice(city)}
+                    style={{
+                      padding: '8px 13px',
+                      borderRadius: 999,
+                      border: '1px solid #E2E8F0',
+                      backgroundColor: '#F8FAFC',
+                      color: '#0F172A',
+                      fontSize: '0.8rem',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {city}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {cityResults.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => applyCityChoice(c.streetAddress || c.cityLabel)}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '13px 4px',
+                background: 'none',
+                border: 'none',
+                borderBottom: '1px solid #F1F5F9',
+                textAlign: 'left',
+                cursor: 'pointer',
+              }}
+            >
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: '50%',
+                  backgroundColor: '#F1F5F9',
+                  color: '#0F172A',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <Globe size={16} />
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A' }}>
+                  {c.cityLabel}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 1 }}>
+                  {c.subtitle}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="animate-fade-in" style={containerStyle}>
       {/* ── TOPO CLEAN ESTILO UBER ("Planeje sua próxima viagem") ── */}
       <div
         style={{
-          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
+          padding: embedded
+            ? '6px 16px 12px 16px'
+            : 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
           borderBottom: '1px solid #F1F5F9',
           backgroundColor: '#FFFFFF',
         }}
@@ -1035,15 +1320,9 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
         <button
           type="button"
           onClick={() => {
-            if (activeField === 'origin') {
-              setOriginInput('');
-              onSelectOrigin(null);
-              originRef.current?.focus();
-            } else {
-              setDestInput('');
-              onSelectDestination?.(null);
-              destRef.current?.focus();
-            }
+            setCityQuery('');
+            setCityResults([]);
+            setSubView('city_search');
           }}
           style={{
             width: '100%',
@@ -1127,7 +1406,13 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
 
         <button
           type="button"
-          onClick={() => onOpenMapPicker(activeField)}
+          onClick={() => {
+            if (onOpenMapPicker) {
+              onOpenMapPicker(activeField);
+            } else {
+              setSubView('map_pin');
+            }
+          }}
           style={{
             width: '100%',
             display: 'flex',

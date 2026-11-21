@@ -5,6 +5,7 @@ import { PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface UberPaymentMethodModalProps {
   isOpen: boolean;
+  embedded?: boolean;
   paymentMethod: PaymentMethod;
   totalPrice: number;
   walletBalance: number;
@@ -23,6 +24,7 @@ interface UberPaymentMethodModalProps {
 
 export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
   isOpen,
+  embedded = false,
   paymentMethod,
   totalPrice,
   walletBalance,
@@ -63,24 +65,39 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
   return (
     <div
       className="animate-fade-in"
-      style={{
-        position: 'fixed',
-        inset: 0,
-        maxWidth: 480,
-        margin: '0 auto',
-        backgroundColor: '#FFFFFF',
-        zIndex: 10050,
-        display: 'flex',
-        flexDirection: 'column',
-        color: '#0F172A',
-        fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-      }}
+      style={
+        embedded
+          ? {
+              flex: 1,
+              minHeight: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              backgroundColor: '#FFFFFF',
+              color: '#0F172A',
+              fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+            }
+          : {
+              position: 'fixed',
+              inset: 0,
+              maxWidth: 480,
+              margin: '0 auto',
+              backgroundColor: '#FFFFFF',
+              zIndex: 10050,
+              display: 'flex',
+              flexDirection: 'column',
+              color: '#0F172A',
+              fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+            }
+      }
     >
       {/* Topo com X + Título "Pague com" (igual Print 4 da Uber) */}
       <div
         style={{
-          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 18px 16px 18px',
+          padding: embedded
+            ? '6px 18px 14px 18px'
+            : 'calc(14px + env(safe-area-inset-top, 0px)) 18px 16px 18px',
           borderBottom: '1px solid #F1F5F9',
+          flexShrink: 0,
         }}
       >
         <button

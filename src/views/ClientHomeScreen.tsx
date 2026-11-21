@@ -17,7 +17,13 @@ import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 interface ClientHomeScreenProps {
   config: SystemConfig;
   currentUser?: ClientProfile | null;
-  onStartBooking: (origin?: LocationPoint, destination?: LocationPoint, categoryId?: string) => void;
+  isBackgroundDimmed?: boolean;
+  onStartBooking: (
+    origin?: LocationPoint,
+    destination?: LocationPoint,
+    categoryId?: string,
+    options?: { focusField?: 'origin' | 'destination'; openSchedule?: boolean }
+  ) => void;
   onOpenActiveRide?: (ride: Ride) => void;
   onGoToMyRides: () => void;
   onGoToProfile: () => void;
@@ -35,6 +41,7 @@ function getGreeting() {
 export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
   config,
   currentUser,
+  isBackgroundDimmed = false,
   onStartBooking,
   onOpenActiveRide,
   onGoToMyRides,
@@ -79,7 +86,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
     window.addEventListener('up_database_synced', checkActiveRide);
 
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      if (!isBackgroundDimmed && document.visibilityState === 'visible') {
         StorageService.syncFromDatabase().then(checkActiveRide);
       }
     }, 1500);
@@ -89,7 +96,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       window.removeEventListener('up_rides_updated', checkActiveRide);
       window.removeEventListener('up_database_synced', checkActiveRide);
     };
-  }, [currentUser]);
+  }, [currentUser, isBackgroundDimmed]);
 
   // Estados para gerenciar endereço fixo salvo
   const [selectedSavedAddr, setSelectedSavedAddr] = useState<{ id: string; label: string; address: string; lat: number; lng: number } | null>(null);
@@ -516,7 +523,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
 
           <button
             type="button"
-            onClick={() => setPickingType('origin')}
+            onClick={() => onStartBooking(origin || undefined, destination || undefined, undefined, { focusField: 'origin' })}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
@@ -544,10 +551,10 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
 
         {/* Barra de Pesquisa Icônica Estilo Uber */}
         <div
-          onClick={() => onStartBooking(origin || undefined, undefined)}
+          onClick={() => onStartBooking(origin || undefined, undefined, undefined, { focusField: 'destination' })}
           role="button"
           tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onStartBooking(origin || undefined, undefined); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onStartBooking(origin || undefined, undefined, undefined, { focusField: 'destination' }); }}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -572,22 +579,31 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
               {destination ? destination.address : 'Para onde?'}
             </span>
           </div>
-          <div style={{
-            backgroundColor: '#FFFFFF',
-            color: '#0F172A',
-            borderRadius: 999,
-            padding: '8px 13px',
-            fontSize: '0.78rem',
-            fontWeight: 700,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 5,
-            boxShadow: '0 2px 6px rgba(15, 23, 42, 0.08)',
-            flexShrink: 0
-          }}>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartBooking(origin || undefined, undefined, undefined, { openSchedule: true });
+            }}
+            style={{
+              backgroundColor: '#FFFFFF',
+              color: '#0F172A',
+              borderRadius: 999,
+              border: 'none',
+              padding: '8px 13px',
+              fontSize: '0.78rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+              boxShadow: '0 2px 6px rgba(15, 23, 42, 0.08)',
+              flexShrink: 0,
+              cursor: 'pointer'
+            }}
+          >
             <Clock size={14} strokeWidth={2.4} />
             <span>Agora</span>
-          </div>
+          </button>
         </div>
 
         {/* 2 Modalidades do Sistema: Viagem Padrão vs Entregas */}

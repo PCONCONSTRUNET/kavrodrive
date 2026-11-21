@@ -180,6 +180,8 @@ const ClientApp: React.FC<{
   const [initialBookingOrigin, setInitialBookingOrigin] = useState<LocationPoint | null>(null);
   const [initialBookingDestination, setInitialBookingDestination] = useState<LocationPoint | null>(null);
   const [initialBookingCategoryId, setInitialBookingCategoryId] = useState<string | null>(null);
+  const [initialBookingFocus, setInitialBookingFocus] = useState<'origin' | 'destination' | undefined>(undefined);
+  const [initialBookingScheduleOpen, setInitialBookingScheduleOpen] = useState<boolean>(false);
   const [resumedBookingRide, setResumedBookingRide] = useState<Ride | null>(null);
   const [profileResetKey, setProfileResetKey] = useState<number>(0);
 
@@ -200,11 +202,18 @@ const ClientApp: React.FC<{
   const [isTermsOpen, setIsTermsOpen] = useState(false);
 
   // Handler ao tentar agendar a partir da home
-  const handleStartBookingFromHome = (origin?: LocationPoint, destination?: LocationPoint, categoryId?: string) => {
+  const handleStartBookingFromHome = (
+    origin?: LocationPoint,
+    destination?: LocationPoint,
+    categoryId?: string,
+    options?: { focusField?: 'origin' | 'destination'; openSchedule?: boolean }
+  ) => {
     setResumedBookingRide(null);
     setInitialBookingOrigin(origin || null);
     setInitialBookingDestination(destination || null);
     setInitialBookingCategoryId(categoryId || null);
+    setInitialBookingFocus(options?.focusField);
+    setInitialBookingScheduleOpen(Boolean(options?.openSchedule));
     setCurrentTab('agendar');
   };
 
@@ -307,10 +316,11 @@ const ClientApp: React.FC<{
     <div className="app-container">
       {/* Conteúdo da Aba Ativa (estende por trás da barra flutuante transparente) */}
       <div style={{ flex: 1 }}>
-        {currentTab === 'inicio' && (
+        {(currentTab === 'inicio' || (currentTab === 'agendar' && !resumedBookingRide)) && (
           <ClientHomeScreen
             config={config}
             currentUser={currentUser}
+            isBackgroundDimmed={currentTab === 'agendar'}
             onStartBooking={handleStartBookingFromHome}
             onOpenActiveRide={handleResumeActiveRide}
             onGoToMyRides={() => setCurrentTab('minhas_corridas')}
@@ -329,12 +339,16 @@ const ClientApp: React.FC<{
             initialOrigin={initialBookingOrigin}
             initialDestination={initialBookingDestination}
             initialCategoryId={initialBookingCategoryId}
+            initialFocusField={initialBookingFocus}
+            initialOpenSchedule={initialBookingScheduleOpen}
             initialRide={resumedBookingRide}
             onRideBooked={() => {
               refreshData();
             }}
             onBackToHome={() => {
               setResumedBookingRide(null);
+              setInitialBookingFocus(undefined);
+              setInitialBookingScheduleOpen(false);
               setCurrentTab('inicio');
             }}
           />
@@ -429,6 +443,8 @@ const ClientApp: React.FC<{
             setInitialBookingOrigin(null);
             setInitialBookingDestination(null);
             setInitialBookingCategoryId(null);
+            setInitialBookingFocus(undefined);
+            setInitialBookingScheduleOpen(false);
             setCurrentTab('agendar');
           }}
           style={{

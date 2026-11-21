@@ -15,7 +15,6 @@ import {
   canPassengerEditRoute
 } from '../services/storage';
 import { RealtimeService } from '../services/realtime';
-import { AddressPickerModal } from '../components/AddressPickerModal';
 import { UberPlanTripModal } from '../components/UberPlanTripModal';
 import { UberPaymentMethodModal } from '../components/UberPaymentMethodModal';
 import { PassengerLiveMap, OnlineDriverMapDot } from '../components/PassengerLiveMap';
@@ -51,6 +50,8 @@ interface ClientBookingScreenProps {
   initialOrigin?: LocationPoint | null;
   initialDestination?: LocationPoint | null;
   initialCategoryId?: string | null;
+  initialFocusField?: 'origin' | 'destination';
+  initialOpenSchedule?: boolean;
   initialRide?: Ride | null;
 }
 
@@ -62,6 +63,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   initialOrigin,
   initialDestination,
   initialCategoryId,
+  initialFocusField,
+  initialOpenSchedule = false,
   initialRide,
 }) => {
   const currentUser = propUser !== undefined ? propUser : StorageService.getCurrentUser();
@@ -69,13 +72,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const [origin, setOrigin] = useState<LocationPoint | null>(initialOrigin || null);
   const [destination, setDestination] = useState<LocationPoint | null>(initialDestination || null);
 
-  const [bookingStep, setBookingStep] = useState<'plan' | 'choose'>(() =>
+  const [sheetView, setSheetView] = useState<'plan' | 'choose' | 'payment' | 'schedule' | 'delivery' | 'add_card'>(() =>
     initialOrigin && initialDestination ? 'choose' : 'plan'
   );
-  const [mapPickerField, setMapPickerField] = useState<'origin' | 'destination' | null>(null);
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now');
   const [scheduledDate, setScheduledDate] = useState<string>(() => {
     const now = new Date();
@@ -188,7 +187,6 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   // Cartões tokenizados do passageiro
   const [savedCards, setSavedCards] = useState<SavedCard[]>([]);
   const [selectedCardId, setSelectedCardId] = useState<string>('');
-  const [isAddingCardModal, setIsAddingCardModal] = useState<boolean>(false);
   const [cardNumber, setCardNumber] = useState('');
   const [cardHolder, setCardHolder] = useState(currentUser?.name || '');
   const [cardExpMonth, setCardExpMonth] = useState('12');
@@ -545,7 +543,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     setSavedCards(nextCards);
     setSelectedCardId(res.card.id);
     setPaymentMethod(res.card.cardType);
-    setIsAddingCardModal(false);
+    setSheetView('choose');
     setCardNumber('');
     setCardCvv('');
   };
@@ -558,7 +556,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   } => {
     setRequestError('');
     if (!origin || !destination) {
-      setBookingStep('plan');
+      setSheetView('plan');
       return { ok: false, error: 'Selecione partida e destino para continuar.', isDeliveryOrder: false };
     }
 
@@ -578,7 +576,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             ? 'Informe um WhatsApp ou telefone válido com DDD para a entrega.'
             : 'Descreva o produto ou item que será enviado na entrega.';
         setRequestError(msg);
-        setIsDeliveryModalOpen(true);
+        setSheetView('delivery');
         return { ok: false, error: msg, isDeliveryOrder };
       }
       normalizedDeliveryPayload = {
@@ -657,7 +655,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     const isCard = effectiveMethod === 'cartao_credito' || effectiveMethod === 'cartao_debito';
     const chosenCard = savedCards.find(c => c.id === selectedCardId);
     if (isCard && !chosenCard) {
-      setIsAddingCardModal(true);
+      setSheetView('add_card');
       return;
     }
 
@@ -1863,139 +1861,153 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const allowCardModal = allowCreditCard && (paymentsConfig.mercadopagoEnabled || savedCards.length > 0);
 
   return (
-    <div className="animate-fade-in" style={{
-      height: '100dvh',
-      backgroundColor: '#E8EDF3',
-      display: 'flex',
-      flexDirection: 'column',
-      maxWidth: 480,
-      margin: '0 auto',
-      position: 'relative',
-      overflow: 'hidden'
-    }}>
-      {/* ═══ ETAPA 1 ESTILO UBER: MODAL "PLANEJE SUA PRÓXIMA VIAGEM" ═══ */}
-      <UberPlanTripModal
-        isOpen={bookingStep === 'plan' && mapPickerField === null}
-        origin={origin}
-        destination={destination}
-        serviceMode={serviceMode}
-        currentUser={currentUser}
-        scheduleMode={scheduleMode}
-        scheduledDate={scheduledDate}
-        scheduledTime={scheduledTime}
-        passengers={passengers}
-        hasLuggage={hasLuggage}
-        notes={notes}
-        onBack={() => {
-          if (origin && destination) {
-            setBookingStep('choose');
-          } else {
-            onBackToHome();
-          }
-        }}
-        onChangeSchedule={(mode, date, time) => {
-          setScheduleMode(mode);
-          setScheduledDate(date);
-          setScheduledTime(time);
-        }}
-        onChangePassengers={(count, lug, obs) => {
-          setPassengers(count);
-          setHasLuggage(lug);
-          setNotes(obs);
-        }}
-        onOpenMapPicker={(field) => setMapPickerField(field)}
-        onSelectOrigin={(pt) => setOrigin(pt)}
-        onSelectDestination={(pt) => setDestination(pt)}
-        onSwapOriginDest={() => {
-          const prevOrigin = origin;
-          setOrigin(destination);
-          setDestination(prevOrigin);
-        }}
-        onCompleteRoute={(orig, dest) => {
-          setOrigin(orig);
-          setDestination(dest);
-          setRequestError('');
-          setBookingStep('choose');
-        }}
-      />
-
-      {/* Seletor visual de Pin no Mapa (ativado apenas via "Defina a localização no mapa") */}
-      <AddressPickerModal
-        isOpen={mapPickerField !== null}
-        onClose={() => setMapPickerField(null)}
-        title={mapPickerField === 'origin' ? 'Onde o motorista busca você?' : 'Definir destino no mapa'}
-        initialPoint={mapPickerField === 'origin' ? (origin || undefined) : (destination || undefined)}
-        onSelect={(p) => {
-          if (mapPickerField === 'origin') {
-            setOrigin(p);
-            if (destination) {
-              setBookingStep('choose');
-            }
-          } else if (mapPickerField === 'destination') {
-            setDestination(p);
-            StorageService.addRecentDestination(p);
-            if (origin) {
-              setBookingStep('choose');
-            }
-          }
-          setMapPickerField(null);
-        }}
-      />
-
-      {/* ═══ ETAPA 3 ESTILO UBER: MODAL "PAGUE COM" ═══ */}
-      <UberPaymentMethodModal
-        isOpen={isPaymentModalOpen}
-        paymentMethod={paymentMethod}
-        totalPrice={pricing.totalPrice}
-        walletBalance={walletBalance}
-        isLoggedIn={Boolean(currentUser?.id)}
-        allowCash={allowCash}
-        allowPix={allowPix}
-        allowWallet={allowWallet}
-        allowCreditCard={allowCardModal}
-        savedCards={savedCards}
-        selectedCardId={selectedCardId}
-        onClose={() => setIsPaymentModalOpen(false)}
-        onSelectMethod={(method, cardId) => {
-          setPaymentMethod(method);
-          if (cardId) setSelectedCardId(cardId);
-          setRequestError('');
-        }}
-        onOpenWalletDeposit={() => {
-          setIsPaymentModalOpen(false);
-          setIsWalletModalOpen(true);
-        }}
-        onOpenAddCard={() => {
-          setIsPaymentModalOpen(false);
-          setIsAddingCardModal(true);
-        }}
-      />
-
-      {/* Tela Cheia de Cadastro Seguro de Cartão (Kavro Pay) */}
-      {isAddingCardModal && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
+    <div
+      className="animate-fade-in"
+      onClick={() => {
+        if (sheetView === 'plan') {
+          onBackToHome();
+        }
+      }}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 10040,
+        backgroundColor: 'rgba(15, 23, 42, 0.56)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 480,
+          height: '94dvh',
           backgroundColor: '#FFFFFF',
-          zIndex: 10090,
+          borderRadius: '22px 22px 0 0',
+          overflow: 'hidden',
           display: 'flex',
-          justifyContent: 'center'
-        }}>
-          <div style={{
-            backgroundColor: '#FFFFFF',
-            width: '100%',
-            maxWidth: 480,
-            height: '100dvh',
+          flexDirection: 'column',
+          position: 'relative',
+          boxShadow: '0 -14px 40px rgba(15, 23, 42, 0.28)',
+        }}
+      >
+        {/* Alça superior padrão Uber (única estrutura de modal para todo o fluxo) */}
+        <div
+          style={{
+            padding: '10px 0 4px 0',
             display: 'flex',
-            flexDirection: 'column',
-            overflowY: 'auto'
-          }}>
-            {/* Cabeçalho full-bleed dark com logo KAVRO DRIVE */}
+            justifyContent: 'center',
+            backgroundColor: sheetView === 'choose' ? 'transparent' : '#FFFFFF',
+            position: sheetView === 'choose' ? 'absolute' : 'relative',
+            top: 0,
+            left: 0,
+            right: 0,
+            zIndex: 500,
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            style={{
+              width: 40,
+              height: 4,
+              borderRadius: 999,
+              backgroundColor: sheetView === 'choose' ? 'rgba(15, 23, 42, 0.35)' : '#CBD5E1',
+            }}
+          />
+        </div>
+
+        {/* ═══ ETAPA 1 DENTRO DO MESMO MODAL: "PLANEJE SUA PRÓXIMA VIAGEM" ═══ */}
+        {sheetView === 'plan' && (
+          <UberPlanTripModal
+            isOpen
+            embedded
+            initialFocusField={initialFocusField}
+            initialOpenSchedule={initialOpenSchedule}
+            origin={origin}
+            destination={destination}
+            serviceMode={serviceMode}
+            currentUser={currentUser}
+            scheduleMode={scheduleMode}
+            scheduledDate={scheduledDate}
+            scheduledTime={scheduledTime}
+            passengers={passengers}
+            hasLuggage={hasLuggage}
+            notes={notes}
+            onBack={() => {
+              if (origin && destination) {
+                setSheetView('choose');
+              } else {
+                onBackToHome();
+              }
+            }}
+            onChangeSchedule={(mode, date, time) => {
+              setScheduleMode(mode);
+              setScheduledDate(date);
+              setScheduledTime(time);
+            }}
+            onChangePassengers={(count, lug, obs) => {
+              setPassengers(count);
+              setHasLuggage(lug);
+              setNotes(obs);
+            }}
+            onSelectOrigin={(pt) => setOrigin(pt)}
+            onSelectDestination={(pt) => setDestination(pt)}
+            onSwapOriginDest={() => {
+              const prevOrigin = origin;
+              setOrigin(destination);
+              setDestination(prevOrigin);
+            }}
+            onCompleteRoute={(orig, dest) => {
+              setOrigin(orig);
+              setDestination(dest);
+              setRequestError('');
+              setSheetView('choose');
+            }}
+          />
+        )}
+
+        {/* ═══ ETAPA 3 DENTRO DO MESMO MODAL: "PAGUE COM" ═══ */}
+        {sheetView === 'payment' && (
+          <UberPaymentMethodModal
+            isOpen
+            embedded
+            paymentMethod={paymentMethod}
+            totalPrice={pricing.totalPrice}
+            walletBalance={walletBalance}
+            isLoggedIn={Boolean(currentUser?.id)}
+            allowCash={allowCash}
+            allowPix={allowPix}
+            allowWallet={allowWallet}
+            allowCreditCard={allowCardModal}
+            savedCards={savedCards}
+            selectedCardId={selectedCardId}
+            onClose={() => setSheetView('choose')}
+            onSelectMethod={(method, cardId) => {
+              setPaymentMethod(method);
+              if (cardId) setSelectedCardId(cardId);
+              setRequestError('');
+            }}
+            onOpenWalletDeposit={() => {
+              setIsWalletModalOpen(true);
+            }}
+            onOpenAddCard={() => {
+              setSheetView('add_card');
+            }}
+          />
+        )}
+
+        {/* Cadastro de Cartão Kavro Pay dentro do mesmo modal */}
+        {sheetView === 'add_card' && (
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
             <div style={{
               background: 'linear-gradient(155deg, #0B1117 0%, #15222C 100%)',
-              padding: 'calc(16px + env(safe-area-inset-top, 0px)) 20px 18px 20px',
-              borderBottomLeftRadius: 24,
-              borderBottomRightRadius: 24,
+              padding: '14px 20px 18px 20px',
+              borderBottomLeftRadius: 20,
+              borderBottomRightRadius: 20,
               boxShadow: '0 8px 24px rgba(11, 17, 23, 0.14)'
             }}>
               <div style={{
@@ -2025,8 +2037,8 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsAddingCardModal(false)}
-                  aria-label="Fechar"
+                  onClick={() => setSheetView('payment')}
+                  aria-label="Voltar para formas de pagamento"
                   style={{
                     width: 34,
                     height: 34,
@@ -2151,13 +2163,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               </form>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* =====================================================================
-          ETAPA 2 ESTILO UBER: MAPA + BOTTOM SHEET "ESCOLHER UMA VIAGEM" (PRINT 3)
+          ETAPA 2 DENTRO DO MESMO MODAL: MAPA + BOTTOM SHEET "ESCOLHER UMA VIAGEM"
          ===================================================================== */}
-      <div style={{ position: 'relative', flex: '0 0 42dvh', minHeight: 215, width: '100%', isolation: 'isolate', zIndex: 1 }}>
+      {sheetView === 'choose' && (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ position: 'relative', flex: '0 0 41dvh', minHeight: 205, width: '100%', isolation: 'isolate', zIndex: 1 }}>
         <PassengerLiveMap
           origin={origin}
           destination={destination}
@@ -2165,22 +2178,21 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         />
 
         {/* Topo Flutuante: Voltar + Pílula da Rota (Partida → Destino) + Motoristas */}
-        {bookingStep === 'choose' && (
-          <div style={{
-            position: 'absolute',
-            top: 'calc(12px + env(safe-area-inset-top, 0px))',
-            left: 12,
-            right: 12,
-            zIndex: 400,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            gap: 8,
-            pointerEvents: 'none'
-          }}>
+        <div style={{
+          position: 'absolute',
+          top: 18,
+          left: 12,
+          right: 12,
+          zIndex: 400,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          pointerEvents: 'none'
+        }}>
           <button
             type="button"
-            onClick={() => setBookingStep('plan')}
+            onClick={() => setSheetView('plan')}
             aria-label="Voltar para editar endereços"
             style={{
               width: 40,
@@ -2206,7 +2218,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           {/* Pílula Central Clicável com Rota (igual Print 3) */}
           <button
             type="button"
-            onClick={() => setBookingStep('plan')}
+            onClick={() => setSheetView('plan')}
             style={{
               flex: 1,
               minWidth: 0,
@@ -2272,10 +2284,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             <span>{onlineDriversCount}</span>
           </div>
         </div>
-        )}
 
         {/* Badge discreta de distância e duração */}
-        {bookingStep === 'choose' && origin && destination && (
+        {origin && destination && (
           <div style={{
             position: 'absolute',
             bottom: 28,
@@ -2296,7 +2307,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       </div>
 
       {/* =====================================================================
-          BOTTOM SHEET "ESCOLHER UMA VIAGEM" (2 MODALIDADES + PAGAMENTO + CTA)
+          PAINEL "ESCOLHER UMA VIAGEM" (2 MODALIDADES + PAGAMENTO + CTA)
          ===================================================================== */}
       <div style={{
         flex: 1,
@@ -2475,7 +2486,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           {selectedIsDelivery && (
             <button
               type="button"
-              onClick={() => setIsDeliveryModalOpen(true)}
+              onClick={() => setSheetView('delivery')}
               style={{
                 width: '100%',
                 marginTop: 10,
@@ -2567,10 +2578,10 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           flexDirection: 'column',
           gap: 10
         }}>
-          {/* Linha de Pagamento Clicável -> abre Modal "Pague com" (Print 4) */}
+          {/* Linha de Pagamento Clicável -> abre "Pague com" dentro do mesmo modal */}
           <button
             type="button"
-            onClick={() => setIsPaymentModalOpen(true)}
+            onClick={() => setSheetView('payment')}
             style={{
               width: '100%',
               display: 'flex',
@@ -2645,7 +2656,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
 
             <button
               type="button"
-              onClick={() => setIsScheduleModalOpen(true)}
+              onClick={() => setSheetView('schedule')}
               title="Agendar horário"
               aria-label="Agendar horário"
               style={{
@@ -2667,303 +2678,269 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           </div>
         </div>
       </div>
-
-      {/* Modal Rápido de Agendamento (botão calendário ao lado do CTA) */}
-      {isScheduleModalOpen && (
-        <div
-          onClick={() => setIsScheduleModalOpen(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.55)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 10060,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: '100%',
-              maxWidth: 480,
-              backgroundColor: '#FFFFFF',
-              borderRadius: '22px 22px 0 0',
-              padding: '18px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-              <h3 style={{ margin: 0, fontSize: '1.08rem', fontWeight: 900, color: '#0F172A' }}>
-                Quando você quer ir?
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsScheduleModalOpen(false)}
-                style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
-              <button
-                type="button"
-                onClick={() => {
-                  setScheduleMode('now');
-                  setIsScheduleModalOpen(false);
-                }}
-                style={{
-                  height: 42,
-                  borderRadius: 12,
-                  border: scheduleMode === 'now' ? '2px solid #0F172A' : '1px solid #CBD5E1',
-                  backgroundColor: scheduleMode === 'now' ? '#0F172A' : '#FFFFFF',
-                  color: scheduleMode === 'now' ? '#FFFFFF' : '#0F172A',
-                  fontWeight: 800,
-                  cursor: 'pointer'
-                }}
-              >
-                Ir agora
-              </button>
-              <button
-                type="button"
-                onClick={() => setScheduleMode('later')}
-                style={{
-                  height: 42,
-                  borderRadius: 12,
-                  border: scheduleMode === 'later' ? '2px solid #16A34A' : '1px solid #CBD5E1',
-                  backgroundColor: scheduleMode === 'later' ? '#16A34A' : '#FFFFFF',
-                  color: scheduleMode === 'later' ? '#FFFFFF' : '#0F172A',
-                  fontWeight: 800,
-                  cursor: 'pointer'
-                }}
-              >
-                Agendar horário
-              </button>
-            </div>
-
-            {scheduleMode === 'later' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <input
-                    type="date"
-                    value={scheduledDate}
-                    onChange={(e) => setScheduledDate(e.target.value)}
-                    style={{ height: 42, padding: '0 10px', borderRadius: 10, border: '1px solid #CBD5E1', fontWeight: 700 }}
-                  />
-                  <input
-                    type="time"
-                    value={scheduledTime}
-                    onChange={(e) => setScheduledTime(e.target.value)}
-                    style={{ height: 42, padding: '0 10px', borderRadius: 10, border: '1px solid #CBD5E1', fontWeight: 700 }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsScheduleModalOpen(false)}
-                  style={{
-                    height: 44,
-                    borderRadius: 999,
-                    border: 'none',
-                    backgroundColor: '#0F172A',
-                    color: '#FFFFFF',
-                    fontWeight: 800,
-                    cursor: 'pointer'
-                  }}
-                >
-                  Confirmar agendamento
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
+      </div>
       )}
 
-      {/* Modal Limpo de Detalhes da Entrega */}
-      {isDeliveryModalOpen && (
-        <div
-          onClick={() => setIsDeliveryModalOpen(false)}
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.55)',
-            backdropFilter: 'blur(4px)',
-            zIndex: 10060,
-            display: 'flex',
-            alignItems: 'flex-end',
-            justifyContent: 'center',
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: '100%',
-              maxWidth: 480,
-              maxHeight: '85dvh',
-              overflowY: 'auto',
-              backgroundColor: '#FFFFFF',
-              borderRadius: '22px 22px 0 0',
-              padding: '18px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 10
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                <Package size={18} color="#15803D" />
-                <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 900, color: '#0F172A' }}>
-                  Detalhes da Entrega
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsDeliveryModalOpen(false)}
-                style={{ width: 32, height: 32, borderRadius: '50%', border: 'none', backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
-              >
-                <X size={16} />
-              </button>
-            </div>
+      {/* Agendamento dentro do mesmo modal */}
+      {sheetView === 'schedule' && (
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '8px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+            <button
+              type="button"
+              onClick={() => setSheetView('choose')}
+              aria-label="Voltar"
+              style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <h2 style={{ margin: 0, fontSize: '1.15rem', fontWeight: 900, color: '#0F172A' }}>
+              Quando você quer ir?
+            </h2>
+          </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-              <button
-                type="button"
-                onClick={() => setDeliveryRole('sender')}
-                style={{
-                  padding: '9px 10px',
-                  borderRadius: 10,
-                  border: deliveryRole === 'sender' ? '2px solid #15803D' : '1px solid #D1FAE5',
-                  backgroundColor: deliveryRole === 'sender' ? '#15803D' : '#FFFFFF',
-                  color: deliveryRole === 'sender' ? '#FFFFFF' : '#166534',
-                  fontSize: '0.78rem',
-                  fontWeight: 800,
-                  cursor: 'pointer'
-                }}
-              >
-                Estou enviando
-              </button>
-              <button
-                type="button"
-                onClick={() => setDeliveryRole('receiver')}
-                style={{
-                  padding: '9px 10px',
-                  borderRadius: 10,
-                  border: deliveryRole === 'receiver' ? '2px solid #15803D' : '1px solid #D1FAE5',
-                  backgroundColor: deliveryRole === 'receiver' ? '#15803D' : '#FFFFFF',
-                  color: deliveryRole === 'receiver' ? '#FFFFFF' : '#166534',
-                  fontSize: '0.78rem',
-                  fontWeight: 800,
-                  cursor: 'pointer'
-                }}
-              >
-                Vou receber
-              </button>
-            </div>
-
-            <input
-              type="text"
-              placeholder={deliveryRole === 'sender' ? 'Nome completo de quem recebe *' : 'Nome completo de quem envia *'}
-              value={deliveryRecipientName}
-              onChange={(e) => setDeliveryRecipientName(e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
-            />
-            <input
-              type="tel"
-              placeholder="WhatsApp com DDD *"
-              value={deliveryRecipientPhone}
-              onChange={(e) => setDeliveryRecipientPhone(e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
-            />
-            <input
-              type="text"
-              placeholder="O que está sendo enviado? (ex: Caixa, chave, documentos...) *"
-              value={deliveryItemDesc}
-              onChange={(e) => setDeliveryItemDesc(e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
-            />
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-              {([
-                { id: 'pequeno', label: 'Pequeno' },
-                { id: 'medio', label: 'Médio' },
-                { id: 'grande', label: 'Grande' }
-              ] as const).map((sz) => (
-                <button
-                  key={sz.id}
-                  type="button"
-                  onClick={() => setDeliveryPackageSize(sz.id)}
-                  style={{
-                    padding: '8px 6px',
-                    borderRadius: 9,
-                    border: deliveryPackageSize === sz.id ? '1.5px solid #15803D' : '1px solid #E2E8F0',
-                    backgroundColor: deliveryPackageSize === sz.id ? '#DCFCE7' : '#FFFFFF',
-                    color: '#14532D',
-                    fontSize: '0.76rem',
-                    fontWeight: 800,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {sz.label}
-                </button>
-              ))}
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
-              {([
-                { id: 'porta_mao', label: 'Em mãos' },
-                { id: 'portaria', label: 'Portaria' },
-                { id: 'recepcao', label: 'Recepção' }
-              ] as const).map((dm) => (
-                <button
-                  key={dm.id}
-                  type="button"
-                  onClick={() => setDeliveryDropoffMode(dm.id)}
-                  style={{
-                    padding: '8px 6px',
-                    borderRadius: 9,
-                    border: deliveryDropoffMode === dm.id ? '1.5px solid #15803D' : '1px solid #E2E8F0',
-                    backgroundColor: deliveryDropoffMode === dm.id ? '#DCFCE7' : '#FFFFFF',
-                    color: '#14532D',
-                    fontSize: '0.76rem',
-                    fontWeight: 800,
-                    cursor: 'pointer'
-                  }}
-                >
-                  {dm.label}
-                </button>
-              ))}
-            </div>
-
-            <input
-              type="text"
-              placeholder="Instruções extras (bloco, apto, contato...)"
-              value={deliveryInstructions}
-              onChange={(e) => setDeliveryInstructions(e.target.value)}
-              style={{ width: '100%', padding: '10px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.82rem', boxSizing: 'border-box' }}
-            />
-
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
             <button
               type="button"
               onClick={() => {
-                setRequestError('');
-                setIsDeliveryModalOpen(false);
+                setScheduleMode('now');
+                setSheetView('choose');
               }}
               style={{
                 height: 46,
-                borderRadius: 999,
-                border: 'none',
-                backgroundColor: '#15803D',
-                color: '#FFFFFF',
-                fontSize: '0.9rem',
+                borderRadius: 14,
+                border: scheduleMode === 'now' ? '2px solid #0F172A' : '1px solid #CBD5E1',
+                backgroundColor: scheduleMode === 'now' ? '#0F172A' : '#FFFFFF',
+                color: scheduleMode === 'now' ? '#FFFFFF' : '#0F172A',
                 fontWeight: 800,
                 cursor: 'pointer'
               }}
             >
-              Salvar detalhes da entrega
+              Ir agora
+            </button>
+            <button
+              type="button"
+              onClick={() => setScheduleMode('later')}
+              style={{
+                height: 46,
+                borderRadius: 14,
+                border: scheduleMode === 'later' ? '2px solid #16A34A' : '1px solid #CBD5E1',
+                backgroundColor: scheduleMode === 'later' ? '#16A34A' : '#FFFFFF',
+                color: scheduleMode === 'later' ? '#FFFFFF' : '#0F172A',
+                fontWeight: 800,
+                cursor: 'pointer'
+              }}
+            >
+              Agendar horário
             </button>
           </div>
+
+          {scheduleMode === 'later' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+                <input
+                  type="date"
+                  value={scheduledDate}
+                  onChange={(e) => setScheduledDate(e.target.value)}
+                  style={{ height: 46, padding: '0 12px', borderRadius: 12, border: '1px solid #CBD5E1', fontWeight: 700 }}
+                />
+                <input
+                  type="time"
+                  value={scheduledTime}
+                  onChange={(e) => setScheduledTime(e.target.value)}
+                  style={{ height: 46, padding: '0 12px', borderRadius: 12, border: '1px solid #CBD5E1', fontWeight: 700 }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => setSheetView('choose')}
+                style={{
+                  height: 48,
+                  borderRadius: 999,
+                  border: 'none',
+                  backgroundColor: '#0F172A',
+                  color: '#FFFFFF',
+                  fontSize: '0.92rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                Confirmar agendamento
+              </button>
+            </div>
+          )}
         </div>
       )}
+
+      {/* Detalhes da Entrega dentro do mesmo modal */}
+      {sheetView === 'delivery' && (
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            padding: '8px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 10
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+            <button
+              type="button"
+              onClick={() => setSheetView('choose')}
+              aria-label="Voltar"
+              style={{ width: 36, height: 36, borderRadius: '50%', border: 'none', backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <Package size={18} color="#15803D" />
+              <h2 style={{ margin: 0, fontSize: '1.1rem', fontWeight: 900, color: '#0F172A' }}>
+                Detalhes da Entrega
+              </h2>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => setDeliveryRole('sender')}
+              style={{
+                padding: '10px',
+                borderRadius: 10,
+                border: deliveryRole === 'sender' ? '2px solid #15803D' : '1px solid #D1FAE5',
+                backgroundColor: deliveryRole === 'sender' ? '#15803D' : '#FFFFFF',
+                color: deliveryRole === 'sender' ? '#FFFFFF' : '#166534',
+                fontSize: '0.8rem',
+                fontWeight: 800,
+                cursor: 'pointer'
+              }}
+            >
+              Estou enviando
+            </button>
+            <button
+              type="button"
+              onClick={() => setDeliveryRole('receiver')}
+              style={{
+                padding: '10px',
+                borderRadius: 10,
+                border: deliveryRole === 'receiver' ? '2px solid #15803D' : '1px solid #D1FAE5',
+                backgroundColor: deliveryRole === 'receiver' ? '#15803D' : '#FFFFFF',
+                color: deliveryRole === 'receiver' ? '#FFFFFF' : '#166534',
+                fontSize: '0.8rem',
+                fontWeight: 800,
+                cursor: 'pointer'
+              }}
+            >
+              Vou receber
+            </button>
+          </div>
+
+          <input
+            type="text"
+            placeholder={deliveryRole === 'sender' ? 'Nome completo de quem recebe *' : 'Nome completo de quem envia *'}
+            value={deliveryRecipientName}
+            onChange={(e) => setDeliveryRecipientName(e.target.value)}
+            style={{ width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.86rem', boxSizing: 'border-box' }}
+          />
+          <input
+            type="tel"
+            placeholder="WhatsApp com DDD *"
+            value={deliveryRecipientPhone}
+            onChange={(e) => setDeliveryRecipientPhone(e.target.value)}
+            style={{ width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.86rem', boxSizing: 'border-box' }}
+          />
+          <input
+            type="text"
+            placeholder="O que está sendo enviado? (ex: Caixa, chave, documentos...) *"
+            value={deliveryItemDesc}
+            onChange={(e) => setDeliveryItemDesc(e.target.value)}
+            style={{ width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.86rem', boxSizing: 'border-box' }}
+          />
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+            {([
+              { id: 'pequeno', label: 'Pequeno' },
+              { id: 'medio', label: 'Médio' },
+              { id: 'grande', label: 'Grande' }
+            ] as const).map((sz) => (
+              <button
+                key={sz.id}
+                type="button"
+                onClick={() => setDeliveryPackageSize(sz.id)}
+                style={{
+                  padding: '9px 6px',
+                  borderRadius: 9,
+                  border: deliveryPackageSize === sz.id ? '1.5px solid #15803D' : '1px solid #E2E8F0',
+                  backgroundColor: deliveryPackageSize === sz.id ? '#DCFCE7' : '#FFFFFF',
+                  color: '#14532D',
+                  fontSize: '0.78rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                {sz.label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6 }}>
+            {([
+              { id: 'porta_mao', label: 'Em mãos' },
+              { id: 'portaria', label: 'Portaria' },
+              { id: 'recepcao', label: 'Recepção' }
+            ] as const).map((dm) => (
+              <button
+                key={dm.id}
+                type="button"
+                onClick={() => setDeliveryDropoffMode(dm.id)}
+                style={{
+                  padding: '9px 6px',
+                  borderRadius: 9,
+                  border: deliveryDropoffMode === dm.id ? '1.5px solid #15803D' : '1px solid #E2E8F0',
+                  backgroundColor: deliveryDropoffMode === dm.id ? '#DCFCE7' : '#FFFFFF',
+                  color: '#14532D',
+                  fontSize: '0.78rem',
+                  fontWeight: 800,
+                  cursor: 'pointer'
+                }}
+              >
+                {dm.label}
+              </button>
+            ))}
+          </div>
+
+          <input
+            type="text"
+            placeholder="Instruções extras (bloco, apto, contato...)"
+            value={deliveryInstructions}
+            onChange={(e) => setDeliveryInstructions(e.target.value)}
+            style={{ width: '100%', padding: '11px 12px', borderRadius: 10, border: '1px solid #CBD5E1', fontSize: '0.84rem', boxSizing: 'border-box' }}
+          />
+
+          <button
+            type="button"
+            onClick={() => {
+              setRequestError('');
+              setSheetView('choose');
+            }}
+            style={{
+              height: 48,
+              borderRadius: 999,
+              border: 'none',
+              backgroundColor: '#15803D',
+              color: '#FFFFFF',
+              fontSize: '0.92rem',
+              fontWeight: 800,
+              cursor: 'pointer',
+              marginTop: 4
+            }}
+          >
+            Salvar detalhes da entrega
+          </button>
+        </div>
+      )}
+      </div>
 
       <TrustedContactsModal
         isOpen={isTrustedContactsOpen}
