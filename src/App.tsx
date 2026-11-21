@@ -978,6 +978,22 @@ const SecurityGuideRoute: React.FC<{ config: SystemConfig }> = ({ config }) => {
   );
 };
 
+const RootLandingRoute: React.FC<{ config: SystemConfig }> = ({ config }) => {
+  const location = useLocation();
+  const isStandalone = typeof window !== 'undefined' && (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as Navigator & { standalone?: boolean }).standalone === true ||
+    document.referrer.includes('android-app://')
+  );
+  const keepWebLanding = new URLSearchParams(location.search).get('web') === '1';
+
+  if (isStandalone && !keepWebLanding) {
+    return <Navigate to="/cliente" replace />;
+  }
+
+  return <LandingScreen config={config} />;
+};
+
 export const App: React.FC = () => {
   const [config, setConfig] = useState<SystemConfig>(StorageService.getConfig());
   const [rides, setRides] = useState<Ride[]>(StorageService.getRides());
@@ -991,6 +1007,22 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     refreshData();
+    const p = location.pathname || '/';
+    const manifestLink = document.getElementById('app-manifest') || document.querySelector('link[rel="manifest"]');
+    const titleMeta = document.getElementById('apple-app-title');
+    if (/^\/(administracion|motora|motorista)(\/|$)/i.test(p)) {
+      if (manifestLink) manifestLink.setAttribute('href', '/manifest-admin.json');
+      if (titleMeta) titleMeta.setAttribute('content', 'Kavro Motorista');
+    } else if (/^\/kavro-drive(\/|$)/i.test(p)) {
+      if (manifestLink) manifestLink.setAttribute('href', '/manifest-driver.json');
+      if (titleMeta) titleMeta.setAttribute('content', 'Kavro Motorista');
+    } else if (/^\/(cliente|app)(\/|$)/i.test(p)) {
+      if (manifestLink) manifestLink.setAttribute('href', '/manifest-client.json');
+      if (titleMeta) titleMeta.setAttribute('content', 'KAVRO DRIVE');
+    } else {
+      if (manifestLink) manifestLink.setAttribute('href', '/manifest.json');
+      if (titleMeta) titleMeta.setAttribute('content', 'KAVRO DRIVE');
+    }
   }, [location.pathname]);
 
   // Sincronização em tempo real via SSE + fallback seguro de rede (sem precisar fechar/abrir o app)
@@ -1157,10 +1189,10 @@ export const App: React.FC = () => {
         element={<Navigate to="/ajuda" replace />}
       />
 
-      {/* Landing Page Oficial na Raiz (/) estilo Uber — Desktop e Mobile */}
+      {/* Landing Page Oficial na Raiz (/) estilo Uber — Desktop e Mobile (PWA standalone redireciona para /cliente) */}
       <Route
         path="/"
-        element={<LandingScreen config={config} />}
+        element={<RootLandingRoute config={config} />}
       />
 
       {/* Rotas do App do Passageiro (/cliente e /app) */}

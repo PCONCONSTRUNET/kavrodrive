@@ -2053,30 +2053,53 @@ async function handleApiRequest(req, res) {
 
     // 0.1 DYNAMIC PWA MANIFEST
     if (pathname === '/api/manifest') {
-      const roleParam = url.searchParams.get('role');
+      const roleParam = String(url.searchParams.get('role') || '').trim().toLowerCase();
       const referer = String(req.headers.referer || '');
       const isAdmin =
         roleParam === 'admin' ||
         /\/(administracion|motora|motorista)(\/|\?|$)/i.test(referer);
+      const isDriverPortal =
+        !isAdmin &&
+        (roleParam === 'driver' || /\/kavro-drive(\/|\?|$)/i.test(referer));
+
+      const baseIcons = [
+        { src: '/pwa-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
+        { src: '/pwa-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+        { src: '/logo-icon.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
+      ];
+
+      const roleManifest = isAdmin
+        ? {
+            id: '/motora',
+            name: 'KAVRO DRIVE - Painel do Motorista',
+            short_name: 'Kavro Motorista',
+            description: 'App do motorista parceiro e painel operacional Kavro Drive.',
+            start_url: '/motora',
+          }
+        : isDriverPortal
+          ? {
+              id: '/kavro-drive',
+              name: 'KAVRO DRIVE - Portal do Motorista',
+              short_name: 'Kavro Motorista',
+              description: 'App do motorista parceiro Kavro Drive: corridas em tempo real e carteira.',
+              start_url: '/kavro-drive',
+            }
+          : {
+              id: '/cliente',
+              name: 'KAVRO DRIVE - Transporte Particular',
+              short_name: 'Kavro Drive',
+              description: 'Peça sua corrida agora com segurança, Pix, Cartão ou Dinheiro.',
+              start_url: '/cliente',
+            };
 
       const manifestData = {
-        id: isAdmin ? '/motora' : '/cliente',
-        name: isAdmin ? 'KAVRO DRIVE - Painel do Motorista' : 'KAVRO DRIVE - Transporte Particular',
-        short_name: isAdmin ? 'Kavro Motorista' : 'Kavro Drive',
-        description: isAdmin
-          ? 'App do motorista parceiro e painel operacional Kavro Drive.'
-          : 'Peça sua corrida agora com segurança, Pix, Cartão ou Dinheiro.',
-        start_url: isAdmin ? '/motora' : '/',
+        ...roleManifest,
         scope: '/',
         display: 'standalone',
         background_color: '#121A21',
         theme_color: '#121A21',
         orientation: 'portrait-primary',
-        icons: [
-          { src: '/pwa-icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any maskable' },
-          { src: '/pwa-icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
-          { src: '/logo-icon.png', sizes: '512x512', type: 'image/png', purpose: 'any' }
-        ]
+        icons: baseIcons
       };
 
       res.writeHead(200, {

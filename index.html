@@ -15,11 +15,19 @@
         try {
           var p = window.location.pathname || '/';
           var isAdminRoute = /^\/(administracion|motora|motorista)(\/|$)/i.test(p);
+          var isDriverRoute = /^\/kavro-drive(\/|$)/i.test(p);
+          var isClientRoute = /^\/(cliente|app)(\/|$)/i.test(p);
           var m = document.getElementById('app-manifest');
           var titleMeta = document.getElementById('apple-app-title');
           if (isAdminRoute) {
             if (m) m.setAttribute('href', '/manifest-admin.json');
             if (titleMeta) titleMeta.setAttribute('content', 'Kavro Motorista');
+          } else if (isDriverRoute) {
+            if (m) m.setAttribute('href', '/manifest-driver.json');
+            if (titleMeta) titleMeta.setAttribute('content', 'Kavro Motorista');
+          } else if (isClientRoute) {
+            if (m) m.setAttribute('href', '/manifest-client.json');
+            if (titleMeta) titleMeta.setAttribute('content', 'KAVRO DRIVE');
           } else {
             if (m) m.setAttribute('href', '/manifest.json');
             if (titleMeta) titleMeta.setAttribute('content', 'KAVRO DRIVE');

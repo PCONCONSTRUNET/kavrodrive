@@ -16,6 +16,14 @@ function supabaseApiPlugin() {
           req.url = '/api/manifest'
           return handleApiRequest(req, res)
         }
+        if (req.url === '/manifest-client.json') {
+          req.url = '/api/manifest?role=client'
+          return handleApiRequest(req, res)
+        }
+        if (req.url === '/manifest-driver.json') {
+          req.url = '/api/manifest?role=driver'
+          return handleApiRequest(req, res)
+        }
         if (req.url === '/manifest-admin.json') {
           req.url = '/api/manifest?role=admin'
           return handleApiRequest(req, res)

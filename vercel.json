@@ -11,6 +11,8 @@
   },
   "rewrites": [
     { "source": "/manifest.json", "destination": "/api?__path=manifest" },
+    { "source": "/manifest-client.json", "destination": "/api?__path=manifest&role=client" },
+    { "source": "/manifest-driver.json", "destination": "/api?__path=manifest&role=driver" },
     { "source": "/manifest-admin.json", "destination": "/api?__path=manifest&role=admin" },
     { "source": "/api/:path*", "destination": "/api?__path=:path*" },
     { "source": "/((?!api/|\\.well-known/).*)", "destination": "/index.html" }
@@ -32,6 +34,18 @@
     },
     {
       "source": "/manifest.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/manifest-client.json",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
+      ]
+    },
+    {
+      "source": "/manifest-driver.json",
       "headers": [
         { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" }
       ]

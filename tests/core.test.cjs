@@ -3712,3 +3712,26 @@ test('GET /api/geocode valida query curta e responde esquema seguro para enderec
     assert.equal(typeof item.lng, 'number');
   }
 });
+
+test('GET /api/manifest aponta PWA de passageiro diretamente para /cliente (nao para /)', async () => {
+  const defaultManifest = await apiJson('/api/manifest');
+  assert.equal(defaultManifest.status, 200);
+  assert.equal(defaultManifest.json.id, '/cliente');
+  assert.equal(defaultManifest.json.start_url, '/cliente');
+  assert.equal(defaultManifest.json.display, 'standalone');
+
+  const clientManifest = await apiJson('/api/manifest?role=client');
+  assert.equal(clientManifest.status, 200);
+  assert.equal(clientManifest.json.id, '/cliente');
+  assert.equal(clientManifest.json.start_url, '/cliente');
+
+  const driverManifest = await apiJson('/api/manifest?role=driver');
+  assert.equal(driverManifest.status, 200);
+  assert.equal(driverManifest.json.id, '/kavro-drive');
+  assert.equal(driverManifest.json.start_url, '/kavro-drive');
+
+  const adminManifest = await apiJson('/api/manifest?role=admin');
+  assert.equal(adminManifest.status, 200);
+  assert.equal(adminManifest.json.id, '/motora');
+  assert.equal(adminManifest.json.start_url, '/motora');
+});
