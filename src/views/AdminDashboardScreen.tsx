@@ -1748,6 +1748,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'plataforma', label: 'Motoristas', icon: Car, badge: null },
               { id: 'documentacoes', label: 'Documentações', icon: FileCheck2, badge: pendingDocsCount > 0 ? String(pendingDocsCount) : null },
               { id: 'categorias', label: 'Categorias de Corridas', icon: Sliders, badge: null },
+              { id: 'parceiros', label: 'Parceiros & Banners', icon: Award, badge: Array.isArray(currentConfig.partnerBanners) && currentConfig.partnerBanners.length > 0 ? String(currentConfig.partnerBanners.length) : null },
               { id: 'financeiro', label: 'Financeiro & Caixa', icon: DollarSign, badge: null },
               { id: 'repasses', label: 'Saques, Carteiras & Split', icon: Wallet, badge: null },
               { id: 'taxas', label: 'Taxas Financeiras', icon: Percent, badge: null },
@@ -1761,7 +1762,6 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'auditoria', label: 'Auditoria', icon: ShieldCheck, badge: null },
               { id: 'rotas', label: 'Rotas GPS', icon: Route, badge: completedRoutesCount > 0 ? String(completedRoutesCount) : null },
               { id: 'clientes', label: 'Passageiros', icon: Users, badge: null },
-              { id: 'parceiros', label: 'Parceiros & Banners', icon: Award, badge: Array.isArray(currentConfig.partnerBanners) && currentConfig.partnerBanners.length > 0 ? String(currentConfig.partnerBanners.length) : null },
               { id: 'notificacoes', label: 'Notificações & Push', icon: Bell, badge: null },
               { id: 'config', label: 'Tarifas & Regras', icon: Settings, badge: null },
             ]

@@ -889,6 +889,11 @@ export interface SystemConfig {
   };
   pushTemplates?: Record<string, PushTemplate>;
   partnerBanners?: HomePartnerBanner[];
+  partnerShowOnSite?: boolean;
+  partnerShowOnClientHome?: boolean;
+  partnerShowOnClientRides?: boolean;
+  partnerShowOnClientProfile?: boolean;
+  partnerHideEmptyPlaceholder?: boolean;
 }
 
 export interface HomePartnerBanner {
@@ -896,6 +901,7 @@ export interface HomePartnerBanner {
   name: string;
   kind: 'parceiro' | 'patrocinador';
   displayMode: 'logo' | 'banner';
+  placement?: 'both' | 'site' | 'client';
   imageUrl: string;
   subtitle?: string;
   linkUrl?: string;

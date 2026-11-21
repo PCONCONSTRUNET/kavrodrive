@@ -37,6 +37,7 @@ import { PassengerTermsContractModal } from '../components/PassengerTermsContrac
 import { PassengerWalletModal } from '../components/PassengerWalletModal';
 import { SafetyCenterInitialView, SafetyCenterModal } from '../components/SafetyCenterModal';
 import { RideReceiptModal } from '../components/RideReceiptModal';
+import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
 import {
   AccountSubView,
   AccountSubViews,
@@ -50,6 +51,7 @@ export const SIMPLE_MODE_STORAGE_KEY = 'kavro_simple_mode';
 
 interface ClientProfileScreenProps {
   onOpenAdminLogin?: () => void;
+  config?: SystemConfig;
   currentUser?: ClientProfile | null;
   rides?: Ride[];
   resetKey?: number;
@@ -59,6 +61,7 @@ interface ClientProfileScreenProps {
 }
 
 export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
+  config: propConfig,
   currentUser: propUser,
   rides: propRides,
   resetKey = 0,
@@ -70,7 +73,18 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   const [currentUser, setCurrentUser] = useState<ClientProfile | null>(
     propUser !== undefined ? propUser : StorageService.getCurrentUser()
   );
-  const [config] = useState<SystemConfig>(StorageService.getConfig());
+  const [localConfig, setLocalConfig] = useState<SystemConfig>(StorageService.getConfig());
+  const config = propConfig || localConfig;
+
+  useEffect(() => {
+    const syncCfg = () => setLocalConfig(StorageService.getConfig());
+    window.addEventListener('up_database_synced', syncCfg);
+    window.addEventListener('up_realtime_config', syncCfg);
+    return () => {
+      window.removeEventListener('up_database_synced', syncCfg);
+      window.removeEventListener('up_realtime_config', syncCfg);
+    };
+  }, []);
   const [subView, setSubView] = useState<AccountSubView>('hub');
 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -1048,6 +1062,17 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
                 <ChevronRight size={17} color="#94A3B8" style={{ flexShrink: 0 }} />
               </button>
             ))}
+          </div>
+
+          {/* Área de Parceiros & Patrocinadores na Conta (habilitada pelo Admin) */}
+          <div style={{ margin: '12px -16px 0 -16px' }}>
+            <PartnersSponsorsSection
+              items={config.partnerBanners}
+              variant="light"
+              context="client"
+              sectionEnabled={Boolean(config.partnerShowOnClientProfile)}
+              hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
+            />
           </div>
 
           {/* 5. Rodapé discreto com Sair da conta */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  Car, DollarSign, ShieldAlert, Search, RefreshCw, Eye, ArrowUpRight
+  Car, DollarSign, ShieldAlert, Search, RefreshCw, Eye, ArrowUpRight, Award
 } from 'lucide-react';
 import { DriverProfile, PaymentTransaction, Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
@@ -11,7 +11,7 @@ interface AdminMasterOverviewTabProps {
   rides: Ride[];
   config: SystemConfig;
   activeSosCount: number;
-  onNavigateTab: (tab: 'corridas' | 'plataforma' | 'financeiro' | 'sos' | 'rotas' | 'clientes' | 'config') => void;
+  onNavigateTab: (tab: 'corridas' | 'plataforma' | 'financeiro' | 'sos' | 'rotas' | 'clientes' | 'config' | 'parceiros') => void;
   onSelectRideDetail: (ride: Ride) => void;
   onRefreshData: () => void;
 }
@@ -283,6 +283,28 @@ export const AdminMasterOverviewTab: React.FC<AdminMasterOverviewTabProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            type="button"
+            onClick={() => onNavigateTab('parceiros')}
+            style={{
+              height: 34,
+              padding: '0 12px',
+              borderRadius: 6,
+              border: '1px solid #BBF7D0',
+              backgroundColor: '#F0FDF4',
+              color: '#15803D',
+              fontSize: '0.76rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6
+            }}
+          >
+            <Award size={14} color="#15803D" />
+            <span>Parceiros &amp; Banners ({Array.isArray(config.partnerBanners) ? config.partnerBanners.length : 0})</span>
+          </button>
+
           <button
             type="button"
             onClick={() => onNavigateTab('plataforma')}

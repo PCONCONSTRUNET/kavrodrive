@@ -1034,7 +1034,13 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       </div>
 
       {/* ── ÁREA DE PARCEIROS & PATROCINADORES NA HOME DO APP ── */}
-      <PartnersSponsorsSection items={config.partnerBanners} variant="light" />
+      <PartnersSponsorsSection
+        items={config.partnerBanners}
+        variant="light"
+        context="client"
+        sectionEnabled={config.partnerShowOnClientHome !== false}
+        hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
+      />
 
       {/* ── RODAPÉ LGPD & SEGURANÇA DE DADOS (DISCRETO) ── */}
       <div style={{ padding: '14px 20px 4px 20px', textAlign: 'center' }}>

@@ -20,6 +20,7 @@ import { RideRatingBottomSheet } from '../components/RideRatingBottomSheet';
 import { RideCancelModal } from '../components/RideCancelModal';
 import { RideEditRouteModal } from '../components/RideEditRouteModal';
 import { PaymentMethodBadge } from '../components/PaymentMethodIcon';
+import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
 
 interface ClientMyRidesScreenProps {
   rides: Ride[];
@@ -813,6 +814,17 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
               </div>
             </div>
           )}
+
+          {/* Área de Parceiros & Patrocinadores (habilitada pelo Admin) */}
+          <div style={{ marginTop: 14 }}>
+            <PartnersSponsorsSection
+              items={config?.partnerBanners}
+              variant="light"
+              context="client"
+              sectionEnabled={Boolean(config?.partnerShowOnClientRides)}
+              hideWhenEmpty={Boolean(config?.partnerHideEmptyPlaceholder)}
+            />
+          </div>
         </div>
       )}
 

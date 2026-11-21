@@ -5,6 +5,9 @@ import { HomePartnerBanner } from '../types';
 interface PartnersSponsorsSectionProps {
   items?: HomePartnerBanner[] | null;
   variant: 'dark' | 'light';
+  context?: 'site' | 'client';
+  sectionEnabled?: boolean;
+  hideWhenEmpty?: boolean;
   isMobile?: boolean;
   onBecomePartnerClick?: () => void;
 }
@@ -32,13 +35,27 @@ export function sanitizePartnerHref(rawUrl?: string): string {
 export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = ({
   items,
   variant,
+  context,
+  sectionEnabled = true,
+  hideWhenEmpty = false,
   isMobile = false,
   onBecomePartnerClick,
 }) => {
+  if (!sectionEnabled) return null;
+
+  const targetContext: 'site' | 'client' = context || (variant === 'dark' ? 'site' : 'client');
   const activeItems = (Array.isArray(items) ? items : [])
-    .filter((item) => item && item.active !== false && String(item.imageUrl || '').trim().length > 0)
+    .filter((item) => {
+      if (!item || item.active === false || String(item.imageUrl || '').trim().length === 0) {
+        return false;
+      }
+      const p = item.placement || 'both';
+      return p === 'both' || p === targetContext;
+    })
     .slice()
     .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
+
+  if (hideWhenEmpty && activeItems.length === 0) return null;
 
   const banners = activeItems.filter((item) => item.displayMode === 'banner');
   const logos = activeItems.filter((item) => item.displayMode !== 'banner');

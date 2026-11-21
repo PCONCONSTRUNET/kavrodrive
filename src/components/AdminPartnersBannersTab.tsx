@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -8,8 +8,10 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  Globe,
   Image as ImageIcon,
   Plus,
+  Smartphone,
   Trash2,
   Upload,
 } from 'lucide-react';
@@ -36,6 +38,8 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
   const [name, setName] = useState('');
   const [kind, setKind] = useState<'parceiro' | 'patrocinador'>('patrocinador');
   const [displayMode, setDisplayMode] = useState<'logo' | 'banner'>('logo');
+  const [placement, setPlacement] = useState<'both' | 'site' | 'client'>('both');
+  const [previewTarget, setPreviewTarget] = useState<'site' | 'client'>('site');
   const [imageUrl, setImageUrl] = useState('');
   const [subtitle, setSubtitle] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
@@ -44,11 +48,19 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
   const [saveBannerNotice, setSaveBannerNotice] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
+  useEffect(() => {
+    const synced = Array.isArray(config.partnerBanners)
+      ? config.partnerBanners.slice().sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0))
+      : [];
+    setItems(synced);
+  }, [config.partnerBanners]);
+
   const resetForm = () => {
     setEditingId(null);
     setName('');
     setKind('patrocinador');
     setDisplayMode('logo');
+    setPlacement('both');
     setImageUrl('');
     setSubtitle('');
     setLinkUrl('');
@@ -56,16 +68,17 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
     setFormError('');
   };
 
-  const persistPartnerBanners = async (nextList: HomePartnerBanner[], message: string) => {
+  const persistPartnerSettings = async (
+    patch: Partial<SystemConfig>,
+    message: string
+  ) => {
     setIsSaving(true);
     setFormError('');
-    const ordered = nextList.map((item, idx) => ({ ...item, sortOrder: idx + 1 }));
-    setItems(ordered);
     const latest = StorageService.getConfig();
     const updatedConfig: SystemConfig = {
       ...latest,
       ...config,
-      partnerBanners: ordered,
+      ...patch,
     };
     const ok = await StorageService.saveConfig(updatedConfig);
     setIsSaving(false);
@@ -76,6 +89,12 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
         : 'Salvo localmente, mas houve erro ao sincronizar com o servidor.'
     );
     setTimeout(() => setSaveBannerNotice(''), 3500);
+  };
+
+  const persistPartnerBanners = async (nextList: HomePartnerBanner[], message: string) => {
+    const ordered = nextList.map((item, idx) => ({ ...item, sortOrder: idx + 1 }));
+    setItems(ordered);
+    await persistPartnerSettings({ partnerBanners: ordered }, message);
   };
 
   const handleImageFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -121,6 +140,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       name: cleanName,
       kind,
       displayMode,
+      placement,
       imageUrl: cleanImage,
       subtitle: subtitle.trim(),
       linkUrl: normalizedLink,
@@ -136,7 +156,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
 
     await persistPartnerBanners(
       nextList,
-      editingId ? 'Parceiro atualizado e publicado na Home!' : 'Parceiro adicionado e publicado na Home!'
+      editingId ? 'Parceiro atualizado!' : 'Parceiro adicionado e publicado!'
     );
     resetForm();
   };
@@ -146,11 +166,23 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
     setName(item.name);
     setKind(item.kind);
     setDisplayMode(item.displayMode);
+    setPlacement(item.placement || 'both');
     setImageUrl(item.imageUrl);
     setSubtitle(item.subtitle || '');
     setLinkUrl(item.linkUrl || '');
     setActive(item.active !== false);
     setFormError('');
+  };
+
+  const handleCyclePlacement = async (id: string) => {
+    const order: Array<'both' | 'site' | 'client'> = ['both', 'site', 'client'];
+    const nextList = items.map((item) => {
+      if (item.id !== id) return item;
+      const cur = item.placement || 'both';
+      const next = order[(order.indexOf(cur) + 1) % order.length];
+      return { ...item, placement: next };
+    });
+    await persistPartnerBanners(nextList, 'Área de exibição do parceiro atualizada.');
   };
 
   const handleMove = async (index: number, delta: -1 | 1) => {
@@ -201,10 +233,10 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       >
         <div>
           <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0F172A', margin: 0, letterSpacing: '-0.02em' }}>
-            Parceiros &amp; Patrocinadores da Home
+            Parceiros &amp; Banners (Site Oficial e Áreas do Cliente)
           </h2>
           <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '3px 0 0 0' }}>
-            Adicione logotipos de parceiros e banners de patrocinadores exibidos na Home do site e na Home do app do passageiro.
+            Controle onde cada logo ou banner aparece: na Home pública do site oficial e dentro das telas do app do cliente.
           </p>
         </div>
 
@@ -227,6 +259,115 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
             <span>{saveBannerNotice}</span>
           </div>
         )}
+      </div>
+
+      {/* Painel Global: Onde a Seção de Parceiros & Banners Fica Visível */}
+      <div
+        style={{
+          backgroundColor: '#FFFFFF',
+          border: '1px solid #E2E8F0',
+          borderRadius: 12,
+          padding: 18,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 12,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#0F172A' }}>
+              Controle de Visibilidade por Área
+            </div>
+            <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 2 }}>
+              Ative ou desative os blocos de patrocinadores e parceiros no site oficial e nas telas internas do cliente.
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+          {([
+            {
+              key: 'partnerShowOnSite',
+              label: 'Site Oficial (Home /)',
+              desc: 'Página pública fora do app',
+              checked: config.partnerShowOnSite !== false,
+              icon: <Globe size={15} />,
+            },
+            {
+              key: 'partnerShowOnClientHome',
+              label: 'Cliente — Início',
+              desc: 'Tela principal do passageiro',
+              checked: config.partnerShowOnClientHome !== false,
+              icon: <Smartphone size={15} />,
+            },
+            {
+              key: 'partnerShowOnClientRides',
+              label: 'Cliente — Atividade',
+              desc: 'Aba Minhas Corridas / Histórico',
+              checked: Boolean(config.partnerShowOnClientRides),
+              icon: <Smartphone size={15} />,
+            },
+            {
+              key: 'partnerShowOnClientProfile',
+              label: 'Cliente — Conta',
+              desc: 'Aba Perfil e Segurança',
+              checked: Boolean(config.partnerShowOnClientProfile),
+              icon: <Smartphone size={15} />,
+            },
+            {
+              key: 'partnerHideEmptyPlaceholder',
+              label: 'Ocultar bloco quando vazio',
+              desc: 'Não mostrar espaço reservado sem itens',
+              checked: Boolean(config.partnerHideEmptyPlaceholder),
+              icon: <EyeOff size={15} />,
+            },
+          ] as const).map((toggle) => (
+            <button
+              key={toggle.key}
+              type="button"
+              disabled={isSaving}
+              onClick={() =>
+                persistPartnerSettings(
+                  { [toggle.key]: !toggle.checked },
+                  `${toggle.label}: ${!toggle.checked ? 'Ativado' : 'Desativado'}.`
+                )
+              }
+              style={{
+                textAlign: 'left',
+                padding: '10px 12px',
+                borderRadius: 10,
+                border: toggle.checked ? '1.5px solid #16A34A' : '1px solid #CBD5E1',
+                backgroundColor: toggle.checked ? '#F0FDF4' : '#F8FAFC',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                cursor: isSaving ? 'wait' : 'pointer',
+              }}
+            >
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: '0.8rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ color: toggle.checked ? '#15803D' : '#64748B', display: 'inline-flex' }}>{toggle.icon}</span>
+                  <span>{toggle.label}</span>
+                </div>
+                <div style={{ fontSize: '0.69rem', color: '#64748B', marginTop: 2 }}>{toggle.desc}</div>
+              </div>
+              <span
+                style={{
+                  fontSize: '0.68rem',
+                  fontWeight: 800,
+                  padding: '3px 8px',
+                  borderRadius: 999,
+                  backgroundColor: toggle.checked ? '#15803D' : '#E2E8F0',
+                  color: toggle.checked ? '#FFFFFF' : '#475569',
+                  flexShrink: 0,
+                }}
+              >
+                {toggle.checked ? 'ON' : 'OFF'}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Formulário de Cadastro / Edição */}
@@ -298,7 +439,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
 
           <div>
             <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-              Formato de Exibição na Home
+              Formato de Exibição
             </label>
             <select
               value={displayMode}
@@ -307,6 +448,24 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
             >
               <option value="logo">Logo (Card Compacto de Marca)</option>
               <option value="banner">Banner (Destaque Horizontal Largo)</option>
+            </select>
+          </div>
+
+          <div>
+            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
+              Onde Exibir
+            </label>
+            <select
+              value={placement}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPlacement(v === 'site' || v === 'client' ? v : 'both');
+              }}
+              style={inputStyle}
+            >
+              <option value="both">Site Oficial + Área do Cliente</option>
+              <option value="site">Somente Site Oficial (Home)</option>
+              <option value="client">Somente Área do Cliente (App)</option>
             </select>
           </div>
 
@@ -584,6 +743,38 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       >
                         {item.displayMode === 'banner' ? 'Banner' : 'Logo'}
                       </span>
+                      <button
+                        type="button"
+                        disabled={isSaving}
+                        onClick={() => handleCyclePlacement(item.id)}
+                        title="Clique para alternar onde este item aparece"
+                        style={{
+                          fontSize: '0.66rem',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: 999,
+                          border: '1px solid #CBD5E1',
+                          backgroundColor:
+                            item.placement === 'site'
+                              ? '#EEF2FF'
+                              : item.placement === 'client'
+                                ? '#FEF3C7'
+                                : '#ECFDF5',
+                          color:
+                            item.placement === 'site'
+                              ? '#3730A3'
+                              : item.placement === 'client'
+                                ? '#92400E'
+                                : '#166534',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {item.placement === 'site'
+                          ? 'Só Site Oficial'
+                          : item.placement === 'client'
+                            ? 'Só Área do Cliente'
+                            : 'Site + Cliente'}
+                      </button>
                       {item.active === false && (
                         <span
                           style={{
@@ -733,10 +924,10 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
         )}
       </div>
 
-      {/* Pré-visualização ao vivo de como aparece na Home do App Passageiro */}
+      {/* Pré-visualização ao vivo (alternando entre Site Oficial e Área do Cliente) */}
       <div
         style={{
-          backgroundColor: '#FFFFFF',
+          backgroundColor: previewTarget === 'site' ? '#0D151C' : '#FFFFFF',
           border: '1px solid #E2E8F0',
           borderRadius: 12,
           overflow: 'hidden',
@@ -747,15 +938,69 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
             padding: '10px 16px',
             backgroundColor: '#F8FAFC',
             borderBottom: '1px solid #E2E8F0',
-            fontSize: '0.75rem',
-            fontWeight: 700,
-            color: '#475569',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
           }}
         >
-          Pré-visualização na Home do App Passageiro
+          <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569' }}>
+            Pré-visualização ao vivo
+          </span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => setPreviewTarget('site')}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 999,
+                border: previewTarget === 'site' ? '1.5px solid #0F172A' : '1px solid #CBD5E1',
+                backgroundColor: previewTarget === 'site' ? '#0F172A' : '#FFFFFF',
+                color: previewTarget === 'site' ? '#FFFFFF' : '#334155',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Site Oficial (Home)
+            </button>
+            <button
+              type="button"
+              onClick={() => setPreviewTarget('client')}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 999,
+                border: previewTarget === 'client' ? '1.5px solid #15803D' : '1px solid #CBD5E1',
+                backgroundColor: previewTarget === 'client' ? '#15803D' : '#FFFFFF',
+                color: previewTarget === 'client' ? '#FFFFFF' : '#334155',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              Área do Cliente (App)
+            </button>
+          </div>
         </div>
-        <div style={{ maxWidth: 460, paddingBottom: 14 }}>
-          <PartnersSponsorsSection items={items} variant="light" />
+        <div style={{ maxWidth: previewTarget === 'site' ? '100%' : 460, paddingBottom: 14 }}>
+          <PartnersSponsorsSection
+            items={items}
+            variant={previewTarget === 'site' ? 'dark' : 'light'}
+            context={previewTarget}
+            sectionEnabled={
+              previewTarget === 'site'
+                ? config.partnerShowOnSite !== false
+                : config.partnerShowOnClientHome !== false
+            }
+            hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
+          />
+          {((previewTarget === 'site' && config.partnerShowOnSite === false) ||
+            (previewTarget === 'client' && config.partnerShowOnClientHome === false)) && (
+            <div style={{ padding: 18, fontSize: '0.78rem', color: '#94A3B8', textAlign: 'center' }}>
+              Esta área está desativada no momento no painel de visibilidade acima.
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -397,6 +397,7 @@ const ClientApp: React.FC<{
 
         {currentTab === 'perfil' && (
           <ClientProfileScreen
+            config={config}
             currentUser={currentUser}
             rides={userRides}
             resetKey={profileResetKey}
