@@ -14,9 +14,12 @@
       (function () {
         try {
           var p = window.location.pathname || '/';
+          var q = window.location.search || '';
           var isAdminRoute = /^\/(administracion|motora|motorista)(\/|$)/i.test(p);
-          var isDriverRoute = /^\/kavro-drive(\/|$)/i.test(p);
-          var isClientRoute = /^\/(cliente|app)(\/|$)/i.test(p);
+          var isInstallDriver = /^\/instalar(\/|$)/i.test(p) && /[?&](app|role)=(motorista|parceiro|driver)\b/i.test(q);
+          var isDriverRoute = /^\/kavro-drive(\/|$)/i.test(p) || isInstallDriver;
+          var isInstallClient = /^\/instalar(\/|$)/i.test(p) && !isInstallDriver;
+          var isClientRoute = /^\/(cliente|app)(\/|$)/i.test(p) || isInstallClient;
           var m = document.getElementById('app-manifest');
           var titleMeta = document.getElementById('apple-app-title');
           if (isAdminRoute) {

@@ -38,6 +38,7 @@ const PublicFleetScreen = lazyNamed(() => import('./views/PublicFleetScreen'), '
 const HelpCenterScreen = lazyNamed(() => import('./views/HelpCenterScreen'), 'HelpCenterScreen');
 const FamilyInviteScreen = lazyNamed(() => import('./views/FamilyInviteScreen'), 'FamilyInviteScreen');
 const CitiesServedScreen = lazyNamed(() => import('./views/CitiesServedScreen'), 'CitiesServedScreen');
+const InstallPwaTutorialScreen = lazyNamed(() => import('./views/InstallPwaTutorialScreen'), 'InstallPwaTutorialScreen');
 
 const RouteLoadingFallback: React.FC = () => (
   <div
@@ -1169,6 +1170,18 @@ export const App: React.FC = () => {
       <Route
         path="/cidades"
         element={<CitiesServedScreen config={config} />}
+      />
+      <Route
+        path="/instalar"
+        element={<InstallPwaTutorialScreen config={config} />}
+      />
+      <Route
+        path="/instalar-app"
+        element={<Navigate to="/instalar" replace />}
+      />
+      <Route
+        path="/tutorial-app"
+        element={<Navigate to="/instalar" replace />}
       />
       <Route
         path="/seguranca"

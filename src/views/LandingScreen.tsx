@@ -616,11 +616,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                       type="button"
                       onClick={() => {
                         setAboutMenuOpen(false);
-                        scrollToSection('apps-qr');
+                        navigate('/instalar');
                       }}
                       style={darkDropdownItemStyle}
                     >
-                      Acessar no Celular
+                      Instalar Web App (PWA)
                     </button>
                     <button
                       type="button"
@@ -2128,10 +2128,10 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 marginBottom: 8,
               }}
             >
-              Acesso direto pelo navegador do celular
+              Acesso Web App e instalação na tela inicial
             </h2>
             <p style={{ fontSize: '0.94rem', color: '#475569' }}>
-              Aponte a câmera para o QR Code ou acesse o aplicativo web para passageiros e motoristas.
+              Operamos via navegador e PWA Web oficial. Toque abaixo para ver o guia de instalação no celular ou área de trabalho e acessar.
             </p>
           </div>
 
@@ -2145,7 +2145,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             {/* Card Passageiro */}
             <button
               type="button"
-              onClick={() => openClientFlow('login')}
+              onClick={() => navigate('/instalar?app=passageiro')}
               style={{
                 backgroundColor: '#0A0F14',
                 color: '#FFFFFF',
@@ -2169,7 +2169,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   />
                 </div>
               ) : (
-                <QrCanvasBox url={`${baseUrl}/cliente`} darkMode />
+                <QrCanvasBox url={`${baseUrl}/instalar?app=passageiro`} darkMode />
               )}
               <div style={{ flex: 1, textAlign: 'left' }}>
                 <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8', letterSpacing: '0.07em', marginBottom: 4 }}>
@@ -2179,7 +2179,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   App Kavro Passageiro
                 </div>
                 <div style={{ fontSize: '0.84rem', color: '#94A3B8' }}>
-                  {isMobile ? 'Toque para abrir e pedir sua corrida' : 'Escaneie para simular e viajar'}
+                  {isMobile ? 'Tutorial PWA + acesso rápido para pedir corrida' : 'Tutorial para área de trabalho, celular ou QR Code'}
                 </div>
               </div>
               <ArrowRight size={20} color="#76D800" />
@@ -2188,7 +2188,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             {/* Card Motorista */}
             <button
               type="button"
-              onClick={() => navigate('/kavro-drive')}
+              onClick={() => navigate('/instalar?app=motorista')}
               style={{
                 backgroundColor: '#FFFFFF',
                 color: '#0A0F14',
@@ -2212,7 +2212,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   />
                 </div>
               ) : (
-                <QrCanvasBox url={`${baseUrl}/kavro-drive`} />
+                <QrCanvasBox url={`${baseUrl}/instalar?app=motorista`} />
               )}
               <div style={{ flex: 1, textAlign: 'left' }}>
                 <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#15803D', letterSpacing: '0.07em', marginBottom: 4 }}>
@@ -2222,7 +2222,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   App Parceiro Kavro
                 </div>
                 <div style={{ fontSize: '0.84rem', color: '#475569' }}>
-                  {isMobile ? 'Toque para acessar o Portal do Motorista' : 'Escaneie para ficar online e dirigir'}
+                  {isMobile ? 'Tutorial PWA + acesso ao Portal do Motorista' : 'Tutorial para área de trabalho, celular ou QR Code'}
                 </div>
               </div>
               <ArrowRight size={20} color="#0A0F14" />
@@ -2319,6 +2319,9 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             <div>
               <h4 style={footerColTitleStyle}>Institucional</h4>
               <div style={footerColListStyle}>
+                <button type="button" onClick={() => navigate('/instalar')} style={footerLinkStyle}>
+                  Instalar Web App (PWA)
+                </button>
                 <button type="button" onClick={() => navigate('/frotas')} style={footerLinkStyle}>
                   Frota verificada
                 </button>
