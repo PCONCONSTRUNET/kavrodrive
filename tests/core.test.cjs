@@ -3628,6 +3628,15 @@ test('Parceiros e Patrocinadores da Home: auditoria registra diff e GET /api/con
       subtitle: 'Entregas no mesmo dia pela Kavro',
       active: true,
       sortOrder: 2
+    },
+    {
+      id: 'prt-gif-1',
+      kind: 'patrocinador',
+      displayMode: 'banner',
+      areas: ['site', 'client_home'],
+      imageUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+      active: true,
+      sortOrder: 3
     }
   ];
 
@@ -3649,12 +3658,13 @@ test('Parceiros e Patrocinadores da Home: auditoria registra diff e GET /api/con
   const pubCfg = await apiJson('/api/config');
   assert.equal(pubCfg.status, 200);
   assert.equal(Array.isArray(pubCfg.json.partnerBanners), true);
-  assert.equal(pubCfg.json.partnerBanners.length, 2);
+  assert.equal(pubCfg.json.partnerBanners.length, 3);
   assert.equal(pubCfg.json.partnerBanners[0].name, 'Auto Posto Central');
   assert.equal(pubCfg.json.partnerBanners[1].displayMode, 'banner');
+  assert.ok(String(pubCfg.json.partnerBanners[2].imageUrl || '').startsWith('data:image/gif;base64,'));
 
   const diff = audit.buildConfigChangesDiff({ ...prevCfg, partnerBanners: [] }, { ...prevCfg, partnerBanners: sampleBanners });
-  assert.ok(diff.some(d => d.field === 'partnerBanners' && d.after === '2 item(ns)'));
+  assert.ok(diff.some(d => d.field === 'partnerBanners' && d.after === '3 item(ns)'));
 });
 
 test('Auditoria publica desativada (410) e /api/public/fleet expoe somente frota aprovada sem localizacoes', async () => {

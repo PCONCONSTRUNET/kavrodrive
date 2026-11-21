@@ -183,10 +183,21 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
 
   const handleImageFileSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
     setFormError('');
-    if (!file.type.startsWith('image/')) {
-      setFormError('Selecione um arquivo de imagem válido (PNG, JPG, WebP ou SVG).');
+    const isImageMime = file.type.startsWith('image/');
+    const isImageExt = /\.(png|jpe?g|webp|gif|svg)$/i.test(file.name);
+    if (!isImageMime && !isImageExt) {
+      setFormError('Selecione uma imagem ou GIF animado válido (GIF, PNG, JPG, WebP ou SVG).');
+      return;
+    }
+    const isGif = file.type === 'image/gif' || /\.gif$/i.test(file.name);
+    if (isGif && file.size > 2.5 * 1024 * 1024) {
+      const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+      setFormError(
+        `GIF animado muito grande (${sizeMb} MB). Envie um GIF de até 2,5 MB ou cole a URL externa (https://...) no campo ao lado.`
+      );
       return;
     }
     const reader = new FileReader();
@@ -194,6 +205,12 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       const rawDataUrl = typeof reader.result === 'string' ? reader.result : '';
       if (!rawDataUrl) return;
       const compressed = await compressPartnerImageDataUrl(rawDataUrl, displayMode);
+      if (compressed.length > 3_500_000) {
+        setFormError(
+          'Arquivo animado muito pesado para envio direto. Reduza para até 2,5 MB ou cole uma URL externa (https://...).'
+        );
+        return;
+      }
       setImageUrl(compressed);
     };
     reader.readAsDataURL(file);
@@ -647,11 +664,11 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
         >
           <div>
             <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 600, color: '#334155', marginBottom: 4 }}>
-              URL da Imagem ou Logo *
+              URL da Imagem, GIF Animado ou Logo *
             </label>
             <input
               type="text"
-              placeholder="Cole https://... ou envie um arquivo ao lado"
+              placeholder="Cole https://... (.gif, .png, .webp) ou envie um arquivo ao lado"
               value={imageUrl}
               onChange={(e) => setImageUrl(e.target.value)}
               style={inputStyle}
@@ -675,10 +692,10 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
               }}
             >
               <Upload size={15} />
-              <span>Enviar arquivo (PNG/JPG/WebP)</span>
+              <span>Enviar imagem ou GIF animado</span>
               <input
                 type="file"
-                accept="image/*"
+                accept="image/*,.gif,.webp,.png,.jpg,.jpeg,.svg"
                 onChange={handleImageFileSelected}
                 style={{ display: 'none' }}
               />

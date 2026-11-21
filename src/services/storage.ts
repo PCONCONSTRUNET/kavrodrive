@@ -2186,7 +2186,21 @@ export const StorageService = {
       rideCategories: normalizedCats,
       serviceCategories: normalizedCats
     };
-    localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(payload));
+    try {
+      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(payload));
+    } catch {
+      try {
+        const compactForLocal: SystemConfig = {
+          ...payload,
+          partnerBanners: Array.isArray(payload.partnerBanners)
+            ? payload.partnerBanners.filter((b) => String(b.imageUrl || '').length < 250_000)
+            : payload.partnerBanners
+        };
+        localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(compactForLocal));
+      } catch {
+        // Ignora erro de cota local para não impedir persistência remota no PostgreSQL
+      }
+    }
 
     return fetch('/api/config', {
       method: 'POST',
