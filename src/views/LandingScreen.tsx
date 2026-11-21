@@ -223,15 +223,19 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       src: '/landing/banner-urbana.png',
       alt: 'Kavro Drive — Uma plataforma completa de mobilidade urbana.',
     },
+    {
+      src: '/landing/banner-motors.png',
+      alt: 'Kavro Drive — Conectando motoristas e passageiros.',
+    },
   ];
 
   useEffect(() => {
     if (!isMobile) return;
-    const tid = window.setInterval(() => {
-      setMobileBannerIndex((prev) => (prev + 1) % 2);
-    }, 4500);
-    return () => window.clearInterval(tid);
-  }, [isMobile]);
+    const tid = window.setTimeout(() => {
+      setMobileBannerIndex((prev) => (prev + 1) % 3);
+    }, 3000);
+    return () => window.clearTimeout(tid);
+  }, [isMobile, mobileBannerIndex]);
 
   const baseUrl =
     typeof window !== 'undefined' && window.location.origin
@@ -991,7 +995,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
             </div>
           </div>
 
-          {/* Indicador discreto dos 2 banners */}
+          {/* Indicador discreto dos 3 banners */}
           <div
             style={{
               display: 'flex',
