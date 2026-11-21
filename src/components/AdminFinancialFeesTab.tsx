@@ -20,6 +20,7 @@ import { StorageService } from '../services/storage';
 import { formatCurrencyValue, parseCurrencyInput, parseCurrencyToFloat } from '../utils/format';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
 import { WithdrawalScheduleControlCard } from './WithdrawalScheduleControlCard';
+import { EfiBankTariffsCard, EFI_OFFICIAL_RATES } from './EfiBankTariffsCard';
 import { normalizeWithdrawalWeekdays } from '../utils/withdrawalSchedule';
 
 interface AdminFinancialFeesTabProps {
@@ -102,9 +103,11 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   );
 
   // Sub-aba 2: Pagamentos, Gateways & Repasses
-  const [pixGatewayStr, setPixGatewayStr] = useState(String(config.gatewayFeePercents?.pix ?? 0));
+  const [pixGatewayStr, setPixGatewayStr] = useState(
+    String(config.gatewayFeePercents?.pix ?? EFI_OFFICIAL_RATES.pixReceivePercent)
+  );
   const [creditGatewayStr, setCreditGatewayStr] = useState(
-    String(config.gatewayFeePercents?.cartao_credito ?? 0)
+    String(config.gatewayFeePercents?.cartao_credito ?? EFI_OFFICIAL_RATES.creditCardCashPercent)
   );
   const [paymentsStatus, setPaymentsStatus] = useState<{
     gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
@@ -207,8 +210,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setGlobalFixedStr(formatCurrencyValue(fixed));
     setUseCategoryOverride(Boolean(config.useCategoryCommissionOverride));
 
-    setPixGatewayStr(String(config.gatewayFeePercents?.pix ?? 0));
-    setCreditGatewayStr(String(config.gatewayFeePercents?.cartao_credito ?? 0));
+    setPixGatewayStr(String(config.gatewayFeePercents?.pix ?? EFI_OFFICIAL_RATES.pixReceivePercent));
+    setCreditGatewayStr(String(config.gatewayFeePercents?.cartao_credito ?? EFI_OFFICIAL_RATES.creditCardCashPercent));
     setWithdrawalFeePercentStr(String(config.withdrawalFeePercent ?? 0));
     setWithdrawalFeeFixedStr(formatCurrencyValue(config.withdrawalFeeFixed ?? 0));
     setMinWithdrawalStr(formatCurrencyValue(config.minWithdrawalAmount ?? 20));
@@ -351,6 +354,43 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   );
   const sampleRideComm = calcPlatformFee(sampleRideGross, globalPctPreview, globalFixedPreview);
   const sampleRideDriver = Math.round(Math.max(0, sampleRideGross - sampleRideComm) * 100) / 100;
+
+  const pixGwPreview = clampPct(pixGatewayStr, EFI_OFFICIAL_RATES.pixReceivePercent);
+  const creditGwPreview = clampPct(creditGatewayStr, EFI_OFFICIAL_RATES.creditCardCashPercent);
+
+  const handleApplyStandardEfiFees = () => {
+    markDirty();
+    setPixGatewayStr(String(EFI_OFFICIAL_RATES.pixReceivePercent));
+    setCreditGatewayStr(String(EFI_OFFICIAL_RATES.creditCardCashPercent));
+    setSaveFeedback({
+      type: 'ok',
+      text: 'Taxas padrão da Efí Bank (1,19% PIX e 3,49% Cartão à vista) preenchidas! Clique em "Salvar e Aplicar no Sistema".'
+    });
+  };
+
+  const handleApplyEfiWithdrawalFee = () => {
+    markDirty();
+    setWithdrawalFeePercentStr(String(EFI_OFFICIAL_RATES.pixPayoutPercent));
+    setSaveFeedback({
+      type: 'ok',
+      text: 'Taxa de envio PIX Efí (1,19%) aplicada no campo de saque PIX! Clique em "Salvar e Aplicar no Sistema".'
+    });
+  };
+
+  const renderEfiTariffsSection = (grossAmount: number, compactHeader = false) => (
+    <EfiBankTariffsCard
+      efiConnected={paymentsStatus.efiPixActive || paymentsStatus.efiEnabled}
+      efiSandbox={paymentsStatus.efiSandbox}
+      sampleRideGross={grossAmount}
+      commissionPercent={globalPctPreview}
+      commissionFixed={globalFixedPreview}
+      configuredPixGwPercent={pixGwPreview}
+      configuredCreditGwPercent={creditGwPreview}
+      onApplyStandardGatewayFees={handleApplyStandardEfiFees}
+      onApplyWithdrawalEfiFee={handleApplyEfiWithdrawalFee}
+      compactHeader={compactHeader}
+    />
+  );
 
   // Prévia de Pagamentos / Gateways / Saques
   const methodRows: Array<{
@@ -869,6 +909,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
               <span>Motorista: <strong style={{ color: '#0F172A' }}>{formatBRL(sampleRideDriver)}</strong></span>
             </div>
           </div>
+
+          {renderEfiTariffsSection(sampleRideGross, true)}
         </div>
       )}
 
@@ -943,6 +985,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
               )}
             </div>
           </div>
+
+          {renderEfiTariffsSection(50, false)}
 
           {/* Tabela direta: Meios de Pagamento x Comissão x Taxa do Gateway */}
           <div

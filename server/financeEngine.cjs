@@ -3342,11 +3342,11 @@ async function getPlatformFinancialOverview() {
       apple_pay: commPctDefault,
       dinheiro: commPctDefault
     },
-    gatewayFeePercents: cfg.gatewayFeePercents || {
-      pix: 0,
-      cartao_credito: 0,
-      cartao_debito: 0,
-      apple_pay: 0
+    gatewayFeePercents: {
+      pix: Number(cfg.gatewayFeePercents?.pix ?? 1.19),
+      cartao_credito: Number(cfg.gatewayFeePercents?.cartao_credito ?? 3.49),
+      cartao_debito: Number(cfg.gatewayFeePercents?.cartao_debito ?? 0),
+      apple_pay: Number(cfg.gatewayFeePercents?.apple_pay ?? 0)
     },
     withdrawalFeePercent: Number(cfg.withdrawalFeePercent ?? 0),
     withdrawalFeeFixed: Number(cfg.withdrawalFeeFixed ?? 0),

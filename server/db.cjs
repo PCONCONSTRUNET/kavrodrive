@@ -76,8 +76,8 @@ function getInitialStore() {
             dinheiro: 20
           },
           gatewayFeePercents: {
-            pix: 0,
-            cartao_credito: 0,
+            pix: 1.19,
+            cartao_credito: 3.49,
             cartao_debito: 0,
             apple_pay: 0
           },

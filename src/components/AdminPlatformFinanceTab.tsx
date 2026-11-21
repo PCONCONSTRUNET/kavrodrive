@@ -498,9 +498,9 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     const debitGross = debitTxs.reduce((acc, t) => acc + t.finalAmount, 0);
     const gwRates = config.gatewayFeePercents || {};
     const gatewayCost =
-      (pixGross * Number(gwRates.pix || 0)) / 100 +
-      (creditGross * Number(gwRates.cartao_credito || 0)) / 100 +
-      (debitGross * Number(gwRates.cartao_debito || 0)) / 100;
+      (pixGross * Number(gwRates.pix ?? 1.19)) / 100 +
+      (creditGross * Number(gwRates.cartao_credito ?? 3.49)) / 100 +
+      (debitGross * Number(gwRates.cartao_debito ?? 0)) / 100;
 
     const digitalInflow = valid
       .filter(t => t.method !== 'dinheiro' && (t.status === 'confirmado' || t.status === 'pago' || t.status === 'parcialmente_pago'))

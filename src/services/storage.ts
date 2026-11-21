@@ -172,8 +172,8 @@ export const DEFAULT_CONFIG: SystemConfig = {
     dinheiro: 20,
   },
   gatewayFeePercents: {
-    pix: 0,
-    cartao_credito: 0,
+    pix: 1.19,
+    cartao_credito: 3.49,
   },
   withdrawalFeePercent: 0,
   withdrawalFeeFixed: 0,

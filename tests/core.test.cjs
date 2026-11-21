@@ -4043,9 +4043,11 @@ test('Regra de Saque PIX do Motorista: padrao somente Sexta-feira, edicao de dia
   const drvEmail = `wd.sched.${ts}@kavro.test`;
 
   try {
-    // 1. Padrão do banco aponta somente Sexta-feira ([5]) e botão habilitado
+    // 1. Padrão do banco aponta somente Sexta-feira ([5]), botão habilitado e taxas Efí Bank pré-configuradas
     assert.equal(originalStoreSnapshot.system_config.default.config.driverWithdrawalEnabled, true);
     assert.deepEqual(originalStoreSnapshot.system_config.default.config.driverWithdrawalWeekdays, [5]);
+    assert.equal(originalStoreSnapshot.system_config.default.config.gatewayFeePercents.pix, 1.19);
+    assert.equal(originalStoreSnapshot.system_config.default.config.gatewayFeePercents.cartao_credito, 3.49);
 
     const fridayCheck = finance.evaluateWithdrawalAvailability(
       { driverWithdrawalEnabled: true, driverWithdrawalWeekdays: [5] },
