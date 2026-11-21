@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   MapPin, Search, Clock, ChevronRight, Calendar,
   Home, Briefcase, Star, Navigation,
-  Trash2, Plus, X, Dumbbell, MapPinned, Bell, Lock, ArrowRight, Car, Package
+  Trash2, Plus, X, Dumbbell, MapPinned, Bell, ArrowRight, Car, Package
 } from 'lucide-react';
 import { LocationPoint, SystemConfig, ClientProfile, Ride } from '../types';
 import { normalizeCategoriesFromConfig, resolveCategoryType } from '../utils/categoryEngine';
@@ -12,7 +12,6 @@ import { PassengerLiveMap } from '../components/PassengerLiveMap';
 import { PassengerFeatureCarousel } from '../components/PassengerFeatureCarousel';
 import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
 import { NotificationsModal } from '../components/NotificationsModal';
-import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 
 interface ClientHomeScreenProps {
   config: SystemConfig;
@@ -53,7 +52,6 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
   const [recentDestinations, setRecentDestinations] = useState<LocationPoint[]>([]);
   const [activeLiveRide, setActiveLiveRide] = useState<Ride | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
-  const [isTermsOpen, setIsTermsOpen] = useState<boolean>(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() => {
     return StorageService.getNotifications().filter(n => !n.read).length;
   });
@@ -1033,47 +1031,16 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         />
       </div>
 
-      {/* ── ÁREA DE PARCEIROS & PATROCINADORES NA HOME DO APP ── */}
-      <PartnersSponsorsSection
-        items={config.partnerBanners}
-        variant="light"
-        area="client_home"
-        sectionEnabled={config.partnerShowOnClientHome !== false}
-        hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
-      />
-
-      {/* ── RODAPÉ LGPD & SEGURANÇA DE DADOS (DISCRETO) ── */}
-      <div style={{ padding: '14px 20px 4px 20px', textAlign: 'center' }}>
-        <button
-          type="button"
-          onClick={() => setIsTermsOpen(true)}
-          style={{
-            background: 'none',
-            border: 'none',
-            fontSize: '0.68rem',
-            color: '#94A3B8',
-            cursor: 'pointer',
-            lineHeight: 1.4,
-            padding: '2px 4px',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4,
-          }}
-        >
-          <Lock size={11} color="#94A3B8" />
-          <span>Rotas protegidas para sua segurança •</span>
-          <span style={{ textDecoration: 'underline', color: '#64748B', fontWeight: 700 }}>
-            Termos &amp; LGPD
-          </span>
-        </button>
+      {/* ── ÁREA DE PARCEIROS & PATROCINADORES NA PARTE INFERIOR DA HOME ── */}
+      <div style={{ marginTop: 28 }}>
+        <PartnersSponsorsSection
+          items={config.partnerBanners}
+          variant="light"
+          area="client_home"
+          sectionEnabled={config.partnerShowOnClientHome !== false}
+          hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
+        />
       </div>
-
-      {/* Modal de Termos de Uso e Política de Privacidade (LGPD) */}
-      <TermsPrivacyModal
-        isOpen={isTermsOpen}
-        onClose={() => setIsTermsOpen(false)}
-        config={config}
-      />
 
       {/* ── MODAL: AÇÕES PARA ENDEREÇO FIXO SALVO (APLICAR OU EXCLUIR) ── */}
       {selectedSavedAddr && (

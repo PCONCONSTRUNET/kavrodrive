@@ -302,16 +302,17 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                             handleItemClick(banner.linkUrl);
                           }
                         }}
+                        title={banner.subtitle ? `${banner.name} — ${banner.subtitle}` : banner.name}
                         style={{
                           position: 'relative',
-                          flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 84%') : undefined,
+                          flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 88%') : undefined,
                           scrollSnapAlign: 'start',
-                          height: isMobile ? 164 : banners.length === 1 ? 220 : 184,
-                          borderRadius: 18,
+                          height: isMobile ? 92 : banners.length === 1 ? 132 : 116,
+                          borderRadius: isMobile ? 10 : 14,
                           overflow: 'hidden',
                           backgroundColor: '#131E26',
                           border: '1px solid rgba(118, 216, 0, 0.24)',
-                          boxShadow: '0 12px 30px rgba(0, 0, 0, 0.32)',
+                          boxShadow: '0 8px 22px rgba(0, 0, 0, 0.28)',
                           cursor: safeHref ? 'pointer' : 'default',
                         }}
                       >
@@ -322,68 +323,32 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                             width: '100%',
                             height: '100%',
                             objectFit: 'cover',
+                            objectPosition: 'center',
                             display: 'block',
                           }}
                         />
                         <div
                           style={{
                             position: 'absolute',
-                            inset: 0,
-                            background:
-                              'linear-gradient(180deg, rgba(11,18,24,0.08) 25%, rgba(11,18,24,0.88) 100%)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            justifyContent: 'space-between',
-                            padding: '12px 14px',
+                            top: 8,
+                            right: 10,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            padding: '3px 9px',
+                            borderRadius: 999,
+                            backgroundColor: 'rgba(11, 18, 24, 0.64)',
+                            backdropFilter: 'blur(6px)',
+                            border: '1px solid rgba(255, 255, 255, 0.14)',
+                            color: '#FFFFFF',
+                            fontSize: '0.6rem',
+                            fontWeight: 700,
+                            letterSpacing: '0.04em',
+                            textTransform: 'uppercase',
                           }}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <span
-                              style={{
-                                fontSize: '0.64rem',
-                                fontWeight: 800,
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.06em',
-                                padding: '3px 9px',
-                                borderRadius: 999,
-                                backgroundColor:
-                                  banner.kind === 'patrocinador'
-                                    ? 'rgba(118, 216, 0, 0.92)'
-                                    : 'rgba(15, 23, 42, 0.78)',
-                                color: banner.kind === 'patrocinador' ? '#0B1218' : '#E2E8F0',
-                                border: '1px solid rgba(255,255,255,0.16)',
-                              }}
-                            >
-                              {banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}
-                            </span>
-                            {safeHref && (
-                              <span
-                                style={{
-                                  width: 28,
-                                  height: 28,
-                                  borderRadius: '50%',
-                                  backgroundColor: 'rgba(11, 18, 24, 0.72)',
-                                  color: '#FFFFFF',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center',
-                                }}
-                              >
-                                <ExternalLink size={13} />
-                              </span>
-                            )}
-                          </div>
-
-                          <div>
-                            <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#FFFFFF', lineHeight: 1.2 }}>
-                              {banner.name}
-                            </div>
-                            {banner.subtitle && (
-                              <div style={{ fontSize: '0.76rem', color: '#CBD5E1', marginTop: 3 }}>
-                                {banner.subtitle}
-                              </div>
-                            )}
-                          </div>
+                          <span>{banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                          {safeHref && <ExternalLink size={10} color="#76D800" />}
                         </div>
                       </div>
                     );
@@ -504,20 +469,21 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
     );
   }
 
-  // Variante Clara (App Home do Passageiro)
+  // Variante Clara (App do Passageiro — Banner fino de borda a borda estilo faixa/pop-up)
   return (
-    <div style={{ padding: '16px 16px 4px 16px' }}>
+    <div style={{ padding: '18px 0 8px 0' }}>
       <div
         style={{
+          padding: '0 16px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          marginBottom: 10,
+          marginBottom: 8,
         }}
       >
         <div
           style={{
-            fontSize: '0.72rem',
+            fontSize: '0.68rem',
             fontWeight: 800,
             color: '#64748B',
             letterSpacing: '0.05em',
@@ -527,13 +493,13 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
             gap: 5,
           }}
         >
-          <Award size={13} color="#15803D" />
+          <Award size={12} color="#15803D" />
           <span>Parceiros &amp; Patrocinadores</span>
         </div>
         {activeItems.length > 0 && (
           <span
             style={{
-              fontSize: '0.66rem',
+              fontSize: '0.62rem',
               fontWeight: 700,
               color: '#15803D',
               backgroundColor: '#F0FDF4',
@@ -548,39 +514,41 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
       </div>
 
       {activeItems.length === 0 ? (
-        <div
-          style={{
-            backgroundColor: '#F8FAFC',
-            borderRadius: 16,
-            padding: '13px 14px',
-            border: '1px dashed #CBD5E1',
-            display: 'flex',
-            alignItems: 'center',
-            gap: 12,
-          }}
-        >
+        <div style={{ padding: '0 16px' }}>
           <div
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: 12,
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #E2E8F0',
+              backgroundColor: '#F8FAFC',
+              borderRadius: 16,
+              padding: '13px 14px',
+              border: '1px dashed #CBD5E1',
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              color: '#15803D',
+              gap: 12,
             }}
           >
-            <ImageIcon size={18} />
-          </div>
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0F172A' }}>
-              Logos &amp; Banners de Parceiros
+            <div
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 12,
+                backgroundColor: '#FFFFFF',
+                border: '1px solid #E2E8F0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                flexShrink: 0,
+                color: '#15803D',
+              }}
+            >
+              <ImageIcon size={18} />
             </div>
-            <div style={{ fontSize: '0.71rem', color: '#64748B', marginTop: 1 }}>
-              Espaço reservado para patrocinadores, promoções e empresas locais na Home.
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0F172A' }}>
+                Logos &amp; Banners de Parceiros
+              </div>
+              <div style={{ fontSize: '0.71rem', color: '#64748B', marginTop: 1 }}>
+                Espaço reservado para patrocinadores, promoções e empresas locais.
+              </div>
             </div>
           </div>
         </div>
@@ -590,10 +558,10 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
             <div
               style={{
                 display: 'flex',
-                gap: 10,
+                gap: banners.length === 1 ? 0 : 8,
                 overflowX: 'auto',
                 scrollSnapType: 'x mandatory',
-                paddingBottom: 2,
+                width: '100%',
               }}
             >
               {banners.map((banner) => {
@@ -612,13 +580,14 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                     }}
                     style={{
                       position: 'relative',
-                      flex: banners.length === 1 ? '0 0 100%' : '0 0 85%',
+                      flex: banners.length === 1 ? '0 0 100%' : '0 0 92%',
+                      width: banners.length === 1 ? '100%' : undefined,
                       scrollSnapAlign: 'start',
-                      height: 136,
-                      borderRadius: 16,
+                      height: 86,
+                      borderRadius: 0,
                       overflow: 'hidden',
-                      border: '1px solid #E2E8F0',
-                      boxShadow: '0 4px 16px rgba(15, 23, 42, 0.08)',
+                      borderTop: '1px solid #E2E8F0',
+                      borderBottom: '1px solid #E2E8F0',
                       cursor: safeHref ? 'pointer' : 'default',
                       backgroundColor: '#0F172A',
                     }}
@@ -626,50 +595,34 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                     <img
                       src={banner.imageUrl}
                       alt={banner.name}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      style={{
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
+                        objectPosition: 'center',
+                        display: 'block',
+                      }}
                     />
                     <div
                       style={{
                         position: 'absolute',
-                        inset: 0,
-                        background:
-                          'linear-gradient(180deg, rgba(15,23,42,0.06) 20%, rgba(15,23,42,0.86) 100%)',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        justifyContent: 'space-between',
-                        padding: '10px 12px',
+                        top: 5,
+                        right: 8,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '2px 7px',
+                        borderRadius: 999,
+                        backgroundColor: 'rgba(15, 23, 42, 0.56)',
+                        backdropFilter: 'blur(6px)',
+                        color: '#FFFFFF',
+                        fontSize: '0.54rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.03em',
                       }}
                     >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <span
-                          style={{
-                            fontSize: '0.6rem',
-                            fontWeight: 800,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.05em',
-                            padding: '3px 8px',
-                            borderRadius: 999,
-                            backgroundColor:
-                              banner.kind === 'patrocinador' ? '#76D800' : 'rgba(255,255,255,0.9)',
-                            color: '#0F172A',
-                          }}
-                        >
-                          {banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}
-                        </span>
-                        {safeHref && (
-                          <ExternalLink size={13} color="#FFFFFF" />
-                        )}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#FFFFFF', lineHeight: 1.2 }}>
-                          {banner.name}
-                        </div>
-                        {banner.subtitle && (
-                          <div style={{ fontSize: '0.7rem', color: '#E2E8F0', marginTop: 2 }}>
-                            {banner.subtitle}
-                          </div>
-                        )}
-                      </div>
+                      <span>{banner.kind === 'patrocinador' ? 'Patrocinador' : 'Parceiro'}</span>
+                      {safeHref && <ExternalLink size={9} color="#76D800" />}
                     </div>
                   </div>
                 );
@@ -684,7 +637,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                 gap: 10,
                 overflowX: 'auto',
                 scrollSnapType: 'x mandatory',
-                paddingBottom: 2,
+                padding: '0 16px 2px 16px',
               }}
             >
               {logos.map((logo) => {
