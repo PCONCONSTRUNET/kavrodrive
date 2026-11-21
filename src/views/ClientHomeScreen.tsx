@@ -220,11 +220,11 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       style={{
         backgroundColor: '#FFFFFF',
         minHeight: '100%',
-        paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))',
+        paddingTop: 'calc(72px + env(safe-area-inset-top, 0px))',
         paddingBottom: 'calc(104px + env(safe-area-inset-bottom, 0px))',
         width: '100%',
         maxWidth: '100%',
-        overflowX: 'hidden'
+        overflowX: 'clip'
       }}
     >
 
@@ -242,26 +242,26 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         onSelect={handleSelectLocation}
       />
 
-      {/* ── HEADER FIXO NO TOPO (NÃO SOBE COM O SCROLL) ────────────────────── */}
+      {/* ── HEADER FIXO NO TOPO EM MODELO FLUTUANTE (LIQUID GLASS) ───────────── */}
       <div style={{
         position: 'fixed',
-        top: 0,
+        top: 'calc(10px + env(safe-area-inset-top, 0px))',
         left: '50%',
         transform: 'translateX(-50%)',
+        width: 'calc(100% - 28px)',
+        maxWidth: 432,
         zIndex: 40,
-        backgroundColor: '#FFFFFF',
-        paddingTop: 'calc(10px + env(safe-area-inset-top, 0px))',
-        paddingBottom: 10,
-        paddingLeft: 16,
-        paddingRight: 16,
+        borderRadius: 28,
+        background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.56) 0%, rgba(255, 255, 255, 0.28) 100%)',
+        backdropFilter: 'blur(24px) saturate(210%)',
+        WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+        border: '1px solid rgba(255, 255, 255, 0.72)',
+        padding: '8px 12px 8px 16px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 8,
-        borderBottom: '1px solid #E2E8F0',
-        boxShadow: '0 4px 14px rgba(15, 23, 42, 0.05)',
-        width: '100%',
-        maxWidth: 480,
+        boxShadow: '0 14px 36px rgba(15, 23, 42, 0.14), 0 2px 10px rgba(15, 23, 42, 0.06), inset 0 1.5px 1px rgba(255, 255, 255, 0.92), inset 0 -1px 1px rgba(255, 255, 255, 0.35)',
         boxSizing: 'border-box'
       }}>
         <img
@@ -275,15 +275,16 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
             type="button"
             onClick={() => setIsNotificationsOpen(true)}
             style={{
-              width: 32,
-              height: 32,
+              width: 34,
+              height: 34,
               borderRadius: '50%',
-              backgroundColor: '#F3F4F6',
-              border: '1px solid #E5E7EB',
+              backgroundColor: 'rgba(255, 255, 255, 0.64)',
+              border: '1px solid rgba(226, 232, 240, 0.8)',
+              boxShadow: '0 2px 8px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.9)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#111827',
+              color: '#0F172A',
               cursor: 'pointer',
               position: 'relative',
               flexShrink: 0
