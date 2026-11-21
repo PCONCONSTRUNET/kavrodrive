@@ -8,7 +8,6 @@ import {
   CheckCircle2,
   Copy,
   Download,
-  ExternalLink,
   Laptop,
   MonitorDown,
   MoreVertical,
@@ -22,18 +21,18 @@ interface InstallPwaTutorialScreenProps {
   config: SystemConfig;
 }
 
-const CURRENT_YEAR = new Date().getFullYear();
-
 type AppTarget = 'passageiro' | 'motorista';
-type PlatformTab = 'desktop' | 'android' | 'ios';
+type PlatformTab = 'android' | 'ios' | 'desktop';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>;
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>;
 }
 
+const CURRENT_YEAR = new Date().getFullYear();
+
 function detectInitialPlatform(): PlatformTab {
-  if (typeof navigator === 'undefined') return 'desktop';
+  if (typeof navigator === 'undefined') return 'android';
   const ua = navigator.userAgent.toLowerCase();
   if (
     /iphone|ipad|ipod/.test(ua) ||
@@ -71,7 +70,7 @@ function syncDocumentManifestForApp(appTarget: AppTarget): void {
   }
 }
 
-const QrInstallBox: React.FC<{ url: string }> = ({ url }) => {
+const QrCompactBox: React.FC<{ url: string }> = ({ url }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -80,7 +79,7 @@ const QrInstallBox: React.FC<{ url: string }> = ({ url }) => {
       canvasRef.current,
       url,
       {
-        width: 112,
+        width: 96,
         margin: 1,
         color: { dark: '#0A0F14', light: '#FFFFFF' },
       },
@@ -91,11 +90,10 @@ const QrInstallBox: React.FC<{ url: string }> = ({ url }) => {
   return (
     <div
       style={{
-        width: 124,
-        height: 124,
+        width: 108,
+        height: 108,
         backgroundColor: '#FFFFFF',
         borderRadius: 10,
-        border: '1px solid #E2E8F0',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -155,9 +153,7 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
     const handleAppInstalled = () => {
       setIsStandalone(true);
       setDeferredPrompt(null);
-      setInstallFeedback(
-        'Aplicativo instalado. O ícone já foi criado no seu dispositivo.'
-      );
+      setInstallFeedback('Aplicativo instalado na tela inicial.');
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
@@ -176,27 +172,19 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
   const appMeta =
     selectedApp === 'motorista'
       ? {
-          id: 'motorista' as const,
-          eyebrow: 'Portal de Motoristas Parceiros',
-          name: 'App Parceiro Kavro',
+          name: 'Kavro Parceiro (Motorista)',
           shortName: 'Kavro Motorista',
           route: '/kavro-drive',
           fullUrl: `${origin}/kavro-drive`,
           displayUrl: `${origin.replace(/^https?:\/\//, '')}/kavro-drive`,
-          description:
-            'Receba chamados na região, acompanhe o trajeto pelo mapa e gerencie ganhos, carteira e saques em janela própria.',
-          ctaLabel: 'Abrir Portal do Motorista',
+          ctaLabel: 'Abrir Portal Motorista',
         }
       : {
-          id: 'passageiro' as const,
-          eyebrow: 'Aplicativo de Passageiros & Entregas',
-          name: 'App Kavro Passageiro',
+          name: 'Kavro Passageiro',
           shortName: 'Kavro Drive',
           route: '/cliente',
           fullUrl: `${origin}/cliente`,
           displayUrl: `${origin.replace(/^https?:\/\//, '')}/cliente`,
-          description:
-            'Solicite corridas em Kavro Padrão, agende horários ou envie encomendas via Kavro Entregas diretamente pelo ícone instalado.',
           ctaLabel: 'Abrir App Passageiro',
         };
 
@@ -210,9 +198,9 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
     try {
       await navigator.clipboard.writeText(appMeta.fullUrl);
       setCopiedLink(true);
-      setTimeout(() => setCopiedLink(false), 2500);
+      setTimeout(() => setCopiedLink(false), 2200);
     } catch {
-      setInstallFeedback(`Copie o endereço: ${appMeta.fullUrl}`);
+      setInstallFeedback(appMeta.fullUrl);
     }
   };
 
@@ -224,105 +212,92 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
     if (choice.outcome === 'accepted') {
       setIsStandalone(true);
       setDeferredPrompt(null);
-      setInstallFeedback(
-        'Instalação confirmada. O atalho oficial aparecerá na área de trabalho ou tela inicial.'
-      );
+      setInstallFeedback('Atalho instalado no seu dispositivo.');
     }
   };
 
+  const guides: Record<
+    PlatformTab,
+    {
+      label: string;
+      hint: string;
+      steps: Array<{ num: string; title: string; sub: string }>;
+    }
+  > = {
+    desktop: {
+      label: 'Computador (Chrome / Edge)',
+      hint: 'Cria atalho direto na Área de Trabalho e Menu Iniciar.',
+      steps: [
+        {
+          num: '1',
+          title: `Abra ${appMeta.displayUrl} no Chrome ou Edge`,
+          sub: 'Acesse direto pelo navegador do Windows ou Mac.',
+        },
+        {
+          num: '2',
+          title: 'Clique em Instalar na barra de endereços',
+          sub: 'Ícone de monitor no canto direito do link (ou menu ⋮ → Instalar página como aplicativo).',
+        },
+        {
+          num: '3',
+          title: 'Confirme em "Instalar"',
+          sub: 'O aplicativo vai aparecer com ícone na sua Área de Trabalho.',
+        },
+      ],
+    },
+    android: {
+      label: 'Celular Android (Chrome)',
+      hint: 'Se veio pelo WhatsApp/Instagram, toque em ⋮ → Abrir no navegador primeiro.',
+      steps: [
+        {
+          num: '1',
+          title: 'Abra este site no Google Chrome',
+          sub: `Endereço oficial: ${appMeta.displayUrl}`,
+        },
+        {
+          num: '2',
+          title: 'Toque nos 3 pontos (⋮) no alto à direita',
+          sub: 'Menu principal do Google Chrome.',
+        },
+        {
+          num: '3',
+          title: 'Toque em "Instalar aplicativo"',
+          sub: 'Ou "Adicionar à tela inicial" e confirme.',
+        },
+      ],
+    },
+    ios: {
+      label: 'iPhone e iPad (Safari)',
+      hint: 'No iPhone, a Apple só permite instalar pelo navegador Safari.',
+      steps: [
+        {
+          num: '1',
+          title: 'Abra o link no navegador Safari',
+          sub: `Endereço oficial: ${appMeta.displayUrl}`,
+        },
+        {
+          num: '2',
+          title: 'Toque em Compartilhar (□↑)',
+          sub: 'Fica na barra inferior do Safari.',
+        },
+        {
+          num: '3',
+          title: 'Escolha "Adicionar à Tela de Início"',
+          sub: 'Depois toque em "Adicionar" no canto direito.',
+        },
+      ],
+    },
+  };
+
+  const currentGuide = guides[platformTab];
+
   const containerStyle: React.CSSProperties = {
     width: '100%',
-    maxWidth: 1120,
+    maxWidth: 960,
     margin: '0 auto',
-    padding: isMobile ? '0 18px' : '0 32px',
+    padding: isMobile ? '0 16px' : '0 28px',
     boxSizing: 'border-box',
   };
-
-  const stepGuides: Record<
-    PlatformTab,
-    Array<{ num: string; title: string; detail: string }>
-  > = {
-    desktop: [
-      {
-        num: '01',
-        title: `Acesse ${appMeta.displayUrl} no Chrome ou Edge`,
-        detail:
-          'Abra o endereço oficial no navegador Google Chrome ou Microsoft Edge no Windows, Mac ou Linux.',
-      },
-      {
-        num: '02',
-        title: 'Clique no ícone de instalação na barra de endereços',
-        detail:
-          'No canto direito da barra onde fica o link, clique no ícone de monitor com seta ou no botão "Instalar". Você também pode abrir o menu de 3 pontos (⋮) > "Transmitir, salvar e compartilhar" > "Instalar página como aplicativo...".',
-      },
-      {
-        num: '03',
-        title: 'Confirme a criação do aplicativo',
-        detail:
-          'Na janela que surgir na tela, clique em "Instalar" para confirmar o nome Kavro Drive / Kavro Motorista.',
-      },
-      {
-        num: '04',
-        title: 'Atalho fixado na Área de Trabalho',
-        detail:
-          'O ícone oficial será criado automaticamente na Área de Trabalho e no Menu Iniciar (ou Dock no Mac), abrindo como programa próprio em janela dedicada.',
-      },
-    ],
-    android: [
-      {
-        num: '01',
-        title: `Abra ${appMeta.displayUrl} no Google Chrome`,
-        detail:
-          'Certifique-se de estar no Google Chrome. Se abriu o link dentro do WhatsApp ou Instagram, toque nos 3 pontos (⋮) e selecione "Abrir no navegador Chrome".',
-      },
-      {
-        num: '02',
-        title: 'Acesse o menu superior direito (⋮)',
-        detail:
-          'Toque nos três pontinhos verticais ao lado da barra de endereço (ou toque no banner "Instalar" caso apareça na parte inferior).',
-      },
-      {
-        num: '03',
-        title: 'Escolha "Instalar aplicativo" ou "Adicionar à tela inicial"',
-        detail:
-          'Dependendo da versão do Android/Chrome, a opção aparecerá com o ícone oficial da Kavro Drive ao lado.',
-      },
-      {
-        num: '04',
-        title: 'Confirme em "Instalar"',
-        detail:
-          'Em poucos segundos o ícone oficial aparecerá junto aos seus aplicativos, abrindo em tela cheia e mantendo sua conta conectada.',
-      },
-    ],
-    ios: [
-      {
-        num: '01',
-        title: `Abra ${appMeta.displayUrl} usando o Safari`,
-        detail:
-          'No iPhone e iPad, a Apple permite instalar Web Apps apenas através do navegador Safari. Se estiver no WhatsApp, Instagram ou Chrome, toque em Compartilhar > Abrir no Safari.',
-      },
-      {
-        num: '02',
-        title: 'Toque no botão Compartilhar do Safari',
-        detail:
-          'Na barra inferior do Safari (ou no topo em iPads), toque no ícone de quadrado com seta apontando para cima.',
-      },
-      {
-        num: '03',
-        title: 'Selecione "Adicionar à Tela de Início"',
-        detail:
-          'Role a lista de ações para baixo até encontrar o item "Adicionar à Tela de Início" (ícone com sinal "+").',
-      },
-      {
-        num: '04',
-        title: 'Toque em "Adicionar" para finalizar',
-        detail:
-          'Confira o nome do atalho no topo direito e confirme. O ícone da Kavro Drive será fixado diretamente na sua tela de início.',
-      },
-    ],
-  };
-
-  const activeSteps = stepGuides[platformTab];
 
   return (
     <div
@@ -332,20 +307,14 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
         color: '#FFFFFF',
         fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
         userSelect: 'text',
-        overflowX: 'hidden',
       }}
     >
-      {/* ═══ CABEÇALHO INSTITUCIONAL ═══ */}
+      {/* Cabeçalho simples */}
       <header
         style={{
-          position: 'sticky',
-          top: 0,
-          height: 66,
-          backgroundColor: 'rgba(10, 15, 20, 0.96)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          zIndex: 80,
+          height: 60,
+          backgroundColor: '#0A0F14',
+          borderBottom: '1px solid rgba(255,255,255,0.08)',
           display: 'flex',
           alignItems: 'center',
         }}
@@ -356,156 +325,71 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 12,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              style={{
-                background: 'none',
-                border: 'none',
-                padding: 0,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                flexShrink: 0,
-              }}
-            >
-              <img
-                src="/logo-horizontal-white.png"
-                alt="Kavro Drive"
-                style={{ height: isMobile ? 24 : 30, width: 'auto', objectFit: 'contain' }}
-              />
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }}
+          >
+            <img
+              src="/logo-horizontal-white.png"
+              alt="Kavro Drive"
+              style={{ height: 24, width: 'auto', display: 'block', objectFit: 'contain' }}
+            />
+          </button>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => navigate('/ajuda')}
-              style={{
-                height: 36,
-                padding: '0 12px',
-                borderRadius: 8,
-                border: '1px solid rgba(255, 255, 255, 0.14)',
-                backgroundColor: 'transparent',
-                color: '#E2E8F0',
-                fontSize: '0.82rem',
-                fontWeight: 600,
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              Central de Ajuda
-            </button>
-
-            <button
-              type="button"
-              onClick={() => navigate('/')}
-              style={{
-                height: 36,
-                padding: '0 12px',
-                borderRadius: 8,
-                border: 'none',
-                backgroundColor: '#FFFFFF',
-                color: '#0A0F14',
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              <ArrowLeft size={14} />
-              <span>Site oficial</span>
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/')}
+            style={{
+              height: 34,
+              padding: '0 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.16)',
+              backgroundColor: 'transparent',
+              color: '#FFFFFF',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+            }}
+          >
+            <ArrowLeft size={14} />
+            <span>Voltar</span>
+          </button>
         </div>
       </header>
 
-      {/* ═══ SEÇÃO 1: TÍTULO + SELETOR DE APLICATIVO WEB / PWA ═══ */}
+      {/* Bloco Superior Compacto: Qual App + Ação Imediata */}
       <section
         style={{
           backgroundColor: '#0A0F14',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          paddingTop: isMobile ? 28 : 48,
-          paddingBottom: isMobile ? 36 : 56,
+          paddingTop: isMobile ? 22 : 34,
+          paddingBottom: isMobile ? 26 : 38,
+          borderBottom: '1px solid rgba(255,255,255,0.08)',
         }}
       >
         <div style={containerStyle}>
-          <div style={{ maxWidth: 740, marginBottom: isMobile ? 22 : 28 }}>
-            <div
-              style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 8,
-                color: '#94A3B8',
-                fontSize: '0.74rem',
-                fontWeight: 700,
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                marginBottom: 12,
-              }}
-            >
-              <span
-                style={{
-                  width: 6,
-                  height: 6,
-                  borderRadius: 2,
-                  backgroundColor: '#76D800',
-                  display: 'inline-block',
-                }}
-              />
-              <span>Web App Oficial (PWA)</span>
-            </div>
-
-            <h1
-              style={{
-                fontSize: isMobile ? '1.85rem' : '2.75rem',
-                fontWeight: 800,
-                lineHeight: 1.1,
-                letterSpacing: '-0.03em',
-                color: '#FFFFFF',
-                marginBottom: 14,
-              }}
-            >
-              Instale a Kavro Drive na tela inicial ou na área de trabalho.
-            </h1>
-
-            <p
-              style={{
-                fontSize: isMobile ? '0.94rem' : '1.02rem',
-                lineHeight: 1.6,
-                color: '#94A3B8',
-              }}
-            >
-              Atualmente operamos exclusivamente pela web e como aplicativo PWA oficial. Você não
-              precisa baixar nada pela Play Store ou App Store: basta fixar o atalho pelo navegador
-              para abrir em tela cheia no celular ou como programa no computador.
-            </p>
-          </div>
-
-          {/* Seletor entre App Passageiro e App Motorista Parceiro */}
+          {/* Alternador Passageiro | Motorista */}
           <div
             style={{
-              display: 'inline-grid',
+              display: 'grid',
               gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
               gap: 4,
               backgroundColor: '#121922',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              border: '1px solid rgba(255,255,255,0.1)',
               borderRadius: 8,
               padding: 4,
+              maxWidth: isMobile ? '100%' : 360,
               marginBottom: 18,
-              width: isMobile ? '100%' : 'auto',
             }}
           >
             {[
-              { key: 'passageiro' as const, label: 'App Kavro Passageiro' },
-              { key: 'motorista' as const, label: 'App Parceiro (Motorista)' },
+              { key: 'passageiro' as const, label: 'Passageiro' },
+              { key: 'motorista' as const, label: 'Motorista' },
             ].map((item) => {
               const active = selectedApp === item.key;
               return (
@@ -514,16 +398,14 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
                   type="button"
                   onClick={() => handleSelectApp(item.key)}
                   style={{
-                    height: 38,
-                    padding: isMobile ? '0 10px' : '0 20px',
+                    height: 36,
                     borderRadius: 6,
                     border: 'none',
                     backgroundColor: active ? '#FFFFFF' : 'transparent',
                     color: active ? '#0A0F14' : '#94A3B8',
-                    fontSize: isMobile ? '0.78rem' : '0.86rem',
+                    fontSize: '0.84rem',
                     fontWeight: 700,
                     cursor: 'pointer',
-                    whiteSpace: 'nowrap',
                   }}
                 >
                   {item.label}
@@ -532,230 +414,140 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
             })}
           </div>
 
-          {/* Card do Aplicativo Selecionado + Botões Diretos */}
           <div
             style={{
-              backgroundColor: '#121922',
-              border: '1px solid rgba(255, 255, 255, 0.12)',
-              borderRadius: 12,
-              padding: isMobile ? 16 : 24,
               display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
               alignItems: isMobile ? 'stretch' : 'center',
               justifyContent: 'space-between',
-              gap: isMobile ? 18 : 28,
+              flexDirection: isMobile ? 'column' : 'row',
+              gap: 20,
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, flex: 1 }}>
-              <div
+            <div style={{ flex: 1 }}>
+              <h1
                 style={{
-                  width: isMobile ? 52 : 60,
-                  height: isMobile ? 52 : 60,
-                  borderRadius: 12,
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E2E8F0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
+                  fontSize: isMobile ? '1.55rem' : '2.1rem',
+                  fontWeight: 800,
+                  letterSpacing: '-0.025em',
+                  lineHeight: 1.15,
+                  color: '#FFFFFF',
+                  marginBottom: 8,
                 }}
               >
-                <img
-                  src="/logo-icon.png"
-                  alt={appMeta.name}
-                  style={{ width: isMobile ? 38 : 44, height: isMobile ? 38 : 44, objectFit: 'contain' }}
-                />
-              </div>
+                Instalar {appMeta.name}
+              </h1>
+              <p
+                style={{
+                  fontSize: isMobile ? '0.88rem' : '0.96rem',
+                  color: '#94A3B8',
+                  lineHeight: 1.5,
+                  marginBottom: 16,
+                  maxWidth: 560,
+                }}
+              >
+                Operamos direto na Web e via Web App (PWA), sem baixar em loja. Instale na tela
+                inicial ou na área de trabalho em 3 passos.
+              </p>
 
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div
-                  style={{
-                    fontSize: '0.7rem',
-                    fontWeight: 700,
-                    letterSpacing: '0.07em',
-                    textTransform: 'uppercase',
-                    color: '#94A3B8',
-                    marginBottom: 4,
-                  }}
-                >
-                  {appMeta.eyebrow}
-                </div>
-                <h2
-                  style={{
-                    fontSize: isMobile ? '1.12rem' : '1.3rem',
-                    fontWeight: 800,
-                    color: '#FFFFFF',
-                    marginBottom: 6,
-                  }}
-                >
-                  {appMeta.name}
-                </h2>
-                <p
-                  style={{
-                    fontSize: '0.86rem',
-                    lineHeight: 1.5,
-                    color: '#CBD5E1',
-                    marginBottom: 12,
-                    maxWidth: 560,
-                  }}
-                >
-                  {appMeta.description}
-                </p>
-
-                {/* Endereço oficial + botão copiar */}
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    backgroundColor: '#0A0F14',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: 8,
-                    padding: '6px 10px',
-                    maxWidth: '100%',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <span
-                    style={{
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      color: '#E2E8F0',
-                      wordBreak: 'break-all',
-                    }}
-                  >
-                    {appMeta.displayUrl}
-                  </span>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {deferredPrompt && !isStandalone && (
                   <button
                     type="button"
-                    onClick={handleCopyLink}
+                    onClick={handleTriggerNativeInstall}
                     style={{
-                      background: 'rgba(255,255,255,0.08)',
-                      border: 'none',
-                      borderRadius: 6,
-                      color: '#FFFFFF',
-                      fontSize: '0.73rem',
-                      fontWeight: 600,
-                      padding: '4px 8px',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                    }}
-                  >
-                    {copiedLink ? <Check size={12} color="#76D800" /> : <Copy size={12} />}
-                    <span>{copiedLink ? 'Copiado' : 'Copiar link'}</span>
-                  </button>
-                </div>
-
-                {/* Botões de ação imediata */}
-                <div
-                  style={{
-                    display: 'flex',
-                    flexWrap: 'wrap',
-                    gap: 10,
-                    marginTop: 16,
-                  }}
-                >
-                  {deferredPrompt && !isStandalone && (
-                    <button
-                      type="button"
-                      onClick={handleTriggerNativeInstall}
-                      style={{
-                        height: 44,
-                        padding: '0 20px',
-                        borderRadius: 8,
-                        border: 'none',
-                        backgroundColor: '#76D800',
-                        color: '#0A0F14',
-                        fontSize: '0.88rem',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 8,
-                      }}
-                    >
-                      <Download size={16} />
-                      <span>Instalar {appMeta.shortName} agora</span>
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => navigate(appMeta.route)}
-                    style={{
-                      height: 44,
-                      padding: '0 20px',
+                      height: 42,
+                      padding: '0 18px',
                       borderRadius: 8,
-                      border:
-                        deferredPrompt && !isStandalone
-                          ? '1px solid rgba(255, 255, 255, 0.22)'
-                          : 'none',
-                      backgroundColor:
-                        deferredPrompt && !isStandalone ? 'transparent' : '#76D800',
-                      color: deferredPrompt && !isStandalone ? '#FFFFFF' : '#0A0F14',
-                      fontSize: '0.88rem',
+                      border: 'none',
+                      backgroundColor: '#76D800',
+                      color: '#0A0F14',
+                      fontSize: '0.86rem',
                       fontWeight: 800,
                       cursor: 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
-                      gap: 8,
+                      gap: 7,
                     }}
                   >
-                    <span>{appMeta.ctaLabel}</span>
-                    <ArrowRight size={16} />
+                    <Download size={16} />
+                    <span>Instalar agora</span>
                   </button>
-                </div>
-
-                {isStandalone && (
-                  <div
-                    style={{
-                      marginTop: 12,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      fontSize: '0.8rem',
-                      fontWeight: 600,
-                      color: '#86EFAC',
-                    }}
-                  >
-                    <CheckCircle2 size={15} />
-                    <span>Você já está utilizando a versão Web App instalada neste dispositivo.</span>
-                  </div>
                 )}
 
-                {installFeedback && (
-                  <div
-                    style={{
-                      marginTop: 10,
-                      fontSize: '0.82rem',
-                      color: '#86EFAC',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {installFeedback}
-                  </div>
-                )}
+                <button
+                  type="button"
+                  onClick={() => navigate(appMeta.route)}
+                  style={{
+                    height: 42,
+                    padding: '0 18px',
+                    borderRadius: 8,
+                    border:
+                      deferredPrompt && !isStandalone
+                        ? '1px solid rgba(255,255,255,0.22)'
+                        : 'none',
+                    backgroundColor:
+                      deferredPrompt && !isStandalone ? 'transparent' : '#76D800',
+                    color: deferredPrompt && !isStandalone ? '#FFFFFF' : '#0A0F14',
+                    fontSize: '0.86rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 7,
+                  }}
+                >
+                  <span>{appMeta.ctaLabel}</span>
+                  <ArrowRight size={15} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopyLink}
+                  style={{
+                    height: 42,
+                    padding: '0 14px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.16)',
+                    backgroundColor: '#121922',
+                    color: '#E2E8F0',
+                    fontSize: '0.82rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {copiedLink ? <Check size={14} color="#76D800" /> : <Copy size={14} />}
+                  <span>{copiedLink ? 'Link copiado' : 'Copiar link'}</span>
+                </button>
               </div>
+
+              {(isStandalone || installFeedback) && (
+                <div
+                  style={{
+                    marginTop: 12,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    color: '#86EFAC',
+                  }}
+                >
+                  <CheckCircle2 size={14} />
+                  <span>
+                    {installFeedback || 'Este aplicativo já está instalado no aparelho.'}
+                  </span>
+                </div>
+              )}
             </div>
 
-            {/* QR Code para instalação rápida pelo celular quando visto no desktop */}
             {!isMobile && (
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: 8,
-                  paddingLeft: 20,
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  flexShrink: 0,
-                }}
-              >
-                <QrInstallBox url={appMeta.fullUrl} />
-                <span style={{ fontSize: '0.73rem', color: '#94A3B8', textAlign: 'center', maxWidth: 140 }}>
-                  Escaneie com a câmera para abrir no celular
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                <QrCompactBox url={appMeta.fullUrl} />
+                <span style={{ fontSize: '0.72rem', color: '#94A3B8' }}>
+                  Abrir no celular
                 </span>
               </div>
             )}
@@ -763,75 +555,35 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
         </div>
       </section>
 
-      {/* ═══ SEÇÃO 2: PASSO A PASSO POR DISPOSITIVO (ÁREA DE TRABALHO, ANDROID E IPHONE) ═══ */}
+      {/* Bloco Principal: Tutorial Simplificado (Abas horizontais + 3 passos curtos) */}
       <section
         style={{
           backgroundColor: '#FFFFFF',
           color: '#0A0F14',
-          paddingTop: isMobile ? 38 : 64,
-          paddingBottom: isMobile ? 46 : 72,
-          borderBottom: '1px solid #E2E8F0',
+          paddingTop: isMobile ? 24 : 38,
+          paddingBottom: isMobile ? 36 : 52,
         }}
       >
         <div style={containerStyle}>
-          <div style={{ marginBottom: isMobile ? 20 : 28 }}>
-            <div
-              style={{
-                fontSize: '0.74rem',
-                fontWeight: 700,
-                color: '#15803D',
-                letterSpacing: '0.08em',
-                textTransform: 'uppercase',
-                marginBottom: 8,
-              }}
-            >
-              Guia passo a passo
-            </div>
-            <h2
-              style={{
-                fontSize: isMobile ? '1.55rem' : '2.1rem',
-                fontWeight: 800,
-                lineHeight: 1.16,
-                letterSpacing: '-0.025em',
-                color: '#0A0F14',
-                marginBottom: 8,
-              }}
-            >
-              Como fixar o atalho conforme o seu dispositivo
-            </h2>
-            <p style={{ fontSize: '0.94rem', color: '#475569', maxWidth: 660 }}>
-              Selecione abaixo onde deseja instalar o aplicativo ({appMeta.name}) para ver o
-              procedimento exato.
-            </p>
-          </div>
-
-          {/* Seletor de Dispositivo / Sistema */}
+          {/* 3 Abas em uma única linha horizontal */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))',
-              gap: 10,
-              marginBottom: isMobile ? 22 : 30,
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              gap: 6,
+              backgroundColor: '#F1F5F9',
+              padding: 4,
+              borderRadius: 10,
+              marginBottom: 18,
             }}
           >
             {[
+              { key: 'android' as const, label: 'Android', icon: <Smartphone size={15} /> },
+              { key: 'ios' as const, label: 'iPhone', icon: <Share size={15} /> },
               {
                 key: 'desktop' as const,
-                title: 'Computador (Área de Trabalho)',
-                sub: 'Windows, Mac ou Linux • Chrome e Edge',
-                icon: <Laptop size={18} />,
-              },
-              {
-                key: 'android' as const,
-                title: 'Celular Android',
-                sub: 'Google Chrome e navegadores Chromium',
-                icon: <Smartphone size={18} />,
-              },
-              {
-                key: 'ios' as const,
-                title: 'iPhone e iPad (iOS)',
-                sub: 'Navegador Safari da Apple',
-                icon: <Share size={18} />,
+                label: isMobile ? 'PC / Desktop' : 'Computador (Área de Trabalho)',
+                icon: <Laptop size={15} />,
               },
             ].map((tab) => {
               const active = platformTab === tab.key;
@@ -841,401 +593,280 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
                   type="button"
                   onClick={() => setPlatformTab(tab.key)}
                   style={{
-                    textAlign: 'left',
-                    padding: '14px 16px',
-                    borderRadius: 10,
-                    border: active ? '1.5px solid #0A0F14' : '1px solid #E2E8F0',
-                    backgroundColor: active ? '#0A0F14' : '#F8FAFC',
-                    color: active ? '#FFFFFF' : '#0A0F14',
+                    height: 38,
+                    padding: '0 8px',
+                    borderRadius: 7,
+                    border: 'none',
+                    backgroundColor: active ? '#0A0F14' : 'transparent',
+                    color: active ? '#FFFFFF' : '#475569',
+                    fontSize: isMobile ? '0.78rem' : '0.84rem',
+                    fontWeight: 700,
                     cursor: 'pointer',
-                    display: 'flex',
+                    display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 12,
+                    justifyContent: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
                   }}
                 >
-                  <div
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 8,
-                      backgroundColor: active ? '#76D800' : '#E2E8F0',
-                      color: '#0A0F14',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {tab.icon}
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '0.92rem', fontWeight: 700 }}>{tab.title}</div>
-                    <div
-                      style={{
-                        fontSize: '0.76rem',
-                        color: active ? '#CBD5E1' : '#64748B',
-                        marginTop: 2,
-                      }}
-                    >
-                      {tab.sub}
-                    </div>
-                  </div>
+                  {tab.icon}
+                  <span>{tab.label}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Grid Principal: Lista Numerada + Ilustração Arquitetônica do Navegador */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 8,
+              marginBottom: 14,
+            }}
+          >
+            <h2 style={{ fontSize: isMobile ? '1.1rem' : '1.25rem', fontWeight: 800, margin: 0 }}>
+              {currentGuide.label}
+            </h2>
+            <span style={{ fontSize: '0.8rem', color: '#475569' }}>{currentGuide.hint}</span>
+          </div>
+
+          {/* 3 Passos Diretos + Miniatura Visual */}
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.1fr) minmax(0, 0.9fr)',
-              gap: isMobile ? 20 : 32,
-              alignItems: 'start',
+              gridTemplateColumns: isMobile ? '1fr' : 'minmax(0, 1.35fr) minmax(0, 0.85fr)',
+              gap: 16,
+              alignItems: 'stretch',
             }}
           >
-            {/* Etapas detalhadas */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {activeSteps.map((step) => (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {currentGuide.steps.map((step) => (
                 <div
                   key={step.num}
                   style={{
-                    backgroundColor: '#F8FAFC',
                     border: '1px solid #E2E8F0',
+                    backgroundColor: '#F8FAFC',
                     borderRadius: 10,
-                    padding: '16px 18px',
+                    padding: '13px 14px',
                     display: 'flex',
                     alignItems: 'flex-start',
-                    gap: 14,
+                    gap: 12,
                   }}
                 >
                   <span
                     style={{
-                      minWidth: 32,
-                      height: 32,
+                      width: 26,
+                      height: 26,
                       borderRadius: 6,
                       backgroundColor: '#0A0F14',
                       color: '#76D800',
-                      fontSize: '0.8rem',
+                      fontSize: '0.78rem',
                       fontWeight: 800,
                       display: 'inline-flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       flexShrink: 0,
+                      marginTop: 1,
                     }}
                   >
                     {step.num}
                   </span>
                   <div>
-                    <h3
-                      style={{
-                        fontSize: '0.98rem',
-                        fontWeight: 700,
-                        color: '#0A0F14',
-                        marginBottom: 4,
-                      }}
-                    >
+                    <div style={{ fontSize: '0.92rem', fontWeight: 700, color: '#0A0F14' }}>
                       {step.title}
-                    </h3>
-                    <p style={{ fontSize: '0.86rem', lineHeight: 1.55, color: '#475569' }}>
-                      {step.detail}
-                    </p>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#475569', marginTop: 2, lineHeight: 1.45 }}>
+                      {step.sub}
+                    </div>
                   </div>
                 </div>
               ))}
             </div>
 
-            {/* Painel Visual Esquemático da Tela Real do Sistema */}
+            {/* Miniatura compacta mostrando o botão exato */}
             <div
               style={{
                 backgroundColor: '#0E141B',
                 color: '#FFFFFF',
-                border: '1px solid #1E293B',
-                borderRadius: 12,
-                padding: isMobile ? 16 : 22,
+                borderRadius: 10,
+                padding: 16,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'space-between',
+                gap: 12,
               }}
             >
-              <div
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.07em',
-                  color: '#94A3B8',
-                  marginBottom: 6,
-                }}
-              >
-                Onde clicar na tela
-              </div>
-              <div style={{ fontSize: '1.02rem', fontWeight: 700, color: '#FFFFFF', marginBottom: 16 }}>
-                {platformTab === 'desktop' && 'Barra de endereços e menu no Chrome / Edge'}
-                {platformTab === 'android' && 'Menu superior direito do Google Chrome'}
-                {platformTab === 'ios' && 'Barra inferior do navegador Safari'}
-              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: '0.07em',
+                    color: '#94A3B8',
+                    marginBottom: 8,
+                  }}
+                >
+                  Botão para clicar
+                </div>
 
-              {platformTab === 'desktop' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  {/* Simulação da barra de endereço Desktop */}
+                {platformTab === 'desktop' && (
                   <div
                     style={{
-                      backgroundColor: '#16202A',
+                      backgroundColor: '#0A0F14',
                       border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: 10,
-                      padding: 12,
+                      borderRadius: 8,
+                      padding: '8px 10px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
                     }}
                   >
-                    <div
+                    <span
                       style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        marginBottom: 10,
+                        fontSize: '0.76rem',
+                        color: '#CBD5E1',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#475569' }} />
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#475569' }} />
-                      <span style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: '#475569' }} />
-                    </div>
-                    <div
+                      {appMeta.displayUrl}
+                    </span>
+                    <span
                       style={{
-                        backgroundColor: '#0A0F14',
-                        border: '1px solid rgba(255,255,255,0.12)',
-                        borderRadius: 8,
-                        padding: '8px 10px',
-                        display: 'flex',
+                        padding: '4px 8px',
+                        borderRadius: 6,
+                        backgroundColor: '#76D800',
+                        color: '#0A0F14',
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
+                        display: 'inline-flex',
                         alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 8,
+                        gap: 4,
+                        flexShrink: 0,
                       }}
                     >
-                      <span
-                        style={{
-                          fontSize: '0.78rem',
-                          color: '#CBD5E1',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        {appMeta.displayUrl}
-                      </span>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-                        <span
-                          style={{
-                            padding: '4px 8px',
-                            borderRadius: 6,
-                            backgroundColor: '#76D800',
-                            color: '#0A0F14',
-                            fontSize: '0.7rem',
-                            fontWeight: 800,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <MonitorDown size={13} />
-                          <span>Instalar</span>
-                        </span>
-                        <MoreVertical size={15} color="#94A3B8" />
-                      </div>
-                    </div>
+                      <MonitorDown size={13} />
+                      <span>Instalar</span>
+                    </span>
                   </div>
+                )}
 
-                  {/* Caminho alternativo no menu */}
+                {platformTab === 'android' && (
                   <div
                     style={{
                       backgroundColor: '#121922',
                       border: '1px solid rgba(255,255,255,0.1)',
-                      borderRadius: 10,
-                      padding: 14,
-                    }}
-                  >
-                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF', marginBottom: 6 }}>
-                      Caminho alternativo (Chrome ou Edge)
-                    </div>
-                    <div style={{ fontSize: '0.8rem', color: '#94A3B8', lineHeight: 1.55 }}>
-                      • <strong style={{ color: '#E2E8F0' }}>Google Chrome:</strong> menu{' '}
-                      <strong style={{ color: '#E2E8F0' }}>⋮</strong> →{' '}
-                      <strong style={{ color: '#E2E8F0' }}>Transmitir, salvar e compartilhar</strong> →{' '}
-                      <strong style={{ color: '#76D800' }}>Instalar página como aplicativo...</strong>
-                      <br />• <strong style={{ color: '#E2E8F0' }}>Microsoft Edge:</strong> menu{' '}
-                      <strong style={{ color: '#E2E8F0' }}>⋯</strong> →{' '}
-                      <strong style={{ color: '#E2E8F0' }}>Aplicativos</strong> →{' '}
-                      <strong style={{ color: '#76D800' }}>Instalar este site como um aplicativo</strong>
-                      <br />• <strong style={{ color: '#E2E8F0' }}>Mac (Safari):</strong> barra superior{' '}
-                      <strong style={{ color: '#E2E8F0' }}>Arquivo</strong> →{' '}
-                      <strong style={{ color: '#76D800' }}>Adicionar ao Dock</strong>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {platformTab === 'android' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                  <div
-                    style={{
-                      backgroundColor: '#16202A',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: 10,
-                      padding: 12,
+                      borderRadius: 8,
+                      padding: 10,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
                     }}
                   >
                     <div
                       style={{
-                        backgroundColor: '#0A0F14',
-                        borderRadius: 8,
-                        padding: '8px 10px',
                         display: 'flex',
-                        alignItems: 'center',
                         justifyContent: 'space-between',
-                        marginBottom: 10,
+                        alignItems: 'center',
+                        fontSize: '0.75rem',
+                        color: '#CBD5E1',
                       }}
                     >
-                      <span style={{ fontSize: '0.76rem', color: '#CBD5E1' }}>
-                        {appMeta.displayUrl}
-                      </span>
+                      <span>{appMeta.displayUrl}</span>
                       <span
                         style={{
-                          width: 28,
-                          height: 28,
-                          borderRadius: 6,
-                          backgroundColor: '#76D800',
-                          color: '#0A0F14',
+                          padding: '3px 6px',
+                          borderRadius: 5,
+                          backgroundColor: 'rgba(255,255,255,0.1)',
                           display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
                         }}
                       >
-                        <MoreVertical size={15} />
+                        <MoreVertical size={14} />
                       </span>
                     </div>
-
                     <div
                       style={{
-                        backgroundColor: '#121922',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 8,
-                        padding: 10,
+                        padding: '7px 10px',
+                        borderRadius: 6,
+                        backgroundColor: '#76D800',
+                        color: '#0A0F14',
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
                         display: 'flex',
-                        flexDirection: 'column',
+                        alignItems: 'center',
                         gap: 6,
                       }}
                     >
-                      <div style={{ fontSize: '0.76rem', color: '#94A3B8' }}>Compartilhar</div>
-                      <div style={{ fontSize: '0.76rem', color: '#94A3B8' }}>Traduzir...</div>
-                      <div
-                        style={{
-                          fontSize: '0.8rem',
-                          fontWeight: 700,
-                          color: '#0A0F14',
-                          backgroundColor: '#76D800',
-                          borderRadius: 6,
-                          padding: '7px 10px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                        }}
-                      >
-                        <Download size={14} />
-                        <span>Instalar aplicativo / Adicionar à tela inicial</span>
-                      </div>
+                      <Download size={14} />
+                      <span>Instalar aplicativo</span>
                     </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {platformTab === 'ios' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {platformTab === 'ios' && (
                   <div
                     style={{
-                      backgroundColor: '#16202A',
-                      border: '1px solid rgba(255,255,255,0.12)',
-                      borderRadius: 10,
-                      padding: 12,
+                      backgroundColor: '#121922',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      borderRadius: 8,
+                      padding: 10,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: 8,
                     }}
                   >
                     <div
                       style={{
-                        backgroundColor: '#121922',
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        borderRadius: 8,
-                        padding: 10,
-                        marginBottom: 10,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: 8,
-                      }}
-                    >
-                      <div style={{ fontSize: '0.76rem', color: '#94A3B8' }}>Copiar</div>
-                      <div
-                        style={{
-                          fontSize: '0.8rem',
-                          fontWeight: 700,
-                          color: '#0A0F14',
-                          backgroundColor: '#76D800',
-                          borderRadius: 6,
-                          padding: '7px 10px',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                        }}
-                      >
-                        <span>Adicionar à Tela de Início</span>
-                        <PlusSquare size={15} />
-                      </div>
-                    </div>
-
-                    <div
-                      style={{
-                        backgroundColor: '#0A0F14',
-                        borderRadius: 8,
-                        padding: '8px 14px',
+                        padding: '7px 10px',
+                        borderRadius: 6,
+                        backgroundColor: '#76D800',
+                        color: '#0A0F14',
+                        fontSize: '0.78rem',
+                        fontWeight: 800,
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'space-around',
-                        color: '#64748B',
-                        fontSize: '0.76rem',
+                        justifyContent: 'space-between',
                       }}
                     >
-                      <span>‹</span>
-                      <span>›</span>
-                      <span
-                        style={{
-                          padding: '5px 10px',
-                          borderRadius: 6,
-                          backgroundColor: '#76D800',
-                          color: '#0A0F14',
-                          fontWeight: 800,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                        }}
-                      >
-                        <Share size={14} />
-                        <span>Compartilhar</span>
-                      </span>
-                      <span>⊡</span>
+                      <span>Adicionar à Tela de Início</span>
+                      <PlusSquare size={14} />
+                    </div>
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'center',
+                        fontSize: '0.74rem',
+                        color: '#CBD5E1',
+                        gap: 6,
+                        alignItems: 'center',
+                      }}
+                    >
+                      <span>Barra do Safari →</span>
+                      <Share size={13} color="#76D800" />
                     </div>
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
-              {/* Preview do ícone resultante */}
               <div
                 style={{
-                  marginTop: 14,
                   borderTop: '1px solid rgba(255,255,255,0.1)',
-                  paddingTop: 14,
+                  paddingTop: 10,
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 12,
+                  gap: 10,
                 }}
               >
                 <div
                   style={{
-                    width: 44,
-                    height: 44,
-                    borderRadius: 10,
+                    width: 34,
+                    height: 34,
+                    borderRadius: 8,
                     backgroundColor: '#FFFFFF',
                     display: 'flex',
                     alignItems: 'center',
@@ -1246,189 +877,33 @@ export const InstallPwaTutorialScreen: React.FC<InstallPwaTutorialScreenProps> =
                   <img
                     src="/logo-icon.png"
                     alt={appMeta.shortName}
-                    style={{ width: 32, height: 32, objectFit: 'contain' }}
+                    style={{ width: 24, height: 24, objectFit: 'contain' }}
                   />
                 </div>
-                <div>
-                  <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#FFFFFF' }}>
-                    Ícone: {appMeta.shortName}
-                  </div>
-                  <div style={{ fontSize: '0.76rem', color: '#94A3B8' }}>
-                    Abre diretamente em {appMeta.route} em tela cheia.
-                  </div>
+                <div style={{ fontSize: '0.76rem', color: '#CBD5E1', lineHeight: 1.35 }}>
+                  <strong style={{ color: '#FFFFFF' }}>{appMeta.shortName}</strong> fica salvo como
+                  aplicativo sem ocupar memória.
                 </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
 
-      {/* ═══ SEÇÃO 3: ORIENTAÇÃO WHATSAPP / INSTAGRAM & BENEFÍCIOS DO PWA ═══ */}
-      <section
-        style={{
-          backgroundColor: '#F6F7F8',
-          color: '#0A0F14',
-          paddingTop: isMobile ? 38 : 56,
-          paddingBottom: isMobile ? 48 : 68,
-        }}
-      >
-        <div style={containerStyle}>
-          {/* Aviso prático sobre navegadores internos (WhatsApp / Instagram) */}
+          {/* Rodapé minimalista */}
           <div
             style={{
-              backgroundColor: '#FFFFFF',
-              border: '1px solid #CBD5E1',
-              borderRadius: 10,
-              padding: isMobile ? 16 : 22,
-              marginBottom: 24,
-              display: 'flex',
-              flexDirection: isMobile ? 'column' : 'row',
-              alignItems: isMobile ? 'flex-start' : 'center',
-              justifyContent: 'space-between',
-              gap: 16,
-            }}
-          >
-            <div>
-              <div
-                style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.07em',
-                  color: '#15803D',
-                  marginBottom: 4,
-                }}
-              >
-                Importante se você veio por um link
-              </div>
-              <h3 style={{ fontSize: '1.02rem', fontWeight: 700, color: '#0A0F14', marginBottom: 4 }}>
-                Abriu dentro do WhatsApp ou Instagram e não apareceu "Instalar"?
-              </h3>
-              <p style={{ fontSize: '0.86rem', color: '#475569', lineHeight: 1.55, maxWidth: 740 }}>
-                Os visualizadores internos desses aplicativos bloqueiam a instalação de atalhos.
-                Toque no menu de <strong>3 pontos (⋮)</strong> no Android e escolha{' '}
-                <strong>"Abrir no navegador"</strong>, ou no iPhone toque no ícone do{' '}
-                <strong>Safari / Compartilhar</strong> para abrir fora do WhatsApp.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleCopyLink}
-              style={{
-                height: 40,
-                padding: '0 16px',
-                borderRadius: 8,
-                border: '1px solid #0A0F14',
-                backgroundColor: '#0A0F14',
-                color: '#FFFFFF',
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 6,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-              }}
-            >
-              <ExternalLink size={14} />
-              <span>{copiedLink ? 'Link copiado!' : 'Copiar link para o navegador'}</span>
-            </button>
-          </div>
-
-          {/* 3 Pilares do Web App PWA */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))',
-              gap: 14,
-            }}
-          >
-            {[
-              {
-                title: 'Leve no aparelho',
-                text: 'Não consome espaço de armazenamento como aplicativos tradicionais de loja e funciona em qualquer celular moderno.',
-              },
-              {
-                title: 'Sempre atualizado',
-                text: 'Melhorias no mapa, tarifas, pagamentos via PIX ou cartão à vista entram no ar instantaneamente sem downloads manuais.',
-              },
-              {
-                title: 'Recursos completos',
-                text: 'GPS ao vivo, notificações de viagem, câmera para verificação CNH/KYC e código de embarque funcionam direto pelo Web App.',
-              },
-            ].map((item) => (
-              <div
-                key={item.title}
-                style={{
-                  backgroundColor: '#FFFFFF',
-                  border: '1px solid #E2E8F0',
-                  borderRadius: 10,
-                  padding: '16px 18px',
-                }}
-              >
-                <div style={{ fontSize: '0.94rem', fontWeight: 700, color: '#0A0F14', marginBottom: 6 }}>
-                  {item.title}
-                </div>
-                <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.55 }}>
-                  {item.text}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Rodapé simples com atalhos finais */}
-          <div
-            style={{
-              marginTop: 28,
-              paddingTop: 22,
+              marginTop: 24,
+              paddingTop: 16,
               borderTop: '1px solid #E2E8F0',
+              fontSize: '0.78rem',
+              color: '#64748B',
               display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
               justifyContent: 'space-between',
-              gap: 12,
+              flexWrap: 'wrap',
+              gap: 8,
             }}
           >
-            <div style={{ fontSize: '0.82rem', color: '#64748B' }}>
-              © {CURRENT_YEAR} {config.companyName || 'Kavro Drive'}. Acesso oficial Web e PWA.
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-              <button
-                type="button"
-                onClick={() => navigate('/cliente')}
-                style={{
-                  height: 38,
-                  padding: '0 14px',
-                  borderRadius: 8,
-                  border: 'none',
-                  backgroundColor: '#0A0F14',
-                  color: '#FFFFFF',
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Abrir App Passageiro
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/kavro-drive')}
-                style={{
-                  height: 38,
-                  padding: '0 14px',
-                  borderRadius: 8,
-                  border: '1px solid #CBD5E1',
-                  backgroundColor: '#FFFFFF',
-                  color: '#0A0F14',
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                }}
-              >
-                Abrir Portal Motorista
-              </button>
-            </div>
+            <span>© {CURRENT_YEAR} {config.companyName || 'Kavro Drive'}</span>
+            <span>Acesso oficial Web &amp; PWA</span>
           </div>
         </div>
       </section>
