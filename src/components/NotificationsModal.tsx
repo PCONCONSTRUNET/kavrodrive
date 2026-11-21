@@ -11,7 +11,7 @@ import { StorageService } from '../services/storage';
 interface NotificationsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  userRole: 'admin' | 'client';
+  userRole: 'admin' | 'client' | 'driver';
   onSelectRide?: (rideId: string) => void;
 }
 
@@ -26,24 +26,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   const [confirmClearAll, setConfirmClearAll] = useState(false);
 
   const loadNotifications = () => {
-    const all = StorageService.getNotifications();
-
-    if (userRole === 'admin') {
-      setNotifications(all);
-    } else {
-      // No modo Cliente, filtra notificações que pertençam às corridas do cliente ou gerais
-      const currentUser = StorageService.getCurrentUser();
-      const allRides = StorageService.getRides();
-      const clientRides = allRides.filter(r => 
-        (currentUser?.phone && r.clientPhone === currentUser.phone) ||
-        (currentUser?.id && r.clientId === currentUser.id) ||
-        (currentUser?.name && r.clientName && r.clientName.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
-      );
-      const clientRideIds = new Set(clientRides.map(r => r.id));
-
-      const filtered = all.filter(n => !n.rideId || clientRideIds.has(n.rideId));
-      setNotifications(filtered);
-    }
+    setNotifications(StorageService.getVisibleNotificationsForRole(userRole));
   };
 
   useEffect(() => {
@@ -57,17 +40,22 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
     window.addEventListener('up_notifications_updated', handleUpdate);
     window.addEventListener('up_database_synced', handleUpdate);
     window.addEventListener('up_push_received', handleUpdate);
+    window.addEventListener('up_realtime_notification', handleUpdate);
+    window.addEventListener('up_rides_updated', handleUpdate);
 
     return () => {
       window.removeEventListener('up_notifications_updated', handleUpdate);
       window.removeEventListener('up_database_synced', handleUpdate);
       window.removeEventListener('up_push_received', handleUpdate);
+      window.removeEventListener('up_realtime_notification', handleUpdate);
+      window.removeEventListener('up_rides_updated', handleUpdate);
     };
   }, [isOpen, userRole]);
 
   if (!isOpen) return null;
 
   const isAdmin = userRole === 'admin';
+  const isDriver = userRole === 'driver';
 
   // Paleta de cores dinâmica
   const bgModal = isAdmin ? '#121A21' : '#FFFFFF';
@@ -84,24 +72,24 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   const filteredList = filter === 'unread' ? notifications.filter(n => !n.read) : notifications;
 
   const handleMarkAllRead = () => {
-    StorageService.markNotificationsRead();
+    StorageService.markNotificationsRead(userRole);
     loadNotifications();
   };
 
   const handleMarkSingleRead = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    StorageService.markNotificationAsRead(id);
+    StorageService.markNotificationAsRead(id, userRole);
     loadNotifications();
   };
 
   const handleDeleteSingle = (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation();
-    StorageService.deleteNotification(id);
+    StorageService.deleteNotification(id, userRole);
     loadNotifications();
   };
 
   const handleClearAll = () => {
-    StorageService.clearAllNotifications();
+    StorageService.clearAllNotifications(userRole);
     setConfirmClearAll(false);
     loadNotifications();
   };
@@ -264,6 +252,24 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             <UserPlus size={19} strokeWidth={2.3} />
           </div>
         );
+      case 'admin_broadcast':
+        return (
+          <div style={{
+            width: 38,
+            height: 38,
+            borderRadius: 12,
+            backgroundColor: '#0F172A',
+            color: '#76D800',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            boxShadow: '0 3px 10px rgba(15, 23, 42, 0.25)'
+          }}>
+            <Bell size={19} strokeWidth={2.3} />
+          </div>
+        );
+      case 'ride':
       case 'ride_new':
       default:
         return (
@@ -295,35 +301,41 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
         position: 'fixed',
         inset: 0,
         zIndex: 99999,
-        backgroundColor: 'rgba(10, 15, 20, 0.78)',
-        backdropFilter: 'blur(8px)',
+        backgroundColor: 'rgba(10, 15, 20, 0.56)',
+        backdropFilter: 'blur(6px)',
+        WebkitBackdropFilter: 'blur(6px)',
         display: 'flex',
-        alignItems: 'flex-end',
+        alignItems: 'flex-start',
         justifyContent: 'center',
-        padding: 0,
-        animation: 'fadeIn 0.2s ease-out'
+        padding: isAdmin
+          ? 'calc(66px + env(safe-area-inset-top, 0px)) 16px 20px 16px'
+          : 'calc(68px + env(safe-area-inset-top, 0px)) 14px 20px 14px',
+        animation: 'fadeIn 0.18s ease-out',
+        boxSizing: 'border-box'
       }}
     >
       <div
-        className="modal-sheet"
+        className="modal-sheet animate-fade-in"
         onClick={(e) => e.stopPropagation()}
         style={{
           width: '100%',
-          maxWidth: 500,
+          maxWidth: isAdmin ? 480 : 432,
           backgroundColor: bgModal,
-          borderRadius: '24px 24px 0 0',
-          boxShadow: '0 -10px 40px rgba(0,0,0,0.4)',
+          borderRadius: 22,
+          boxShadow: '0 22px 48px rgba(15, 23, 42, 0.32), 0 4px 14px rgba(15, 23, 42, 0.12)',
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          maxHeight: '88dvh',
-          borderTop: `2px solid ${isAdmin ? '#76D800' : '#15803D'}`
+          maxHeight: '72dvh',
+          border: `1px solid ${borderCol}`,
+          borderTop: `3px solid ${isAdmin ? '#76D800' : '#16A34A'}`,
+          transformOrigin: 'top right'
         }}
       >
         {/* CABEÇALHO */}
         <div style={{
           backgroundColor: bgHeader,
-          padding: '16px 18px 12px 18px',
+          padding: '14px 16px 12px 16px',
           borderBottom: `1px solid ${borderCol}`,
           display: 'flex',
           alignItems: 'center',
@@ -332,9 +344,9 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{
-              width: 38,
-              height: 38,
-              borderRadius: 12,
+              width: 36,
+              height: 36,
+              borderRadius: 11,
               backgroundColor: isAdmin ? 'rgba(118, 216, 0, 0.15)' : '#F0FDF4',
               border: `1.5px solid ${isAdmin ? 'rgba(118, 216, 0, 0.4)' : '#BBF7D0'}`,
               color: isAdmin ? '#76D800' : '#15803D',
@@ -342,12 +354,12 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
               alignItems: 'center',
               justifyContent: 'center'
             }}>
-              <Bell size={20} strokeWidth={2.4} />
+              <Bell size={18} strokeWidth={2.4} />
             </div>
 
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <h2 style={{ fontSize: '1.05rem', fontWeight: 900, color: textColor, margin: 0, lineHeight: 1.2 }}>
+                <h2 style={{ fontSize: '1.02rem', fontWeight: 900, color: textColor, margin: 0, lineHeight: 1.2 }}>
                   Notificações & Avisos
                 </h2>
                 {unreadCount > 0 && (
@@ -363,8 +375,12 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                   </span>
                 )}
               </div>
-              <span style={{ fontSize: '0.74rem', color: textMuted }}>
-                {isAdmin ? 'Painel Operacional do Motorista' : 'Avisos da sua conta e corridas'}
+              <span style={{ fontSize: '0.73rem', color: textMuted }}>
+                {isAdmin
+                  ? 'Painel Operacional Admin Master'
+                  : isDriver
+                    ? 'Corridas disponíveis e avisos da central'
+                    : 'Notificações de corridas, entregas e avisos'}
               </span>
             </div>
           </div>
@@ -671,7 +687,9 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                           <ChevronRight size={13} />
                         </button>
                       ) : (
-                        <span style={{ fontSize: '0.68rem', color: textMuted }}>Aviso do sistema</span>
+                        <span style={{ fontSize: '0.68rem', color: textMuted }}>
+                          {item.type === 'admin_broadcast' ? 'Comunicado Kavro Drive' : 'Atualização automática'}
+                        </span>
                       )}
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

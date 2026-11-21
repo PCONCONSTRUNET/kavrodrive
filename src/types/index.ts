@@ -941,9 +941,13 @@ export interface NotificationItem {
   message: string;
   timestamp: string;
   read: boolean;
-  type: 'ride_new' | 'ride_confirmed' | 'ride_cancelled' | 'payment' | 'sos_alert' | 'reminder' | 'general' | string;
+  type: 'ride_new' | 'ride_confirmed' | 'ride_cancelled' | 'payment' | 'sos_alert' | 'reminder' | 'admin_broadcast' | 'general' | string;
   rideId?: string;
   driverId?: string;
+  audience?: 'admin' | 'cliente' | 'motorista' | 'ambos' | string;
+  targetClientId?: string | null;
+  targetDriverId?: string | null;
+  url?: string | null;
 }
 
 export type AuditCategory =

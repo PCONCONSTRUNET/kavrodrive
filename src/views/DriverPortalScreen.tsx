@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Menu, Search, Power, Navigation, Phone, MessageSquare,
+  Menu, Search, Bell, Power, Navigation, Phone, MessageSquare,
   DollarSign, Wallet, Star, Clock, Car, ChevronRight,
   TrendingUp, ArrowUpRight, Check, X, AlertTriangle, User,
   Calendar, Award, Banknote, QrCode, Copy, RefreshCw, LogOut,
@@ -12,6 +12,7 @@ import { DriverProfile, DriverVehicle, DriverWalletSummary, Ride, SystemConfig }
 import { StorageService } from '../services/storage';
 import { PushService, driverExternalId } from '../services/push';
 import { PushPermissionPrompt } from '../components/PushNotifications';
+import { NotificationsModal } from '../components/NotificationsModal';
 import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
@@ -108,6 +109,31 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   // Modais estilo Uber
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [isPreferencesOpen, setIsPreferencesOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() =>
+    StorageService.getVisibleNotificationsForRole('driver').filter(n => !n.read).length
+  );
+
+  useEffect(() => {
+    const updateDriverNotifs = () => {
+      setUnreadNotifCount(
+        StorageService.getVisibleNotificationsForRole('driver').filter(n => !n.read).length
+      );
+    };
+    updateDriverNotifs();
+    window.addEventListener('up_notifications_updated', updateDriverNotifs);
+    window.addEventListener('up_database_synced', updateDriverNotifs);
+    window.addEventListener('up_push_received', updateDriverNotifs);
+    window.addEventListener('up_realtime_notification', updateDriverNotifs);
+    window.addEventListener('up_rides_updated', updateDriverNotifs);
+    return () => {
+      window.removeEventListener('up_notifications_updated', updateDriverNotifs);
+      window.removeEventListener('up_database_synced', updateDriverNotifs);
+      window.removeEventListener('up_push_received', updateDriverNotifs);
+      window.removeEventListener('up_realtime_notification', updateDriverNotifs);
+      window.removeEventListener('up_rides_updated', updateDriverNotifs);
+    };
+  }, [currentDriver?.id]);
   const [togglingCategoryId, setTogglingCategoryId] = useState<string | null>(null);
   const [preferencesError, setPreferencesError] = useState('');
   const isSavingPrefRef = useRef(false);
@@ -2144,30 +2170,76 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             </button>
           </div>
 
-          {/* Botão Busca / Preferências Circular Branco 🔍 */}
-          <button
-            type="button"
-            onClick={() => setIsPreferencesOpen(true)}
-            aria-label="Buscar região e filtros"
-            style={{
-              width: 46,
-              height: 46,
-              borderRadius: '50%',
-              background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
-              backdropFilter: 'blur(24px) saturate(210%)',
-              WebkitBackdropFilter: 'blur(24px) saturate(210%)',
-              border: '1px solid rgba(255, 255, 255, 0.72)',
-              color: '#0F172A',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 6px 20px rgba(15, 23, 42, 0.16), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)',
-              cursor: 'pointer',
-              pointerEvents: 'auto'
-            }}
-          >
-            <Search size={20} />
-          </button>
+          {/* Botões Circulares do Lado Direito: Notificações 🔔 + Busca/Preferências 🔍 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'auto' }}>
+            <button
+              type="button"
+              onClick={() => setIsNotificationsOpen(true)}
+              aria-label="Notificações do motorista"
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+                backdropFilter: 'blur(24px) saturate(210%)',
+                WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+                border: '1px solid rgba(255, 255, 255, 0.72)',
+                color: '#0F172A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 6px 20px rgba(15, 23, 42, 0.16), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)',
+                cursor: 'pointer',
+                position: 'relative'
+              }}
+            >
+              <Bell size={19} />
+              {unreadNotifCount > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: -2,
+                  right: -2,
+                  backgroundColor: '#DC2626',
+                  color: '#FFFFFF',
+                  fontSize: '0.62rem',
+                  fontWeight: 900,
+                  minWidth: 16,
+                  height: 16,
+                  borderRadius: 999,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 4px',
+                  border: '1.5px solid #FFFFFF'
+                }}>
+                  {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+                </span>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsPreferencesOpen(true)}
+              aria-label="Buscar região e filtros"
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
+                backdropFilter: 'blur(24px) saturate(210%)',
+                WebkitBackdropFilter: 'blur(24px) saturate(210%)',
+                border: '1px solid rgba(255, 255, 255, 0.72)',
+                color: '#0F172A',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 6px 20px rgba(15, 23, 42, 0.16), inset 0 1.5px 1px rgba(255, 255, 255, 0.9)',
+                cursor: 'pointer'
+              }}
+            >
+              <Search size={20} />
+            </button>
+          </div>
         </header>
       )}
 
@@ -3202,6 +3274,17 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         <PushPermissionPrompt
           role="motorista"
           externalId={driverExternalId(currentDriver.id, currentDriver.phone) || null}
+        />
+      )}
+
+      {currentDriver && (
+        <NotificationsModal
+          isOpen={isNotificationsOpen}
+          onClose={() => setIsNotificationsOpen(false)}
+          userRole="driver"
+          onSelectRide={() => {
+            setActiveTab('radar');
+          }}
         />
       )}
     </div>

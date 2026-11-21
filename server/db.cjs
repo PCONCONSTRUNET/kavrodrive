@@ -770,18 +770,43 @@ async function localQuery(text, params = []) {
   if (upper.startsWith('SELECT') && upper.includes('FROM PUBLIC.NOTIFICATIONS')) {
     const sorted = [...localStore.notifications]
       .sort((a, b) => String(b.timestamp || '').localeCompare(String(a.timestamp || '')))
-      .slice(0, 50);
+      .slice(0, 100);
     return { rows: sorted, rowCount: sorted.length };
   }
   if (upper.startsWith('INSERT INTO PUBLIC.NOTIFICATIONS')) {
+    const colMatch = sql.match(/\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)/i);
+    const cols = colMatch ? colMatch[1].split(',').map(s => s.trim().toLowerCase()) : [];
+    const valsRaw = colMatch ? colMatch[2].split(',').map(s => s.trim()) : [];
+    const byCol = {};
+    cols.forEach((col, i) => {
+      const expr = valsRaw[i] || '';
+      const pMatch = expr.match(/^\$(\d+)/);
+      if (pMatch) {
+        byCol[col] = params[Number(pMatch[1]) - 1];
+      } else if (/^'(.*)'$/.test(expr)) {
+        byCol[col] = expr.slice(1, -1);
+      } else if (expr.toUpperCase() === 'TRUE') {
+        byCol[col] = true;
+      } else if (expr.toUpperCase() === 'FALSE') {
+        byCol[col] = false;
+      } else if (expr.toUpperCase().includes('NOW()')) {
+        byCol[col] = new Date().toISOString();
+      } else {
+        byCol[col] = null;
+      }
+    });
     const row = {
-      id: params[0],
-      title: params[1],
-      message: params[2],
-      type: params[3] || 'ride_new',
-      ride_id: params[4] || null,
-      read: Boolean(params[5]),
-      timestamp: params[6] || new Date().toISOString()
+      id: byCol.id ?? params[0],
+      title: byCol.title ?? params[1],
+      message: byCol.message ?? params[2],
+      type: byCol.type || 'ride_new',
+      ride_id: byCol.ride_id || null,
+      read: Boolean(byCol.read),
+      timestamp: byCol.timestamp || new Date().toISOString(),
+      audience: byCol.audience || 'admin',
+      target_client_id: byCol.target_client_id || null,
+      target_driver_id: byCol.target_driver_id || null,
+      url: byCol.url || null
     };
     localStore.notifications.unshift(row);
     saveLocalStore();

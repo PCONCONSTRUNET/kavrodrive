@@ -37,6 +37,25 @@ function shouldDeliverToClient(client, eventName, scope = {}) {
     return false;
   }
 
+  // Notificações em tempo real (sininho no app + push in-app) filtradas por audiência/destinatário
+  if (eventName === 'notification:new') {
+    if (!client.viewerRole || client.viewerRole === 'anon' || client.viewerRole === 'tracking') {
+      return false;
+    }
+    const aud = scope.audience || 'admin';
+    if (client.viewerRole === 'client') {
+      if (aud !== 'cliente' && aud !== 'ambos') return false;
+      if (scope.clientId && client.userId && String(scope.clientId) !== String(client.userId)) return false;
+      return !scope.clientId || Boolean(client.userId);
+    }
+    if (client.viewerRole === 'driver') {
+      if (aud !== 'motorista' && aud !== 'ambos') return false;
+      if (scope.driverId && client.userId && String(scope.driverId) !== String(client.userId)) return false;
+      return !scope.driverId || Boolean(client.userId);
+    }
+    return false;
+  }
+
   if (eventName === 'sos:updated') {
     if (client.trackingSosId && scope.sosId && client.trackingSosId === scope.sosId) {
       return true;

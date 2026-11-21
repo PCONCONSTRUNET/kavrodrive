@@ -280,8 +280,18 @@ export const StorageService = {
           this.setCurrentUser({ ...currentUser, ...data.clients[0] });
         }
       }
-      if (isAdmin && Array.isArray(data.notifications)) {
-        localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(data.notifications));
+      if (Array.isArray(data.notifications)) {
+        if (isAdmin) {
+          localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(data.notifications));
+        } else {
+          const viewerScope = currentDriver?.id ? `driver_${currentDriver.id}` : `client_${currentUser?.id || 'anon'}`;
+          const readIds = this.getLocalNotificationIdSet('read', viewerScope);
+          const dismissedIds = this.getLocalNotificationIdSet('dismissed', viewerScope);
+          const scopedList = (data.notifications as NotificationItem[])
+            .filter(n => !dismissedIds.has(n.id))
+            .map(n => (readIds.has(n.id) ? { ...n, read: true } : n));
+          localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(scopedList));
+        }
         window.dispatchEvent(new CustomEvent('up_notifications_updated'));
       }
       if (data.blockedSlots) {
@@ -2214,6 +2224,120 @@ export const StorageService = {
       .catch(() => false);
   },
 
+  getLocalNotificationIdSet(kind: 'read' | 'dismissed', viewerScope: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(`kavro_notif_${kind}_${viewerScope}`);
+      const arr = raw ? JSON.parse(raw) : [];
+      return new Set(Array.isArray(arr) ? arr.map(String) : []);
+    } catch {
+      return new Set<string>();
+    }
+  },
+
+  addLocalNotificationIds(kind: 'read' | 'dismissed', viewerScope: string, ids: string[]): void {
+    try {
+      const existing = this.getLocalNotificationIdSet(kind, viewerScope);
+      ids.forEach(id => existing.add(String(id)));
+      localStorage.setItem(
+        `kavro_notif_${kind}_${viewerScope}`,
+        JSON.stringify(Array.from(existing).slice(-200))
+      );
+    } catch {
+      // ignore storage errors
+    }
+  },
+
+  getNotificationViewerScope(userRole: 'admin' | 'client' | 'driver'): string {
+    if (userRole === 'driver') {
+      const drv = this.getCurrentDriver();
+      return `driver_${drv?.id || 'anon'}`;
+    }
+    if (userRole === 'client') {
+      const usr = this.getCurrentUser();
+      return `client_${usr?.id || 'anon'}`;
+    }
+    return 'admin';
+  },
+
+  getVisibleNotificationsForRole(userRole: 'admin' | 'client' | 'driver'): NotificationItem[] {
+    const all = this.getNotifications();
+    if (userRole === 'admin') return all;
+
+    const viewerScope = this.getNotificationViewerScope(userRole);
+    const readIds = this.getLocalNotificationIdSet('read', viewerScope);
+    const dismissedIds = this.getLocalNotificationIdSet('dismissed', viewerScope);
+    const allRides = this.getRides();
+
+    if (userRole === 'driver') {
+      const currentDriver = this.getCurrentDriver();
+      const driverRideIds = new Set(
+        allRides
+          .filter(r => currentDriver?.id && r.driverId === currentDriver.id)
+          .map(r => r.id)
+      );
+      const hiddenForDriver = new Set([
+        'driver_new',
+        'driver_kyc',
+        'vehicle_new',
+        'client_new',
+        'profile_change_request',
+        'safety_audio'
+      ]);
+      return all
+        .filter((n) => {
+          if (dismissedIds.has(n.id)) return false;
+          if (hiddenForDriver.has(n.type)) return false;
+          const aud = n.audience || '';
+          if (aud === 'admin' || aud === 'cliente') return false;
+          if (n.targetDriverId && currentDriver?.id && String(n.targetDriverId) !== String(currentDriver.id)) {
+            return false;
+          }
+          if (n.targetClientId) return false;
+          if (n.rideId && driverRideIds.has(n.rideId)) return !aud || aud === 'motorista' || aud === 'ambos';
+          return aud === 'motorista' || aud === 'ambos';
+        })
+        .map(n => (readIds.has(n.id) ? { ...n, read: true } : n));
+    }
+
+    // Modo passageiro/cliente: exibe SOMENTE atualizações de corridas, entregas, pagamentos e avisos destinados a ele
+    const currentUser = this.getCurrentUser();
+    const clientRideIds = new Set(
+      allRides
+        .filter(r =>
+          (currentUser?.phone && r.clientPhone === currentUser.phone) ||
+          (currentUser?.id && r.clientId === currentUser.id) ||
+          (currentUser?.name && r.clientName && r.clientName.trim().toLowerCase() === currentUser.name.trim().toLowerCase())
+        )
+        .map(r => r.id)
+    );
+    const ADMIN_ONLY_TYPES = new Set([
+      'driver_new',
+      'driver_kyc',
+      'vehicle_new',
+      'client_new',
+      'profile_change_request',
+      'safety_audio',
+      'sos_alert'
+    ]);
+
+    return all
+      .filter((n) => {
+        if (dismissedIds.has(n.id)) return false;
+        if (ADMIN_ONLY_TYPES.has(n.type)) return false;
+        const aud = n.audience || '';
+        if (aud === 'admin' || aud === 'motorista') return false;
+        if (n.targetClientId && currentUser?.id && String(n.targetClientId) !== String(currentUser.id)) {
+          return false;
+        }
+        if (n.targetDriverId) return false;
+        if (n.rideId && clientRideIds.has(n.rideId)) {
+          return !aud || aud === 'cliente' || aud === 'ambos';
+        }
+        return (aud === 'cliente' || aud === 'ambos') && !n.rideId;
+      })
+      .map(n => (readIds.has(n.id) ? { ...n, read: true } : n));
+  },
+
   getNotifications(): NotificationItem[] {
     const data = localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS);
     if (!data) return [];
@@ -2237,12 +2361,19 @@ export const StorageService = {
 
     fetch('/api/notifications', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
       body: JSON.stringify(newItem)
     }).catch(() => {});
   },
 
-  markNotificationsRead(): void {
+  markNotificationsRead(userRole: 'admin' | 'client' | 'driver' = 'admin'): void {
+    if (userRole !== 'admin') {
+      const scope = this.getNotificationViewerScope(userRole);
+      const visibleIds = this.getVisibleNotificationsForRole(userRole).map(n => n.id);
+      this.addLocalNotificationIds('read', scope, visibleIds);
+      window.dispatchEvent(new CustomEvent('up_notifications_updated'));
+      return;
+    }
     const list = this.getNotifications().map(n => ({ ...n, read: true }));
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
     fetch('/api/notifications/read', {
@@ -2252,7 +2383,13 @@ export const StorageService = {
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
   },
 
-  markNotificationAsRead(id: string): void {
+  markNotificationAsRead(id: string, userRole: 'admin' | 'client' | 'driver' = 'admin'): void {
+    if (userRole !== 'admin') {
+      const scope = this.getNotificationViewerScope(userRole);
+      this.addLocalNotificationIds('read', scope, [id]);
+      window.dispatchEvent(new CustomEvent('up_notifications_updated'));
+      return;
+    }
     const list = this.getNotifications().map(n => n.id === id ? { ...n, read: true } : n);
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
     fetch(`/api/notifications/${encodeURIComponent(id)}/read`, {
@@ -2263,7 +2400,13 @@ export const StorageService = {
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
   },
 
-  deleteNotification(id: string): void {
+  deleteNotification(id: string, userRole: 'admin' | 'client' | 'driver' = 'admin'): void {
+    if (userRole !== 'admin') {
+      const scope = this.getNotificationViewerScope(userRole);
+      this.addLocalNotificationIds('dismissed', scope, [id]);
+      window.dispatchEvent(new CustomEvent('up_notifications_updated'));
+      return;
+    }
     const list = this.getNotifications().filter(n => n.id !== id);
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(list));
     fetch(`/api/notifications/${encodeURIComponent(id)}`, {
@@ -2273,7 +2416,14 @@ export const StorageService = {
     window.dispatchEvent(new CustomEvent('up_notifications_updated'));
   },
 
-  clearAllNotifications(): void {
+  clearAllNotifications(userRole: 'admin' | 'client' | 'driver' = 'admin'): void {
+    if (userRole !== 'admin') {
+      const scope = this.getNotificationViewerScope(userRole);
+      const visibleIds = this.getVisibleNotificationsForRole(userRole).map(n => n.id);
+      this.addLocalNotificationIds('dismissed', scope, visibleIds);
+      window.dispatchEvent(new CustomEvent('up_notifications_updated'));
+      return;
+    }
     localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify([]));
     fetch('/api/notifications', {
       method: 'DELETE',

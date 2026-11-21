@@ -1092,6 +1092,7 @@ export const App: React.FC = () => {
     window.addEventListener('up_realtime_ride', handleRealtimeRide);
     window.addEventListener('up_realtime_driver', handleRealtimeRide);
     window.addEventListener('up_realtime_config', handleRealtimeRide);
+    window.addEventListener('up_realtime_notification', handleRealtimeRide);
     window.addEventListener('up_realtime_gps', handleRealtimeGps);
     window.addEventListener('up_realtime_status', resetPollingSpeed);
     window.addEventListener('up_database_synced', handleSynced);
@@ -1106,6 +1107,7 @@ export const App: React.FC = () => {
       window.removeEventListener('up_realtime_ride', handleRealtimeRide);
       window.removeEventListener('up_realtime_driver', handleRealtimeRide);
       window.removeEventListener('up_realtime_config', handleRealtimeRide);
+      window.removeEventListener('up_realtime_notification', handleRealtimeRide);
       window.removeEventListener('up_realtime_gps', handleRealtimeGps);
       window.removeEventListener('up_realtime_status', resetPollingSpeed);
       window.removeEventListener('up_database_synced', handleSynced);

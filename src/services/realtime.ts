@@ -125,6 +125,11 @@ class RealtimeClient {
         window.dispatchEvent(new CustomEvent('up_realtime_audit', { detail }));
       });
 
+      es.addEventListener('notification:new', (evt: MessageEvent) => {
+        const detail = parseDetail(evt);
+        window.dispatchEvent(new CustomEvent('up_realtime_notification', { detail }));
+      });
+
       es.onerror = () => {
         this.cleanupSource();
         if (this.refCount > 0) {

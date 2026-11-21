@@ -3,6 +3,7 @@
 // ============================================================
 const env = require('./env.cjs');
 const db = require('./db.cjs');
+const realtimeHub = require('./realtimeHub.cjs');
 
 const APP_ID = env.ONESIGNAL_APP_ID || '618823b7-cb26-49c8-b7c0-96385c228a98';
 const ADMIN_EXTERNAL_ID = 'up-admin';
@@ -159,21 +160,221 @@ async function resolveRideTargets(audience, eventName, ride = {}) {
   return Array.from(targets);
 }
 
+const ADMIN_ONLY_NOTIFICATION_TYPES = new Set([
+  'driver_new',
+  'driver_kyc',
+  'vehicle_new',
+  'client_new',
+  'profile_change_request',
+  'safety_audio',
+  'sos_alert'
+]);
+
+let notificationsSchemaReady = false;
+async function ensureNotificationsSchema() {
+  if (notificationsSchemaReady) return;
+  try {
+    await db.query('ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS audience VARCHAR(30) DEFAULT \'admin\'');
+    await db.query('ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS target_client_id VARCHAR(64)');
+    await db.query('ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS target_driver_id VARCHAR(64)');
+    await db.query('ALTER TABLE public.notifications ADD COLUMN IF NOT EXISTS url TEXT');
+  } catch {
+    // fallback seguro em memória
+  }
+  notificationsSchemaReady = true;
+}
+
+function formatNotificationRow(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    title: row.title,
+    message: row.message,
+    type: row.type || 'general',
+    rideId: row.ride_id ?? row.rideId ?? null,
+    read: Boolean(row.read),
+    timestamp: row.timestamp || new Date().toISOString(),
+    audience: row.audience || 'admin',
+    targetClientId: row.target_client_id ?? row.targetClientId ?? null,
+    targetDriverId: row.target_driver_id ?? row.targetDriverId ?? null,
+    url: row.url || null
+  };
+}
+
+function mapTemplateToNotificationType(templateKey, eventName) {
+  if (eventName === 'ride_confirmed') return 'ride_confirmed';
+  if (eventName === 'ride_cancelled') return 'ride_cancelled';
+  if (eventName === 'pix_paid' || eventName === 'payment_approved') return 'payment';
+  if (eventName === 'reminder') return 'reminder';
+  if (eventName === 'new_ride' || String(templateKey || '').includes('new_ride')) return 'ride_new';
+  return 'ride';
+}
+
+async function saveAndPublishInAppNotification({
+  id = null,
+  title,
+  message,
+  type = 'general',
+  rideId = null,
+  audience = 'admin',
+  targetClientId = null,
+  targetDriverId = null,
+  url = null,
+  timestamp = null
+} = {}) {
+  const cleanTitle = String(title || '').trim();
+  const cleanMessage = String(message || '').trim();
+  if (!cleanTitle || !cleanMessage) return null;
+  await ensureNotificationsSchema();
+
+  const notifId = String(id || `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
+  const isoTs = timestamp || new Date().toISOString();
+  const normalizedAud = ['admin', 'cliente', 'motorista', 'ambos'].includes(audience) ? audience : 'admin';
+
+  try {
+    await db.query(
+      `INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp, audience, target_client_id, target_driver_id, url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+      [
+        notifId,
+        cleanTitle,
+        cleanMessage,
+        type || 'general',
+        rideId || null,
+        false,
+        isoTs,
+        normalizedAud,
+        targetClientId ? String(targetClientId) : null,
+        targetDriverId ? String(targetDriverId) : null,
+        url ? String(url) : null
+      ]
+    );
+  } catch (err) {
+    console.warn('[notifications] erro ao persistir notificação:', err.message);
+  }
+
+  const item = {
+    id: notifId,
+    title: cleanTitle,
+    message: cleanMessage,
+    type: type || 'general',
+    rideId: rideId || null,
+    read: false,
+    timestamp: isoTs,
+    audience: normalizedAud,
+    targetClientId: targetClientId ? String(targetClientId) : null,
+    targetDriverId: targetDriverId ? String(targetDriverId) : null,
+    url: url ? String(url) : null
+  };
+
+  try {
+    realtimeHub.publish(
+      'notification:new',
+      { notification: item },
+      {
+        audience: normalizedAud,
+        clientId: targetClientId ? String(targetClientId) : null,
+        driverId: targetDriverId ? String(targetDriverId) : null,
+        rideId: rideId || null
+      }
+    );
+  } catch {
+    // ignore realtime error
+  }
+
+  return item;
+}
+
+async function queryNotificationsForViewer({
+  isAdmin = false,
+  clientId = '',
+  driverId = '',
+  rideIds = [],
+  limit = 60
+} = {}) {
+  await ensureNotificationsSchema();
+  const r = await db.query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 100');
+  const rows = (r.rows || []).map(formatNotificationRow).filter(Boolean);
+
+  if (isAdmin) {
+    return rows.slice(0, limit);
+  }
+
+  const rideIdSet = new Set((rideIds || []).filter(Boolean).map(String));
+
+  if (clientId) {
+    const cid = String(clientId);
+    return rows
+      .filter((n) => {
+        if (ADMIN_ONLY_NOTIFICATION_TYPES.has(n.type)) return false;
+        const aud = n.audience || 'admin';
+        if (n.targetClientId && String(n.targetClientId) === cid) {
+          return aud === 'cliente' || aud === 'ambos';
+        }
+        if (n.targetClientId && String(n.targetClientId) !== cid) return false;
+        if (n.rideId && rideIdSet.has(String(n.rideId))) {
+          return !n.audience || aud === 'cliente' || aud === 'ambos';
+        }
+        return (aud === 'cliente' || aud === 'ambos') && !n.rideId && !n.targetDriverId;
+      })
+      .slice(0, limit);
+  }
+
+  if (driverId) {
+    const did = String(driverId);
+    return rows
+      .filter((n) => {
+        if (new Set(['driver_new', 'driver_kyc', 'vehicle_new', 'client_new', 'profile_change_request', 'safety_audio']).has(n.type)) {
+          return false;
+        }
+        const aud = n.audience || 'admin';
+        if (n.targetDriverId && String(n.targetDriverId) === did) {
+          return aud === 'motorista' || aud === 'ambos';
+        }
+        if (n.targetDriverId && String(n.targetDriverId) !== did) return false;
+        if (n.rideId && rideIdSet.has(String(n.rideId))) {
+          return !n.audience || aud === 'motorista' || aud === 'ambos';
+        }
+        return (aud === 'motorista' || aud === 'ambos') && !n.targetClientId;
+      })
+      .slice(0, limit);
+  }
+
+  return [];
+}
+
 // Dispara um evento usando o modelo configurado
 async function notify(templateKey, ride, extra = {}) {
   const templates = await getTemplates();
   const t = templates[templateKey];
   if (!t || !t.enabled) return null;
   const audience = t.audience || 'cliente';
-  const target = await resolveRideTargets(audience, t.event || templateKey, ride);
-  if (target.length === 0) return null;
+  const renderedTitle = fill(t.title, ride, extra);
+  const renderedMessage = fill(t.message, ride, extra);
   const url =
     audience === 'admin'
       ? '/administracion'
       : audience === 'motorista'
         ? '/kavro-drive'
         : `/viagem/${encodeURIComponent(ride.id)}`;
-  return sendToExternalIds(target, fill(t.title, ride, extra), fill(t.message, ride, extra), {
+
+  if (!extra.__sendAfter && (audience === 'cliente' || audience === 'motorista' || audience === 'ambos')) {
+    await saveAndPublishInAppNotification({
+      id: `notif-${templateKey}-${ride.id}-${Date.now()}`,
+      title: renderedTitle,
+      message: renderedMessage,
+      type: mapTemplateToNotificationType(templateKey, t.event || templateKey),
+      rideId: ride.id,
+      audience,
+      targetClientId: audience === 'cliente' ? (ride.clientId || null) : null,
+      targetDriverId: audience === 'motorista' ? (ride.driverId || null) : null,
+      url
+    });
+  }
+
+  const target = await resolveRideTargets(audience, t.event || templateKey, ride);
+  if (target.length === 0) return null;
+  return sendToExternalIds(target, renderedTitle, renderedMessage, {
     url, data: { rideId: ride.id, event: templateKey, audience }, sendAfter: extra.__sendAfter
   });
 }
@@ -289,59 +490,101 @@ async function handleRideChange(before, after, { source = 'app' } = {}) {
   }
 }
 
-async function broadcastManualPush({ audience = 'ambos', title, message, url } = {}) {
+async function broadcastManualPush({
+  audience = 'ambos',
+  targetClientId = null,
+  targetDriverId = null,
+  title,
+  message,
+  url
+} = {}) {
   const cleanTitle = String(title || '').trim();
   const cleanMessage = String(message || '').trim();
   if (!cleanTitle || !cleanMessage) {
     throw new Error('Título e mensagem são obrigatórios para disparo manual.');
   }
 
+  const normalizedAud =
+    audience === 'cliente_especifico'
+      ? 'cliente'
+      : audience === 'motorista_especifico'
+        ? 'motorista'
+        : (['admin', 'cliente', 'motorista', 'ambos'].includes(audience) ? audience : 'ambos');
+  const cleanTargetClient = audience === 'cliente_especifico' ? String(targetClientId || '').trim() : null;
+  const cleanTargetDriver = audience === 'motorista_especifico' ? String(targetDriverId || '').trim() : null;
+
+  if (audience === 'cliente_especifico' && !cleanTargetClient) {
+    throw new Error('Selecione o passageiro/cliente que receberá a notificação.');
+  }
+  if (audience === 'motorista_especifico' && !cleanTargetDriver) {
+    throw new Error('Selecione o motorista que receberá a notificação.');
+  }
+
   const targetIds = new Set();
-  if (audience === 'admin') {
+  if (normalizedAud === 'admin') {
     targetIds.add(ADMIN_EXTERNAL_ID);
   }
-  if (audience === 'cliente' || audience === 'ambos') {
+  if (normalizedAud === 'cliente' || normalizedAud === 'ambos') {
     try {
       const r = await db.query('SELECT id, phone FROM public.clients');
       for (const row of r.rows || []) {
+        if (cleanTargetClient && String(row.id) !== cleanTargetClient) continue;
         const ext = clientExternalId(row.phone);
         if (ext) targetIds.add(ext);
         if (row.id) targetIds.add(String(row.id));
       }
+      if (cleanTargetClient) targetIds.add(cleanTargetClient);
     } catch { /* segue */ }
   }
-  if (audience === 'motorista' || audience === 'ambos') {
+  if (normalizedAud === 'motorista' || normalizedAud === 'ambos') {
     try {
       const r = await db.query('SELECT id, phone FROM public.drivers');
       for (const row of r.rows || []) {
+        if (cleanTargetDriver && String(row.id) !== cleanTargetDriver) continue;
         const ext = driverExternalId(row.id, row.phone);
         if (ext) targetIds.add(ext);
         if (row.id) targetIds.add(String(row.id));
       }
+      if (cleanTargetDriver) targetIds.add(cleanTargetDriver);
     } catch { /* segue */ }
   }
 
   const resolvedUrl =
     url ||
-    (audience === 'admin'
+    (normalizedAud === 'admin'
       ? '/administracion'
-      : audience === 'motorista'
+      : normalizedAud === 'motorista'
         ? '/kavro-drive'
         : '/cliente');
+
+  const notification = await saveAndPublishInAppNotification({
+    id: `notif-manual-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    title: cleanTitle,
+    message: cleanMessage,
+    type: 'admin_broadcast',
+    rideId: null,
+    audience: normalizedAud,
+    targetClientId: cleanTargetClient,
+    targetDriverId: cleanTargetDriver,
+    url: resolvedUrl
+  });
 
   const ids = Array.from(targetIds);
   let result = null;
   if (ids.length > 0) {
     result = await sendToExternalIds(ids, cleanTitle, cleanMessage, {
       url: resolvedUrl,
-      data: { type: 'manual_broadcast', audience }
+      data: {
+        type: 'admin_broadcast',
+        audience: normalizedAud,
+        notificationId: notification?.id || null
+      }
     });
-  } else {
-    // Fallback por tag role no OneSignal quando ainda não há registros SQL correspondentes
+  } else if (!cleanTargetClient && !cleanTargetDriver) {
     const roles =
-      audience === 'ambos'
+      normalizedAud === 'ambos'
         ? ['cliente', 'motorista']
-        : [audience];
+        : [normalizedAud];
     const filters = [];
     roles.forEach((roleVal, idx) => {
       if (idx > 0) filters.push({ operator: 'OR' });
@@ -355,15 +598,25 @@ async function broadcastManualPush({ audience = 'ambos', title, message, url } =
       contents: { en: cleanMessage, pt: cleanMessage },
       chrome_web_icon: appUrl('/pwa-icon-192.png'),
       web_url: appUrl(resolvedUrl),
-      data: { type: 'manual_broadcast', audience }
+      data: {
+        type: 'admin_broadcast',
+        audience: normalizedAud,
+        notificationId: notification?.id || null
+      }
     });
   }
 
   return {
-    ok: Boolean(result?.id || result?.recipients),
-    audience,
+    ok: Boolean(notification || result?.id || result?.recipients),
+    inAppDelivered: Boolean(notification),
+    pushSent: Boolean(result?.id || result?.recipients),
+    pushRecipients: Number(result?.recipients || 0),
+    audience: normalizedAud,
+    targetClientId: cleanTargetClient,
+    targetDriverId: cleanTargetDriver,
     targetedIdsCount: ids.length,
     oneSignalId: result?.id || null,
+    notification,
     result
   };
 }
@@ -373,6 +626,9 @@ module.exports = {
   DEFAULT_TEMPLATES,
   clientExternalId,
   driverExternalId,
+  ensureNotificationsSchema,
+  saveAndPublishInAppNotification,
+  queryNotificationsForViewer,
   handleRideChange,
   sendToExternalIds,
   broadcastManualPush,

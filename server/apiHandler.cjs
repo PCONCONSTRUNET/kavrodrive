@@ -2246,11 +2246,11 @@ async function handleApiRequest(req, res) {
         }));
 
       if (isAdmin) {
-        const [ridesRes, expRes, cliRes, notifRes, slotsRes] = await Promise.all([
+        const [ridesRes, expRes, cliRes, adminNotifs, slotsRes] = await Promise.all([
           db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC LIMIT 500'),
           db.query('SELECT * FROM public.expenses ORDER BY date DESC LIMIT 500'),
           db.query('SELECT * FROM public.clients ORDER BY created_at DESC LIMIT 1000'),
-          db.query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 50'),
+          push.queryNotificationsForViewer({ isAdmin: true, limit: 60 }),
           db.query('SELECT date, slots FROM public.blocked_slots')
         ]);
 
@@ -2278,15 +2278,7 @@ async function handleApiRequest(req, res) {
             createdAt: r.created_at
           })),
           clients: cliRes.rows.map(r => sanitizeClientRow(r, true)),
-          notifications: notifRes.rows.map(r => ({
-            id: r.id,
-            title: r.title,
-            message: r.message,
-            type: r.type,
-            rideId: r.ride_id,
-            read: r.read,
-            timestamp: r.timestamp
-          })),
+          notifications: adminNotifs,
           blockedSlots: blockedSlotsMap
         });
       }
@@ -2311,6 +2303,11 @@ async function handleApiRequest(req, res) {
         const formattedRides = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
         const driverScopedRides = filterAndSortDriverRidesByRadius(formattedRides, selfDriver, cachedSysCfg)
           .map(r => security.sanitizeRideForViewer(r, { isDriver: true }));
+        const driverNotifs = await push.queryNotificationsForViewer({
+          driverId: verifiedDriverId,
+          rideIds: driverScopedRides.map(r => r.id),
+          limit: 50
+        });
         const driversPayload = selfDriver
           ? [selfDriver, ...onlineDriversPublic.filter(d => d.id !== verifiedDriverId)]
           : onlineDriversPublic;
@@ -2322,7 +2319,7 @@ async function handleApiRequest(req, res) {
           onlineDriversCount: onlineDriversPublic.length,
           expenses: [],
           clients: [],
-          notifications: [],
+          notifications: driverNotifs,
           blockedSlots: blockedSlotsMap
         });
       }
@@ -2364,6 +2361,14 @@ async function handleApiRequest(req, res) {
         );
       });
       const publicRidesWithRatings = await attachClientRatingsToRides(rawClientRides);
+      const effectiveClientId = verifiedClientId || selfCliRes.rows[0]?.id || '';
+      const clientNotifs = effectiveClientId
+        ? await push.queryNotificationsForViewer({
+            clientId: effectiveClientId,
+            rideIds: publicRidesWithRatings.map(r => r.id),
+            limit: 50
+          })
+        : [];
 
       return sendJson(res, 200, {
         config: sanitizePublicConfig(cachedSysCfg, false),
@@ -2372,7 +2377,7 @@ async function handleApiRequest(req, res) {
         onlineDriversCount: onlineDriversPublic.length,
         expenses: [],
         clients: selfCliRes.rows.map(r => sanitizeClientRow(r, false)),
-        notifications: [],
+        notifications: clientNotifs,
         blockedSlots: blockedSlotsMap
       });
     }
@@ -7253,7 +7258,8 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { error: 'Acesso não autorizado para disparo de notificações.' });
       }
       const body = await parseBody(req);
-      const audience = ['cliente', 'motorista', 'ambos', 'admin'].includes(body.audience)
+      const allowedAudiences = ['cliente', 'motorista', 'ambos', 'admin', 'cliente_especifico', 'motorista_especifico'];
+      const audience = allowedAudiences.includes(body.audience)
         ? body.audience
         : 'ambos';
       const title = String(body.title || '').trim();
@@ -7261,13 +7267,19 @@ async function handleApiRequest(req, res) {
       if (!title || !message) {
         return sendJson(res, 400, { error: 'Título e mensagem da notificação são obrigatórios.' });
       }
-      const out = await push.broadcastManualPush({
-        audience,
-        title,
-        message,
-        url: body.url ? String(body.url) : undefined
-      });
-      return sendJson(res, 200, out);
+      try {
+        const out = await push.broadcastManualPush({
+          audience,
+          targetClientId: body.targetClientId ? String(body.targetClientId).trim() : null,
+          targetDriverId: body.targetDriverId ? String(body.targetDriverId).trim() : null,
+          title,
+          message,
+          url: body.url ? String(body.url) : undefined
+        });
+        return sendJson(res, 200, out);
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, error: err?.message || 'Dados inválidos para disparo.' });
+      }
     }
 
     // 4. EXPENSES
@@ -9073,31 +9085,58 @@ async function handleApiRequest(req, res) {
     // 7. NOTIFICATIONS
     if (pathname === '/api/notifications') {
       if (method === 'GET') {
-        if (!await isAuthorizedAdmin(req)) {
-          return sendJson(res, 200, []);
+        const isAdminViewer = await isAuthorizedAdmin(req);
+        if (isAdminViewer) {
+          const items = await push.queryNotificationsForViewer({ isAdmin: true, limit: 60 });
+          return sendJson(res, 200, items);
         }
-        const r = await db.query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 50');
-        return sendJson(res, 200, r.rows.map(row => ({
-          id: row.id,
-          title: row.title,
-          message: row.message,
-          type: row.type,
-          rideId: row.ride_id,
-          read: row.read,
-          timestamp: row.timestamp
-        })));
+        const drvSession = verifyDriverToken(req);
+        if (drvSession?.sub) {
+          const drvRidesRes = await db.query(
+            `SELECT * FROM public.rides WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL) ORDER BY created_at DESC LIMIT 100`,
+            [drvSession.sub]
+          );
+          const items = await push.queryNotificationsForViewer({
+            driverId: drvSession.sub,
+            rideIds: (drvRidesRes.rows || []).map(r => r.id),
+            limit: 50
+          });
+          return sendJson(res, 200, items);
+        }
+        const cliSession = verifyClientToken(req);
+        if (cliSession?.sub) {
+          const phoneDigits = normalizePhoneDigitsServer(cliSession.phone || '');
+          const cliRidesRes = await db.query(
+            `SELECT * FROM public.rides WHERE ($1 <> '' AND client_id = $1) OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2) ORDER BY created_at DESC LIMIT 80`,
+            [cliSession.sub, phoneDigits]
+          );
+          const items = await push.queryNotificationsForViewer({
+            clientId: cliSession.sub,
+            rideIds: (cliRidesRes.rows || []).map(r => r.id),
+            limit: 50
+          });
+          return sendJson(res, 200, items);
+        }
+        return sendJson(res, 200, []);
       }
       if (method === 'POST') {
         if (!await isAuthorizedAdmin(req)) {
           return sendJson(res, 401, { error: 'Acesso não autorizado.' });
         }
         const n = await parseBody(req);
-        if (!n.id) n.id = `notif-${Date.now()}`;
-        await db.query(`
-          INSERT INTO public.notifications (id, title, message, type, ride_id, read, timestamp)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-        `, [n.id, n.title, n.message, n.type || 'ride_new', n.rideId || null, Boolean(n.read), n.timestamp || new Date().toISOString()]);
-        return sendJson(res, 200, { ok: true, notification: n });
+        const created = await push.saveAndPublishInAppNotification({
+          id: n.id || `notif-${Date.now()}`,
+          title: n.title,
+          message: n.message,
+          type: n.type || 'ride_new',
+          rideId: n.rideId || null,
+          audience: n.audience || 'admin',
+          targetClientId: n.targetClientId || null,
+          targetDriverId: n.targetDriverId || null,
+          url: n.url || null,
+          timestamp: n.timestamp || new Date().toISOString()
+        });
+        return sendJson(res, 200, { ok: true, notification: created });
       }
       if (method === 'DELETE') {
         if (!await isAuthorizedAdmin(req)) {

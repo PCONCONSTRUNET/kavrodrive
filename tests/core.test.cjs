@@ -3757,3 +3757,210 @@ test('GET /api/manifest aponta PWA de passageiro diretamente para /cliente (nao 
   assert.equal(adminManifest.json.id, '/motora');
   assert.equal(adminManifest.json.start_url, '/motora');
 });
+
+test('Notificacoes segmentadas: Admin envia direto para passageiro/motorista e passageiro ve somente corridas e seus comunicados', async () => {
+  const push = require('../server/push.cjs');
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '0').slice(-9);
+    const digits = base.split('').map(Number);
+    if (digits.every((d) => d === digits[0])) digits[8] = (digits[8] + 1) % 10;
+    const calc = (sliceLen) => {
+      let sum = 0;
+      for (let i = 0; i < sliceLen; i++) sum += digits[i] * (sliceLen + 1 - i);
+      const rem = (sum * 10) % 11;
+      return rem >= 10 ? 0 : rem;
+    };
+    digits.push(calc(9));
+    digits.push(calc(10));
+    return digits.join('');
+  };
+  const seed = Math.floor((Date.now() % 600000000) + 150000021);
+  const ts = Date.now();
+
+  const cliReg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.241' },
+    body: {
+      name: 'Passageiro Notif Teste',
+      phone: `(48) 99511-${String(ts).slice(-4)}`,
+      document: makeTestCpf(seed),
+      email: `notif.cli.${ts}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cliReg.status, 200);
+  const cliId = cliReg.json.client.id;
+  const cliToken = cliReg.json.clientToken;
+
+  const cli2Reg = await apiJson('/api/clients/register', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.242' },
+    body: {
+      name: 'Passageiro Notif Outro',
+      phone: `(48) 99522-${String(ts + 1).slice(-4)}`,
+      document: makeTestCpf(seed + 19),
+      email: `notif.cli2.${ts}@kavro.test`,
+      password: '1234',
+      termsAcceptance: { accepted: true }
+    }
+  });
+  assert.equal(cli2Reg.status, 200);
+  const cli2Token = cli2Reg.json.clientToken;
+
+  const drvId = `drv-notif-${ts}`;
+  const drvEmail = `notif.drv.${ts}@kavro.test`;
+  db.localStore.drivers = db.localStore.drivers.filter(d => d.id !== drvId);
+  db.localStore.drivers.push({
+    id: drvId,
+    name: 'Motorista Notif Teste',
+    phone: `(48) 99533-${String(ts).slice(-4)}`,
+    email: drvEmail,
+    document: makeTestCpf(seed + 37),
+    cnh: '88776655443',
+    password_hash: scryptHash('1234'),
+    vehicle_brand: 'Chevrolet',
+    vehicle_model: 'Onix',
+    vehicle_color: 'Prata',
+    vehicle_year: '2024',
+    vehicle_plate: 'KVR9A12',
+    vehicle_category: 'kavro_go',
+    eligible_categories: ['kavro_go'],
+    approval_status: 'aprovado',
+    financial_blocked: false,
+    is_online: true,
+    created_at: new Date().toISOString()
+  });
+
+  const drvLogin = await apiJson('/api/drivers/login', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.243' },
+    body: { identifier: drvEmail, password: '1234' }
+  });
+  assert.equal(drvLogin.status, 200);
+  const drvToken = drvLogin.json.driverToken;
+
+  // Sem sessao Admin Master, endpoint HTTP permanece fechado (401) e anônimo nao enxerga notificacoes
+  const unauthBroadcast = await apiJson('/api/push/broadcast', {
+    method: 'POST',
+    body: { audience: 'cliente', title: 'Sem Auth', message: 'Bloqueado' }
+  });
+  assert.equal(unauthBroadcast.status, 401);
+
+  const anonNotifs = await apiJson('/api/notifications');
+  assert.equal(anonNotifs.status, 200);
+  assert.deepEqual(anonNotifs.json, []);
+
+  // Insere alerta administrativo interno que NAO deve aparecer para passageiro nem motorista
+  await db.query(
+    `INSERT INTO public.notifications (id, title, message, type, read, timestamp)
+     VALUES ($1, $2, $3, 'driver_kyc', false, NOW())`,
+    [`notif-adm-only-${ts}`, 'KYC Interno Motorista', 'Dados internos do motorista']
+  );
+
+  // Admin dispara comunicados diretos segmentados (todos passageiros, passageiro específico, motoristas, motorista específico, admin)
+  const bCastCli = await push.broadcastManualPush({
+    audience: 'cliente',
+    title: '🎉 Cupom Especial',
+    message: 'Comunicado exclusivo para passageiros!'
+  });
+  assert.equal(bCastCli.ok, true);
+  assert.equal(bCastCli.inAppDelivered, true);
+
+  const bCastCliOne = await push.broadcastManualPush({
+    audience: 'cliente_especifico',
+    targetClientId: cliId,
+    title: '🎁 Beneficio Individual',
+    message: 'Somente o passageiro alvo deve ver este aviso.'
+  });
+  assert.equal(bCastCliOne.ok, true);
+  assert.equal(bCastCliOne.inAppDelivered, true);
+
+  const bCastDrv = await push.broadcastManualPush({
+    audience: 'motorista',
+    title: '⚡ Bonus Motorista',
+    message: 'Somente motoristas devem ver isto.'
+  });
+  assert.equal(bCastDrv.ok, true);
+
+  const bCastDrvOne = await push.broadcastManualPush({
+    audience: 'motorista_especifico',
+    targetDriverId: drvId,
+    title: '🛡️ Alerta Frota Individual',
+    message: 'Comunicado exclusivo do motorista selecionado.'
+  });
+  assert.equal(bCastDrvOne.ok, true);
+
+  const bCastAdm = await push.broadcastManualPush({
+    audience: 'admin',
+    title: '🔐 Interno Admin Broadcast',
+    message: 'Registro interno da gestao.'
+  });
+  assert.equal(bCastAdm.ok, true);
+
+  // Passageiro 1 consulta /api/notifications: recebe o comunicado geral + individual dele, sem KYC interno nem avisos de motorista/admin
+  const cliNotifs = await apiJson('/api/notifications', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(cliNotifs.status, 200);
+  assert.ok(Array.isArray(cliNotifs.json));
+  assert.ok(cliNotifs.json.some(n => n.title === '🎉 Cupom Especial'));
+  assert.ok(cliNotifs.json.some(n => n.title === '🎁 Beneficio Individual'));
+  assert.equal(cliNotifs.json.some(n => n.type === 'driver_kyc' || n.type === 'client_new'), false);
+  assert.equal(cliNotifs.json.some(n => n.title === '⚡ Bonus Motorista'), false);
+  assert.equal(cliNotifs.json.some(n => n.title === '🛡️ Alerta Frota Individual'), false);
+  assert.equal(cliNotifs.json.some(n => n.title === '🔐 Interno Admin Broadcast'), false);
+
+  // Passageiro 2 NAO recebe o comunicado individual do Passageiro 1
+  const cli2Notifs = await apiJson('/api/notifications', {
+    headers: { 'x-client-token': cli2Token }
+  });
+  assert.equal(cli2Notifs.status, 200);
+  assert.ok(cli2Notifs.json.some(n => n.title === '🎉 Cupom Especial'));
+  assert.equal(cli2Notifs.json.some(n => n.title === '🎁 Beneficio Individual'), false);
+
+  // Motorista recebe comunicados de motorista/frota, sem KYC administrativo nem cupom de passageiro
+  const drvNotifs = await apiJson('/api/notifications', {
+    headers: { 'x-driver-token': drvToken }
+  });
+  assert.equal(drvNotifs.status, 200);
+  assert.ok(drvNotifs.json.some(n => n.title === '⚡ Bonus Motorista'));
+  assert.ok(drvNotifs.json.some(n => n.title === '🛡️ Alerta Frota Individual'));
+  assert.equal(drvNotifs.json.some(n => n.title === '🎉 Cupom Especial'), false);
+  assert.equal(drvNotifs.json.some(n => n.type === 'driver_kyc'), false);
+
+  // Admin Master visualiza todo o historico (alertas internos + comunicados enviados)
+  const admNotifs = await push.queryNotificationsForViewer({ isAdmin: true, limit: 60 });
+  assert.ok(admNotifs.some(n => n.type === 'driver_kyc'));
+  assert.ok(admNotifs.some(n => n.title === '🎉 Cupom Especial'));
+  assert.ok(admNotifs.some(n => n.title === '🔐 Interno Admin Broadcast'));
+
+  // Passageiro cria corrida e recebe notificacao da corrida no sininho
+  const rideRes = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Notif Teste',
+      clientPhone: `(48) 99511-${String(ts).slice(-4)}`,
+      originAddress: 'Origem Notif',
+      destinationAddress: 'Destino Notif',
+      originLat: -28.392,
+      originLng: -49.397,
+      destinationLat: -28.385,
+      destinationLng: -49.389,
+      distanceKm: 5,
+      durationMin: 10,
+      totalPrice: 22.5,
+      category: 'kavro_go',
+      paymentMethod: 'dinheiro'
+    }
+  });
+  assert.equal(rideRes.status, 200);
+
+  const cliNotifsAfterRide = await apiJson('/api/notifications', {
+    headers: { 'x-client-token': cliToken }
+  });
+  assert.equal(cliNotifsAfterRide.status, 200);
+  assert.ok(cliNotifsAfterRide.json.some(n => n.rideId === rideRes.json.ride.id));
+});

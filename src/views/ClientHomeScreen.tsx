@@ -53,22 +53,29 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
   const [activeLiveRide, setActiveLiveRide] = useState<Ride | null>(null);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() => {
-    return StorageService.getNotifications().filter(n => !n.read).length;
+    return StorageService.getVisibleNotificationsForRole('client').filter(n => !n.read).length;
   });
 
   useEffect(() => {
     const updateCount = () => {
-      setUnreadNotifCount(StorageService.getNotifications().filter(n => !n.read).length);
+      setUnreadNotifCount(
+        StorageService.getVisibleNotificationsForRole('client').filter(n => !n.read).length
+      );
     };
+    updateCount();
     window.addEventListener('up_notifications_updated', updateCount);
     window.addEventListener('up_database_synced', updateCount);
     window.addEventListener('up_push_received', updateCount);
+    window.addEventListener('up_realtime_notification', updateCount);
+    window.addEventListener('up_rides_updated', updateCount);
     return () => {
       window.removeEventListener('up_notifications_updated', updateCount);
       window.removeEventListener('up_database_synced', updateCount);
       window.removeEventListener('up_push_received', updateCount);
+      window.removeEventListener('up_realtime_notification', updateCount);
+      window.removeEventListener('up_rides_updated', updateCount);
     };
-  }, []);
+  }, [currentUser?.id]);
 
   useEffect(() => {
     const checkActiveRide = () => {

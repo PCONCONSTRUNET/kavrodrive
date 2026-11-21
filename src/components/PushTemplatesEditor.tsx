@@ -1,9 +1,9 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
   Bell, BellRing, Send, ChevronDown, ChevronUp, Loader2, Check,
-  Sparkles, Plus, Trash2, Users, Car, ShieldCheck, Globe, Smile
+  Sparkles, Plus, Trash2, Users, Car, ShieldCheck, Globe, Smile, UserCheck
 } from 'lucide-react';
-import { PushAudience, PushTemplate, PushTriggerEvent } from '../types';
+import { ClientProfile, DriverProfile, NotificationItem, PushAudience, PushTemplate, PushTriggerEvent } from '../types';
 import { PushService } from '../services/push';
 import { StorageService } from '../services/storage';
 
@@ -68,8 +68,33 @@ const BUILTIN_LABELS: Record<string, string> = {
 
 const VARIABLES = ['{cliente}', '{motorista}', '{valor}', '{origem}', '{destino}', '{pagamento}', '{data}', '{hora}', '{id}'];
 
+type ManualAudience =
+  | 'cliente'
+  | 'cliente_especifico'
+  | 'motorista'
+  | 'motorista_especifico'
+  | 'ambos'
+  | 'admin';
+
+const MANUAL_AUDIENCE_META: Record<ManualAudience, { label: string; short: string }> = {
+  ambos: { label: 'Todos (Passageiros + Motoristas)', short: 'Todos' },
+  cliente: { label: 'Todos os Passageiros / Clientes', short: 'Passageiros' },
+  cliente_especifico: { label: 'Passageiro / Cliente Específico', short: 'Cliente único' },
+  motorista: { label: 'Todos os Motoristas', short: 'Motoristas' },
+  motorista_especifico: { label: 'Motorista Específico', short: 'Motorista único' },
+  admin: { label: 'Admin Master', short: 'Admin' }
+};
+
+const QUICK_MANUAL_PRESETS = [
+  { label: '🎉 Promoção', title: '🎉 Condição especial na Kavro Drive!', message: 'Solicite sua corrida agora pelo app com tarifa justa e atendimento verificado.' },
+  { label: '⚡ Alta Demanda', title: '⚡ Alta demanda de corridas na região!', message: 'Motorista parceiro, fique online agora para aproveitar as novas chamadas.' },
+  { label: '📢 Comunicado', title: '📢 Aviso importante da Kavro Drive', message: 'Confira as novidades do atendimento e mantenha seu cadastro sempre atualizado.' }
+];
+
 interface Props {
   value?: Record<string, PushTemplate>;
+  clients?: ClientProfile[];
+  drivers?: DriverProfile[];
   onChange: (next: Record<string, PushTemplate>) => void;
   onPersist?: (next: Record<string, PushTemplate>) => Promise<void> | void;
 }
@@ -98,7 +123,7 @@ const ToggleSwitch: React.FC<{ checked: boolean; onClick: (e: React.MouseEvent) 
   </button>
 );
 
-export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersist }) => {
+export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], drivers = [], onChange, onPersist }) => {
   const templates = useMemo(() => {
     const merged: Record<string, PushTemplate> = {};
     for (const [k, def] of Object.entries(DEFAULT_PUSH_TEMPLATES)) {
@@ -124,13 +149,18 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
   const [testing, setTesting] = useState(false);
   const [statusFeedback, setStatusFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  // ===== Estado: Disparo Manual (Broadcast) =====
-  const [broadcastAudience, setBroadcastAudience] = useState<PushAudience>('ambos');
+  // ===== Estado: Disparo Manual (Broadcast / Direto) =====
+  const [broadcastAudience, setBroadcastAudience] = useState<ManualAudience>('ambos');
+  const [selectedClientId, setSelectedClientId] = useState<string>('');
+  const [selectedDriverId, setSelectedDriverId] = useState<string>('');
   const [broadcastTitle, setBroadcastTitle] = useState('🚗 Novidade na Kavro Drive!');
   const [broadcastMessage, setBroadcastMessage] = useState('Aproveite corridas rápidas, seguras e com tarifa justa hoje mesmo.');
   const [broadcastUrl, setBroadcastUrl] = useState<string>('');
   const [broadcastFocus, setBroadcastFocus] = useState<'title' | 'message'>('message');
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
+  const [sentHistory, setSentHistory] = useState<NotificationItem[]>(() =>
+    StorageService.getNotifications().filter(n => n.type === 'admin_broadcast').slice(0, 12)
+  );
   const broadcastTitleRef = useRef<HTMLInputElement | null>(null);
   const broadcastMsgRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -230,6 +260,14 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
       setStatusFeedback({ type: 'err', text: 'Preencha o título e a mensagem da notificação antes de enviar.' });
       return;
     }
+    if (broadcastAudience === 'cliente_especifico' && !selectedClientId) {
+      setStatusFeedback({ type: 'err', text: 'Selecione o passageiro/cliente que receberá esta notificação.' });
+      return;
+    }
+    if (broadcastAudience === 'motorista_especifico' && !selectedDriverId) {
+      setStatusFeedback({ type: 'err', text: 'Selecione o motorista que receberá esta notificação.' });
+      return;
+    }
     setSendingBroadcast(true);
     setStatusFeedback(null);
     try {
@@ -241,6 +279,8 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
         },
         body: JSON.stringify({
           audience: broadcastAudience,
+          targetClientId: broadcastAudience === 'cliente_especifico' ? selectedClientId : undefined,
+          targetDriverId: broadcastAudience === 'motorista_especifico' ? selectedDriverId : undefined,
           title: broadcastTitle.trim(),
           message: broadcastMessage.trim(),
           url: broadcastUrl || undefined,
@@ -248,14 +288,20 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.ok) {
+        if (data.notification) {
+          setSentHistory(prev => [data.notification, ...prev].slice(0, 12));
+        }
+        const pushNote = data.pushSent
+          ? ` • Web Push enviado (${data.targetedIdsCount || 0} alvo(s))`
+          : ' • Entregue na caixa do sininho no app';
         setStatusFeedback({
           type: 'ok',
-          text: `Notificação enviada via OneSignal para ${AUDIENCE_META[broadcastAudience].label} (${data.targetedIdsCount || 0} IDs segmentados).`,
+          text: `Notificação enviada para ${MANUAL_AUDIENCE_META[broadcastAudience].label}${pushNote}.`,
         });
       } else {
         setStatusFeedback({
           type: 'err',
-          text: data.error || 'O gateway OneSignal não encontrou dispositivos inscritos para este público ainda.',
+          text: data.error || 'Não foi possível enviar a notificação.',
         });
       }
     } catch {
@@ -614,7 +660,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
         </div>
       )}
 
-      {/* BLOCO 1: DISPARO MANUAL COM EMOJIS & SEGMENTAÇÃO */}
+      {/* BLOCO 1: ENVIO DIRETO PARA PASSAGEIROS, CLIENTES & MOTORISTAS */}
       <div
         style={{
           backgroundColor: '#FFFFFF',
@@ -627,16 +673,43 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
             <div>
               <h4 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 7 }}>
                 <Send size={16} color="#0F172A" />
-                Enviar Notificação Manual (Broadcast)
+                Enviar Notificação Direta (Sininho do App + Push)
               </h4>
               <p style={{ margin: '2px 0 0 0', fontSize: '0.78rem', color: '#64748B' }}>
-                Escreva uma mensagem, escolha os emojis, defina o público e envie agora.
+                Envia na mesma hora para o pop-up do sininho no app e via Push para quem escolher abaixo.
               </p>
             </div>
+          </div>
+
+          {/* Atalhos Rápidos */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <span style={{ fontSize: '0.71rem', fontWeight: 700, color: '#64748B' }}>Modelos rápidos:</span>
+            {QUICK_MANUAL_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                type="button"
+                onClick={() => {
+                  setBroadcastTitle(preset.title);
+                  setBroadcastMessage(preset.message);
+                }}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  border: '1px solid #CBD5E1',
+                  backgroundColor: '#F8FAFC',
+                  color: '#0F172A',
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  cursor: 'pointer'
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
           </div>
 
           {/* Seletor de Público */}
@@ -644,13 +717,15 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
             <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
               Enviar para qual público?
             </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: 8 }}>
               {([
-                { id: 'cliente', label: 'Somente Passageiros', icon: Users },
-                { id: 'motorista', label: 'Somente Motoristas', icon: Car },
-                { id: 'ambos', label: 'Passageiros + Motoristas', icon: Globe },
+                { id: 'ambos', label: 'Todos (Passag. + Mot.)', icon: Globe },
+                { id: 'cliente', label: 'Todos Passageiros', icon: Users },
+                { id: 'cliente_especifico', label: 'Cliente Específico', icon: UserCheck },
+                { id: 'motorista', label: 'Todos Motoristas', icon: Car },
+                { id: 'motorista_especifico', label: 'Motorista Específico', icon: UserCheck },
                 { id: 'admin', label: 'Admin Master', icon: ShieldCheck },
-              ] as { id: PushAudience; label: string; icon: React.ComponentType<{ size?: number }> }[]).map(opt => {
+              ] as { id: ManualAudience; label: string; icon: React.ComponentType<{ size?: number }> }[]).map(opt => {
                 const Icon = opt.icon;
                 const active = broadcastAudience === opt.id;
                 return (
@@ -668,7 +743,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
                       border: `1.5px solid ${active ? '#0F172A' : '#E2E8F0'}`,
                       backgroundColor: active ? '#0F172A' : '#F8FAFC',
                       color: active ? '#FFFFFF' : '#334155',
-                      fontSize: '0.78rem',
+                      fontSize: '0.76rem',
                       fontWeight: 700,
                       cursor: 'pointer',
                     }}
@@ -680,6 +755,47 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
               })}
             </div>
           </div>
+
+          {/* Seletor de Destinatário Específico quando escolhido */}
+          {broadcastAudience === 'cliente_especifico' && (
+            <div>
+              <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#1D4ED8', marginBottom: 4 }}>
+                Escolha o Passageiro / Cliente destinatário
+              </label>
+              <select
+                value={selectedClientId}
+                onChange={(e) => setSelectedClientId(e.target.value)}
+                style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1.5px solid #93C5FD', backgroundColor: '#EFF6FF', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600 }}
+              >
+                <option value="">-- Selecione um passageiro ({clients.length}) --</option>
+                {clients.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name} • {c.phone || c.email || c.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {broadcastAudience === 'motorista_especifico' && (
+            <div>
+              <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#047857', marginBottom: 4 }}>
+                Escolha o Motorista destinatário
+              </label>
+              <select
+                value={selectedDriverId}
+                onChange={(e) => setSelectedDriverId(e.target.value)}
+                style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1.5px solid #6EE7B7', backgroundColor: '#ECFDF5', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600 }}
+              >
+                <option value="">-- Selecione um motorista ({drivers.length}) --</option>
+                {drivers.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} • {d.vehiclePlate || d.phone || d.id}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Título e Mensagem */}
           <div>
@@ -787,7 +903,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: '0.7rem', color: '#94A3B8', fontWeight: 700 }}>
-                    KAVRO DRIVE • {AUDIENCE_META[broadcastAudience].short.toUpperCase()}
+                    KAVRO DRIVE • {MANUAL_AUDIENCE_META[broadcastAudience].short.toUpperCase()}
                   </span>
                   <span style={{ fontSize: '0.68rem', color: '#64748B' }}>agora</span>
                 </div>
@@ -816,6 +932,27 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
                 <option value="/administracion">Painel Admin Master (/administracion)</option>
               </select>
             </div>
+
+            {sentHistory.length > 0 && (
+              <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px' }}>
+                <div style={{ fontSize: '0.71rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
+                  Últimos comunicados enviados ({sentHistory.length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 135, overflowY: 'auto' }}>
+                  {sentHistory.map((item) => (
+                    <div key={item.id} style={{ fontSize: '0.74rem', padding: '6px 8px', borderRadius: 7, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
+                      <div style={{ fontWeight: 800, color: '#0F172A', display: 'flex', justifyContent: 'space-between', gap: 6 }}>
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
+                        <span style={{ fontSize: '0.66rem', color: '#15803D', flexShrink: 0 }}>
+                          {item.audience || 'todos'}
+                        </span>
+                      </div>
+                      <div style={{ color: '#64748B', fontSize: '0.7rem', marginTop: 1 }}>{item.message}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <button
@@ -839,7 +976,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, onChange, onPersis
             }}
           >
             {sendingBroadcast ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            {sendingBroadcast ? 'Enviando notificação...' : `Enviar Notificação para ${AUDIENCE_META[broadcastAudience].label}`}
+            {sendingBroadcast ? 'Enviando notificação...' : `Enviar para ${MANUAL_AUDIENCE_META[broadcastAudience].label}`}
           </button>
         </div>
       </div>
