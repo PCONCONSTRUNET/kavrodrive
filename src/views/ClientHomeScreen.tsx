@@ -17,7 +17,6 @@ import { TermsPrivacyModal } from '../components/TermsPrivacyModal';
 interface ClientHomeScreenProps {
   config: SystemConfig;
   currentUser?: ClientProfile | null;
-  isBackgroundDimmed?: boolean;
   onStartBooking: (
     origin?: LocationPoint,
     destination?: LocationPoint,
@@ -41,7 +40,6 @@ function getGreeting() {
 export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
   config,
   currentUser,
-  isBackgroundDimmed = false,
   onStartBooking,
   onOpenActiveRide,
   onGoToMyRides,
@@ -86,7 +84,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
     window.addEventListener('up_database_synced', checkActiveRide);
 
     const interval = setInterval(() => {
-      if (!isBackgroundDimmed && document.visibilityState === 'visible') {
+      if (document.visibilityState === 'visible') {
         StorageService.syncFromDatabase().then(checkActiveRide);
       }
     }, 1500);
@@ -96,7 +94,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       window.removeEventListener('up_rides_updated', checkActiveRide);
       window.removeEventListener('up_database_synced', checkActiveRide);
     };
-  }, [currentUser, isBackgroundDimmed]);
+  }, [currentUser]);
 
   // Estados para gerenciar endereço fixo salvo
   const [selectedSavedAddr, setSelectedSavedAddr] = useState<{ id: string; label: string; address: string; lat: number; lng: number } | null>(null);

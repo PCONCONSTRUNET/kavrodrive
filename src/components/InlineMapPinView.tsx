@@ -128,7 +128,7 @@ export const InlineMapPinView: React.FC<InlineMapPinViewProps> = ({
       {/* Topo compacto dentro do mesmo modal */}
       <div
         style={{
-          padding: '6px 16px 12px 16px',
+          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',

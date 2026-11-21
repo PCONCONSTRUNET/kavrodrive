@@ -143,7 +143,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
     setShowPassengerPopover(false);
 
     const timer = setTimeout(() => {
-      if (initialFocusField === 'origin' || !origin) {
+      if (initialFocusField === 'origin') {
         setActiveField('origin');
         originRef.current?.focus();
       } else {
@@ -475,9 +475,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
       <div className="animate-fade-in" style={containerStyle}>
         <div
           style={{
-            padding: embedded
-              ? '6px 16px 12px 16px'
-              : 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
+            padding: 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
             borderBottom: '1px solid #F1F5F9',
           }}
         >
@@ -640,9 +638,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
       {/* ── TOPO CLEAN ESTILO UBER ("Planeje sua próxima viagem") ── */}
       <div
         style={{
-          padding: embedded
-            ? '6px 16px 12px 16px'
-            : 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
+          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 16px 12px 16px',
           borderBottom: '1px solid #F1F5F9',
           backgroundColor: '#FFFFFF',
         }}
@@ -930,19 +926,20 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
           </div>
         )}
 
-        {/* ── CAIXA CONECTADA DE ORIGEM E DESTINO (EXATO FORMATO UBER) ── */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div
-            style={{
-              flex: 1,
-              minWidth: 0,
-              border: '2px solid #0F172A',
-              borderRadius: 16,
-              backgroundColor: '#F8FAFC',
-              position: 'relative',
-              overflow: 'hidden',
-            }}
-          >
+        {/* ── CAIXA UNIFICADA DE ORIGEM, DESTINO E ALTERNÂNCIA NO MESMO BLOCO ── */}
+        <div
+          style={{
+            width: '100%',
+            border: '2px solid #0F172A',
+            borderRadius: 16,
+            backgroundColor: '#F8FAFC',
+            display: 'flex',
+            alignItems: 'stretch',
+            overflow: 'hidden',
+            boxSizing: 'border-box',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
             {/* Linha vertical conectando bolinha ao quadrado */}
             <div
               style={{
@@ -1139,11 +1136,10 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
             title="Inverter origem e destino"
             aria-label="Inverter origem e destino"
             style={{
-              width: 38,
-              height: 38,
-              borderRadius: '50%',
-              backgroundColor: '#F1F5F9',
-              border: '1px solid #E2E8F0',
+              width: 44,
+              backgroundColor: '#FFFFFF',
+              border: 'none',
+              borderLeft: '1px solid #E2E8F0',
               color: '#0F172A',
               display: 'flex',
               alignItems: 'center',
@@ -1152,7 +1148,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
               flexShrink: 0,
             }}
           >
-            <ArrowUpDown size={16} />
+            <ArrowUpDown size={17} />
           </button>
         </div>
 
@@ -1357,7 +1353,9 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
           </span>
         </button>
 
-        {activeQuery.trim().length >= 2 && (
+        {activeQuery.trim().length >= 2 &&
+          activeQuery.trim() !== (activeField === 'origin' ? origin?.address : destination?.address) &&
+          activeQuery.trim() !== 'Minha localização atual (GPS)' && (
           <button
             type="button"
             onClick={() => runSearch(activeQuery)}

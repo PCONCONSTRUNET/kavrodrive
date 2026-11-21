@@ -316,11 +316,10 @@ const ClientApp: React.FC<{
     <div className="app-container">
       {/* Conteúdo da Aba Ativa (estende por trás da barra flutuante transparente) */}
       <div style={{ flex: 1 }}>
-        {(currentTab === 'inicio' || (currentTab === 'agendar' && !resumedBookingRide)) && (
+        {currentTab === 'inicio' && (
           <ClientHomeScreen
             config={config}
             currentUser={currentUser}
-            isBackgroundDimmed={currentTab === 'agendar'}
             onStartBooking={handleStartBookingFromHome}
             onOpenActiveRide={handleResumeActiveRide}
             onGoToMyRides={() => setCurrentTab('minhas_corridas')}

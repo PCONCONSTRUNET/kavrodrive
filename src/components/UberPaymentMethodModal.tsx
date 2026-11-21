@@ -93,9 +93,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
       {/* Topo com X + Título "Pague com" (igual Print 4 da Uber) */}
       <div
         style={{
-          padding: embedded
-            ? '6px 18px 14px 18px'
-            : 'calc(14px + env(safe-area-inset-top, 0px)) 18px 16px 18px',
+          padding: 'calc(14px + env(safe-area-inset-top, 0px)) 18px 16px 18px',
           borderBottom: '1px solid #F1F5F9',
           flexShrink: 0,
         }}

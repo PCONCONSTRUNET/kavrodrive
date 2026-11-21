@@ -1863,64 +1863,21 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   return (
     <div
       className="animate-fade-in"
-      onClick={() => {
-        if (sheetView === 'plan') {
-          onBackToHome();
-        }
-      }}
       style={{
         position: 'fixed',
         inset: 0,
         zIndex: 10040,
-        backgroundColor: 'rgba(15, 23, 42, 0.56)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
+        width: '100%',
+        maxWidth: 480,
+        margin: '0 auto',
+        height: '100dvh',
+        backgroundColor: '#FFFFFF',
         display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'center',
+        flexDirection: 'column',
+        overflow: 'hidden',
       }}
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: '100%',
-          maxWidth: 480,
-          height: '94dvh',
-          backgroundColor: '#FFFFFF',
-          borderRadius: '22px 22px 0 0',
-          overflow: 'hidden',
-          display: 'flex',
-          flexDirection: 'column',
-          position: 'relative',
-          boxShadow: '0 -14px 40px rgba(15, 23, 42, 0.28)',
-        }}
-      >
-        {/* Alça superior padrão Uber (única estrutura de modal para todo o fluxo) */}
-        <div
-          style={{
-            padding: '10px 0 4px 0',
-            display: 'flex',
-            justifyContent: 'center',
-            backgroundColor: sheetView === 'choose' ? 'transparent' : '#FFFFFF',
-            position: sheetView === 'choose' ? 'absolute' : 'relative',
-            top: 0,
-            left: 0,
-            right: 0,
-            zIndex: 500,
-            pointerEvents: 'none',
-          }}
-        >
-          <div
-            style={{
-              width: 40,
-              height: 4,
-              borderRadius: 999,
-              backgroundColor: sheetView === 'choose' ? 'rgba(15, 23, 42, 0.35)' : '#CBD5E1',
-            }}
-          />
-        </div>
-
-        {/* ═══ ETAPA 1 DENTRO DO MESMO MODAL: "PLANEJE SUA PRÓXIMA VIAGEM" ═══ */}
+      {/* ═══ ETAPA 1 EM TELA CHEIA: "PLANEJE SUA PRÓXIMA VIAGEM" ═══ */}
         {sheetView === 'plan' && (
           <UberPlanTripModal
             isOpen
@@ -2005,7 +1962,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflowY: 'auto' }}>
             <div style={{
               background: 'linear-gradient(155deg, #0B1117 0%, #15222C 100%)',
-              padding: '14px 20px 18px 20px',
+              padding: 'calc(16px + env(safe-area-inset-top, 0px)) 20px 18px 20px',
               borderBottomLeftRadius: 20,
               borderBottomRightRadius: 20,
               boxShadow: '0 8px 24px rgba(11, 17, 23, 0.14)'
@@ -2180,7 +2137,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
         {/* Topo Flutuante: Voltar + Pílula da Rota (Partida → Destino) + Motoristas */}
         <div style={{
           position: 'absolute',
-          top: 18,
+          top: 'calc(12px + env(safe-area-inset-top, 0px))',
           left: 12,
           right: 12,
           zIndex: 400,
@@ -2683,7 +2640,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
 
       {/* Agendamento dentro do mesmo modal */}
       {sheetView === 'schedule' && (
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: '8px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px' }}>
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', padding: 'calc(14px + env(safe-area-inset-top, 0px)) 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
             <button
               type="button"
@@ -2778,7 +2735,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: '8px 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
+            padding: 'calc(14px + env(safe-area-inset-top, 0px)) 18px calc(22px + env(safe-area-inset-bottom, 0px)) 18px',
             display: 'flex',
             flexDirection: 'column',
             gap: 10
@@ -2940,7 +2897,6 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           </button>
         </div>
       )}
-      </div>
 
       <TrustedContactsModal
         isOpen={isTrustedContactsOpen}
