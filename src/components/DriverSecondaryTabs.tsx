@@ -14,7 +14,6 @@ import {
   Loader2,
   Lock,
   Mail,
-  MapPin,
   Menu,
   Phone,
   Plus,
@@ -49,6 +48,8 @@ import { VehiclePhotoPreview } from './VehiclePhotoPreview';
 import { readCrlvDocumentFile } from '../utils/crlvReader';
 import { PaymentMethodBadge } from './PaymentMethodIcon';
 import { evaluateDriverWithdrawalRule } from '../utils/withdrawalSchedule';
+import { formatCityStateValue, parseCityStateValue } from '../utils/geo';
+import { CityStateSelector } from './CityStateSelector';
 
 interface DriverSecondaryTabsProps {
   activeTab: 'ganhos' | 'carteira' | 'veiculos' | 'perfil';
@@ -173,9 +174,11 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   const [reqEmail, setReqEmail] = useState(
     pendingReq?.requestedFields?.email ?? currentDriver.email ?? ''
   );
-  const [reqCity, setReqCity] = useState(
+  const initialParsedCity = parseCityStateValue(
     pendingReq?.requestedFields?.city ?? currentDriver.city ?? ''
   );
+  const [reqState, setReqState] = useState(initialParsedCity.uf);
+  const [reqCity, setReqCity] = useState(initialParsedCity.city);
   const [isSubmittingChange, setIsSubmittingChange] = useState(false);
   const [changeFeedback, setChangeFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
@@ -599,7 +602,9 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
     setReqName(req?.requestedFields?.name || currentDriver.name || '');
     setReqPhone(formatPhone(req?.requestedFields?.phone || currentDriver.phone || ''));
     setReqEmail(req?.requestedFields?.email ?? currentDriver.email ?? '');
-    setReqCity(req?.requestedFields?.city ?? currentDriver.city ?? '');
+    const parsed = parseCityStateValue(req?.requestedFields?.city ?? currentDriver.city ?? '');
+    setReqState(parsed.uf);
+    setReqCity(parsed.city);
   }, [
     currentDriver.id,
     currentDriver.name,
@@ -639,17 +644,23 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
     }
   };
 
+  const formattedReqCity = formatCityStateValue(reqCity, reqState);
+
   const hasPendingDiff =
     reqName.trim() !== (currentDriver.name || '').trim() ||
     reqPhone.replace(/\D/g, '') !== (currentDriver.phone || '').replace(/\D/g, '') ||
     reqEmail.trim().toLowerCase() !== (currentDriver.email || '').trim().toLowerCase() ||
-    reqCity.trim() !== (currentDriver.city || '').trim();
+    formattedReqCity.trim() !== (currentDriver.city || '').trim();
 
   const handleSubmitChangeRequest = async (e: React.FormEvent) => {
     e.preventDefault();
     setChangeFeedback(null);
+    if (reqState.trim() && !reqCity.trim()) {
+      setChangeFeedback({ type: 'err', text: 'Selecione ou informe a cidade para o estado escolhido.' });
+      return;
+    }
     if (!hasPendingDiff) {
-      setChangeFeedback({ type: 'err', text: 'Altere nome, telefone, e-mail ou cidade antes de enviar.' });
+      setChangeFeedback({ type: 'err', text: 'Altere nome, telefone, e-mail, estado ou cidade antes de enviar.' });
       return;
     }
     setIsSubmittingChange(true);
@@ -657,7 +668,7 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
       name: reqName.trim(),
       phone: reqPhone.trim(),
       email: reqEmail.trim(),
-      city: reqCity.trim()
+      city: formattedReqCity.trim()
     });
     setIsSubmittingChange(false);
     if (res.ok && res.driver) {
@@ -2848,37 +2859,32 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                   </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>
-                      Telefone / WhatsApp
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <Phone size={15} color="#6B7280" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-                      <input
-                        type="tel"
-                        value={reqPhone}
-                        onChange={(e) => setReqPhone(formatPhone(e.target.value))}
-                        required
-                        style={INPUT_STYLE}
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>
-                      Cidade Base
-                    </label>
-                    <div style={{ position: 'relative' }}>
-                      <MapPin size={15} color="#6B7280" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
-                      <input
-                        type="text"
-                        value={reqCity}
-                        onChange={(e) => setReqCity(e.target.value)}
-                        style={INPUT_STYLE}
-                      />
-                    </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>
+                    Telefone / WhatsApp
+                  </label>
+                  <div style={{ position: 'relative' }}>
+                    <Phone size={15} color="#6B7280" style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)' }} />
+                    <input
+                      type="tel"
+                      value={reqPhone}
+                      onChange={(e) => setReqPhone(formatPhone(e.target.value))}
+                      required
+                      style={INPUT_STYLE}
+                    />
                   </div>
                 </div>
+
+                <CityStateSelector
+                  uf={reqState}
+                  city={reqCity}
+                  onChange={({ uf, city }) => {
+                    setReqState(uf);
+                    setReqCity(city);
+                  }}
+                  variant="compact"
+                  showIcons
+                />
 
                 <div>
                   <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#374151', marginBottom: 4 }}>

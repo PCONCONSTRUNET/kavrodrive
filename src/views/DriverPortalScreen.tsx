@@ -17,7 +17,8 @@ import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { ScreenWakeLockManager, playNewRideSound, stopNewRideSound, unlockNewRideAudio } from '../utils/soundAndVoice';
-import { calculateHaversineDistance } from '../utils/geo';
+import { calculateHaversineDistance, formatCityStateValue } from '../utils/geo';
+import { CityStateSelector } from '../components/CityStateSelector';
 import { formatRideCode, getCleanWhatsappNumber, formatPhone, formatCPF, formatMercosulPlate, formatCNH } from '../utils/format';
 import { evaluateDriverWithdrawalRule } from '../utils/withdrawalSchedule';
 import {
@@ -179,7 +180,8 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
   const [regCnhHasEar, setRegCnhHasEar] = useState(true);
   const [regPhoto, setRegPhoto] = useState('');
   const [regPassword, setRegPassword] = useState('');
-  const [regCity, setRegCity] = useState('Lauro Müller/SC');
+  const [regState, setRegState] = useState('');
+  const [regCity, setRegCity] = useState('');
   const [regBrand, setRegBrand] = useState('');
   const [regModel, setRegModel] = useState('');
   const [regVersion, setRegVersion] = useState('');
@@ -588,7 +590,10 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         case 1: return regName.trim().split(/\s+/).filter(Boolean).length < 2 ? 'Informe seu nome completo (nome e sobrenome).' : '';
         case 2: return regPhone.replace(/\D/g, '').length < 10 ? 'Informe um celular válido com DDD.' : (regEmail && !/^\S+@\S+\.\S+$/.test(regEmail) ? 'Informe um e-mail válido.' : '');
         case 3: return regDocument.replace(/\D/g, '').length !== 11 ? 'Informe um CPF válido com 11 dígitos.' : '';
-        case 4: return !regCity.trim() ? 'Informe a cidade onde vai dirigir.' : '';
+        case 4:
+          if (!regState.trim()) return 'Selecione o estado (UF) onde vai dirigir.';
+          if (!regCity.trim()) return 'Selecione ou informe a cidade onde vai dirigir.';
+          return '';
         case 5: return !regPassword || regPassword.length < 4 ? 'A senha precisa ter no mínimo 4 caracteres.' : '';
         case 6: return !regBrand.trim() || !regModel.trim() ? 'Informe a marca e o modelo do veículo.' : '';
         case 7: return !/^\d{4}$/.test(regYear) ? 'Informe o ano do veículo (ex: 2022).' : (!regColor.trim() ? 'Informe a cor do veículo.' : '');
@@ -622,7 +627,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         hasAirConditioning: regHasAc,
         hasLargeTrunk: regHasLargeTrunk,
         hasLeatherSeats: regHasLeatherSeats,
-        city: regCity,
+        city: formatCityStateValue(regCity, regState),
         rating: 5.0,
         totalRides: 0
       },
@@ -640,7 +645,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       cnhHasEar: regCnhHasEar,
       photo: regPhoto,
       password: regPassword,
-      city: regCity,
+      city: formatCityStateValue(regCity, regState),
       vehicleBrand: regBrand,
       vehicleModel: regModel,
       vehicleVersion: regVersion,
@@ -1126,7 +1131,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       1: { section: 'Seus dados', title: 'Qual é o seu nome?', subtitle: 'Use o mesmo nome que aparece na sua CNH.' },
       2: { section: 'Seus dados', title: 'Como podemos falar com você?', subtitle: 'Vamos usar o celular para avisos de corridas e da sua conta.' },
       3: { section: 'Seus dados', title: 'Qual é o seu CPF?', subtitle: 'Necessário para a verificação de antecedentes e pagamentos.' },
-      4: { section: 'Seus dados', title: 'Em qual cidade você vai dirigir?' },
+      4: { section: 'Seus dados', title: 'Em qual estado e cidade você vai dirigir?', subtitle: 'Selecione o estado (UF) e o município principal onde irá atuar.' },
       5: { section: 'Sua conta', title: 'Crie uma senha', subtitle: 'Você vai usar essa senha para entrar no app.' },
       6: { section: 'Veículo', title: 'Qual carro você vai usar?', subtitle: 'O veículo precisa ter 4 portas e documentação em dia.' },
       7: { section: 'Veículo', title: 'Ano e cor do veículo' },
@@ -1380,12 +1385,17 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
                 </div>
               )}
 
-              {/* 4. Cidade */}
+              {/* 4. Estado e Cidade */}
               {regStep === 4 && (
-                <div>
-                  <input autoFocus type="text" placeholder="Cidade/UF" value={regCity}
-                    onChange={(e) => setRegCity(e.target.value)} style={uInput} />
-                </div>
+                <CityStateSelector
+                  uf={regState}
+                  city={regCity}
+                  onChange={({ uf, city }) => {
+                    setRegState(uf);
+                    setRegCity(city);
+                  }}
+                  variant="onboarding"
+                />
               )}
 
               {/* 5. Senha */}
@@ -1712,7 +1722,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
             cpf: regDocument,
             phone: regPhone,
             email: regEmail,
-            city: regCity,
+            city: formatCityStateValue(regCity, regState),
             vehicle: [regBrand, regModel, regYear].filter(Boolean).join(' '),
             plate: regPlate ? regPlate.toUpperCase() : ''
           }}

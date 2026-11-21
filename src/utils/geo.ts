@@ -857,3 +857,103 @@ export function snapPointToRoute(
     heading: point.heading || 0
   };
 }
+
+export const BRAZILIAN_STATES: ReadonlyArray<{ uf: string; name: string }> = [
+  { uf: 'AC', name: 'Acre' },
+  { uf: 'AL', name: 'Alagoas' },
+  { uf: 'AP', name: 'Amapá' },
+  { uf: 'AM', name: 'Amazonas' },
+  { uf: 'BA', name: 'Bahia' },
+  { uf: 'CE', name: 'Ceará' },
+  { uf: 'DF', name: 'Distrito Federal' },
+  { uf: 'ES', name: 'Espírito Santo' },
+  { uf: 'GO', name: 'Goiás' },
+  { uf: 'MA', name: 'Maranhão' },
+  { uf: 'MT', name: 'Mato Grosso' },
+  { uf: 'MS', name: 'Mato Grosso do Sul' },
+  { uf: 'MG', name: 'Minas Gerais' },
+  { uf: 'PA', name: 'Pará' },
+  { uf: 'PB', name: 'Paraíba' },
+  { uf: 'PR', name: 'Paraná' },
+  { uf: 'PE', name: 'Pernambuco' },
+  { uf: 'PI', name: 'Piauí' },
+  { uf: 'RJ', name: 'Rio de Janeiro' },
+  { uf: 'RN', name: 'Rio Grande do Norte' },
+  { uf: 'RS', name: 'Rio Grande do Sul' },
+  { uf: 'RO', name: 'Rondônia' },
+  { uf: 'RR', name: 'Roraima' },
+  { uf: 'SC', name: 'Santa Catarina' },
+  { uf: 'SP', name: 'São Paulo' },
+  { uf: 'SE', name: 'Sergipe' },
+  { uf: 'TO', name: 'Tocantins' }
+];
+
+const BRAZILIAN_UF_SET = new Set(BRAZILIAN_STATES.map((s) => s.uf));
+
+/**
+ * Extrai { city, uf } de valores legados como "Lauro Müller/SC", "Lauro Müller - SC, BR" ou "Criciúma".
+ */
+export function parseCityStateValue(raw?: string): { city: string; uf: string } {
+  const cleaned = String(raw || '')
+    .replace(/,\s*BR$/i, '')
+    .trim();
+  if (!cleaned) return { city: '', uf: '' };
+
+  const slashOrDashMatch = cleaned.match(/^(.*?)\s*(?:\/|-|,)\s*([A-Za-z]{2})$/);
+  if (slashOrDashMatch) {
+    const candidateCity = slashOrDashMatch[1].trim();
+    const candidateUf = slashOrDashMatch[2].toUpperCase();
+    if (BRAZILIAN_UF_SET.has(candidateUf)) {
+      return { city: candidateCity, uf: candidateUf };
+    }
+  }
+
+  const upperOnly = cleaned.toUpperCase();
+  if (BRAZILIAN_UF_SET.has(upperOnly)) {
+    return { city: '', uf: upperOnly };
+  }
+
+  return { city: cleaned, uf: '' };
+}
+
+/**
+ * Formata cidade e UF no padrão oficial usado pelo motor de categorias ("Cidade/UF").
+ */
+export function formatCityStateValue(city?: string, uf?: string): string {
+  const cleanCity = String(city || '').trim();
+  const cleanUf = String(uf || '').trim().toUpperCase();
+  if (cleanCity && cleanUf) return `${cleanCity}/${cleanUf}`;
+  return cleanCity;
+}
+
+export function getFallbackCitiesByState(uf: string): string[] {
+  const targetUf = String(uf || '').trim().toUpperCase();
+  if (!targetUf) return [];
+  return REGIONAL_CITIES_FALLBACK
+    .filter((c) => c.uf === targetUf)
+    .map((c) => c.nome)
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
+
+/**
+ * Retorna todos os municípios oficiais do estado selecionado via API IBGE (com fallback regional).
+ */
+export async function getCitiesByState(uf: string): Promise<string[]> {
+  const targetUf = String(uf || '').trim().toUpperCase();
+  if (!BRAZILIAN_UF_SET.has(targetUf)) return [];
+
+  const ibgeList = await getIbgeMunicipalities();
+  const ibgeCities = ibgeList
+    .filter((m) => m.uf.toUpperCase() === targetUf)
+    .map((m) => m.nome);
+
+  const combined = ibgeCities.length > 0 ? ibgeCities : getFallbackCitiesByState(targetUf);
+  const deduped = new Map<string, string>();
+  for (const name of combined) {
+    const key = normalizeText(name);
+    if (key && !deduped.has(key)) {
+      deduped.set(key, name.trim());
+    }
+  }
+  return Array.from(deduped.values()).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
