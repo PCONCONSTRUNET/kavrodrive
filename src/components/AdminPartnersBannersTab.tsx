@@ -123,6 +123,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
   const [formError, setFormError] = useState('');
   const [saveBannerNotice, setSaveBannerNotice] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [showLivePreview, setShowLivePreview] = useState(true);
 
   useEffect(() => {
     const synced = Array.isArray(config.partnerBanners)
@@ -524,10 +525,10 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
           backgroundColor: '#FFFFFF',
           border: '1px solid #E2E8F0',
           borderRadius: 12,
-          padding: 20,
+          padding: '14px 16px',
           display: 'flex',
           flexDirection: 'column',
-          gap: 14,
+          gap: 10,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
@@ -761,7 +762,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       >
         <div
           style={{
-            padding: '14px 18px',
+            padding: '10px 14px',
             borderBottom: '1px solid #E2E8F0',
             display: 'flex',
             alignItems: 'center',
@@ -770,46 +771,56 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
             gap: 8,
           }}
         >
-          <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>
+          <div style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>
             Cadastrados em {currentTabMeta.shortLabel} ({areaItems.length})
           </div>
-          <span style={{ fontSize: '0.72rem', color: '#64748B' }}>
-            Edite, reordene, deixe inativo ou exclua a qualquer momento
+          <span style={{ fontSize: '0.7rem', color: '#64748B' }}>
+            Edite, reordene, deixe inativo ou exclua
           </span>
         </div>
 
         {areaItems.length === 0 ? (
-          <div style={{ padding: 28, textAlign: 'center', color: '#64748B', fontSize: '0.84rem' }}>
-            <ImageIcon size={28} color="#94A3B8" style={{ marginBottom: 6 }} />
+          <div style={{ padding: 20, textAlign: 'center', color: '#64748B', fontSize: '0.8rem' }}>
+            <ImageIcon size={22} color="#94A3B8" style={{ marginBottom: 4 }} />
             <div>
               Nenhum patrocinador ou logo cadastrado em <strong>{currentTabMeta.shortLabel}</strong> ainda.
             </div>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns:
+                areaItems.length > 1 ? 'repeat(auto-fill, minmax(390px, 1fr))' : '1fr',
+              gap: 8,
+              padding: 10,
+              backgroundColor: '#F8FAFC',
+            }}
+          >
             {areaItems.map((item, areaIdx) => {
               const isInactive = item.active === false;
               return (
                 <div
                   key={item.id}
                   style={{
-                    padding: '12px 16px',
-                    borderBottom: areaIdx < areaItems.length - 1 ? '1px solid #F1F5F9' : 'none',
+                    padding: '8px 10px',
+                    borderRadius: 10,
+                    border: '1px solid #E2E8F0',
                     backgroundColor: isInactive ? '#F8FAFC' : '#FFFFFF',
-                    opacity: isInactive ? 0.8 : 1,
+                    opacity: isInactive ? 0.78 : 1,
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     flexWrap: 'wrap',
-                    gap: 12,
+                    gap: 8,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 220, flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180, flex: 1 }}>
                     <div
                       style={{
-                        width: item.displayMode === 'banner' ? 132 : 76,
-                        height: 48,
-                        borderRadius: 8,
+                        width: item.displayMode === 'banner' ? 92 : 52,
+                        height: 36,
+                        borderRadius: 6,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',
                         overflow: 'hidden',
@@ -817,7 +828,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        padding: item.displayMode === 'banner' ? 0 : 4,
+                        padding: item.displayMode === 'banner' ? 0 : 3,
                       }}
                     >
                       <img
@@ -831,12 +842,12 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       />
                     </div>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
                         <span
                           style={{
-                            fontSize: '0.66rem',
+                            fontSize: '0.62rem',
                             fontWeight: 800,
-                            padding: '2px 7px',
+                            padding: '1px 6px',
                             borderRadius: 999,
                             backgroundColor: '#F1F5F9',
                             color: '#475569',
@@ -846,9 +857,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                         </span>
                         <span
                           style={{
-                            fontSize: '0.66rem',
+                            fontSize: '0.62rem',
                             fontWeight: 700,
-                            padding: '2px 7px',
+                            padding: '1px 6px',
                             borderRadius: 999,
                             backgroundColor: item.kind === 'patrocinador' ? '#DCFCE7' : '#EFF6FF',
                             color: item.kind === 'patrocinador' ? '#15803D' : '#1D4ED8',
@@ -858,9 +869,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                         </span>
                         <span
                           style={{
-                            fontSize: '0.66rem',
+                            fontSize: '0.62rem',
                             fontWeight: 700,
-                            padding: '2px 7px',
+                            padding: '1px 6px',
                             borderRadius: 999,
                             backgroundColor: '#F1F5F9',
                             color: '#334155',
@@ -870,9 +881,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                         </span>
                         <span
                           style={{
-                            fontSize: '0.66rem',
+                            fontSize: '0.62rem',
                             fontWeight: 800,
-                            padding: '2px 7px',
+                            padding: '1px 6px',
                             borderRadius: 999,
                             backgroundColor: isInactive ? '#FEF2F2' : '#ECFDF5',
                             color: isInactive ? '#DC2626' : '#15803D',
@@ -890,28 +901,32 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: 4,
-                            fontSize: '0.7rem',
+                            fontSize: '0.68rem',
                             color: '#2563EB',
-                            marginTop: 4,
+                            marginTop: 2,
                             textDecoration: 'none',
+                            maxWidth: 240,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
                           }}
                         >
-                          <ExternalLink size={11} />
-                          <span>{item.linkUrl}</span>
+                          <ExternalLink size={10} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.linkUrl}</span>
                         </a>
                       )}
                     </div>
                   </div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                     <button
                       type="button"
                       disabled={areaIdx === 0 || isSaving}
                       onClick={() => handleMoveWithinArea(areaIdx, -1)}
                       title="Subir posição"
                       style={{
-                        width: 30,
-                        height: 30,
+                        width: 26,
+                        height: 26,
                         borderRadius: 6,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',
@@ -922,7 +937,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                         justifyContent: 'center',
                       }}
                     >
-                      <ArrowUp size={14} />
+                      <ArrowUp size={13} />
                     </button>
                     <button
                       type="button"
@@ -930,8 +945,8 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       onClick={() => handleMoveWithinArea(areaIdx, 1)}
                       title="Descer posição"
                       style={{
-                        width: 30,
-                        height: 30,
+                        width: 26,
+                        height: 26,
                         borderRadius: 6,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',
@@ -942,7 +957,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                         justifyContent: 'center',
                       }}
                     >
-                      <ArrowDown size={14} />
+                      <ArrowDown size={13} />
                     </button>
 
                     <button
@@ -950,21 +965,21 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       disabled={isSaving}
                       onClick={() => handleToggleActive(item.id)}
                       style={{
-                        height: 30,
-                        padding: '0 10px',
+                        height: 26,
+                        padding: '0 8px',
                         borderRadius: 6,
                         border: '1px solid #E2E8F0',
                         backgroundColor: isInactive ? '#ECFDF5' : '#F8FAFC',
                         color: isInactive ? '#15803D' : '#475569',
-                        fontSize: '0.72rem',
+                        fontSize: '0.68rem',
                         fontWeight: 700,
                         cursor: 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: 5,
+                        gap: 4,
                       }}
                     >
-                      {isInactive ? <Eye size={13} /> : <EyeOff size={13} />}
+                      {isInactive ? <Eye size={12} /> : <EyeOff size={12} />}
                       <span>{isInactive ? 'Ativar' : 'Inativar'}</span>
                     </button>
 
@@ -972,21 +987,21 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       type="button"
                       onClick={() => handleEditItem(item)}
                       style={{
-                        height: 30,
-                        padding: '0 10px',
+                        height: 26,
+                        padding: '0 8px',
                         borderRadius: 6,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',
                         color: '#0F172A',
-                        fontSize: '0.72rem',
+                        fontSize: '0.68rem',
                         fontWeight: 700,
                         cursor: 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: 5,
+                        gap: 4,
                       }}
                     >
-                      <Edit2 size={13} />
+                      <Edit2 size={12} />
                       <span>Editar</span>
                     </button>
 
@@ -995,21 +1010,21 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       disabled={isSaving}
                       onClick={() => handleDeleteFromArea(item.id)}
                       style={{
-                        height: 30,
-                        padding: '0 10px',
+                        height: 26,
+                        padding: '0 8px',
                         borderRadius: 6,
                         border: '1px solid #FECACA',
                         backgroundColor: '#FEF2F2',
                         color: '#DC2626',
-                        fontSize: '0.72rem',
+                        fontSize: '0.68rem',
                         fontWeight: 700,
                         cursor: 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
-                        gap: 5,
+                        gap: 4,
                       }}
                     >
-                      <Trash2 size={13} />
+                      <Trash2 size={12} />
                       <span>Excluir</span>
                     </button>
                   </div>
@@ -1020,10 +1035,10 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
         )}
       </div>
 
-      {/* ═══ PRÉ-VISUALIZAÇÃO AO VIVO DESTA ABA ═══ */}
+      {/* ═══ PRÉ-VISUALIZAÇÃO COMPACTA DESTA ABA ═══ */}
       <div
         style={{
-          backgroundColor: currentTabMeta.isSite ? '#0D151C' : '#FFFFFF',
+          backgroundColor: '#FFFFFF',
           border: '1px solid #E2E8F0',
           borderRadius: 12,
           overflow: 'hidden',
@@ -1031,30 +1046,68 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       >
         <div
           style={{
-            padding: '10px 16px',
+            padding: '8px 14px',
             backgroundColor: '#F8FAFC',
-            borderBottom: '1px solid #E2E8F0',
-            fontSize: '0.75rem',
-            fontWeight: 700,
-            color: '#475569',
+            borderBottom: showLivePreview ? '1px solid #E2E8F0' : 'none',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
           }}
         >
-          Pré-visualização ao vivo — {currentTabMeta.title}
+          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#475569' }}>
+            Pré-visualização compacta — {currentTabMeta.shortLabel}
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowLivePreview((prev) => !prev)}
+            style={{
+              height: 24,
+              padding: '0 9px',
+              borderRadius: 6,
+              border: '1px solid #CBD5E1',
+              backgroundColor: '#FFFFFF',
+              color: '#334155',
+              fontSize: '0.68rem',
+              fontWeight: 700,
+              cursor: 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            {showLivePreview ? <EyeOff size={12} /> : <Eye size={12} />}
+            <span>{showLivePreview ? 'Recolher prévia' : 'Ver prévia'}</span>
+          </button>
         </div>
-        <div style={{ maxWidth: currentTabMeta.isSite ? '100%' : 460, paddingBottom: 14 }}>
-          <PartnersSponsorsSection
-            items={items}
-            variant={currentTabMeta.isSite ? 'dark' : 'light'}
-            area={activeArea}
-            sectionEnabled={currentAreaEnabled}
-            hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
-          />
-          {!currentAreaEnabled && (
-            <div style={{ padding: 18, fontSize: '0.78rem', color: '#94A3B8', textAlign: 'center' }}>
-              Esta aba está configurada como Oculta (OFF) no botão acima.
+        {showLivePreview && (
+          <div style={{ padding: 10, backgroundColor: '#F1F5F9' }}>
+            <div
+              style={{
+                maxWidth: currentTabMeta.isSite ? 560 : 340,
+                backgroundColor: currentTabMeta.isSite ? '#0D151C' : '#FFFFFF',
+                borderRadius: 10,
+                border: '1px solid #CBD5E1',
+                overflow: 'hidden',
+                paddingBottom: currentTabMeta.isSite ? 0 : 8,
+              }}
+            >
+              <PartnersSponsorsSection
+                items={items}
+                variant={currentTabMeta.isSite ? 'dark' : 'light'}
+                area={activeArea}
+                sectionEnabled={currentAreaEnabled}
+                hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
+                compactPreview
+              />
+              {!currentAreaEnabled && (
+                <div style={{ padding: 12, fontSize: '0.74rem', color: '#94A3B8', textAlign: 'center' }}>
+                  Esta aba está configurada como Oculta (OFF) no botão acima.
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -10,6 +10,7 @@ interface PartnersSponsorsSectionProps {
   sectionEnabled?: boolean;
   hideWhenEmpty?: boolean;
   isMobile?: boolean;
+  compactPreview?: boolean;
   onBecomePartnerClick?: () => void;
 }
 
@@ -54,6 +55,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
   sectionEnabled = true,
   hideWhenEmpty = false,
   isMobile = false,
+  compactPreview = false,
   onBecomePartnerClick,
 }) => {
   if (!sectionEnabled) return null;
@@ -90,8 +92,8 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
           backgroundColor: '#0D151C',
           borderTop: '1px solid rgba(118, 216, 0, 0.12)',
           borderBottom: '1px solid rgba(118, 216, 0, 0.12)',
-          paddingTop: isMobile ? 32 : 44,
-          paddingBottom: isMobile ? 34 : 48,
+          paddingTop: compactPreview ? 12 : isMobile ? 32 : 44,
+          paddingBottom: compactPreview ? 14 : isMobile ? 34 : 48,
           scrollMarginTop: 68,
         }}
       >
@@ -100,7 +102,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
             width: '100%',
             maxWidth: 1200,
             margin: '0 auto',
-            padding: isMobile ? '0 18px' : '0 32px',
+            padding: compactPreview ? '0 14px' : isMobile ? '0 18px' : '0 32px',
           }}
         >
           {/* Cabeçalho da área de Parceiros & Patrocinadores */}
@@ -110,8 +112,8 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
               alignItems: isMobile ? 'flex-start' : 'center',
               justifyContent: 'space-between',
               flexWrap: 'wrap',
-              gap: 12,
-              marginBottom: isMobile ? 16 : 22,
+              gap: compactPreview ? 8 : 12,
+              marginBottom: compactPreview ? 10 : isMobile ? 16 : 22,
             }}
           >
             <div>
@@ -120,20 +122,20 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 6,
-                  fontSize: '0.72rem',
+                  fontSize: compactPreview ? '0.62rem' : '0.72rem',
                   fontWeight: 800,
                   letterSpacing: '0.06em',
                   textTransform: 'uppercase',
                   color: '#8CE826',
-                  marginBottom: 4,
+                  marginBottom: compactPreview ? 2 : 4,
                 }}
               >
-                <Award size={14} />
+                <Award size={compactPreview ? 12 : 14} />
                 <span>Parceiros &amp; Patrocinadores</span>
               </div>
               <h2
                 style={{
-                  fontSize: isMobile ? '1.22rem' : '1.48rem',
+                  fontSize: compactPreview ? '0.96rem' : isMobile ? '1.22rem' : '1.48rem',
                   fontWeight: 800,
                   color: '#FFFFFF',
                   margin: 0,
@@ -276,16 +278,25 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           scrollSnapType: 'x mandatory',
                           paddingBottom: 4,
                         }
-                      : {
-                          display: 'grid',
-                          gridTemplateColumns:
-                            banners.length === 1
-                              ? 'minmax(0, 1fr)'
-                              : banners.length === 2
-                                ? 'repeat(2, minmax(0, 1fr))'
-                                : 'repeat(3, minmax(0, 1fr))',
-                          gap: 14,
-                        }
+                      : compactPreview
+                        ? {
+                            display: 'grid',
+                            gridTemplateColumns:
+                              banners.length === 1
+                                ? 'minmax(0, 360px)'
+                                : 'repeat(auto-fill, minmax(220px, 1fr))',
+                            gap: 8,
+                          }
+                        : {
+                            display: 'grid',
+                            gridTemplateColumns:
+                              banners.length === 1
+                                ? 'minmax(0, 1fr)'
+                                : banners.length === 2
+                                  ? 'repeat(2, minmax(0, 1fr))'
+                                  : 'repeat(3, minmax(0, 1fr))',
+                            gap: 14,
+                          }
                   }
                 >
                   {banners.map((banner) => {
@@ -306,8 +317,8 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           position: 'relative',
                           flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 88%') : undefined,
                           scrollSnapAlign: 'start',
-                          height: isMobile ? 92 : banners.length === 1 ? 132 : 116,
-                          borderRadius: isMobile ? 10 : 14,
+                          height: compactPreview ? 64 : isMobile ? 92 : banners.length === 1 ? 132 : 116,
+                          borderRadius: compactPreview ? 8 : isMobile ? 10 : 14,
                           overflow: 'hidden',
                           backgroundColor: '#131E26',
                           border: '1px solid rgba(118, 216, 0, 0.24)',
@@ -367,11 +378,17 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           scrollSnapType: 'x mandatory',
                           paddingBottom: 4,
                         }
-                      : {
-                          display: 'grid',
-                          gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))',
-                          gap: 12,
-                        }
+                      : compactPreview
+                        ? {
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))',
+                            gap: 8,
+                          }
+                        : {
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))',
+                            gap: 12,
+                          }
                   }
                 >
                   {logos.map((logo) => {
@@ -393,24 +410,24 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           scrollSnapAlign: 'start',
                           backgroundColor: '#131E26',
                           border: '1px solid rgba(118, 216, 0, 0.18)',
-                          borderRadius: 14,
-                          padding: '12px',
+                          borderRadius: compactPreview ? 10 : 14,
+                          padding: compactPreview ? '8px' : '12px',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
                           textAlign: 'center',
-                          gap: 8,
+                          gap: compactPreview ? 5 : 8,
                           cursor: safeHref ? 'pointer' : 'default',
                         }}
                       >
                         <div
                           style={{
                             width: '100%',
-                            height: 62,
-                            borderRadius: 10,
+                            height: compactPreview ? 42 : 62,
+                            borderRadius: compactPreview ? 7 : 10,
                             backgroundColor: 'rgba(255, 255, 255, 0.96)',
-                            padding: '6px 10px',
+                            padding: compactPreview ? '4px 6px' : '6px 10px',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
@@ -457,7 +474,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
 
   // Variante Clara (App do Passageiro — Banner fino de borda a borda estilo faixa/pop-up)
   return (
-    <div style={{ padding: '18px 0 8px 0' }}>
+    <div style={{ padding: compactPreview ? '10px 0 4px 0' : '18px 0 8px 0' }}>
       <div
         style={{
           padding: '0 16px',
@@ -569,7 +586,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                       flex: banners.length === 1 ? '0 0 100%' : '0 0 92%',
                       width: banners.length === 1 ? '100%' : undefined,
                       scrollSnapAlign: 'start',
-                      height: 86,
+                      height: compactPreview ? 62 : 86,
                       borderRadius: 0,
                       overflow: 'hidden',
                       borderTop: '1px solid #E2E8F0',
