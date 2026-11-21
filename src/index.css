@@ -62,6 +62,7 @@ html, body, #root {
   width: 100%;
   max-width: 100%;
   overflow-x: hidden;
+  overflow-x: clip;
   position: relative;
 }
 
@@ -125,6 +126,7 @@ body {
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.5;
   overflow-x: hidden;
+  overflow-x: clip;
   user-select: none;
 }
 

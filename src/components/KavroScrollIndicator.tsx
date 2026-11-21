@@ -15,116 +15,204 @@ export const KavroScrollIndicator: React.FC = () => {
   });
   const hideTimerRef = useRef<number | null>(null);
   const rafRef = useRef<number | null>(null);
+  const pendingScrollingRef = useRef<boolean>(false);
+  const activeScrollerRef = useRef<HTMLElement | null>(null);
+  const activeHintTargetRef = useRef<EventTarget | null>(null);
 
   useEffect(() => {
+    activeScrollerRef.current = null;
+    activeHintTargetRef.current = null;
+
     const isTouchOrMobile = () =>
       window.innerWidth < 820 || window.matchMedia('(pointer: coarse)').matches;
 
-    const getScrollerEl = (): HTMLElement | null => {
-      const el = document.querySelector<HTMLElement>('.kavro-mobile-app-scroll');
-      if (!el) return null;
+    const isEligibleElementScroller = (el: HTMLElement | null): el is HTMLElement => {
+      if (!el || !el.isConnected) return false;
+      if (el === document.documentElement || el === document.body) return false;
       const ov = window.getComputedStyle(el).overflowY;
-      if (ov === 'auto' || ov === 'scroll') return el;
+      if (ov !== 'auto' && ov !== 'scroll') return false;
+      if (el.scrollHeight - el.clientHeight <= 24) return false;
+      // Ignora caixas pequenas internas (ex: selects/autocomplete) para acompanhar a página principal
+      const vw = window.innerWidth || document.documentElement.clientWidth || 360;
+      const vh = window.innerHeight || document.documentElement.clientHeight || 640;
+      return el.clientHeight >= vh * 0.4 && el.clientWidth >= vw * 0.55;
+    };
+
+    const resolveScroller = (hintTarget?: EventTarget | null): HTMLElement | null => {
+      if (hintTarget instanceof HTMLElement && isEligibleElementScroller(hintTarget)) {
+        activeScrollerRef.current = hintTarget;
+        return hintTarget;
+      }
+      if (isEligibleElementScroller(activeScrollerRef.current)) {
+        return activeScrollerRef.current;
+      }
+      const appScrollEl = document.querySelector<HTMLElement>('.kavro-mobile-app-scroll');
+      if (isEligibleElementScroller(appScrollEl)) {
+        activeScrollerRef.current = appScrollEl;
+        return appScrollEl;
+      }
       return null;
     };
 
-    const compute = (scrolling: boolean) => {
+    const getDocumentScrollMetrics = () => {
+      const docEl = document.documentElement;
+      const bodyEl = document.body;
+      const scrollingEl = document.scrollingElement as HTMLElement | null;
+      const bodyOv = bodyEl ? window.getComputedStyle(bodyEl).overflowY : '';
+      const bodyActsAsScroller = Boolean(
+        bodyEl &&
+        (bodyOv === 'auto' || bodyOv === 'scroll') &&
+        bodyEl.scrollHeight > bodyEl.clientHeight + 24 &&
+        bodyEl.clientHeight <= (window.innerHeight || docEl.clientHeight) + 2
+      );
+
+      if (bodyActsAsScroller && bodyEl) {
+        return {
+          scrollHeight: bodyEl.scrollHeight,
+          clientHeight: bodyEl.clientHeight,
+          scrollTop: bodyEl.scrollTop,
+        };
+      }
+
+      const scrollHeight = Math.max(
+        scrollingEl?.scrollHeight || 0,
+        docEl?.scrollHeight || 0,
+        bodyEl?.scrollHeight || 0
+      );
+      const clientHeight = window.innerHeight || docEl?.clientHeight || 0;
+      const scrollTop = Math.max(
+        window.scrollY || 0,
+        scrollingEl?.scrollTop || 0,
+        docEl?.scrollTop || 0,
+        bodyEl?.scrollTop || 0
+      );
+      return { scrollHeight, clientHeight, scrollTop };
+    };
+
+    const compute = (scrolling: boolean, hintTarget?: EventTarget | null) => {
       if (!isTouchOrMobile()) {
         setMetrics((prev) => (prev.visible ? { ...prev, visible: false } : prev));
         return;
       }
 
-      const containerEl = getScrollerEl();
-      const scrollHeight = containerEl
-        ? containerEl.scrollHeight
-        : Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0);
-      const clientHeight = containerEl
-        ? containerEl.clientHeight
-        : window.innerHeight || document.documentElement.clientHeight;
-      const maxScroll = scrollHeight - clientHeight;
+      const containerEl = resolveScroller(hintTarget);
+      const { scrollHeight, clientHeight, scrollTop: rawTop } = containerEl
+        ? {
+            scrollHeight: containerEl.scrollHeight,
+            clientHeight: containerEl.clientHeight,
+            scrollTop: containerEl.scrollTop,
+          }
+        : getDocumentScrollMetrics();
 
-      if (maxScroll <= 24 || scrollHeight <= 0) {
+      const maxScroll = scrollHeight - clientHeight;
+      if (maxScroll <= 24 || scrollHeight <= 0 || clientHeight <= 0) {
         setMetrics((prev) => (prev.visible ? { ...prev, visible: false } : prev));
         return;
       }
 
-      const rawTop = containerEl
-        ? containerEl.scrollTop
-        : window.scrollY || document.documentElement.scrollTop || 0;
       const scrollTop = Math.min(Math.max(rawTop, 0), maxScroll);
       const rawThumbPct = (clientHeight / scrollHeight) * 100;
       const thumbHeightPct = Math.min(Math.max(rawThumbPct, 10), 42);
       const progress = maxScroll > 0 ? scrollTop / maxScroll : 0;
       const thumbTopPct = progress * (100 - thumbHeightPct);
 
-      setMetrics({
-        visible: true,
-        thumbTopPct,
-        thumbHeightPct,
-        isScrolling: scrolling,
+      setMetrics((prev) => {
+        if (
+          prev.visible &&
+          prev.isScrolling === scrolling &&
+          Math.abs(prev.thumbTopPct - thumbTopPct) < 0.05 &&
+          Math.abs(prev.thumbHeightPct - thumbHeightPct) < 0.05
+        ) {
+          return prev;
+        }
+        return {
+          visible: true,
+          thumbTopPct,
+          thumbHeightPct,
+          isScrolling: scrolling,
+        };
       });
     };
 
-    const scheduleUpdate = (scrolling: boolean) => {
+    const scheduleUpdate = (scrolling: boolean, hintTarget?: EventTarget | null) => {
+      if (scrolling) pendingScrollingRef.current = true;
+      if (hintTarget) activeHintTargetRef.current = hintTarget;
       if (rafRef.current !== null) return;
       rafRef.current = window.requestAnimationFrame(() => {
         rafRef.current = null;
-        compute(scrolling);
+        const isActivelyScrolling = scrolling || pendingScrollingRef.current;
+        pendingScrollingRef.current = false;
+        compute(isActivelyScrolling, activeHintTargetRef.current);
       });
     };
 
-    const onScroll = () => {
-      scheduleUpdate(true);
+    const onScroll = (evt: Event) => {
+      const target = evt?.target || null;
+      if (target === document || target === document.documentElement || target === document.body) {
+        activeScrollerRef.current = null;
+      }
+      scheduleUpdate(true, target);
       if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
       hideTimerRef.current = window.setTimeout(() => {
-        compute(false);
+        scheduleUpdate(false, target);
       }, 900);
     };
 
     const onResize = () => scheduleUpdate(false);
 
-    let boundEl: HTMLElement | null = null;
-    let observedContent: Element | null = null;
+    const observedSet = new Set<Element>();
+    const observeSafely = (roInstance: ResizeObserver | null, el: Element | null | undefined) => {
+      if (!roInstance || !el || observedSet.has(el)) return;
+      observedSet.add(el);
+      roInstance.observe(el);
+    };
 
     const ro =
       typeof ResizeObserver !== 'undefined'
         ? new ResizeObserver(() => {
-            bindScrollTarget();
             scheduleUpdate(false);
           })
         : null;
 
-    const bindScrollTarget = () => {
-      const nextEl = getScrollerEl();
-      if (boundEl !== nextEl) {
-        if (boundEl) boundEl.removeEventListener('scroll', onScroll);
-        boundEl = nextEl;
-        if (boundEl) boundEl.addEventListener('scroll', onScroll, { passive: true });
-      }
-      const nextContent = nextEl?.firstElementChild || document.body;
-      if (ro && nextContent && observedContent !== nextContent) {
-        if (observedContent) ro.unobserve(observedContent);
-        observedContent = nextContent;
-        ro.observe(observedContent);
-      }
-    };
+    const mo =
+      typeof MutationObserver !== 'undefined'
+        ? new MutationObserver(() => {
+            if (!isEligibleElementScroller(activeScrollerRef.current)) {
+              activeScrollerRef.current = null;
+            }
+            const nextContainer = resolveScroller();
+            observeSafely(ro, nextContainer);
+            observeSafely(ro, nextContainer?.firstElementChild);
+            scheduleUpdate(false);
+          })
+        : null;
 
-    bindScrollTarget();
+    const rootEl = document.getElementById('root') || document.body;
+    observeSafely(ro, rootEl);
+    const initialContainer = resolveScroller();
+    observeSafely(ro, initialContainer);
+    observeSafely(ro, initialContainer?.firstElementChild);
+    if (mo && rootEl) {
+      mo.observe(rootEl, { childList: true, subtree: true });
+    }
+
     compute(false);
-    const settleTimer = window.setTimeout(() => {
-      bindScrollTarget();
-      compute(false);
-    }, 300);
+    const settleTimer1 = window.setTimeout(() => compute(false), 180);
+    const settleTimer2 = window.setTimeout(() => compute(false), 600);
 
+    // Captura fase 'capture: true' pois eventos scroll de containers (como .kavro-mobile-app-scroll e body) não fazem bubble até window
+    document.addEventListener('scroll', onScroll, { passive: true, capture: true });
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onResize, { passive: true });
 
     return () => {
-      window.clearTimeout(settleTimer);
+      window.clearTimeout(settleTimer1);
+      window.clearTimeout(settleTimer2);
       if (ro) ro.disconnect();
-      if (boundEl) boundEl.removeEventListener('scroll', onScroll);
+      if (mo) mo.disconnect();
       if (hideTimerRef.current !== null) window.clearTimeout(hideTimerRef.current);
       if (rafRef.current !== null) window.cancelAnimationFrame(rafRef.current);
+      document.removeEventListener('scroll', onScroll, { capture: true });
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', onResize);
     };
