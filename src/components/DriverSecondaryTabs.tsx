@@ -143,7 +143,7 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
   todayEarnings,
   pixEditType,
   pixEditKey,
-  pixEditBank,
+  pixEditBank: _pixEditBank,
   isSavingPix,
   pixSaveNotice,
   onChangeTab,
@@ -258,11 +258,6 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
       }
     }
 
-    if (!pixEditBank.trim()) {
-      setPixLocalFeedback({ type: 'err', text: 'Informe o nome do banco de destino (ex: Nubank, Inter).' });
-      return;
-    }
-
     if (!sameOwnershipChecked) {
       setPixLocalFeedback({
         type: 'err',
@@ -283,7 +278,7 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
       id: `pix-${Date.now()}`,
       pixType: pixEditType,
       pixKey: keyTrimmed,
-      bankName: pixEditBank.trim(),
+      bankName: '',
       holderName: currentDriver.name,
       holderDocument: ownerDocDigits,
       sameOwnershipConfirmed: true,
@@ -1648,14 +1643,6 @@ export const DriverSecondaryTabs: React.FC<DriverSecondaryTabsProps> = ({
                       paddingLeft: 12,
                       backgroundColor: pixEditType === 'cpf' && ownerDocDigits ? '#F3F4F6' : '#F9FAFB'
                     }}
-                  />
-
-                  <input
-                    type="text"
-                    placeholder="Banco (ex: Nubank, Banco do Brasil, Inter, Itaú)"
-                    value={pixEditBank}
-                    onChange={(e) => onPixBankChange(e.target.value)}
-                    style={{ ...INPUT_STYLE, paddingLeft: 12 }}
                   />
 
                   <label style={{
