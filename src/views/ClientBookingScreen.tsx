@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Users, CreditCard,
   ArrowLeft, ShieldCheck, Check, Car,
@@ -70,6 +70,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
   const currentUser = propUser !== undefined ? propUser : StorageService.getCurrentUser();
 
   const [origin, setOrigin] = useState<LocationPoint | null>(initialOrigin || null);
+  const originTouchedManuallyRef = useRef<boolean>(Boolean(initialOrigin));
   const [destination, setDestination] = useState<LocationPoint | null>(initialDestination || null);
 
   const [sheetView, setSheetView] = useState<'plan' | 'choose' | 'payment' | 'schedule' | 'delivery' | 'add_card'>(() =>
@@ -280,24 +281,26 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     setIsCheckReady(true);
   }, []);
 
-  // Detecta GPS atual para preencher embarque automaticamente se vazio
+  // Detecta GPS atual somente na abertura inicial (sem repopular após usuário limpar no X)
   useEffect(() => {
-    if (!origin && navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setOrigin({
+    if (initialOrigin || originTouchedManuallyRef.current || !navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (originTouchedManuallyRef.current) return;
+        setOrigin((prev) =>
+          prev || {
             address: 'Minha localização atual (GPS)',
             lat: pos.coords.latitude,
             lng: pos.coords.longitude
-          });
-        },
-        () => {
-          // Mantém manual se usuário negar GPS
-        },
-        { enableHighAccuracy: true, timeout: 6000 }
-      );
-    }
-  }, [origin]);
+          }
+        );
+      },
+      () => {
+        // Mantém manual se usuário negar GPS
+      },
+      { enableHighAccuracy: true, timeout: 6000 }
+    );
+  }, []);
 
   // Carrega configuração ativa do gateway de pagamento (Efí Bank / Mercado Pago / Sandbox)
   useEffect(() => {
@@ -1911,14 +1914,19 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
               setHasLuggage(lug);
               setNotes(obs);
             }}
-            onSelectOrigin={(pt) => setOrigin(pt)}
+            onSelectOrigin={(pt) => {
+              originTouchedManuallyRef.current = true;
+              setOrigin(pt);
+            }}
             onSelectDestination={(pt) => setDestination(pt)}
             onSwapOriginDest={() => {
+              originTouchedManuallyRef.current = true;
               const prevOrigin = origin;
               setOrigin(destination);
               setDestination(prevOrigin);
             }}
             onCompleteRoute={(orig, dest) => {
+              originTouchedManuallyRef.current = true;
               setOrigin(orig);
               setDestination(dest);
               setRequestError('');

@@ -263,18 +263,14 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
     }
 
     StorageService.addRecentDestination(point);
+    onSelectDestination?.(point);
     setDestInput(point.address);
 
     if (origin) {
       onCompleteRoute(origin, point);
     } else {
-      const fallbackOrigin: LocationPoint = {
-        address: 'Minha localização atual (GPS)',
-        lat: -28.3878,
-        lng: -49.3977,
-      };
-      onSelectOrigin(fallbackOrigin);
-      onCompleteRoute(fallbackOrigin, point);
+      setActiveField('origin');
+      setTimeout(() => originRef.current?.focus(), 60);
     }
   };
 
