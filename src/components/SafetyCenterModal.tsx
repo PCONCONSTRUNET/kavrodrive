@@ -39,6 +39,7 @@ import { FamilyProfileFlowModal } from './FamilyProfileFlowModal';
 import {
   ActiveAudioRecorderSession,
   SafetyAudioClip,
+  blobToDataUrl,
   deleteSafetyAudioClip,
   isAudioCaptureSupported,
   listSafetyAudioClips,
@@ -567,6 +568,16 @@ export const SafetyCenterModal: React.FC<SafetyCenterModalProps> = ({
     }
   };
 
+  const encodeClipForCloudUpload = async (clip: SafetyAudioClip): Promise<string | undefined> => {
+    if (!clip?.blob || clip.blob.size > 2_800_000) return undefined;
+    try {
+      const dataUrl = await blobToDataUrl(clip.blob);
+      return dataUrl.startsWith('data:') ? dataUrl : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const handleToggleStartRecording = async () => {
     setErrorMsg('');
     if (isRecording && recorderRef.current) {
@@ -578,13 +589,31 @@ export const SafetyCenterModal: React.FC<SafetyCenterModalProps> = ({
         setAudioClips((prev) => [clip, ...prev]);
         setFeedback('Áudio salvo com segurança neste aparelho.');
         if (activeRide?.id && currentUser?.id) {
-          await StorageService.reportSafetyAudioIncident(activeRide.id, {
+          const audioDataUrl = await encodeClipForCloudUpload(clip);
+          const upRes = await StorageService.reportSafetyAudioIncident(activeRide.id, {
+            id: clip.id,
             durationSec: clip.durationSec,
             mimeType: clip.mimeType,
             sizeBytes: clip.sizeBytes,
             recordedAt: clip.createdAt,
-            escalateToSos: false
+            escalateToSos: false,
+            audioDataUrl
           });
+          if (upRes.ok && upRes.record?.hasAudioFile) {
+            await markSafetyAudioClipReported(clip.id, {
+              reportedToSos: false,
+              uploadedToCloud: true,
+              cloudStorage: upRes.record.storage
+            });
+            setAudioClips((prev) =>
+              prev.map((c) =>
+                c.id === clip.id
+                  ? { ...c, uploadedToCloud: true, cloudStorage: upRes.record?.storage }
+                  : c
+              )
+            );
+            setFeedback('Áudio gravado e salvo no cofre privado da nuvem!');
+          }
         }
       } catch (err) {
         setErrorMsg(err instanceof Error ? err.message : 'Erro ao encerrar gravação.');
@@ -616,21 +645,41 @@ export const SafetyCenterModal: React.FC<SafetyCenterModalProps> = ({
       return;
     }
     setIsSaving(true);
+    const audioDataUrl = await encodeClipForCloudUpload(clip);
     const res = await StorageService.reportSafetyAudioIncident(activeRide.id, {
+      id: clip.id,
       durationSec: clip.durationSec,
       mimeType: clip.mimeType,
       sizeBytes: clip.sizeBytes,
       recordedAt: clip.createdAt,
       notes: 'Anexado pelo passageiro na Central de Segurança K-Áudio.',
-      escalateToSos: true
+      escalateToSos: true,
+      audioDataUrl
     });
     setIsSaving(false);
     if (res.ok) {
-      await markSafetyAudioClipReported(clip.id);
+      const cloudSaved = Boolean(res.record?.hasAudioFile);
+      await markSafetyAudioClipReported(clip.id, {
+        reportedToSos: true,
+        uploadedToCloud: cloudSaved,
+        cloudStorage: res.record?.storage
+      });
       setAudioClips((prev) =>
-        prev.map((c) => (c.id === clip.id ? { ...c, reportedToSos: true } : c))
+        prev.map((c) =>
+          c.id === clip.id
+            ? {
+                ...c,
+                reportedToSos: true,
+                ...(cloudSaved ? { uploadedToCloud: true, cloudStorage: res.record?.storage } : {})
+              }
+            : c
+        )
       );
-      setFeedback('Registro K-Áudio anexado à corrida e notificado à Central SOS!');
+      setFeedback(
+        cloudSaved
+          ? 'Áudio K-Áudio salvo no cofre privado Cloudflare R2 e notificado à Central SOS!'
+          : 'Registro K-Áudio anexado à corrida e notificado à Central SOS!'
+      );
     } else {
       setErrorMsg(res.error || 'Não foi possível enviar registro K-Áudio.');
     }
@@ -1618,11 +1667,26 @@ export const SafetyCenterModal: React.FC<SafetyCenterModalProps> = ({
                           padding: '10px 12px'
                         }}
                       >
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#E5E5E5' }}>
-                            {clip.rideCode ? `${clip.rideCode} • ` : ''}
-                            {new Date(clip.createdAt).toLocaleString('pt-BR')} •{' '}
-                            {formatDuration(clip.durationSec)}
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8 }}>
+                          <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#E5E5E5', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                            <span>
+                              {clip.rideCode ? `${clip.rideCode} • ` : ''}
+                              {new Date(clip.createdAt).toLocaleString('pt-BR')} •{' '}
+                              {formatDuration(clip.durationSec)}
+                            </span>
+                            {clip.uploadedToCloud && (
+                              <span style={{
+                                fontSize: '0.64rem',
+                                fontWeight: 800,
+                                padding: '2px 6px',
+                                borderRadius: 999,
+                                backgroundColor: 'rgba(16, 185, 129, 0.16)',
+                                color: '#6EE7B7',
+                                border: '1px solid rgba(16, 185, 129, 0.35)'
+                              }}>
+                                Cofre Nuvem
+                              </span>
+                            )}
                           </span>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             {audioUrls[clip.id] && (

@@ -8,6 +8,21 @@ export interface SafetyAudioClip {
   sizeBytes: number;
   blob: Blob;
   reportedToSos?: boolean;
+  uploadedToCloud?: boolean;
+  cloudStorage?: string;
+}
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (typeof FileReader === 'undefined') {
+      reject(new Error('FileReader indisponível neste dispositivo.'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(new Error('Falha ao codificar áudio para envio.'));
+    reader.readAsDataURL(blob);
+  });
 }
 
 const DB_NAME = 'kavro_safety_audio_db';
@@ -79,7 +94,10 @@ export async function listSafetyAudioClips(): Promise<SafetyAudioClip[]> {
   }
 }
 
-export async function markSafetyAudioClipReported(clipId: string): Promise<void> {
+export async function markSafetyAudioClipReported(
+  clipId: string,
+  cloudMeta?: { reportedToSos?: boolean; uploadedToCloud?: boolean; cloudStorage?: string }
+): Promise<void> {
   try {
     const db = await openAudioDb();
     await new Promise<void>((resolve) => {
@@ -89,7 +107,12 @@ export async function markSafetyAudioClipReported(clipId: string): Promise<void>
       getReq.onsuccess = () => {
         const existing = getReq.result as SafetyAudioClip | undefined;
         if (existing) {
-          store.put({ ...existing, reportedToSos: true });
+          store.put({
+            ...existing,
+            reportedToSos: cloudMeta?.reportedToSos !== undefined ? cloudMeta.reportedToSos : true,
+            ...(cloudMeta?.uploadedToCloud !== undefined ? { uploadedToCloud: cloudMeta.uploadedToCloud } : {}),
+            ...(cloudMeta?.cloudStorage ? { cloudStorage: cloudMeta.cloudStorage } : {})
+          });
         }
       };
       tx.oncomplete = () => {

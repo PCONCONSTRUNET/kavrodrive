@@ -4381,3 +4381,156 @@ test('Cloudflare R2 Public Media: banners de parceiros, config master, fotos de 
     );
   }
 });
+
+test('Cloudflare Turnstile no OTP e K-Audio real no Cloudflare R2 Privado com URL assinada 15 min', async () => {
+  const prevTurnstileSecret = process.env.TURNSTILE_SECRET_KEY;
+  const prevPrivBucket = process.env.CLOUDFLARE_R2_BUCKET;
+  const originalFetch = global.fetch;
+
+  const { S3Client } = require('@aws-sdk/client-s3');
+  const fakePrivClient = new S3Client({
+    region: 'auto',
+    endpoint: 'https://test-account.r2.cloudflarestorage.com',
+    credentials: { accessKeyId: 'test-key-id', secretAccessKey: 'test-secret-key' }
+  });
+  const privUploads = [];
+  fakePrivClient.send = async (cmd) => {
+    privUploads.push({
+      bucket: cmd?.input?.Bucket,
+      key: cmd?.input?.Key,
+      contentType: cmd?.input?.ContentType,
+      size: cmd?.input?.Body ? cmd.input.Body.length : 0
+    });
+    return {};
+  };
+  kycStorage.setCloudflareR2ClientOverride(fakePrivClient);
+  process.env.CLOUDFLARE_R2_BUCKET = 'kyc-documents';
+  process.env.TURNSTILE_SECRET_KEY = 'test-turnstile-secret';
+
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('challenges.cloudflare.com/turnstile/v0/siteverify')) {
+      const bodyStr = String(opts?.body || '');
+      const valid = bodyStr.includes('response=valid-turnstile-tok');
+      return new Response(JSON.stringify({ success: valid }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    return originalFetch(url, opts);
+  };
+
+  try {
+    // 1) Cria passageiro autenticado com desafio Turnstile valido
+    const makeValidCpf = (seed) => {
+      const base = String(seed).padStart(9, '0').slice(0, 9).split('').map(Number);
+      const calcDigit = (digits) => {
+        let sum = 0;
+        for (let i = 0; i < digits.length; i++) sum += digits[i] * (digits.length + 1 - i);
+        const rem = (sum * 10) % 11;
+        return rem >= 10 ? 0 : rem;
+      };
+      base.push(calcDigit(base));
+      base.push(calcDigit(base));
+      return base.join('');
+    };
+
+    const regCli = await apiJson('/api/clients/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.253' },
+      body: {
+        name: 'Passageiro Turnstile OTP',
+        phone: '(48) 99811-7766',
+        email: 'otp.turnstile@kavro.test',
+        document: makeValidCpf(481112233),
+        password: '1234',
+        turnstileToken: 'valid-turnstile-tok',
+        termsAcceptance: {
+          accepted: true,
+          contractId: 'KAVRO-TC-PASSAGEIRO',
+          contractVersion: '2026.1',
+          acceptedAtClient: new Date().toISOString(),
+          affirmativeText: 'Li e concordo com os Termos.'
+        }
+      }
+    });
+    assert.equal(regCli.status, 200);
+    const cliToken = regCli.json.clientToken;
+    const cliId = regCli.json.client.id;
+
+    // 2) Turnstile no OTP bloqueia solicitacao sem token (403) e aprova com token valido (200)
+    const otpBlocked = await apiJson('/api/auth/recovery/request', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.253' },
+      body: { role: 'client', identifier: 'otp.turnstile@kavro.test' }
+    });
+    assert.equal(otpBlocked.status, 403);
+
+    const otpAllowed = await apiJson('/api/auth/recovery/request', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.253' },
+      body: { role: 'client', identifier: 'otp.turnstile@kavro.test', turnstileToken: 'valid-turnstile-tok' }
+    });
+    assert.equal(otpAllowed.status, 200);
+    assert.equal(otpAllowed.json.ok, true);
+
+    // 3) K-Audio real salvo no R2 Privado (kyc-documents/safety-audio/...) com URL assinada 15 min
+    const rideRes = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Turnstile OTP',
+        clientPhone: '(48) 99811-7766',
+        originAddress: 'Centro',
+        destinationAddress: 'Rodoviária',
+        distanceKm: 4.5,
+        durationMin: 10,
+        totalPrice: 20,
+        category: 'kavro_go',
+        paymentMethod: 'pix'
+      }
+    });
+    assert.equal(rideRes.status, 200);
+    const rideId = rideRes.json.ride.id;
+
+    const sampleAudioDataUrl = 'data:audio/webm;codecs=opus;base64,' + Buffer.from('kavro-fake-webm-audio-bytes').toString('base64');
+    const audioUp = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/safety-audio`, {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        id: 'kaudio-r2-clip-1',
+        durationSec: 12,
+        mimeType: 'audio/webm;codecs=opus',
+        sizeBytes: 27,
+        audioDataUrl: sampleAudioDataUrl,
+        escalateToSos: true
+      }
+    });
+    assert.equal(audioUp.status, 200);
+    assert.equal(audioUp.json.record.hasAudioFile, true);
+    assert.equal(audioUp.json.record.storage, 'cloudflare_r2');
+    assert.equal(audioUp.json.record.audioDocInfo, undefined);
+    assert.equal(privUploads.length, 1);
+    assert.equal(privUploads[0].bucket, 'kyc-documents');
+    assert.match(privUploads[0].key, new RegExp(`^safety-audio/${rideId}/kaudio-r2-clip-1\\.webm$`));
+    assert.equal(privUploads[0].contentType, 'audio/webm');
+
+    // Acesso anonimo rejeitado (401); dono da corrida recebe URL assinada de 15 min (900s)
+    const anonPlay = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/safety-audio/kaudio-r2-clip-1`);
+    assert.equal(anonPlay.status, 401);
+
+    const ownerPlay = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/safety-audio/kaudio-r2-clip-1`, {
+      headers: { 'x-client-token': cliToken }
+    });
+    assert.equal(ownerPlay.status, 200);
+    assert.equal(ownerPlay.json.expiresInSec, 900);
+    assert.match(ownerPlay.json.signedUrl, /^https:\/\/.*r2\.cloudflarestorage\.com\/.*safety-audio\/.*X-Amz-Expires=900/);
+  } finally {
+    global.fetch = originalFetch;
+    kycStorage.setCloudflareR2ClientOverride(null);
+    if (prevTurnstileSecret === undefined) delete process.env.TURNSTILE_SECRET_KEY;
+    else process.env.TURNSTILE_SECRET_KEY = prevTurnstileSecret;
+    if (prevPrivBucket === undefined) delete process.env.CLOUDFLARE_R2_BUCKET;
+    else process.env.CLOUDFLARE_R2_BUCKET = prevPrivBucket;
+  }
+});

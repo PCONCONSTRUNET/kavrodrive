@@ -2777,7 +2777,8 @@ export const StorageService = {
 
   async requestPasswordRecovery(
     role: 'client' | 'driver',
-    identifier: string
+    identifier: string,
+    turnstileToken?: string
   ): Promise<{
     ok: boolean;
     maskedDestination?: string;
@@ -2790,7 +2791,7 @@ export const StorageService = {
       const res = await fetch('/api/auth/recovery/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ role, identifier })
+        body: JSON.stringify({ role, identifier, turnstileToken })
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
@@ -2913,12 +2914,14 @@ export const StorageService = {
   async reportSafetyAudioIncident(
     rideId: string,
     payload: {
+      id?: string;
       durationSec: number;
       mimeType: string;
       sizeBytes: number;
       recordedAt?: string;
       notes?: string;
       escalateToSos?: boolean;
+      audioDataUrl?: string;
     }
   ): Promise<{ ok: boolean; record?: SafetyAudioIncidentRecord; error?: string }> {
     try {
@@ -2934,6 +2937,28 @@ export const StorageService = {
       return data;
     } catch {
       return { ok: false, error: 'Erro de conexão ao registrar gravação K-Áudio.' };
+    }
+  },
+
+  async getSafetyAudioSignedUrl(
+    rideId: string,
+    clipId: string
+  ): Promise<{ ok: boolean; signedUrl?: string; expiresInSec?: number; record?: SafetyAudioIncidentRecord; error?: string }> {
+    try {
+      const res = await fetch(
+        `/api/rides/${encodeURIComponent(rideId)}/safety-audio/${encodeURIComponent(clipId)}?_t=${Date.now()}`,
+        {
+          cache: 'no-store',
+          headers: this.getAuthHeaders()
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) {
+        return { ok: false, error: data?.error || 'Não foi possível abrir o áudio K-Áudio.' };
+      }
+      return data;
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao solicitar link seguro K-Áudio.' };
     }
   },
 

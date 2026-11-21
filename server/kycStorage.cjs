@@ -108,11 +108,26 @@ function resolveLocalVaultDir() {
 const LOCAL_VAULT_DIR = resolveLocalVaultDir();
 
 function inferExtensionAndMime(mimeType) {
-  const normalized = String(mimeType || '').toLowerCase();
+  const normalized = String(mimeType || '').toLowerCase().split(';')[0].trim();
   if (normalized === 'application/pdf') return { ext: 'pdf', contentType: 'application/pdf' };
   if (normalized === 'image/png') return { ext: 'png', contentType: 'image/png' };
   if (normalized === 'image/webp') return { ext: 'webp', contentType: 'image/webp' };
   if (normalized === 'image/heic' || normalized === 'image/heif') return { ext: 'heic', contentType: normalized };
+  if (normalized === 'audio/mp4' || normalized === 'audio/x-m4a' || normalized === 'video/mp4') {
+    return { ext: 'm4a', contentType: 'audio/mp4' };
+  }
+  if (normalized === 'audio/ogg' || normalized === 'application/ogg') {
+    return { ext: 'ogg', contentType: 'audio/ogg' };
+  }
+  if (normalized === 'audio/mpeg' || normalized === 'audio/mp3') {
+    return { ext: 'mp3', contentType: 'audio/mpeg' };
+  }
+  if (normalized === 'audio/wav' || normalized === 'audio/wave' || normalized === 'audio/x-wav') {
+    return { ext: 'wav', contentType: 'audio/wav' };
+  }
+  if (normalized === 'audio/webm' || normalized === 'video/webm') {
+    return { ext: 'webm', contentType: 'audio/webm' };
+  }
   return { ext: 'jpg', contentType: normalized.startsWith('image/') ? normalized : 'image/jpeg' };
 }
 
@@ -121,6 +136,11 @@ function inferContentTypeFromFilename(filename) {
   if (lower.endsWith('.pdf')) return 'application/pdf';
   if (lower.endsWith('.png')) return 'image/png';
   if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.webm')) return 'audio/webm';
+  if (lower.endsWith('.m4a') || lower.endsWith('.mp4')) return 'audio/mp4';
+  if (lower.endsWith('.ogg')) return 'audio/ogg';
+  if (lower.endsWith('.mp3')) return 'audio/mpeg';
+  if (lower.endsWith('.wav')) return 'audio/wav';
   return 'image/jpeg';
 }
 
@@ -178,24 +198,14 @@ function cleanExpiredTokens() {
   }
 }
 
-/**
- * Salva um documento (CNH ou Selfie) no Cloudflare R2, Supabase Storage privado ou cofre local seguro
- */
-async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
-  const isCnh = docType === 'cnh';
-  const prefix = isCnh ? 'cnh' : 'selfie';
-  const timestamp = Date.now();
-
+async function savePrivateObject({ storagePath, fallbackFilename, dataUrlOrBuffer, defaultMimeType = 'image/jpeg' }) {
   let buffer;
-  let contentType = 'image/jpeg';
-  let ext = 'jpg';
+  let detected = inferExtensionAndMime(defaultMimeType);
 
   if (typeof dataUrlOrBuffer === 'string') {
-    const match = dataUrlOrBuffer.match(/^data:([a-zA-Z0-9.+/-]+)(?:;[^,]*)?;base64,(.+)$/s);
+    const match = dataUrlOrBuffer.match(/^data:([^,;]+)(?:;[^,]*)?;base64,(.+)$/s);
     if (match) {
-      const detected = inferExtensionAndMime(match[1]);
-      contentType = detected.contentType;
-      ext = detected.ext;
+      detected = inferExtensionAndMime(match[1]);
       buffer = Buffer.from(match[2], 'base64');
     } else {
       buffer = Buffer.from(dataUrlOrBuffer, 'utf8');
@@ -204,10 +214,9 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
     buffer = dataUrlOrBuffer;
   }
 
-  const filename = `${prefix}_${driverId}_${timestamp}.${ext}`;
-  const storagePath = `drivers/${driverId}/${filename}`;
+  const contentType = detected.contentType;
 
-  // 1. PRIORIDADE: Cloudflare R2 (Object Storage dedicado, 10 GB grátis, zero egress)
+  // 1. PRIORIDADE: Cloudflare R2 (Bucket privado - 10 GB grátis, zero egress)
   const r2 = getCloudflareR2();
   if (r2) {
     try {
@@ -224,7 +233,7 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
         storage: 'cloudflare_r2',
         path: storagePath,
         bucket,
-        filename,
+        filename: fallbackFilename,
         contentType
       };
     } catch (err) {
@@ -236,7 +245,6 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
   const supabase = getSupabase();
   if (supabase) {
     try {
-      // Garante que o bucket privado kyc-documents existe
       await supabase.storage.createBucket('kyc-documents', { public: false }).catch(() => {});
 
       const { data, error } = await supabase.storage
@@ -250,7 +258,7 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
         return {
           storage: 'supabase',
           path: storagePath,
-          filename,
+          filename: fallbackFilename,
           contentType
         };
       }
@@ -262,15 +270,60 @@ async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
 
   // 3. FALLBACK: Armazenamento seguro no cofre local (ou /tmp em serverless)
   const vaultDir = resolveLocalVaultDir();
-  const localFilePath = path.join(vaultDir, filename);
+  const localFilePath = path.join(vaultDir, fallbackFilename);
   fs.writeFileSync(localFilePath, buffer);
 
   return {
     storage: 'local_vault',
-    path: filename,
-    filename,
+    path: fallbackFilename,
+    filename: fallbackFilename,
     contentType
   };
+}
+
+/**
+ * Salva um documento (CNH ou Selfie) no Cloudflare R2, Supabase Storage privado ou cofre local seguro
+ */
+async function saveKycDocument(driverId, docType, dataUrlOrBuffer) {
+  const isCnh = docType === 'cnh';
+  const prefix = isCnh ? 'cnh' : 'selfie';
+  const timestamp = Date.now();
+  let defaultMime = 'image/jpeg';
+
+  if (typeof dataUrlOrBuffer === 'string') {
+    const match = dataUrlOrBuffer.match(/^data:([^,;]+)(?:;[^,]*)?;base64,/);
+    if (match) defaultMime = match[1];
+  }
+  const { ext } = inferExtensionAndMime(defaultMime);
+  const safeDriverId = sanitizeR2PathSegment(driverId, 'driver');
+  const filename = `${prefix}_${safeDriverId}_${timestamp}.${ext}`;
+  return savePrivateObject({
+    storagePath: `drivers/${safeDriverId}/${filename}`,
+    fallbackFilename: filename,
+    dataUrlOrBuffer,
+    defaultMimeType: defaultMime
+  });
+}
+
+/**
+ * Salva um clipe de áudio K-Áudio no cofre privado (Cloudflare R2 privado, Supabase privado ou cofre local)
+ */
+async function savePrivateSafetyAudio(rideId, clipId, dataUrlOrBuffer, rawMimeType = 'audio/webm') {
+  let detectedMime = rawMimeType || 'audio/webm';
+  if (typeof dataUrlOrBuffer === 'string') {
+    const match = dataUrlOrBuffer.match(/^data:([^,;]+)(?:;[^,]*)?;base64,/);
+    if (match) detectedMime = match[1];
+  }
+  const { ext } = inferExtensionAndMime(detectedMime);
+  const safeRideId = sanitizeR2PathSegment(rideId, 'ride');
+  const safeClipId = sanitizeR2PathSegment(clipId, `clip-${Date.now()}`);
+  const filename = `kaudio_${safeRideId}_${safeClipId}.${ext}`;
+  return savePrivateObject({
+    storagePath: `safety-audio/${safeRideId}/${safeClipId}.${ext}`,
+    fallbackFilename: filename,
+    dataUrlOrBuffer,
+    defaultMimeType: detectedMime
+  });
 }
 
 /**
@@ -549,6 +602,7 @@ async function savePublicMedia(ownerId, mediaType, dataUrlOrUrl, options = {}) {
 
 module.exports = {
   saveKycDocument,
+  savePrivateSafetyAudio,
   savePublicMedia,
   uploadBufferToPublicR2,
   parseMediaDataUrl,

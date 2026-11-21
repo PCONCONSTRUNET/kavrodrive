@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   ShieldAlert, MapPin, Phone, Car, User, ExternalLink, Copy, CheckCircle2,
-  RefreshCw, Search
+  RefreshCw, Search, Mic
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
@@ -55,6 +55,25 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
+  const [audioSignedUrls, setAudioSignedUrls] = useState<Record<string, string>>({});
+  const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
+  const [audioLoadError, setAudioLoadError] = useState<string>('');
+
+  const handleLoadSafetyAudio = async (rideId: string, clipId: string) => {
+    const key = `${rideId}:${clipId}`;
+    setLoadingAudioId(key);
+    setAudioLoadError('');
+    try {
+      const res = await StorageService.getSafetyAudioSignedUrl(rideId, clipId);
+      if (res.ok && res.signedUrl) {
+        setAudioSignedUrls((prev) => ({ ...prev, [key]: res.signedUrl! }));
+      } else {
+        setAudioLoadError(res.error || 'Não foi possível carregar o áudio K-Áudio.');
+      }
+    } finally {
+      setLoadingAudioId(null);
+    }
+  };
 
   const loadSosAlerts = async () => {
     setIsLoading(true);
@@ -614,6 +633,93 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
                       </div>
                     </div>
                   </div>
+
+                  {(() => {
+                    const linkedRide = alert.rideId
+                      ? rides.find((r) => r.id === alert.rideId)
+                      : undefined;
+                    const clips = Array.isArray(linkedRide?.safetyAudioRecords)
+                      ? linkedRide.safetyAudioRecords
+                      : [];
+                    if (!linkedRide || clips.length === 0) return null;
+
+                    return (
+                      <div style={{
+                        padding: 12,
+                        borderRadius: 8,
+                        border: '1px solid #CBD5E1',
+                        backgroundColor: '#F8FAFC',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.74rem', fontWeight: 700, color: '#0F172A' }}>
+                            <Mic size={14} color="#DC2626" />
+                            <span>Gravações K-Áudio da Corrida ({clips.length})</span>
+                          </div>
+                          {audioLoadError && (
+                            <span style={{ fontSize: '0.7rem', fontWeight: 600, color: '#DC2626' }}>
+                              {audioLoadError}
+                            </span>
+                          )}
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {clips.map((rec) => {
+                            const cacheKey = `${linkedRide.id}:${rec.id}`;
+                            const signedUrl = audioSignedUrls[cacheKey];
+                            const isBusy = loadingAudioId === cacheKey;
+                            return (
+                              <div
+                                key={rec.id}
+                                style={{
+                                  padding: '8px 10px',
+                                  borderRadius: 8,
+                                  backgroundColor: '#FFFFFF',
+                                  border: '1px solid #E2E8F0',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: 6
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: '0.73rem', color: '#334155', fontWeight: 600 }}>
+                                    {new Date(rec.recordedAt).toLocaleString('pt-BR')} • {rec.durationSec}s • {rec.reportedBy}
+                                  </span>
+                                  {rec.hasAudioFile ? (
+                                    <button
+                                      type="button"
+                                      disabled={isBusy}
+                                      onClick={() => handleLoadSafetyAudio(linkedRide.id, rec.id)}
+                                      style={{
+                                        padding: '4px 10px',
+                                        borderRadius: 6,
+                                        border: '1px solid #0F172A',
+                                        backgroundColor: '#0F172A',
+                                        color: '#FFFFFF',
+                                        fontSize: '0.7rem',
+                                        fontWeight: 700,
+                                        cursor: 'pointer'
+                                      }}
+                                    >
+                                      {isBusy ? 'Gerando link R2...' : signedUrl ? 'Atualizar Link (15 min)' : 'Ouvir K-Áudio (R2)'}
+                                    </button>
+                                  ) : (
+                                    <span style={{ fontSize: '0.68rem', color: '#64748B' }}>
+                                      Somente registro de metadados
+                                    </span>
+                                  )}
+                                </div>
+                                {signedUrl && (
+                                  <audio controls src={signedUrl} style={{ width: '100%', height: 32 }} />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}

@@ -205,6 +205,8 @@ export interface SafetyAudioIncidentRecord {
   recordedAt: string;
   reportedBy: 'passageiro' | 'motorista';
   notes?: string;
+  hasAudioFile?: boolean;
+  storage?: string;
 }
 
 export interface RideCheckAlertState {

@@ -1040,6 +1040,15 @@ function normalizeRideId(rawId) {
   return str;
 }
 
+function sanitizeSafetyAudioRecord(rec) {
+  if (!rec || typeof rec !== 'object') return rec;
+  const { audioDocInfo: _hidden, ...rest } = rec;
+  return {
+    ...rest,
+    hasAudioFile: Boolean(rec.hasAudioFile || rec.audioDocInfo)
+  };
+}
+
 function formatRideFromDb(row) {
   if (!row) return null;
   const num = row.ride_number
@@ -1104,7 +1113,7 @@ function formatRideFromDb(row) {
       ? (row.applied_fare_snapshot ?? row.appliedFareSnapshot).trustedContactsDispatches
       : [],
     safetyAudioRecords: Array.isArray((row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.safetyAudioRecords)
-      ? (row.applied_fare_snapshot ?? row.appliedFareSnapshot).safetyAudioRecords
+      ? (row.applied_fare_snapshot ?? row.appliedFareSnapshot).safetyAudioRecords.map(sanitizeSafetyAudioRecord)
       : [],
     isTeenRide: Boolean((row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.isTeenRide),
     cancellationFeeApplied: (row.applied_fare_snapshot ?? row.appliedFareSnapshot)?.cancellationFeeApplied ?? undefined,
@@ -2010,6 +2019,10 @@ async function handleApiRequest(req, res) {
       const rl = await security.checkRateLimitAsync('otp_req', `${ip}:${rawIdentifier.toLowerCase()}`, 5, 5 * 60 * 1000);
       if (!rl.allowed) {
         return sendJson(res, 429, { ok: false, error: `Muitas solicitações de código. Aguarde ${rl.retryAfterSec}s para tentar novamente.` }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
+      const turnstile = await verifyTurnstileToken(body.turnstileToken, req.socket?.remoteAddress);
+      if (!turnstile.ok) {
+        return sendJson(res, 403, { ok: false, error: turnstile.error });
       }
       if (!rawIdentifier) {
         return sendJson(res, 400, { ok: false, error: 'Informe seu WhatsApp, E-mail ou CPF cadastrado.' });
@@ -8514,7 +8527,52 @@ async function handleApiRequest(req, res) {
       });
     }
 
-    // Registro de Gravação K-Áudio de Segurança vinculada à corrida
+    // Registro de Gravação K-Áudio de Segurança vinculada à corrida (com cofre privado Cloudflare R2)
+    const safetyAudioSignedMatch = pathname.match(/^\/api\/rides\/([^/]+)\/safety-audio\/([^/]+)$/);
+    if (safetyAudioSignedMatch && method === 'GET') {
+      const id = normalizeRideId(decodeURIComponent(safetyAudioSignedMatch[1]));
+      const clipId = decodeURIComponent(safetyAudioSignedMatch[2]);
+      const isAdmin = await isAuthorizedAdmin(req);
+      const clientSession = verifyClientToken(req);
+      const driverSession = verifyDriverToken(req);
+
+      const curRes = await db.query('SELECT * FROM public.rides WHERE id = $1 LIMIT 1', [id]);
+      const row = curRes.rows[0];
+      if (!row) {
+        return sendJson(res, 404, { ok: false, error: 'Corrida não encontrada.' });
+      }
+      const ride = formatRideFromDb(row);
+      const isOwnClient = Boolean(clientSession && ride.clientId && clientSession.sub === ride.clientId);
+      const isAssignedDriver = Boolean(driverSession && ride.driverId && driverSession.sub === ride.driverId);
+      if (!isAdmin && !isOwnClient && !isAssignedDriver) {
+        return sendJson(res, 401, { ok: false, error: 'Sessão não autorizada para acessar o áudio desta viagem.' });
+      }
+
+      const records = Array.isArray(ride.appliedFareSnapshot?.safetyAudioRecords)
+        ? ride.appliedFareSnapshot.safetyAudioRecords
+        : [];
+      const targetClip = records.find((c) => String(c.id) === clipId);
+      if (!targetClip) {
+        return sendJson(res, 404, { ok: false, error: 'Gravação K-Áudio não localizada nesta corrida.' });
+      }
+      if (!targetClip.audioDocInfo) {
+        return sendJson(res, 404, { ok: false, error: 'Somente metadados foram registrados; arquivo de áudio não anexado na nuvem.' });
+      }
+
+      const reqHost = req.headers.host || 'localhost:5173';
+      const signedUrl = await kycStorage.generateTemporarySignedUrl(targetClip.audioDocInfo, id, reqHost);
+      if (!signedUrl) {
+        return sendJson(res, 502, { ok: false, error: 'Não foi possível gerar link temporário seguro para o áudio.' });
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        signedUrl,
+        expiresInSec: 900,
+        record: sanitizeSafetyAudioRecord(targetClip)
+      });
+    }
+
     const safetyAudioMatch = pathname.match(/^\/api\/rides\/([^/]+)\/safety-audio$/);
     if (safetyAudioMatch && method === 'POST') {
       const id = normalizeRideId(decodeURIComponent(safetyAudioMatch[1]));
@@ -8535,22 +8593,43 @@ async function handleApiRequest(req, res) {
       }
 
       const body = await parseBody(req);
-      const record = {
-        id: String(body.id || `aud-clip-${Date.now()}`),
-        rideId: id,
-        durationSec: Math.max(0, Number(body.durationSec || 0)),
-        mimeType: String(body.mimeType || 'audio/webm').slice(0, 64),
-        sizeBytes: Math.max(0, Number(body.sizeBytes || 0)),
-        recordedAt: body.recordedAt || new Date().toISOString(),
-        reportedBy: driverSession ? 'motorista' : 'passageiro',
-        ...(body.notes ? { notes: String(body.notes).slice(0, 280) } : {})
-      };
+      const clipId = String(body.id || `aud-clip-${Date.now()}`);
+      const mimeType = String(body.mimeType || 'audio/webm').slice(0, 64);
 
       const curSnap = ride.appliedFareSnapshot && typeof ride.appliedFareSnapshot === 'object'
         ? { ...ride.appliedFareSnapshot }
         : {};
       const prevClips = Array.isArray(curSnap.safetyAudioRecords) ? curSnap.safetyAudioRecords : [];
-      const nextClips = [...prevClips, record].slice(-20);
+      const existingClip = prevClips.find((c) => String(c.id) === clipId);
+
+      let audioDocInfo = existingClip?.audioDocInfo || null;
+      const rawAudioDataUrl = typeof body.audioDataUrl === 'string' ? body.audioDataUrl.trim() : '';
+      if (
+        !audioDocInfo &&
+        rawAudioDataUrl &&
+        rawAudioDataUrl.length <= 4_200_000 &&
+        /^data:(?:audio\/|video\/webm|application\/ogg)/i.test(rawAudioDataUrl)
+      ) {
+        audioDocInfo = await kycStorage.savePrivateSafetyAudio(id, clipId, rawAudioDataUrl, mimeType);
+      }
+
+      const record = {
+        ...(existingClip || {}),
+        id: clipId,
+        rideId: id,
+        durationSec: Math.max(0, Number(body.durationSec ?? existingClip?.durationSec ?? 0)),
+        mimeType,
+        sizeBytes: Math.max(0, Number(body.sizeBytes ?? existingClip?.sizeBytes ?? 0)),
+        recordedAt: body.recordedAt || existingClip?.recordedAt || new Date().toISOString(),
+        reportedBy: driverSession ? 'motorista' : 'passageiro',
+        hasAudioFile: Boolean(audioDocInfo),
+        ...(audioDocInfo?.storage ? { storage: audioDocInfo.storage } : {}),
+        ...(audioDocInfo ? { audioDocInfo } : {}),
+        ...(body.notes ? { notes: String(body.notes).slice(0, 280) } : {})
+      };
+
+      const filteredPrev = prevClips.filter((c) => String(c.id) !== clipId);
+      const nextClips = [...filteredPrev, record].slice(-20);
       curSnap.safetyAudioRecords = nextClips;
 
       await db.query(
@@ -8565,7 +8644,7 @@ async function handleApiRequest(req, res) {
           [
             `notif-kaudio-${Date.now()}`,
             `🎙️ K-ÁUDIO ENVIADO (${ride.rideCode || id})`,
-            `${ride.clientName || 'Passageiro'} anexou gravação de segurança (${record.durationSec}s).`,
+            `${ride.clientName || 'Passageiro'} anexou gravação de segurança (${record.durationSec}s${audioDocInfo ? ' • R2 privado' : ''}).`,
             id
           ]
         ).catch(() => {});
@@ -8575,7 +8654,7 @@ async function handleApiRequest(req, res) {
         category: 'seguranca',
         actionKey: 'safety_audio_recorded',
         title: `Gravação K-Áudio registrada (${ride.rideCode || id})`,
-        summary: `Áudio de segurança (${record.durationSec}s, ${Math.round(record.sizeBytes / 1024)} KB) registrado por ${record.reportedBy}.`,
+        summary: `Áudio de segurança (${record.durationSec}s, ${Math.round(record.sizeBytes / 1024)} KB${audioDocInfo ? `, cofre ${audioDocInfo.storage}` : ''}) registrado por ${record.reportedBy}.`,
         severity: body.escalateToSos ? 'critico' : 'info',
         actorRole: driverSession ? 'motorista' : (isAdmin ? 'admin_master' : 'passageiro'),
         actorId: driverSession?.sub || clientSession?.sub || 'admin-master',
@@ -8586,7 +8665,11 @@ async function handleApiRequest(req, res) {
         relatedIds: { rideId: id }
       }).catch(() => {});
 
-      return sendJson(res, 200, { ok: true, record, safetyAudioRecords: nextClips });
+      return sendJson(res, 200, {
+        ok: true,
+        record: sanitizeSafetyAudioRecord(record),
+        safetyAudioRecords: nextClips.map(sanitizeSafetyAudioRecord)
+      });
     }
 
     // ── PERFIL FAMILIAR / SEGURANÇA PARA ADOLESCENTES (12 A 18 ANOS) ───────────────────────────────────────────

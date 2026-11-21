@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, KeyRound, ShieldCheck, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { StorageService } from '../services/storage';
 import { getCleanWhatsappNumber } from '../utils/format';
+import { TurnstileWidget, isTurnstileEnabled } from './TurnstileWidget';
 
 interface PasswordRecoveryModalProps {
   isOpen: boolean;
@@ -29,6 +30,8 @@ export const PasswordRecoveryModal: React.FC<PasswordRecoveryModalProps> = ({
   const [channels, setChannels] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileResetKey, setTurnstileResetKey] = useState(0);
 
   React.useEffect(() => {
     if (isOpen) {
@@ -40,6 +43,8 @@ export const PasswordRecoveryModal: React.FC<PasswordRecoveryModalProps> = ({
       setDevCodePreview('');
       setChannels([]);
       setError('');
+      setTurnstileToken('');
+      setTurnstileResetKey((k) => k + 1);
     }
   }, [isOpen, initialIdentifier]);
 
@@ -51,13 +56,23 @@ export const PasswordRecoveryModal: React.FC<PasswordRecoveryModalProps> = ({
       setError(role === 'driver' ? 'Informe seu CPF, WhatsApp ou E-mail.' : 'Informe seu WhatsApp ou E-mail.');
       return;
     }
+    if (isTurnstileEnabled() && !turnstileToken) {
+      setError('Confirme a verificação de segurança anti-robô para solicitar o código.');
+      return;
+    }
     setLoading(true);
     setError('');
-    const res = await StorageService.requestPasswordRecovery(role, identifier.trim());
+    const res = await StorageService.requestPasswordRecovery(
+      role,
+      identifier.trim(),
+      turnstileToken || undefined
+    );
     setLoading(false);
 
     if (!res.ok) {
       setError(res.error || 'Conta não encontrada.');
+      setTurnstileToken('');
+      setTurnstileResetKey((k) => k + 1);
       return;
     }
 
@@ -197,6 +212,8 @@ export const PasswordRecoveryModal: React.FC<PasswordRecoveryModalProps> = ({
                 }}
               />
             </div>
+
+            <TurnstileWidget theme="light" onVerify={(tok) => setTurnstileToken(tok || '')} resetKey={turnstileResetKey} />
 
             <button
               type="submit"
