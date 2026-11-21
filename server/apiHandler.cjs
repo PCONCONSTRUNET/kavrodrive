@@ -3852,6 +3852,15 @@ async function handleApiRequest(req, res) {
       const mappedCatId = finance.mapLegacyCategoryIdServer(ride.category || before?.category || 'kavro_go');
       const matchedCat = allCats.find(c => c.id === ride.category || c.id === mappedCatId) || allCats[0];
       const reqMethod = ride.paymentMethod || before?.paymentMethod || 'dinheiro';
+      const installmentErr = finance.validateCardOnlySingleInstallment
+        ? finance.validateCardOnlySingleInstallment(ride)
+        : null;
+      if (installmentErr && ['cartao_credito', 'cartao_debito', 'apple_pay', 'online'].includes(reqMethod)) {
+        return {
+          status: 400,
+          body: { ok: false, error: installmentErr }
+        };
+      }
       if (!before && !ride.isManualBooking && Array.isArray(cfg.activePaymentMethods) && cfg.activePaymentMethods.length > 0) {
         const normalizedMethod = reqMethod === 'online' ? 'cartao_credito' : reqMethod;
         const isMethodAllowed =
@@ -6249,6 +6258,8 @@ async function handleApiRequest(req, res) {
         efiSandbox: Boolean(efiCfg.sandbox),
         mercadopagoEnabled: mpOn,
         mercadopagoPublicKey: mpPublicKey,
+        cardMaxInstallments: finance.CARD_MAX_INSTALLMENTS || 1,
+        cardOnlyAtSight: true,
         autoPixPayoutEnabled: Boolean(efiDriverPixSendEnabled || process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
       });
     }
@@ -6470,6 +6481,12 @@ async function handleApiRequest(req, res) {
         : clientSession.sub;
       if (!targetClientId) {
         return sendJson(res, 400, { ok: false, error: 'Passageiro não identificado.' });
+      }
+      const topupInstallmentErr = finance.validateCardOnlySingleInstallment
+        ? finance.validateCardOnlySingleInstallment(body)
+        : null;
+      if (topupInstallmentErr && String(body.method || '').toLowerCase() !== 'pix') {
+        return sendJson(res, 400, { ok: false, error: topupInstallmentErr });
       }
       const amount = Number(String(body.amount ?? '').replace(',', '.'));
       if (!Number.isFinite(amount) || amount < finance.MIN_CLIENT_WALLET_TOPUP_BRL) {

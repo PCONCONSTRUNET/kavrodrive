@@ -26,9 +26,9 @@ export function getPaymentMethodLabel(method?: string, compact = false): string 
   if (key === 'dinheiro') return compact ? 'Dinheiro' : 'Dinheiro em Espécie';
   if (key === 'apple_pay') return 'Apple Pay';
   if (key === 'carteira') return compact ? 'Carteira' : 'Saldo da Carteira';
-  if (key === 'cartao_debito') return compact ? 'Débito' : 'Cartão de Débito';
+  if (key === 'cartao_debito') return compact ? 'Débito' : 'Cartão de Débito (à vista)';
   if (key === 'online') return compact ? 'Online' : 'Pagamento Online';
-  return compact ? 'Cartão' : 'Cartão de Crédito';
+  return compact ? 'Cartão' : 'Cartão de Crédito (à vista)';
 }
 
 interface PaymentMethodIconProps {

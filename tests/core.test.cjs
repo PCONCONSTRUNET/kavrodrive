@@ -1505,10 +1505,12 @@ test('Gateway de Pagamentos completo (sem Stripe): tokenizacao de cartao, pre-au
     })]
   );
 
-  // 1) /api/payments/config nao expoe mais chaves Stripe
+  // 1) /api/payments/config nao expoe mais chaves Stripe e exige cartao somente a vista (1x)
   const cfgRes = await apiJson('/api/payments/config');
   assert.equal(cfgRes.status, 200);
   assert.ok(['efibank', 'mercadopago', 'sandbox'].includes(cfgRes.json.gatewayProvider));
+  assert.equal(cfgRes.json.cardMaxInstallments, 1);
+  assert.equal(cfgRes.json.cardOnlyAtSight, true);
   assert.equal(cfgRes.json.stripeEnabled, undefined);
   assert.equal(cfgRes.json.stripePublishableKey, undefined);
 
@@ -1572,6 +1574,26 @@ test('Gateway de Pagamentos completo (sem Stripe): tokenizacao de cartao, pre-au
   assert.equal(cardSaveRes.json.card.last4, '4242');
 
   // 4) Corrida no Cartao: pre-autoriza -> motorista aceita, inicia e finaliza -> captura
+  const blockedInstallmentRide = await apiJson('/api/rides', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      clientName: 'Passageiro Pagamentos',
+      clientPhone: '(48) 99444-5566',
+      originAddress: 'Origem Card',
+      destinationAddress: 'Destino Card',
+      distanceKm: 25,
+      durationMin: 24,
+      time: '14:00',
+      category: 'kavro_go',
+      paymentMethod: 'cartao_credito',
+      cardId: cardSaveRes.json.card.id,
+      installments: 2
+    }
+  });
+  assert.equal(blockedInstallmentRide.status, 400);
+
   const cardRide = await apiJson('/api/rides', {
     method: 'POST',
     headers: { 'x-client-token': cliToken },

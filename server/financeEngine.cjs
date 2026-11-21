@@ -8,6 +8,21 @@ function round2(n) {
 }
 
 const MIN_CLIENT_WALLET_TOPUP_BRL = 20;
+const CARD_MAX_INSTALLMENTS = 1;
+
+/**
+ * Garante que pagamentos por cartão sejam processados apenas à vista (1x, sem parcelamento).
+ */
+function validateCardOnlySingleInstallment(payload = {}) {
+  if (!payload || typeof payload !== 'object') return null;
+  const raw = payload.installments ?? payload.parcelas;
+  if (raw === undefined || raw === null || raw === '') return null;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed !== CARD_MAX_INSTALLMENTS) {
+    return 'Pagamento no cartão é aceito somente à vista (1x, sem parcelamento).';
+  }
+  return null;
+}
 
 // ============================================================
 // Gerador EMV BR Code PIX (Backend Oficial)
@@ -4124,6 +4139,8 @@ async function creditClientWalletAdjustment({
 
 module.exports = {
   MIN_CLIENT_WALLET_TOPUP_BRL,
+  CARD_MAX_INSTALLMENTS,
+  validateCardOnlySingleInstallment,
   round2,
   calculateSplit,
   resolveCommissionPercentForRide,

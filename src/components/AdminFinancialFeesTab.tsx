@@ -365,8 +365,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     },
     {
       id: 'cartao_credito',
-      title: 'Cartão de Crédito',
-      subtitle: 'Pré-autorização + captura no fim',
+      title: 'Cartão de Crédito (À vista)',
+      subtitle: 'Somente à vista (1x, sem parcelamento) • Pré-autorização + captura no fim',
       accent: '#1D4ED8',
       bgAccent: '#EFF6FF',
       hasGateway: true,

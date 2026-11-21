@@ -731,7 +731,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                           }}
                         >
                           <PaymentMethodIcon method="cartao_credito" size={16} />
-                          <span>Cartão de Crédito</span>
+                          <span>Cartão de Crédito (à vista)</span>
                         </button>
                       </div>
 
@@ -964,7 +964,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                                 {card.brand} •••• {card.last4}
                               </div>
                               <div style={{ fontSize: '0.68rem', color: '#64748B' }}>
-                                {card.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val. {card.expMonth}/{card.expYear}
+                                {card.cardType === 'cartao_debito' ? 'Débito (à vista)' : 'Crédito à vista (1x)'} • Val. {card.expMonth}/{card.expYear}
                               </div>
                             </div>
                           </div>
@@ -1165,7 +1165,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                   Adicionar cartão à Carteira
                 </div>
                 <div style={{ fontSize: '0.73rem', color: '#94A3B8', marginTop: 2 }}>
-                  Pagamento criptografado para depósitos e corridas Kavro
+                  Pagamento criptografado à vista (1x, sem parcelamento) para depósitos e corridas Kavro
                 </div>
               </div>
 

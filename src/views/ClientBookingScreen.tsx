@@ -2025,7 +2025,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                 Adicionar cartão Kavro Pay
               </div>
               <div style={{ fontSize: '0.73rem', color: '#94A3B8', marginTop: 2 }}>
-                Pagamento criptografado — pré-autorizado somente na corrida
+                Pagamento criptografado à vista (1x, sem parcelamento)
               </div>
             </div>
 
@@ -2051,7 +2051,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
                         cursor: 'pointer'
                       }}
                     >
-                      Cartão de Crédito
+                      Cartão de Crédito • Somente à vista
                     </button>
                   </div>
 

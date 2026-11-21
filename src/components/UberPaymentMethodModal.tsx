@@ -398,7 +398,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                         {String(c.brand || 'Cartão').toUpperCase()} •••• {c.last4}
                       </div>
                       <div style={{ fontSize: '0.75rem', color: '#64748B' }}>
-                        {c.cardType === 'cartao_debito' ? 'Débito' : 'Crédito'} • Val {c.expMonth}/{c.expYear}
+                        {c.cardType === 'cartao_debito' ? 'Débito (à vista)' : 'Crédito à vista (1x)'} • Val {c.expMonth}/{c.expYear}
                       </div>
                     </div>
                   </div>
@@ -444,7 +444,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                 }}
               >
                 <Plus size={16} />
-                <span>Adicionar novo cartão</span>
+                <span>Adicionar novo cartão (à vista)</span>
               </button>
             )}
           </div>
