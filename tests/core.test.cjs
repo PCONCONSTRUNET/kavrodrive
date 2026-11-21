@@ -3685,3 +3685,20 @@ test('Auditoria publica desativada (410) e /api/public/fleet expoe somente frota
     assert.equal(drv.crlvNumber, undefined);
   }
 });
+
+test('GET /api/geocode valida query curta e responde esquema seguro para enderecos colados', async () => {
+  const shortGeo = await apiJson('/api/geocode?q=x');
+  assert.equal(shortGeo.status, 200);
+  assert.equal(shortGeo.json.ok, true);
+  assert.deepEqual(shortGeo.json.results, []);
+
+  const addrGeo = await apiJson('/api/geocode?q=' + encodeURIComponent('Rua 15 de Novembro, Lauro Muller, SC'));
+  assert.equal(addrGeo.status, 200);
+  assert.equal(addrGeo.json.ok, true);
+  assert.equal(Array.isArray(addrGeo.json.results), true);
+  for (const item of addrGeo.json.results) {
+    assert.equal(typeof item.display_name, 'string');
+    assert.equal(typeof item.lat, 'number');
+    assert.equal(typeof item.lng, 'number');
+  }
+});

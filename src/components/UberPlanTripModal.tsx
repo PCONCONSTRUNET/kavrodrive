@@ -112,6 +112,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
 
   const [results, setResults] = useState<Array<{ display_name: string; lat: number; lng: number }>>([]);
   const [isSearching, setIsSearching] = useState<boolean>(false);
+  const [hasSearchedEmpty, setHasSearchedEmpty] = useState<boolean>(false);
   const [isLocatingGps, setIsLocatingGps] = useState<boolean>(false);
   const [gpsNotice, setGpsNotice] = useState<string>('');
 
@@ -119,6 +120,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
   const destRef = useRef<HTMLInputElement | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchReqIdRef = useRef<number>(0);
+  const pasteImmediateRef = useRef<boolean>(false);
 
   useEffect(() => {
     setOriginInput(origin?.address || '');
@@ -165,45 +167,114 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
 
   const activeQuery = activeField === 'origin' ? originInput : destInput;
 
-  const runSearch = (query: string) => {
+  const runSearch = (
+    query: string,
+    fieldOverride?: 'origin' | 'destination',
+    immediate = false
+  ) => {
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    const targetField = fieldOverride || activeField;
     const trimmed = query.trim();
-    const currentSelectedText = activeField === 'origin' ? origin?.address : destination?.address;
+    const currentSelectedText = targetField === 'origin' ? origin?.address : destination?.address;
     if (trimmed.length < 2 || trimmed === currentSelectedText) {
       setResults([]);
       setIsSearching(false);
+      setHasSearchedEmpty(false);
       return;
     }
 
     const reqId = ++searchReqIdRef.current;
     setIsSearching(true);
-    searchTimerRef.current = setTimeout(async () => {
+    setHasSearchedEmpty(false);
+
+    const execute = async () => {
       try {
         const res = await searchAddressGeocode(trimmed, origin?.lat, origin?.lng);
         if (searchReqIdRef.current === reqId) {
           setResults(res);
+          setHasSearchedEmpty(res.length === 0);
           setIsSearching(false);
         }
       } catch {
         if (searchReqIdRef.current === reqId) {
           setResults([]);
+          setHasSearchedEmpty(true);
           setIsSearching(false);
         }
       }
-    }, 240);
+    };
+
+    if (immediate) {
+      void execute();
+    } else {
+      searchTimerRef.current = setTimeout(execute, 210);
+    }
   };
 
   const handleFieldChange = (field: 'origin' | 'destination', value: string) => {
+    const prevValue = field === 'origin' ? originInput : destInput;
+    const wasPaste = pasteImmediateRef.current || Math.abs(value.length - prevValue.length) > 4;
+    pasteImmediateRef.current = false;
+
     setActiveField(field);
     setGpsNotice('');
     if (field === 'origin') {
       setOriginInput(value);
-      if (!value.trim()) onSelectOrigin(null);
+      if (!value.trim() || value.trim() !== (origin?.address || '')) {
+        onSelectOrigin(null);
+      }
     } else {
       setDestInput(value);
-      if (!value.trim()) onSelectDestination?.(null);
+      if (!value.trim() || value.trim() !== (destination?.address || '')) {
+        onSelectDestination?.(null);
+      }
     }
-    runSearch(value);
+    runSearch(value, field, wasPaste);
+  };
+
+  const handleFieldFocus = (field: 'origin' | 'destination') => {
+    setActiveField(field);
+    const val = (field === 'origin' ? originInput : destInput).trim();
+    const selectedAddr = (field === 'origin' ? origin?.address : destination?.address) || '';
+    if (val.length >= 2 && val !== selectedAddr && val !== 'Minha localização atual (GPS)') {
+      if (results.length === 0) {
+        runSearch(val, field, true);
+      }
+    } else if (!val || val === selectedAddr) {
+      setResults([]);
+      setHasSearchedEmpty(false);
+    }
+  };
+
+  const handleFieldKeyDown = async (
+    field: 'origin' | 'destination',
+    e: React.KeyboardEvent<HTMLInputElement>
+  ) => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const val = (field === 'origin' ? originInput : destInput).trim();
+    if (val.length < 2) return;
+    if (results.length > 0 && activeField === field) {
+      const top = results[0];
+      handleSelectSuggestion({ address: top.display_name, lat: top.lat, lng: top.lng });
+      return;
+    }
+    const reqId = ++searchReqIdRef.current;
+    setActiveField(field);
+    setIsSearching(true);
+    setHasSearchedEmpty(false);
+    const res = await searchAddressGeocode(val, origin?.lat, origin?.lng);
+    if (searchReqIdRef.current !== reqId) return;
+    setResults(res);
+    setHasSearchedEmpty(res.length === 0);
+    setIsSearching(false);
+    if (res.length > 0) {
+      handleSelectSuggestion({
+        address: res[0].display_name,
+        lat: res[0].lat,
+        lng: res[0].lng,
+      });
+    }
   };
 
   const handleUseCurrentGps = () => {
@@ -249,6 +320,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
 
   const handleSelectSuggestion = (point: LocationPoint) => {
     setResults([]);
+    setHasSearchedEmpty(false);
     setIsSearching(false);
     if (activeField === 'origin') {
       onSelectOrigin(point);
@@ -980,9 +1052,12 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
                 ref={originRef}
                 type="text"
                 value={originInput}
-                onFocus={() => {
-                  setActiveField('origin');
-                  setResults([]);
+                onFocus={() => handleFieldFocus('origin')}
+                onPaste={() => {
+                  pasteImmediateRef.current = true;
+                }}
+                onKeyDown={(e) => {
+                  void handleFieldKeyDown('origin', e);
                 }}
                 onChange={(e) => handleFieldChange('origin', e.target.value)}
                 placeholder="Ponto de partida..."
@@ -1006,6 +1081,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
                     setOriginInput('');
                     setActiveField('origin');
                     setResults([]);
+                    setHasSearchedEmpty(false);
                     originRef.current?.focus();
                   }}
                   style={{
@@ -1078,9 +1154,12 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
                 ref={destRef}
                 type="text"
                 value={destInput}
-                onFocus={() => {
-                  setActiveField('destination');
-                  setResults([]);
+                onFocus={() => handleFieldFocus('destination')}
+                onPaste={() => {
+                  pasteImmediateRef.current = true;
+                }}
+                onKeyDown={(e) => {
+                  void handleFieldKeyDown('destination', e);
                 }}
                 onChange={(e) => handleFieldChange('destination', e.target.value)}
                 placeholder={serviceMode === 'entregas' ? 'Endereço de entrega?' : 'Para onde?'}
@@ -1104,6 +1183,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
                     setDestInput('');
                     setActiveField('destination');
                     setResults([]);
+                    setHasSearchedEmpty(false);
                     destRef.current?.focus();
                   }}
                   style={{
@@ -1225,7 +1305,25 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
           </div>
         )}
 
-        {suggestionList.map((item) => (
+        {hasSearchedEmpty && !isSearching && activeQuery.trim().length >= 3 && (
+          <div
+            style={{
+              margin: '6px 0 8px 0',
+              padding: '10px 12px',
+              borderRadius: 12,
+              backgroundColor: '#FFFBEB',
+              border: '1px solid #FDE68A',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              color: '#92400E',
+            }}
+          >
+            Não encontramos esse número exato. Tente buscar apenas o nome da rua e cidade, ou toque em{' '}
+            <strong>&quot;Defina a localização no mapa&quot;</strong> abaixo.
+          </div>
+        )}
+
+        {suggestionList.map((item, idx) => (
           <button
             key={item.key}
             type="button"
@@ -1305,6 +1403,21 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
                 {item.subtitle}
               </div>
             </div>
+            {item.kind === 'search' && idx === 0 && (
+              <span
+                style={{
+                  flexShrink: 0,
+                  padding: '4px 10px',
+                  borderRadius: 999,
+                  backgroundColor: '#0F172A',
+                  color: '#76D800',
+                  fontSize: '0.7rem',
+                  fontWeight: 800,
+                }}
+              >
+                Aplicar
+              </span>
+            )}
           </button>
         ))}
 
@@ -1354,7 +1467,7 @@ export const UberPlanTripModal: React.FC<UberPlanTripModalProps> = ({
           activeQuery.trim() !== 'Minha localização atual (GPS)' && (
           <button
             type="button"
-            onClick={() => runSearch(activeQuery)}
+            onClick={() => runSearch(activeQuery, activeField, true)}
             style={{
               width: '100%',
               display: 'flex',

@@ -331,9 +331,226 @@ export async function searchCitiesAndViaCep(query: string): Promise<CityOrCepSug
   return merged;
 }
 
+export interface ParsedBrazilianAddressQuery {
+  cleanedFull: string;
+  houseNumber: string;
+  embeddedCep: string;
+  candidates: string[];
+}
+
+const ROMAN_TO_ARABIC_MAP: Array<[RegExp, string]> = [
+  [/\bxxv\b/gi, '25'],
+  [/\bxix\b/gi, '19'],
+  [/\bxviii\b/gi, '18'],
+  [/\bxvii\b/gi, '17'],
+  [/\bxvi\b/gi, '16'],
+  [/\bxv\b/gi, '15'],
+  [/\bxiv\b/gi, '14'],
+  [/\bxiii\b/gi, '13'],
+  [/\bxii\b/gi, '12'],
+  [/\bxi\b/gi, '11'],
+  [/\bviii\b/gi, '8'],
+  [/\bvii\b/gi, '7'],
+  [/\bvi\b/gi, '6'],
+];
+
+function applyStreetRomanSwaps(text: string): string {
+  let out = text;
+  for (const [rx, arab] of ROMAN_TO_ARABIC_MAP) {
+    out = out.replace(rx, arab);
+  }
+  return out;
+}
+
+function expandPtStreetAbbreviations(text: string): string {
+  return text
+    .replace(/(^|[,\s])r\.\s*/gi, '$1Rua ')
+    .replace(/(^|[,\s])av\.\s*/gi, '$1Avenida ')
+    .replace(/(^|[,\s])rod\.\s*/gi, '$1Rodovia ')
+    .replace(/(^|[,\s])estr\.\s*/gi, '$1Estrada ')
+    .replace(/(^|[,\s])tv\.\s*/gi, '$1Travessa ')
+    .replace(/(^|[,\s])p[cç]\.\s*/gi, '$1Praça ')
+    .replace(/(^|[,\s])al\.\s*/gi, '$1Alameda ')
+    .replace(/(^|[,\s])dr\.\s*/gi, '$1Doutor ')
+    .replace(/(^|[,\s])prof\.\s*/gi, '$1Professor ')
+    .replace(/(^|[,\s])cel\.\s*/gi, '$1Coronel ')
+    .replace(/(^|[,\s])gov\.\s*/gi, '$1Governador ')
+    .replace(/(^|[,\s])pres\.\s*/gi, '$1Presidente ')
+    .replace(/(^|[,\s])sta\.\s*/gi, '$1Santa ')
+    .replace(/(^|[,\s])sto\.\s*/gi, '$1Santo ')
+    .replace(/(^|[,\s])pe\.\s*/gi, '$1Padre ');
+}
+
 /**
- * Busca de endereço ultra-rápida e tolerante a erros de digitação (ex: "laura muller" -> Lauro Müller)
- * Suporta CEP direto via ViaCEP + base local + Photon Geocoder + Fallback Nominatim
+ * Limpa endereços colados no padrão brasileiro (ex: "RUA XV DE NOVEMBRO, Nº 132 - CENTRO, LAURO MÜLLER - SC, CEP 88835-000")
+ * preservando número e CEP em separado e gerando variações progressivas compatíveis com Photon e Nominatim.
+ */
+export function buildBrazilianGeocodeCandidates(rawInput: string): ParsedBrazilianAddressQuery {
+  const normalizedSpaces = String(rawInput || '')
+    .replace(/[\r\n\t]+/g, ', ')
+    .replace(/\blaura\b/gi, 'Lauro')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const cepMatch = normalizedSpaces.match(/\b(?:cep[:\s-]*)?(\d{5})-?(\d{3})\b/i);
+  const embeddedCep = cepMatch ? `${cepMatch[1]}${cepMatch[2]}` : '';
+
+  const numMatch =
+    normalizedSpaces.match(/\b(?:n[º°o\.]*|numero|número)\s*[:.]?\s*(\d{1,5}[a-z]?)\b/i) ||
+    normalizedSpaces.match(/,\s*(\d{1,5})(?=\s*(?:,|-|\/|$|\s))/);
+  const houseNumber = numMatch ? numMatch[1].trim() : '';
+
+  let cleaned = expandPtStreetAbbreviations(normalizedSpaces)
+    .replace(/\bcep[:\s-]*\d{5}-?\d{3}\b/gi, '')
+    .replace(/\b\d{5}-\d{3}\b/g, '')
+    .replace(/\b(?:n[º°o\.]*|numero|número)\s*[:.]?\s*/gi, ' ')
+    .replace(/#\s*(\d{1,5})/g, '$1')
+    .replace(/\b(?:apto?|apartamento|bloco|bl\.?|sala|sl\.?|casa|loja|andar|fundos|lote|quadra|qd\.?|lt\.?)\s*[a-z0-9/-]*/gi, '')
+    .replace(/\s*\/\s*([A-Z]{2})\b/gi, ', $1')
+    .replace(/\s+-\s+/g, ', ')
+    .replace(/,\s*,+/g, ',')
+    .replace(/^[,.\s-]+|[,.\s-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) cleaned = normalizedSpaces;
+
+  const segments = cleaned.split(',').map((s) => s.trim()).filter(Boolean);
+  const segmentsWithoutNumber = segments
+    .map((seg) =>
+      houseNumber
+        ? seg.replace(new RegExp(`^${houseNumber}$|\\b${houseNumber}\\b`, 'i'), '').trim()
+        : seg
+    )
+    .filter((seg) => seg && !/^\d{1,5}$/.test(seg));
+
+  const streetPart = segmentsWithoutNumber[0] || segments[0] || cleaned;
+  const lastCityCandidate =
+    segmentsWithoutNumber.length >= 2
+      ? segmentsWithoutNumber
+          .slice(1)
+          .filter((s) => !/^(centro|brasil|brazil|[a-z]{2})$/i.test(s))
+          .slice(-1)[0] || ''
+      : '';
+  const stateToken =
+    segments.find((s) => /^(AC|AL|AP|AM|BA|CE|DF|ES|GO|MA|MT|MS|MG|PA|PB|PR|PE|PI|RJ|RN|RS|RO|RR|SC|SP|SE|TO)$/i.test(s)) || '';
+
+  const rawCandidates = [
+    cleaned,
+    segmentsWithoutNumber.join(', '),
+    lastCityCandidate
+      ? [streetPart, lastCityCandidate, stateToken].filter(Boolean).join(', ')
+      : '',
+    applyStreetRomanSwaps(
+      lastCityCandidate
+        ? [streetPart, lastCityCandidate, stateToken].filter(Boolean).join(', ')
+        : streetPart
+    ),
+    streetPart,
+    applyStreetRomanSwaps(streetPart),
+  ];
+
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const c of rawCandidates) {
+    const cleanCand = String(c || '').replace(/,\s*,+/g, ',').replace(/^[,.\s]+|[,.\s]+$/g, '').trim();
+    if (cleanCand.length >= 2) {
+      const key = normalizeText(cleanCand);
+      if (!seen.has(key)) {
+        seen.add(key);
+        candidates.push(cleanCand);
+      }
+    }
+  }
+
+  return {
+    cleanedFull: cleaned,
+    houseNumber,
+    embeddedCep,
+    candidates: candidates.slice(0, 5),
+  };
+}
+
+function attachPastedHouseNumber(displayName: string, houseNumber: string): string {
+  if (!houseNumber || !displayName) return displayName;
+  const numRx = new RegExp(`\\b${houseNumber}\\b`, 'i');
+  if (numRx.test(displayName)) return displayName;
+  const commaIdx = displayName.indexOf(',');
+  if (commaIdx <= 0) return `${displayName}, ${houseNumber}`;
+  return `${displayName.slice(0, commaIdx).trim()}, ${houseNumber}${displayName.slice(commaIdx)}`;
+}
+
+async function queryPhotonDirect(
+  queryStr: string,
+  userLat: number,
+  userLng: number
+): Promise<Array<{ display_name: string; lat: number; lng: number }>> {
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 3200);
+    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(queryStr)}&limit=8&lat=${userLat}&lon=${userLng}&location_bias_scale=0.35`;
+    const res = await fetch(photonUrl, { signal: controller.signal });
+    clearTimeout(tid);
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (!Array.isArray(data?.features)) return [];
+    return data.features
+      .filter((f: any) => {
+        const cc = String(f?.properties?.countrycode || '').toUpperCase();
+        return !cc || cc === 'BR';
+      })
+      .map((f: any) => {
+        const p = f.properties || {};
+        const parts: string[] = [];
+        if (p.name) parts.push(p.name);
+        if (p.street && p.street !== p.name) {
+          parts.push(p.housenumber ? `${p.street}, ${p.housenumber}` : p.street);
+        } else if (p.housenumber && parts.length > 0) {
+          parts[0] += `, ${p.housenumber}`;
+        }
+        if (p.district && p.district !== p.name) parts.push(p.district);
+        const city = p.city || p.town || p.municipality;
+        if (city && city !== p.name && city !== p.district) parts.push(city);
+        if (p.state) parts.push(p.state);
+        return {
+          display_name: parts.filter(Boolean).join(', '),
+          lat: Number(f.geometry?.coordinates?.[1]),
+          lng: Number(f.geometry?.coordinates?.[0]),
+        };
+      })
+      .filter((item: { display_name: string; lat: number; lng: number }) =>
+        Boolean(item.display_name) && Number.isFinite(item.lat) && Number.isFinite(item.lng)
+      );
+  } catch {
+    return [];
+  }
+}
+
+async function queryServerGeocodeApi(
+  queryStr: string,
+  userLat: number,
+  userLng: number
+): Promise<Array<{ display_name: string; lat: number; lng: number }>> {
+  if (typeof window === 'undefined') return [];
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 3800);
+    const res = await fetch(
+      `/api/geocode?q=${encodeURIComponent(queryStr)}&lat=${encodeURIComponent(String(userLat))}&lng=${encodeURIComponent(String(userLng))}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(tid);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return Array.isArray(json?.results) ? json.results : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Busca de endereço tolerante a endereços colados no formato brasileiro (com "Nº", CEP, abreviações,
+ * numeração romana "XV" <-> "15", links/coordenadas do Google Maps) usando base local + ViaCEP + Photon + /api/geocode.
  */
 export async function searchAddressGeocode(
   query: string,
@@ -346,141 +563,136 @@ export async function searchAddressGeocode(
 }>> {
   if (!query || query.trim().length < 2) return [];
 
-  const rawClean = query.trim();
-  const cepDigits = rawClean.replace(/\D/g, '');
-  if (/^[\d.\-\s]+$/.test(rawClean) && cepDigits.length === 8) {
-    const viaCep = await lookupViaCep(cepDigits);
-    if (viaCep) {
-      let resolvedLat = userLat;
-      let resolvedLng = userLng;
+  let rawClean = query.trim();
+
+  // Suporta links colados do Google Maps (com @lat,lng ou ?q=...)
+  if (/^https?:\/\/(www\.)?(google\.|maps\.app|goo\.gl)/i.test(rawClean)) {
+    const atCoords = rawClean.match(/@(-?\d{1,2}\.\d{4,}),(-?\d{1,3}\.\d{4,})/);
+    const qCoords = rawClean.match(/[?&](?:q|query)=(-?\d{1,2}\.\d{4,}),(-?\d{1,3}\.\d{4,})/);
+    const coordHit = atCoords || qCoords;
+    if (coordHit) {
+      const lat = parseFloat(coordHit[1]);
+      const lng = parseFloat(coordHit[2]);
+      const rev = await reverseGeocode(lat, lng).catch(() => `Local no mapa (${lat.toFixed(5)}, ${lng.toFixed(5)})`);
+      return [{ display_name: rev, lat, lng }];
+    }
+    const qText = rawClean.match(/[?&](?:q|query)=([^&]+)/);
+    if (qText && qText[1]) {
       try {
-        const nomUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(viaCep.formattedAddress)}&limit=1&countrycodes=br`;
-        const resp = await fetch(nomUrl, { headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' } });
-        if (resp.ok) {
-          const nomData = await resp.json();
-          if (Array.isArray(nomData) && nomData[0]) {
-            resolvedLat = parseFloat(nomData[0].lat);
-            resolvedLng = parseFloat(nomData[0].lon);
-          }
-        }
+        rawClean = decodeURIComponent(qText[1].replace(/\+/g, ' ')).trim();
       } catch {
-        // fallback para centro da região/mapa atual
+        // segue com rawClean
       }
+    }
+  }
+
+  // Suporta coordenadas coladas diretamente (ex: "-28.39123, -49.39354")
+  const directCoords = rawClean.match(/^(-?\d{1,2}\.\d{4,})\s*[,\s;]\s*(-?\d{1,3}\.\d{4,})$/);
+  if (directCoords) {
+    const lat = parseFloat(directCoords[1]);
+    const lng = parseFloat(directCoords[2]);
+    if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+      const rev = await reverseGeocode(lat, lng).catch(() => `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`);
+      return [{ display_name: rev, lat, lng }];
+    }
+  }
+
+  // CEP puro (8 dígitos)
+  const cepDigitsOnly = rawClean.replace(/\D/g, '');
+  if (/^[\d.\-\s]+$/.test(rawClean) && cepDigitsOnly.length === 8) {
+    const viaCep = await lookupViaCep(cepDigitsOnly);
+    if (viaCep) {
+      const hits = await queryPhotonDirect(viaCep.formattedAddress, userLat, userLng);
+      const serverHits = hits.length > 0 ? hits : await queryServerGeocodeApi(viaCep.formattedAddress, userLat, userLng);
+      const top = serverHits[0];
       return [
         {
           display_name: `${viaCep.formattedAddress} (CEP ${viaCep.cep})`,
-          lat: resolvedLat,
-          lng: resolvedLng
-        }
+          lat: top ? top.lat : userLat,
+          lng: top ? top.lng : userLng,
+        },
       ];
     }
   }
 
-  const normQ = normalizeText(rawClean).replace(/\blaura\b/g, 'lauro');
-  const tokens = normQ.split(/\s+/).filter(Boolean);
+  const parsed = buildBrazilianGeocodeCandidates(rawClean);
+  const normQ = normalizeText(parsed.cleanedFull);
+  const tokens = normQ.split(/[\s,]+/).filter((t) => t.length >= 2);
 
-  // 1. Busca imediata na base local de bairros e pontos de Lauro Müller & região
-  const localMatches = LOCAL_POINTS_DATABASE.filter(item => {
+  // 1. Base local rápida (apenas quando bate na rua/bairro exato ou sem tokens numéricos desconhecidos)
+  const localMatches = LOCAL_POINTS_DATABASE.filter((item) => {
     const itemNorm = normalizeText(item.name);
     const aliasesNorm = item.aliases.map(normalizeText);
-    return tokens.every(t => itemNorm.includes(t) || aliasesNorm.some(a => a.includes(t)));
-  }).map(item => ({
+    return tokens.length > 0 && tokens.every((t) => itemNorm.includes(t) || aliasesNorm.some((a) => a.includes(t)));
+  }).map((item) => ({
     display_name: item.name,
     lat: item.lat,
-    lng: item.lng
+    lng: item.lng,
   }));
 
-  // 2. Consulta Photon Geocoder com viés geográfico próximo ao ponto atual do mapa (sem travar em uma única cidade)
-  let photonMatches: Array<{ display_name: string; lat: number; lng: number }> = [];
-  try {
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 3500);
-    const photonUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(rawClean.replace(/\blaura\b/gi, 'Lauro'))}&limit=10&lat=${userLat}&lon=${userLng}&location_bias_scale=0.35`;
-    const res = await fetch(photonUrl, { signal: controller.signal });
-    clearTimeout(tid);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.features)) {
-        const brFeatures = data.features.filter((f: any) => {
-          const cc = String(f?.properties?.countrycode || '').toUpperCase();
-          return !cc || cc === 'BR';
-        });
-        photonMatches = brFeatures
-          .map((f: any) => {
-            const p = f.properties || {};
-            const parts: string[] = [];
-            if (p.name) parts.push(p.name);
-            if (p.street && p.street !== p.name) {
-              parts.push(p.housenumber ? `${p.street}, ${p.housenumber}` : p.street);
-            } else if (p.housenumber && parts.length > 0) {
-              parts[0] += `, ${p.housenumber}`;
-            }
-            if (p.district && p.district !== p.name) parts.push(p.district);
-            const city = p.city || p.town || p.municipality;
-            if (city && city !== p.name && city !== p.district) parts.push(city);
-            if (p.state) parts.push(p.state);
+  // 2. Se o endereço colado contém CEP embutido (ex: "... CEP 88835-000"), resolve ViaCEP em paralelo
+  const viaCepPromise = parsed.embeddedCep ? lookupViaCep(parsed.embeddedCep) : Promise.resolve(null);
 
-            return {
-              display_name: parts.filter(Boolean).join(', '),
-              lat: Number(f.geometry.coordinates[1]),
-              lng: Number(f.geometry.coordinates[0])
-            };
-          })
-          .filter((item: { display_name: string }) => Boolean(item.display_name));
-      }
+  // 3. Tenta candidato principal no Photon
+  let externalMatches = await queryPhotonDirect(parsed.candidates[0] || rawClean, userLat, userLng);
+
+  // 4. Se veio vazio ou com poucos resultados, roda relaxamento progressivo (sem "Nº", sem número, XV <-> 15) + /api/geocode (Nominatim)
+  if (externalMatches.length < 2) {
+    const relaxQueue = parsed.candidates.slice(1);
+    const viaCepData = await viaCepPromise;
+    if (viaCepData && viaCepData.formattedAddress) {
+      relaxQueue.unshift(viaCepData.formattedAddress);
     }
-  } catch (err) {
-    console.warn('Photon geocode error:', err);
+
+    const relaxedTasks: Array<Promise<Array<{ display_name: string; lat: number; lng: number }>>> = [];
+    for (let i = 0; i < relaxQueue.length && i < 3; i++) {
+      relaxedTasks.push(queryPhotonDirect(relaxQueue[i], userLat, userLng));
+    }
+    // Proxy /api/geocode usa Nominatim oficial com User-Agent + Photon no servidor
+    relaxedTasks.push(queryServerGeocodeApi(parsed.candidates[0] || rawClean, userLat, userLng));
+    if (parsed.candidates[1]) {
+      relaxedTasks.push(queryServerGeocodeApi(parsed.candidates[1], userLat, userLng));
+    }
+    if (parsed.candidates[3] && parsed.candidates[3] !== parsed.candidates[1]) {
+      relaxedTasks.push(queryServerGeocodeApi(parsed.candidates[3], userLat, userLng));
+    }
+
+    const batch = await Promise.all(relaxedTasks);
+    for (const chunk of batch) {
+      if (chunk.length > 0) externalMatches = [...externalMatches, ...chunk];
+    }
+  } else {
+    await viaCepPromise;
   }
 
-  // 3. Fallback Nominatim Brasil se base local + Photon tiverem poucos resultados
-  let nominatimMatches: Array<{ display_name: string; lat: number; lng: number }> = [];
-  if (localMatches.length + photonMatches.length < 2) {
-    try {
-      const controller = new AbortController();
-      const tid = setTimeout(() => controller.abort(), 3500);
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(rawClean.replace(/\blaura\b/gi, 'Lauro'))}&addressdetails=1&limit=6&countrycodes=br`;
-      const response = await fetch(url, { headers: { 'Accept-Language': 'pt-BR,pt;q=0.9' }, signal: controller.signal });
-      clearTimeout(tid);
-      if (response.ok) {
-        const data = await response.json();
-        nominatimMatches = (Array.isArray(data) ? data : []).map((item: any) => {
-          const a = item.address || {};
-          const road = a.road || a.pedestrian || item.name || '';
-          const num = a.house_number ? `, ${a.house_number}` : '';
-          const hood = a.suburb || a.neighbourhood || '';
-          const city = a.city || a.town || a.village || a.municipality || '';
-          const state = a.state || '';
-          const formatted = [
-            road ? `${road}${num}` : '',
-            hood && hood !== road ? hood : '',
-            city && city !== hood ? city : '',
-            state
-          ].filter(Boolean).join(', ');
-          return {
-            display_name: formatted || String(item.display_name || '').split(',').slice(0, 4).join(',').trim(),
-            lat: parseFloat(item.lat),
-            lng: parseFloat(item.lon),
-          };
-        });
-      }
-    } catch {
-      // ignore
-    }
-  }
+  // Preserva o número da casa digitado/colado quando o geocoder retorna apenas o logradouro
+  const enrichedExternal = externalMatches.map((item) => ({
+    ...item,
+    display_name: attachPastedHouseNumber(item.display_name, parsed.houseNumber),
+  }));
 
-  // 4. Une os resultados e elimina duplicatas de endereço
-  const combined = [...localMatches, ...photonMatches, ...nominatimMatches];
+  const combined = [...localMatches, ...enrichedExternal];
   const unique: Array<{ display_name: string; lat: number; lng: number }> = [];
   const seen = new Set<string>();
 
   for (const item of combined) {
     const key = normalizeText(item.display_name);
-    if (!seen.has(key)) {
+    if (key && !seen.has(key)) {
       seen.add(key);
       unique.push(item);
     }
   }
+
+  // Ordena priorizando resultados que contêm tokens da cidade/bairro colados pelo usuário
+  const scoreItem = (displayName: string) => {
+    const n = normalizeText(displayName);
+    let score = 0;
+    for (const t of tokens) {
+      if (t.length >= 3 && n.includes(t)) score += 1;
+    }
+    return score;
+  };
+  unique.sort((a, b) => scoreItem(b.display_name) - scoreItem(a.display_name));
 
   return unique.slice(0, 8);
 }
