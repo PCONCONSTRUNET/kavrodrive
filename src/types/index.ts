@@ -896,12 +896,15 @@ export interface SystemConfig {
   partnerHideEmptyPlaceholder?: boolean;
 }
 
+export type PartnerBannerArea = 'site' | 'client_home' | 'client_rides' | 'client_profile';
+
 export interface HomePartnerBanner {
   id: string;
   name: string;
   kind: 'parceiro' | 'patrocinador';
   displayMode: 'logo' | 'banner';
   placement?: 'both' | 'site' | 'client';
+  areas?: PartnerBannerArea[];
   imageUrl: string;
   subtitle?: string;
   linkUrl?: string;

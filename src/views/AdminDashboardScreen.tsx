@@ -2031,7 +2031,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
                 {activeTab === 'clientes' && 'Passageiros'}
-                {activeTab === 'parceiros' && 'Parceiros & Banners da Home'}
+                {activeTab === 'parceiros' && 'Parceiros & Banners'}
                 {activeTab === 'notificacoes' && 'Notificações & Push'}
                 {activeTab === 'config' && 'Tarifas & Regras'}
               </span>

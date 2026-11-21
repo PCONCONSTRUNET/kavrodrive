@@ -1069,7 +1069,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
             <PartnersSponsorsSection
               items={config.partnerBanners}
               variant="light"
-              context="client"
+              area="client_profile"
               sectionEnabled={Boolean(config.partnerShowOnClientProfile)}
               hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
             />

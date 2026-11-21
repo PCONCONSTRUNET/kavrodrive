@@ -1,15 +1,29 @@
 import React from 'react';
 import { Award, ExternalLink, Image as ImageIcon, Sparkles } from 'lucide-react';
-import { HomePartnerBanner } from '../types';
+import { HomePartnerBanner, PartnerBannerArea } from '../types';
 
 interface PartnersSponsorsSectionProps {
   items?: HomePartnerBanner[] | null;
   variant: 'dark' | 'light';
+  area?: PartnerBannerArea;
   context?: 'site' | 'client';
   sectionEnabled?: boolean;
   hideWhenEmpty?: boolean;
   isMobile?: boolean;
   onBecomePartnerClick?: () => void;
+}
+
+export function doesBannerBelongToArea(
+  item: HomePartnerBanner,
+  area: PartnerBannerArea
+): boolean {
+  if (Array.isArray(item.areas) && item.areas.length > 0) {
+    return item.areas.includes(area);
+  }
+  const p = item.placement || 'both';
+  if (p === 'site') return area === 'site';
+  if (p === 'client') return area === 'client_home';
+  return area === 'site' || area === 'client_home';
 }
 
 export function sanitizePartnerHref(rawUrl?: string): string {
@@ -35,6 +49,7 @@ export function sanitizePartnerHref(rawUrl?: string): string {
 export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = ({
   items,
   variant,
+  area,
   context,
   sectionEnabled = true,
   hideWhenEmpty = false,
@@ -43,14 +58,14 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
 }) => {
   if (!sectionEnabled) return null;
 
-  const targetContext: 'site' | 'client' = context || (variant === 'dark' ? 'site' : 'client');
+  const targetArea: PartnerBannerArea =
+    area || (context === 'site' || (!context && variant === 'dark') ? 'site' : 'client_home');
   const activeItems = (Array.isArray(items) ? items : [])
     .filter((item) => {
       if (!item || item.active === false || String(item.imageUrl || '').trim().length === 0) {
         return false;
       }
-      const p = item.placement || 'both';
-      return p === 'both' || p === targetContext;
+      return doesBannerBelongToArea(item, targetArea);
     })
     .slice()
     .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));

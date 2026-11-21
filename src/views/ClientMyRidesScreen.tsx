@@ -820,7 +820,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
             <PartnersSponsorsSection
               items={config?.partnerBanners}
               variant="light"
-              context="client"
+              area="client_rides"
               sectionEnabled={Boolean(config?.partnerShowOnClientRides)}
               hideWhenEmpty={Boolean(config?.partnerHideEmptyPlaceholder)}
             />

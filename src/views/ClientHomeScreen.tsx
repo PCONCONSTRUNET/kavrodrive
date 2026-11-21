@@ -1037,7 +1037,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       <PartnersSponsorsSection
         items={config.partnerBanners}
         variant="light"
-        context="client"
+        area="client_home"
         sectionEnabled={config.partnerShowOnClientHome !== false}
         hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
       />

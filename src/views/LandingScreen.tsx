@@ -1319,7 +1319,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       <PartnersSponsorsSection
         items={config.partnerBanners}
         variant="dark"
-        context="site"
+        area="site"
         sectionEnabled={config.partnerShowOnSite !== false}
         hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
         isMobile={isMobile}
