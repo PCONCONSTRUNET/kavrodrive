@@ -706,7 +706,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                 style={{
                   width: displayMode === 'banner' ? 144 : 68,
                   height: displayMode === 'banner' ? 32 : 40,
-                  borderRadius: 6,
+                  borderRadius: 10,
                   border: '1px solid #CBD5E1',
                   backgroundColor: '#FFFFFF',
                   padding: displayMode === 'banner' ? 0 : 4,
@@ -842,7 +842,7 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                       style={{
                         width: item.displayMode === 'banner' ? 126 : 54,
                         height: item.displayMode === 'banner' ? 28 : 36,
-                        borderRadius: 6,
+                        borderRadius: 10,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',
                         overflow: 'hidden',

@@ -276,8 +276,8 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           gap: banners.length === 1 ? 0 : 8,
                           overflowX: 'auto',
                           scrollSnapType: 'x mandatory',
-                          margin: '0 -18px',
-                          width: 'calc(100% + 36px)',
+                          margin: '0 -8px',
+                          width: 'calc(100% + 16px)',
                         }
                       : compactPreview
                         ? {
@@ -320,13 +320,11 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           width: !isMobile || banners.length === 1 ? '100%' : undefined,
                           aspectRatio: '9 / 2',
                           scrollSnapAlign: 'start',
-                          borderRadius: isMobile ? 0 : compactPreview ? 8 : 12,
+                          borderRadius: compactPreview ? 12 : 16,
                           overflow: 'hidden',
                           backgroundColor: '#131E26',
-                          border: isMobile ? undefined : '1px solid rgba(118, 216, 0, 0.24)',
-                          borderTop: isMobile ? '1px solid rgba(118, 216, 0, 0.24)' : undefined,
-                          borderBottom: isMobile ? '1px solid rgba(118, 216, 0, 0.24)' : undefined,
-                          boxShadow: isMobile ? 'none' : '0 8px 22px rgba(0, 0, 0, 0.28)',
+                          border: '1px solid rgba(118, 216, 0, 0.24)',
+                          boxShadow: '0 8px 22px rgba(0, 0, 0, 0.28)',
                           cursor: safeHref ? 'pointer' : 'default',
                         }}
                       >
@@ -344,18 +342,18 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                         <div
                           style={{
                             position: 'absolute',
-                            top: 8,
-                            right: 10,
+                            top: 6,
+                            right: 8,
                             display: 'inline-flex',
                             alignItems: 'center',
-                            gap: 5,
-                            padding: '3px 9px',
+                            gap: 4,
+                            padding: '2px 7px',
                             borderRadius: 999,
                             backgroundColor: 'rgba(11, 18, 24, 0.64)',
                             backdropFilter: 'blur(6px)',
                             border: '1px solid rgba(255, 255, 255, 0.14)',
                             color: '#FFFFFF',
-                            fontSize: '0.6rem',
+                            fontSize: '0.54rem',
                             fontWeight: 700,
                             letterSpacing: '0.04em',
                             textTransform: 'uppercase',
@@ -569,6 +567,8 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                 overflowX: 'auto',
                 scrollSnapType: 'x mandatory',
                 width: '100%',
+                padding: compactPreview ? '0 8px' : '0 10px',
+                boxSizing: 'border-box',
               }}
             >
               {banners.map((banner) => {
@@ -591,10 +591,10 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                       width: banners.length === 1 ? '100%' : undefined,
                       aspectRatio: '9 / 2',
                       scrollSnapAlign: 'start',
-                      borderRadius: 0,
+                      borderRadius: compactPreview ? 12 : 16,
                       overflow: 'hidden',
-                      borderTop: '1px solid #E2E8F0',
-                      borderBottom: '1px solid #E2E8F0',
+                      border: '1px solid #E2E8F0',
+                      boxShadow: '0 4px 12px rgba(15, 23, 42, 0.06)',
                       cursor: safeHref ? 'pointer' : 'default',
                       backgroundColor: '#0F172A',
                     }}
