@@ -605,9 +605,6 @@ function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwne
       destination: ride.destination,
       distanceKm: ride.distanceKm,
       durationMin: ride.durationMin,
-      totalPrice: ride.totalPrice,
-      paymentMethod: ride.paymentMethod,
-      paymentStatus: ride.paymentStatus,
       clientName: maskNamePublic(ride.clientName),
       clientPhone: '',
       driverId: ride.driverId || null,
@@ -622,9 +619,9 @@ function sanitizeRideForViewer(ride, { isAdmin = false, isDriver = false, isOwne
       clientLocation: ride.clientLocation || null,
       requiresBoardingPin,
       rideCheck,
-      trustedContactsDispatches,
       trackingToken,
       trackingUrl,
+      trackingReadOnly: true,
       createdAt: ride.createdAt,
       updatedAt: ride.updatedAt
     };

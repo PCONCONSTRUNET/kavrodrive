@@ -1123,6 +1123,11 @@ test('Seguranca em Rota: Contatos de Confianca automaticos via API + link /track
   assert.equal(trackRes.json.ride.driverPlate, 'KVR9A26');
   assert.equal(trackRes.json.ride.driverName, 'Roberto Condutor');
   assert.equal(trackRes.json.ride.boardingPin, undefined);
+  assert.equal(trackRes.json.ride.totalPrice, undefined);
+  assert.equal(trackRes.json.ride.paymentMethod, undefined);
+  assert.equal(trackRes.json.ride.paymentStatus, undefined);
+  assert.equal(trackRes.json.ride.trustedContactsDispatches, undefined);
+  assert.equal(trackRes.json.ride.trackingReadOnly, true);
 
   // 6) GPS fora do corredor da rota (> 3km lateral e mais distante do destino) dispara RideCheck automaticamente
   const locOffRoute = await apiJson(`/api/rides/${encodeURIComponent(rideId)}/location`, {
@@ -2607,6 +2612,11 @@ test('Perfil Familiar (Adolescentes 12-18 anos): trava idade/termos, gera link r
   assert.equal(trkRes.status, 200);
   assert.equal(trkRes.json.ride.driverName, 'Motorista 5 Estrelas');
   assert.equal(trkRes.json.ride.boardingPin, undefined);
+  assert.equal(trkRes.json.ride.totalPrice, undefined);
+  assert.equal(trkRes.json.ride.paymentMethod, undefined);
+  assert.equal(trkRes.json.ride.paymentStatus, undefined);
+  assert.equal(trkRes.json.ride.trustedContactsDispatches, undefined);
+  assert.equal(trkRes.json.ride.trackingReadOnly, true);
 
   // 8) Responsável revoga membro -> remove do Perfil Familiar e volta adolescente para conta padrão
   const revokeRes = await apiJson(

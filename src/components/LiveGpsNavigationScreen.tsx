@@ -26,6 +26,7 @@ interface LiveGpsNavigationScreenProps {
   ride: Ride;
   isOpen: boolean;
   userRole: 'driver' | 'client';
+  readOnlyTracking?: boolean;
   onClose: () => void;
   onUpdateStatus?: (rideId: string, newStatus: RideStatus) => void;
   config: SystemConfig;
@@ -161,6 +162,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
   onClose,
   onUpdateStatus,
   config,
+  readOnlyTracking = false,
 }) => {
   const isDriver = userRole === 'driver';
   const [liveRide, setLiveRide] = useState<Ride>(ride);
@@ -500,7 +502,10 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
   // Função oficial para o cliente compartilhar o link público de rastreamento com a família via WhatsApp ou nativo
   const handleShareWithFamily = () => {
     const destAddr = liveRide.destination.address || 'Destino';
-    const trackingUrl = `${window.location.origin}/viagem/${encodeURIComponent(liveRide.id)}`;
+    const sharePath = liveRide.trackingUrl
+      ? liveRide.trackingUrl.replace(/^\/track\//, '/viagem/')
+      : `/viagem/${encodeURIComponent(liveRide.id)}`;
+    const trackingUrl = `${window.location.origin}${sharePath}`;
     const vehicleText = liveRide.driverVehicle ? ` (${liveRide.driverVehicle}${liveRide.driverPlate ? ` • Placa ${liveRide.driverPlate}` : ''})` : '';
     const driverText = hasAssignedDriver ? ` com o motorista ${driverDisplayName}${vehicleText}` : '';
     const text = `🚗 *Kavro Drive - Acompanhamento de Viagem*\n\nEstou em viagem${driverText} rumo a *${destAddr}*.\n\nAcompanhe minha localização e rota em tempo real por este link seguro:\n${trackingUrl}`;
@@ -1364,19 +1369,21 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                   Nenhum motorista aceitou ainda — assim que aceitar você verá nome, placa e GPS em tempo real.
                 </div>
               </div>
-              <div style={{
-                backgroundColor: '#F8FAFC',
-                border: '1px solid #E2E8F0',
-                borderRadius: 10,
-                padding: '5px 9px',
-                textAlign: 'right',
-                flexShrink: 0
-              }}>
-                <div style={{ fontSize: '0.56rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Valor</div>
-                <div style={{ fontSize: '0.88rem', fontWeight: 900, color: '#0F172A' }}>
-                  R$ {liveRide.totalPrice.toFixed(2).replace('.', ',')}
+              {!readOnlyTracking && (
+                <div style={{
+                  backgroundColor: '#F8FAFC',
+                  border: '1px solid #E2E8F0',
+                  borderRadius: 10,
+                  padding: '5px 9px',
+                  textAlign: 'right',
+                  flexShrink: 0
+                }}>
+                  <div style={{ fontSize: '0.56rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase' }}>Valor</div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 900, color: '#0F172A' }}>
+                    R$ {liveRide.totalPrice.toFixed(2).replace('.', ',')}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             <RideSearchingStageCard
@@ -1428,7 +1435,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               >
                 Fechar tela
               </button>
-              {!isDriver && canPassengerCancelRide(liveRide) && (
+              {!isDriver && !readOnlyTracking && canPassengerCancelRide(liveRide) && (
                 <button
                   type="button"
                   onClick={() => setIsCancelModalOpen(true)}
@@ -1789,7 +1796,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             {liveRide.driverPlate ? (
               <MercosulPlateBadge plate={liveRide.driverPlate} size="sm" />
-            ) : (
+            ) : !readOnlyTracking ? (
               <div style={{
                 backgroundColor: '#F8FAFC',
                 border: '1px solid #E2E8F0',
@@ -1804,50 +1811,54 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
                   R$ {liveRide.totalPrice.toFixed(2).replace('.', ',')}
                 </div>
               </div>
+            ) : null}
+
+            {!readOnlyTracking && (
+              <>
+                <a
+                  href={`https://wa.me/55${driverPhoneClean || supportPhoneClean}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="WhatsApp"
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 9,
+                    backgroundColor: '#FFFFFF',
+                    border: '1.5px solid #25D366',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    textDecoration: 'none'
+                  }}
+                >
+                  <WhatsAppIcon size={17} />
+                </a>
+
+                <a
+                  href={`tel:${driverPhoneClean || supportPhoneClean}`}
+                  title="Ligar"
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 9,
+                    backgroundColor: '#121A21',
+                    color: '#FFFFFF',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    textDecoration: 'none'
+                  }}
+                >
+                  <Phone size={14} />
+                </a>
+              </>
             )}
-
-            <a
-              href={`https://wa.me/55${driverPhoneClean || supportPhoneClean}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="WhatsApp"
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 9,
-                backgroundColor: '#FFFFFF',
-                border: '1.5px solid #25D366',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textDecoration: 'none'
-              }}
-            >
-              <WhatsAppIcon size={17} />
-            </a>
-
-            <a
-              href={`tel:${driverPhoneClean || supportPhoneClean}`}
-              title="Ligar"
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 9,
-                backgroundColor: '#121A21',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                textDecoration: 'none'
-              }}
-            >
-              <Phone size={14} />
-            </a>
           </div>
         </div>
 
-        {/* PIN de Embarque quando aguardando embarque */}
-        {liveRide.boardingPin && (rideStatus === 'confirmada' || rideStatus === 'a_caminho' || rideStatus === 'no_local') && (
+        {/* PIN de Embarque quando aguardando embarque (somente titular da conta) */}
+        {!readOnlyTracking && liveRide.boardingPin && (rideStatus === 'confirmada' || rideStatus === 'a_caminho' || rideStatus === 'no_local') && (
           <div style={{
             marginBottom: 8,
             padding: '7px 11px',
@@ -1967,35 +1978,37 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 7, width: '100%' }}>
-            {/* Botão de Compartilhar Rota em Tempo Real com a Família / Amigos */}
-            <button
-              type="button"
-              onClick={handleShareWithFamily}
-              style={{
-                height: 38,
-                borderRadius: 11,
-                backgroundColor: '#25D366',
-                color: '#FFFFFF',
-                fontSize: '0.82rem',
-                fontWeight: 800,
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 7,
-                width: '100%',
-                boxShadow: '0 3px 10px rgba(37, 211, 102, 0.35)',
-                margin: 0
-              }}
-            >
-              <WhatsAppIcon size={17} />
-              <span>📲 Compartilhar Rota com a Família</span>
-            </button>
+            {/* Botão de Compartilhar Rota em Tempo Real com a Família / Amigos (somente titular) */}
+            {!readOnlyTracking && (
+              <button
+                type="button"
+                onClick={handleShareWithFamily}
+                style={{
+                  height: 38,
+                  borderRadius: 11,
+                  backgroundColor: '#25D366',
+                  color: '#FFFFFF',
+                  fontSize: '0.82rem',
+                  fontWeight: 800,
+                  border: 'none',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 7,
+                  width: '100%',
+                  boxShadow: '0 3px 10px rgba(37, 211, 102, 0.35)',
+                  margin: 0
+                }}
+              >
+                <WhatsAppIcon size={17} />
+                <span>📲 Compartilhar Rota com a Família</span>
+              </button>
+            )}
 
-            {/* Linha com SOS de Emergência (somente após embarque) e Fechar */}
-            <div style={{ display: 'grid', gridTemplateColumns: rideStatus === 'em_andamento' ? '1.2fr 1fr' : '1fr', gap: 7 }}>
-              {rideStatus === 'em_andamento' && (
+            {/* Linha com SOS de Emergência (somente após embarque e titular) e Fechar */}
+            <div style={{ display: 'grid', gridTemplateColumns: !readOnlyTracking && rideStatus === 'em_andamento' ? '1.2fr 1fr' : '1fr', gap: 7 }}>
+              {!readOnlyTracking && rideStatus === 'em_andamento' && (
                 <button
                   type="button"
                   onClick={() => setIsSosModalOpen(true)}
@@ -2037,7 +2050,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               </button>
             </div>
 
-            {canPassengerCancelRide(liveRide) && (
+            {!readOnlyTracking && canPassengerCancelRide(liveRide) && (
               <button
                 type="button"
                 onClick={() => setIsCancelModalOpen(true)}
@@ -2089,15 +2102,17 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
       )}
 
       {/* Central de Emergência SOS (Polícia 190, SAMU 192, Bombeiros 193) */}
-      <SosEmergencyModal
-        isOpen={isSosModalOpen}
-        onClose={() => setIsSosModalOpen(false)}
-        currentLocationText={`${rideStatus === 'a_caminho' || rideStatus === 'confirmada' ? liveRide.origin.address : liveRide.destination.address} (GPS: ${currentPos.lat.toFixed(5)}, ${currentPos.lng.toFixed(5)})`}
-        rideId={liveRide.id}
-        driverPhone={driverPhoneRaw || config?.companyWhatsapp || config?.companyPhone}
-      />
+      {!readOnlyTracking && (
+        <SosEmergencyModal
+          isOpen={isSosModalOpen}
+          onClose={() => setIsSosModalOpen(false)}
+          currentLocationText={`${rideStatus === 'a_caminho' || rideStatus === 'confirmada' ? liveRide.origin.address : liveRide.destination.address} (GPS: ${currentPos.lat.toFixed(5)}, ${currentPos.lng.toFixed(5)})`}
+          rideId={liveRide.id}
+          driverPhone={driverPhoneRaw || config?.companyWhatsapp || config?.companyPhone}
+        />
+      )}
 
-      {!isDriver && (
+      {!isDriver && !readOnlyTracking && (
         <RideCancelModal
           isOpen={isCancelModalOpen}
           ride={liveRide}

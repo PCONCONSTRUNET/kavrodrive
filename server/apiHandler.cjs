@@ -5569,9 +5569,9 @@ async function handleApiRequest(req, res) {
       return sendJson(res, 200, {
         ok: true,
         ride: security.sanitizeRideForViewer(ride, {
-          isAdmin,
-          isDriver: isAssignedDriver,
-          isOwnerClient,
+          isAdmin: hasValidTracking ? false : isAdmin,
+          isDriver: hasValidTracking ? false : isAssignedDriver,
+          isOwnerClient: hasValidTracking ? false : isOwnerClient,
           isTrackingViewer: true
         })
       });

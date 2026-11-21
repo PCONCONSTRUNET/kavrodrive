@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import {
   MapPin, Clock, Calendar, AlertCircle,
   Phone, Navigation, ShieldCheck, ShieldAlert, ArrowLeft,
@@ -39,6 +39,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
 }) => {
   const { rideId } = useParams<{ rideId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [copiedPix, setCopiedPix] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -50,57 +51,78 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
   const [isEditRouteModalOpen, setIsEditRouteModalOpen] = useState(false);
   const [isTrustedContactsOpen, setIsTrustedContactsOpen] = useState(false);
   const [trackedRide, setTrackedRide] = useState<Ride | null>(null);
+  const [isLoadingTracked, setIsLoadingTracked] = useState(false);
   const [isRatingSheetOpen, setIsRatingSheetOpen] = useState(false);
   const [ratingAutoShownId, setRatingAutoShownId] = useState<string>('');
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [unreadChatCount, setUnreadChatCount] = useState(0);
 
   const trackToken = typeof window !== 'undefined'
-    ? String(new URLSearchParams(window.location.search).get('t') || '').trim()
+    ? String(new URLSearchParams(location.search || window.location.search).get('t') || '').trim()
     : '';
+  const isTrackPath = location.pathname.startsWith('/track/');
+  const isSharedLinkMode = Boolean(trackToken || isTrackPath);
   const currentLoggedUser = StorageService.getCurrentUser();
-  const isExternalTracking = Boolean(trackToken && !currentLoggedUser);
 
-  // Busca a corrida correspondente (prioriza sessão local; senão usa link assinado /track)
-  const ride =
+  // No link compartilhado (?t= ou /track), usa apenas a resposta higienizada da API (sem valores, PIN nem ações).
+  const localMatchedRide =
     rides.find(r => r.id === rideId || formatRideCode(r) === rideId) ||
     StorageService.getRides().find(r => r.id === rideId || formatRideCode(r) === rideId) ||
-    trackedRide ||
     undefined;
-  const canClientCancelThisRide = Boolean(
-    !isExternalTracking &&
+  const ride = (isSharedLinkMode && trackToken
+    ? trackedRide
+    : (localMatchedRide || trackedRide)) || undefined;
+
+  const isOwnerSession = Boolean(
+    !isSharedLinkMode &&
     currentLoggedUser &&
     StorageService.getClientToken() &&
-    (!ride?.clientId || ride.clientId === currentLoggedUser.id) &&
+    ride &&
+    !(ride as Ride & { trackingReadOnly?: boolean }).trackingReadOnly &&
+    (!ride.clientId || ride.clientId === currentLoggedUser.id)
+  );
+  const isExternalTracking = !isOwnerSession;
+  const canClientCancelThisRide = Boolean(
+    isOwnerSession &&
     canPassengerCancelRide(ride)
   );
 
-  useEffect(() => {
+  const fetchTrackedRide = useCallback(async () => {
     if (!rideId || !trackToken) return;
-    let active = true;
-    const fetchTracked = async () => {
-      try {
-        const res = await fetch(
-          `/api/rides/${encodeURIComponent(rideId)}/track?t=${encodeURIComponent(trackToken)}`,
-          { headers: { ...StorageService.getAuthHeaders() } }
-        );
-        if (res.ok && active) {
-          const data = await res.json();
-          if (data?.ok && data.ride) {
-            setTrackedRide(data.ride);
-          }
+    try {
+      const res = await fetch(
+        `/api/rides/${encodeURIComponent(rideId)}/track?t=${encodeURIComponent(trackToken)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.ok && data.ride) {
+          setTrackedRide(data.ride);
         }
-      } catch {
-        // Silencioso
       }
+    } catch {
+      // Silencioso
+    } finally {
+      setIsLoadingTracked(false);
+    }
+  }, [rideId, trackToken]);
+
+  useEffect(() => {
+    if (!rideId || !trackToken) {
+      setIsLoadingTracked(false);
+      return;
+    }
+    let active = true;
+    setIsLoadingTracked(true);
+    const run = async () => {
+      if (active) await fetchTrackedRide();
     };
-    fetchTracked();
-    const t = setInterval(fetchTracked, 4000);
+    run();
+    const t = setInterval(run, 4000);
     return () => {
       active = false;
       clearInterval(t);
     };
-  }, [rideId, trackToken]);
+  }, [rideId, trackToken, fetchTrackedRide]);
 
   // Abre automaticamente o bottom sheet Uber-style quando a viagem encerra sem avaliação
   useEffect(() => {
@@ -173,6 +195,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
   useEffect(() => {
     if (!ride?.id) return;
     const handleChatMsg = (evt: Event) => {
+      if (isExternalTracking) return;
       const detail = (evt as CustomEvent)?.detail;
       if (!detail || detail.rideId !== ride.id || !detail.message) return;
       if (detail.message.sender === 'driver' && !isChatOpen) {
@@ -180,27 +203,41 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
       }
     };
     const handleRealtimeUpdate = () => {
-      StorageService.syncFromDatabase().then(refreshData);
+      if (trackToken) {
+        fetchTrackedRide();
+      } else {
+        StorageService.syncFromDatabase().then(refreshData);
+      }
     };
-    window.addEventListener('up_realtime_chat', handleChatMsg);
+    if (!isExternalTracking) {
+      window.addEventListener('up_realtime_chat', handleChatMsg);
+    }
     window.addEventListener('up_realtime_ride', handleRealtimeUpdate);
 
     const intervalMs = RealtimeService.isConnected() ? 10000 : 3000;
-    const interval = setInterval(async () => {
-      await StorageService.syncFromDatabase();
-      refreshData();
-    }, intervalMs);
+    const interval = trackToken
+      ? null
+      : setInterval(async () => {
+          await StorageService.syncFromDatabase();
+          refreshData();
+        }, intervalMs);
     return () => {
-      clearInterval(interval);
-      window.removeEventListener('up_realtime_chat', handleChatMsg);
+      if (interval) clearInterval(interval);
+      if (!isExternalTracking) {
+        window.removeEventListener('up_realtime_chat', handleChatMsg);
+      }
       window.removeEventListener('up_realtime_ride', handleRealtimeUpdate);
     };
-  }, [refreshData, ride?.id, isChatOpen]);
+  }, [refreshData, ride?.id, isChatOpen, isExternalTracking, trackToken, fetchTrackedRide]);
 
   const handleManualRefresh = async () => {
     setIsRefreshing(true);
-    await StorageService.syncFromDatabase();
-    refreshData();
+    if (trackToken) {
+      await fetchTrackedRide();
+    } else {
+      await StorageService.syncFromDatabase();
+      refreshData();
+    }
     setTimeout(() => setIsRefreshing(false), 600);
   };
 
@@ -217,6 +254,22 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
     setTimeout(() => setCopiedLink(false), 2000);
   };
 
+  if (isLoadingTracked && !ride) {
+    return (
+      <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#F8FAFC', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
+        <div style={{ width: 56, height: 56, borderRadius: '50%', backgroundColor: '#ECFDF5', border: '1px solid #BBF7D0', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 14 }}>
+          <RefreshCw size={24} color="#16A34A" className="animate-spin" />
+        </div>
+        <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0F172A', marginBottom: 6 }}>
+          Carregando rastreamento ao vivo...
+        </h2>
+        <p style={{ fontSize: '0.82rem', color: '#64748B', maxWidth: 300 }}>
+          Conectando à telemetria de localização em tempo real.
+        </p>
+      </div>
+    );
+  }
+
   if (!ride) {
     return (
       <div className="app-container" style={{ minHeight: '100vh', backgroundColor: '#F8FAFC', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 24, textAlign: 'center' }}>
@@ -230,7 +283,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
           O código da viagem informado ({rideId || 'desconhecido'}) não foi localizado ou pode ter sido cancelado.
         </p>
         <button
-          onClick={() => navigate('/cliente')}
+          onClick={() => navigate(!isSharedLinkMode && currentLoggedUser ? '/cliente' : '/')}
           className="btn-primary"
           style={{ padding: '12px 24px', fontSize: '0.9rem' }}
         >
@@ -372,7 +425,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
         <div style={{ maxWidth: 560, margin: '0 auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
           <button
             type="button"
-            onClick={() => navigate('/cliente')}
+            onClick={() => navigate(isExternalTracking ? '/' : '/cliente')}
             style={{
               background: 'rgba(255,255,255,0.08)',
               border: '1px solid rgba(255,255,255,0.12)',
@@ -406,7 +459,9 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
                 ? 'Registro de Cancelamento'
                 : isCompletedRide
                   ? 'Resumo da Viagem'
-                  : 'Acompanhamento em Tempo Real'}
+                  : isExternalTracking
+                    ? 'Rastreio de Segurança • Ao vivo'
+                    : 'Acompanhamento em Tempo Real'}
             </div>
             <div style={{
               fontSize: '0.96rem',
@@ -423,7 +478,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-            {ride?.status === 'em_andamento' && (
+            {!isExternalTracking && ride?.status === 'em_andamento' && (
               <button
                 type="button"
                 onClick={() => setIsSosOpen(true)}
@@ -467,25 +522,27 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
             >
               <RefreshCw size={15} className={isRefreshing ? 'animate-spin' : ''} />
             </button>
-            <button
-              type="button"
-              onClick={handleCopyLink}
-              style={{
-                background: 'rgba(255,255,255,0.08)',
-                border: '1px solid rgba(255,255,255,0.12)',
-                borderRadius: 10,
-                width: 36,
-                height: 36,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: copiedLink ? '#86EFAC' : '#FFFFFF',
-                cursor: 'pointer'
-              }}
-              title="Copiar link de acompanhamento"
-            >
-              {copiedLink ? <Check size={15} /> : <Share2 size={15} />}
-            </button>
+            {!isExternalTracking && (
+              <button
+                type="button"
+                onClick={handleCopyLink}
+                style={{
+                  background: 'rgba(255,255,255,0.08)',
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  borderRadius: 10,
+                  width: 36,
+                  height: 36,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: copiedLink ? '#86EFAC' : '#FFFFFF',
+                  cursor: 'pointer'
+                }}
+                title="Copiar link de acompanhamento"
+              >
+                {copiedLink ? <Check size={15} /> : <Share2 size={15} />}
+              </button>
+            )}
           </div>
         </div>
       </header>
@@ -731,7 +788,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
                 </div>
               </div>
 
-              {ride.boardingPin && (ride.status === 'confirmada' || ride.status === 'a_caminho') && (
+              {!isExternalTracking && ride.boardingPin && (ride.status === 'confirmada' || ride.status === 'a_caminho') && (
                 <div style={{
                   marginTop: 12,
                   padding: '10px 14px',
@@ -813,28 +870,54 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
               </button>
             </>
           )}
+
+          {isExternalTracking &&
+            (ride.status === 'aguardando_confirmacao' || ride.status === 'na_fila' || ride.status === 'aguardando_pagamento') && (
+              <button
+                type="button"
+                onClick={() => setIsLiveMapOpen(true)}
+                className="btn-ios-primary"
+                style={{
+                  width: '100%',
+                  marginTop: 14,
+                  padding: '12px 16px',
+                  fontSize: '0.88rem',
+                  fontWeight: 800,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8
+                }}
+              >
+                <Navigation size={17} />
+                <span>Abrir GPS ao Vivo no Mapa</span>
+              </button>
+            )}
         </div>
 
         <LiveGpsNavigationScreen
           ride={ride}
           isOpen={isLiveMapOpen}
           userRole="client"
+          readOnlyTracking={isExternalTracking}
           onClose={() => setIsLiveMapOpen(false)}
           config={config}
         />
 
-        <RideRatingBottomSheet
-          isOpen={isRatingSheetOpen}
-          ride={ride}
-          raterRole="cliente"
-          onClose={() => setIsRatingSheetOpen(false)}
-          onSubmitted={() => {
-            setIsRatingSheetOpen(false);
-            refreshData();
-          }}
-        />
+        {!isExternalTracking && (
+          <RideRatingBottomSheet
+            isOpen={isRatingSheetOpen}
+            ride={ride}
+            raterRole="cliente"
+            onClose={() => setIsRatingSheetOpen(false)}
+            onSubmitted={() => {
+              setIsRatingSheetOpen(false);
+              refreshData();
+            }}
+          />
+        )}
 
-        {ride.status === 'finalizada' && (
+        {!isExternalTracking && ride.status === 'finalizada' && (
           <div style={{
             backgroundColor: '#FFFFFF',
             borderRadius: 16,
@@ -977,7 +1060,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
                 <div style={{ fontSize: '0.74rem', color: '#64748B', marginTop: 1 }}>
                   {ride.driverRating ? `★ ${Number(ride.driverRating).toFixed(2)} • ` : ''}Kavro Drive
                 </div>
-                {ride.driverPhone && (
+                {!isExternalTracking && ride.driverPhone && (
                   <div style={{ fontSize: '0.72rem', color: '#16A34A', fontWeight: 700, marginTop: 2 }}>
                     {formatPhone(ride.driverPhone)}
                   </div>
@@ -1026,7 +1109,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
             padding: '7px 10px',
             borderRadius: 10,
             border: '1px solid #E2E8F0',
-            marginBottom: 12,
+            marginBottom: isExternalTracking ? 0 : 12,
             fontSize: '0.69rem',
             color: '#475569',
             fontWeight: 600
@@ -1038,94 +1121,96 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
             <span>Veículo vistoriado</span>
           </div>
 
-          {/* Botões de Contato Direto */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-            <button
-              type="button"
-              onClick={() => {
-                setUnreadChatCount(0);
-                setIsChatOpen(true);
-              }}
-              style={{
-                backgroundColor: '#0F172A',
-                color: '#FFFFFF',
-                border: 'none',
-                borderRadius: 12,
-                padding: '10px 10px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                fontSize: '0.82rem',
-                fontWeight: 700,
-                cursor: 'pointer',
-                position: 'relative'
-              }}
-            >
-              <MessageSquare size={15} />
-              <span>Chat</span>
-              {unreadChatCount > 0 && (
-                <span style={{
-                  minWidth: 18,
-                  height: 18,
-                  padding: '0 5px',
-                  borderRadius: 999,
-                  backgroundColor: '#2563EB',
+          {/* Botões de Contato Direto (exclusivos para o passageiro titular) */}
+          {!isExternalTracking && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setUnreadChatCount(0);
+                  setIsChatOpen(true);
+                }}
+                style={{
+                  backgroundColor: '#0F172A',
                   color: '#FFFFFF',
-                  fontSize: '0.7rem',
-                  fontWeight: 800,
-                  display: 'inline-flex',
+                  border: 'none',
+                  borderRadius: 12,
+                  padding: '10px 10px',
+                  display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
-                }}>
-                  {unreadChatCount}
-                </span>
-              )}
-            </button>
+                  justifyContent: 'center',
+                  gap: 6,
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  position: 'relative'
+                }}
+              >
+                <MessageSquare size={15} />
+                <span>Chat</span>
+                {unreadChatCount > 0 && (
+                  <span style={{
+                    minWidth: 18,
+                    height: 18,
+                    padding: '0 5px',
+                    borderRadius: 999,
+                    backgroundColor: '#2563EB',
+                    color: '#FFFFFF',
+                    fontSize: '0.7rem',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}>
+                    {unreadChatCount}
+                  </span>
+                )}
+              </button>
 
-            <a
-              href={`https://wa.me/${driverPhone}?text=Ol%C3%A1,%20falo%20sobre%20a%20solicita%C3%A7%C3%A3o%20${encodeURIComponent(ride.id)}%20na%20Kavro%20Drive.`}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                backgroundColor: '#16A34A',
-                color: '#FFFFFF',
-                borderRadius: 12,
-                padding: '10px 12px',
-                textDecoration: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                fontSize: '0.82rem',
-                fontWeight: 700
-              }}
-            >
-              <WhatsAppIcon size={16} />
-              <span>WhatsApp</span>
-            </a>
+              <a
+                href={`https://wa.me/${driverPhone}?text=Ol%C3%A1,%20falo%20sobre%20a%20solicita%C3%A7%C3%A3o%20${encodeURIComponent(ride.id)}%20na%20Kavro%20Drive.`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  backgroundColor: '#16A34A',
+                  color: '#FFFFFF',
+                  borderRadius: 12,
+                  padding: '10px 12px',
+                  textDecoration: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  fontSize: '0.82rem',
+                  fontWeight: 700
+                }}
+              >
+                <WhatsAppIcon size={16} />
+                <span>WhatsApp</span>
+              </a>
 
-            <a
-              href={`tel:+${driverPhone}`}
-              style={{
-                backgroundColor: '#FFFFFF',
-                border: '1px solid #CBD5E1',
-                color: '#0F172A',
-                borderRadius: 12,
-                padding: '10px 12px',
-                textDecoration: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: 6,
-                fontSize: '0.82rem',
-                fontWeight: 700
-              }}
-            >
-              <Phone size={15} />
-              <span>Ligar</span>
-            </a>
-          </div>
+              <a
+                href={`tel:+${driverPhone}`}
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  border: '1px solid #CBD5E1',
+                  color: '#0F172A',
+                  borderRadius: 12,
+                  padding: '10px 12px',
+                  textDecoration: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 6,
+                  fontSize: '0.82rem',
+                  fontWeight: 700
+                }}
+              >
+                <Phone size={15} />
+                <span>Ligar</span>
+              </a>
+            </div>
+          )}
         </div>
         )}
 
@@ -1273,8 +1358,41 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
           </div>
         </div>
 
-        {/* CARD 4: Pagamento & Comprovante */}
-        {(() => {
+        {/* CARD 4: Aviso de rastreio seguro (contato externo) ou Pagamento & Comprovante (titular) */}
+        {isExternalTracking ? (
+          <div style={{
+            backgroundColor: '#FFFFFF',
+            borderRadius: 16,
+            padding: 16,
+            border: '1px solid #BBF7D0',
+            boxShadow: '0 1px 4px rgba(15, 23, 42, 0.04)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12
+          }}>
+            <div style={{
+              width: 40,
+              height: 40,
+              borderRadius: 12,
+              backgroundColor: '#F0FDF4',
+              border: '1px solid #BBF7D0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0
+            }}>
+              <ShieldCheck size={20} color="#16A34A" />
+            </div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0F172A' }}>
+                Acompanhamento exclusivo em tempo real
+              </div>
+              <div style={{ fontSize: '0.75rem', color: '#475569', marginTop: 2, lineHeight: 1.45 }}>
+                Visualização segura de localização, veículo e trajeto. Alterações de destino, valores, recibos e cancelamento ficam restritos ao passageiro.
+              </div>
+            </div>
+          </div>
+        ) : (() => {
           const isPaidStatus =
             ride.paymentStatus === 'pago' ||
             ride.paymentStatus === 'confirmado' ||
@@ -1494,7 +1612,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
       </main>
 
       {/* MODAL / COMPROVANTE DIGITAL OFICIAL DO PASSAGEIRO (PDF / WHATSAPP) */}
-      {showReceiptModal && ride && (
+      {!isExternalTracking && showReceiptModal && ride && (
         <RideReceiptModal
           isOpen={showReceiptModal}
           onClose={() => setShowReceiptModal(false)}
@@ -1504,7 +1622,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
       )}
 
       {/* Modal de Emergência SOS */}
-      {ride && (
+      {!isExternalTracking && ride && (
         <SosEmergencyModal
           isOpen={isSosOpen}
           onClose={() => setIsSosOpen(false)}
@@ -1515,7 +1633,7 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
       )}
 
       {/* Chat em Tempo Real com o Motorista */}
-      {ride && (
+      {!isExternalTracking && ride && (
         <RideChatModal
           isOpen={isChatOpen}
           ride={ride}
