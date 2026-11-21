@@ -266,17 +266,18 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-              {/* Banners Largos em Destaque */}
+              {/* Banners em Destaque (mesma proporção 9:2 / 4,5:1 em todas as áreas) */}
               {banners.length > 0 && (
                 <div
                   style={
                     isMobile
                       ? {
                           display: 'flex',
-                          gap: 12,
+                          gap: banners.length === 1 ? 0 : 8,
                           overflowX: 'auto',
                           scrollSnapType: 'x mandatory',
-                          paddingBottom: 4,
+                          margin: '0 -18px',
+                          width: 'calc(100% + 36px)',
                         }
                       : compactPreview
                         ? {
@@ -291,9 +292,9 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                             display: 'grid',
                             gridTemplateColumns:
                               banners.length === 1
-                                ? 'minmax(0, 1fr)'
+                                ? 'minmax(0, 480px)'
                                 : banners.length === 2
-                                  ? 'repeat(2, minmax(0, 1fr))'
+                                  ? 'repeat(2, minmax(0, 480px))'
                                   : 'repeat(3, minmax(0, 1fr))',
                             gap: 14,
                           }
@@ -315,14 +316,17 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                         }}
                         style={{
                           position: 'relative',
-                          flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 88%') : undefined,
+                          flex: isMobile ? (banners.length === 1 ? '0 0 100%' : '0 0 92%') : undefined,
+                          width: !isMobile || banners.length === 1 ? '100%' : undefined,
+                          aspectRatio: '9 / 2',
                           scrollSnapAlign: 'start',
-                          height: compactPreview ? 64 : isMobile ? 92 : banners.length === 1 ? 132 : 116,
-                          borderRadius: compactPreview ? 8 : isMobile ? 10 : 14,
+                          borderRadius: isMobile ? 0 : compactPreview ? 8 : 12,
                           overflow: 'hidden',
                           backgroundColor: '#131E26',
-                          border: '1px solid rgba(118, 216, 0, 0.24)',
-                          boxShadow: '0 8px 22px rgba(0, 0, 0, 0.28)',
+                          border: isMobile ? undefined : '1px solid rgba(118, 216, 0, 0.24)',
+                          borderTop: isMobile ? '1px solid rgba(118, 216, 0, 0.24)' : undefined,
+                          borderBottom: isMobile ? '1px solid rgba(118, 216, 0, 0.24)' : undefined,
+                          boxShadow: isMobile ? 'none' : '0 8px 22px rgba(0, 0, 0, 0.28)',
                           cursor: safeHref ? 'pointer' : 'default',
                         }}
                       >
@@ -386,7 +390,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           }
                         : {
                             display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))',
+                            gridTemplateColumns: 'repeat(auto-fill, minmax(132px, 148px))',
                             gap: 12,
                           }
                   }
@@ -406,25 +410,25 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           }
                         }}
                         style={{
-                          flex: isMobile ? '0 0 148px' : undefined,
+                          flex: isMobile ? '0 0 132px' : undefined,
                           scrollSnapAlign: 'start',
                           backgroundColor: '#131E26',
                           border: '1px solid rgba(118, 216, 0, 0.18)',
                           borderRadius: compactPreview ? 10 : 14,
-                          padding: compactPreview ? '8px' : '12px',
+                          padding: compactPreview ? '8px' : '10px',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
                           justifyContent: 'center',
                           textAlign: 'center',
-                          gap: compactPreview ? 5 : 8,
+                          gap: compactPreview ? 5 : 6,
                           cursor: safeHref ? 'pointer' : 'default',
                         }}
                       >
                         <div
                           style={{
                             width: '100%',
-                            height: compactPreview ? 42 : 62,
+                            height: compactPreview ? 44 : 54,
                             borderRadius: compactPreview ? 7 : 10,
                             backgroundColor: 'rgba(255, 255, 255, 0.96)',
                             padding: compactPreview ? '4px 6px' : '6px 10px',
@@ -585,8 +589,8 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                       position: 'relative',
                       flex: banners.length === 1 ? '0 0 100%' : '0 0 92%',
                       width: banners.length === 1 ? '100%' : undefined,
+                      aspectRatio: '9 / 2',
                       scrollSnapAlign: 'start',
-                      height: compactPreview ? 62 : 86,
                       borderRadius: 0,
                       overflow: 'hidden',
                       borderTop: '1px solid #E2E8F0',
@@ -658,12 +662,12 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                       }
                     }}
                     style={{
-                      flex: '0 0 118px',
+                      flex: compactPreview ? '0 0 112px' : '0 0 132px',
                       scrollSnapAlign: 'start',
                       backgroundColor: '#FFFFFF',
                       border: '1px solid #E2E8F0',
                       borderRadius: 14,
-                      padding: '10px',
+                      padding: compactPreview ? '8px' : '10px',
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
@@ -676,7 +680,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                     <div
                       style={{
                         width: '100%',
-                        height: 54,
+                        height: compactPreview ? 44 : 54,
                         borderRadius: 10,
                         backgroundColor: '#F8FAFC',
                         padding: '5px 8px',

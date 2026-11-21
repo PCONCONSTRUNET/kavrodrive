@@ -704,9 +704,9 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
             {imageUrl && (
               <div
                 style={{
-                  width: displayMode === 'banner' ? 110 : 68,
-                  height: 44,
-                  borderRadius: 8,
+                  width: displayMode === 'banner' ? 144 : 68,
+                  height: displayMode === 'banner' ? 32 : 40,
+                  borderRadius: 6,
                   border: '1px solid #CBD5E1',
                   backgroundColor: '#FFFFFF',
                   padding: displayMode === 'banner' ? 0 : 4,
@@ -728,6 +728,11 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                 />
               </div>
             )}
+          </div>
+          <div style={{ gridColumn: '1 / -1', fontSize: '0.72rem', color: '#475569' }}>
+            {displayMode === 'banner'
+              ? 'Tamanho único para todas as áreas (Site Oficial e App): 1080 × 240 px ou 1200 × 267 px (proporção 9:2, sem cortes).'
+              : 'Tamanho ideal para Logo em todas as áreas: 520 × 260 px ou 500 × 500 px (PNG/WebP transparente ou GIF animado).'}
           </div>
         </div>
 
@@ -835,8 +840,8 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 180, flex: 1 }}>
                     <div
                       style={{
-                        width: item.displayMode === 'banner' ? 92 : 52,
-                        height: 36,
+                        width: item.displayMode === 'banner' ? 126 : 54,
+                        height: item.displayMode === 'banner' ? 28 : 36,
                         borderRadius: 6,
                         border: '1px solid #E2E8F0',
                         backgroundColor: '#FFFFFF',

@@ -814,19 +814,19 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
               </div>
             </div>
           )}
-
-          {/* Área de Parceiros & Patrocinadores (habilitada pelo Admin) */}
-          <div style={{ marginTop: 14 }}>
-            <PartnersSponsorsSection
-              items={config?.partnerBanners}
-              variant="light"
-              area="client_rides"
-              sectionEnabled={Boolean(config?.partnerShowOnClientRides)}
-              hideWhenEmpty={Boolean(config?.partnerHideEmptyPlaceholder)}
-            />
-          </div>
         </div>
       )}
+
+      {/* Área de Parceiros & Patrocinadores (habilitada pelo Admin — borda a borda e mesmo formato 9:2) */}
+      <div style={{ margin: '16px -16px 0 -16px' }}>
+        <PartnersSponsorsSection
+          items={config?.partnerBanners}
+          variant="light"
+          area="client_rides"
+          sectionEnabled={Boolean(config?.partnerShowOnClientRides)}
+          hideWhenEmpty={Boolean(config?.partnerHideEmptyPlaceholder)}
+        />
+      </div>
 
       {/* ═══════════════════════════════════════════════════════════════════════
           MODAL FULLSCREEN: "INFORMAÇÕES DA VIAGEM" (ESTILO UBER PASSAGEIRO)
