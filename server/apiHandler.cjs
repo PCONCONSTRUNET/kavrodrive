@@ -1854,7 +1854,7 @@ async function dispatchOtpDelivery({ role, user, code }) {
     ? push.driverExternalId(user.id, user.phone)
     : push.clientExternalId(user.phone);
 
-  if (extId && process.env.ONESIGNAL_REST_API_KEY) {
+  if (extId && push.isConfigured()) {
     try {
       await push.sendToExternalIds(
         [extId],
@@ -1945,7 +1945,7 @@ async function handleApiRequest(req, res) {
           databaseConfigured: Boolean(db.pool),
           r2Configured: r2Status.configured,
           r2PublicConfigured: r2Status.publicConfigured,
-          pushConfigured: Boolean(process.env.ONESIGNAL_REST_API_KEY),
+          pushConfigured: push.isConfigured(),
           googleAuthConfigured: Boolean(getGoogleClientId()),
           turnstileConfigured: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
           mercadopagoConfigured: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MERCADOPAGO_PUBLIC_KEY),
@@ -6106,7 +6106,7 @@ async function handleApiRequest(req, res) {
           { rideId: id, driverId: ride.driverId, clientId: ride.clientId }
         );
 
-        if (process.env.ONESIGNAL_REST_API_KEY) {
+        if (push.isConfigured()) {
           const targetExtId = senderRole === 'driver'
             ? push.clientExternalId(ride.clientPhone)
             : push.driverExternalId(ride.driverId, ride.driverPhone);
@@ -7430,6 +7430,13 @@ async function handleApiRequest(req, res) {
     if (pathname === '/api/push/test' && method === 'POST') {
       if (!await isAuthorizedAdmin(req)) {
         return sendJson(res, 401, { error: 'Acesso não autorizado: PIN de motorista inválido ou ausente.' });
+      }
+      if (!push.isConfigured()) {
+        return sendJson(res, 200, {
+          ok: false,
+          error: 'ONESIGNAL_REST_API_KEY não configurada no servidor (Vercel/.env.local).',
+          result: null
+        });
       }
       const body = await parseBody(req);
       const target = body.externalId || push.ADMIN_EXTERNAL_ID;

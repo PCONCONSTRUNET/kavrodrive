@@ -5,9 +5,21 @@ const env = require('./env.cjs');
 const db = require('./db.cjs');
 const realtimeHub = require('./realtimeHub.cjs');
 
-const APP_ID = env.ONESIGNAL_APP_ID || '618823b7-cb26-49c8-b7c0-96385c228a98';
+const DEFAULT_ONESIGNAL_APP_ID = 'ec6678e3-9723-4080-883f-d5bb0fe74a7b';
 const ADMIN_EXTERNAL_ID = 'up-admin';
 const TZ_OFFSET = '-03:00'; // Horário de Brasília
+
+function getAppId() {
+  return String(env.ONESIGNAL_APP_ID || env.VITE_ONESIGNAL_APP_ID || DEFAULT_ONESIGNAL_APP_ID).trim() || DEFAULT_ONESIGNAL_APP_ID;
+}
+
+function getRestApiKey() {
+  return String(env.ONESIGNAL_REST_API_KEY || '').trim();
+}
+
+function isConfigured() {
+  return Boolean(getRestApiKey());
+}
 
 // Mesma regra usada no front: cliente = "cli-" + telefone só com dígitos, motorista = "drv-" + driverId
 function clientExternalId(phone) {
@@ -82,13 +94,19 @@ function fill(text, ride = {}, extra = {}) {
 }
 
 function appUrl(path) {
-  const base = (env.PUBLIC_APP_URL || '').replace(/\/$/, '');
+  let base = String(env.PUBLIC_APP_URL || '').trim();
+  if (!base && env.VERCEL_PROJECT_PRODUCTION_URL) {
+    base = `https://${String(env.VERCEL_PROJECT_PRODUCTION_URL).trim()}`;
+  } else if (!base && env.VERCEL_URL) {
+    base = `https://${String(env.VERCEL_URL).trim()}`;
+  }
+  base = base.replace(/\/$/, '');
   return base ? `${base}${path}` : undefined;
 }
 
 // Chamada crua à API REST do OneSignal
 async function oneSignal(method, path, body) {
-  const key = env.ONESIGNAL_REST_API_KEY;
+  const key = getRestApiKey();
   if (!key) { console.warn('[push] ONESIGNAL_REST_API_KEY ausente'); return null; }
   try {
     const res = await fetch(`https://api.onesignal.com${path}`, {
@@ -112,7 +130,7 @@ async function sendToExternalIds(externalIds, title, message, { url, sendAfter, 
   for (let i = 0; i < ids.length; i += 1500) {
     const chunk = ids.slice(i, i + 1500);
     const payload = {
-      app_id: APP_ID,
+      app_id: getAppId(),
       target_channel: 'push',
       include_aliases: { external_id: chunk },
       headings: { en: title, pt: title },
@@ -400,7 +418,7 @@ async function cancelReminder(rideId) {
     const r = await db.query('SELECT reminder_notification_id FROM public.rides WHERE id = $1', [rideId]);
     const nid = r.rows[0]?.reminder_notification_id;
     if (nid) {
-      await oneSignal('DELETE', `/notifications/${nid}?app_id=${APP_ID}`);
+      await oneSignal('DELETE', `/notifications/${nid}?app_id=${getAppId()}`);
       await db.query('UPDATE public.rides SET reminder_notification_id = NULL WHERE id = $1', [rideId]);
     }
   } catch (err) { console.warn('[push] cancelReminder:', err.message); }
@@ -603,7 +621,7 @@ async function broadcastManualPush({
       filters.push({ field: 'tag', key: 'role', relation: '=', value: roleVal });
     });
     result = await oneSignal('POST', '/notifications', {
-      app_id: APP_ID,
+      app_id: getAppId(),
       target_channel: 'push',
       filters,
       headings: { en: cleanTitle, pt: cleanTitle },
@@ -638,6 +656,8 @@ async function broadcastManualPush({
 module.exports = {
   ADMIN_EXTERNAL_ID,
   DEFAULT_TEMPLATES,
+  getAppId,
+  isConfigured,
   clientExternalId,
   driverExternalId,
   ensureNotificationsSchema,

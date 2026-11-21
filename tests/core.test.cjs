@@ -4534,3 +4534,67 @@ test('Cloudflare Turnstile no OTP e K-Audio real no Cloudflare R2 Privado com UR
     else process.env.CLOUDFLARE_R2_BUCKET = prevPrivBucket;
   }
 });
+
+test('OneSignal Push usa novas credenciais dinamica e corretamente em /api/health e sendToExternalIds', async () => {
+  const push = require('../server/push.cjs');
+  const prevAppId = process.env.ONESIGNAL_APP_ID;
+  const prevApiKey = process.env.ONESIGNAL_REST_API_KEY;
+  const prevVercelProdUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  const originalFetch = global.fetch;
+
+  try {
+    delete process.env.ONESIGNAL_APP_ID;
+    delete process.env.ONESIGNAL_REST_API_KEY;
+    assert.equal(push.getAppId(), 'ec6678e3-9723-4080-883f-d5bb0fe74a7b');
+    assert.equal(push.isConfigured(), false);
+
+    const healthOff = await apiJson('/api/health');
+    assert.equal(healthOff.status, 200);
+    assert.equal(healthOff.json.services.pushConfigured, false);
+
+    process.env.ONESIGNAL_REST_API_KEY = 'os_v2_app_unit_test_dummy_key';
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = 'kavrodrive.vercel.app';
+    assert.equal(push.isConfigured(), true);
+
+    const healthOn = await apiJson('/api/health');
+    assert.equal(healthOn.status, 200);
+    assert.equal(healthOn.json.services.pushConfigured, true);
+
+    const captured = [];
+    global.fetch = async (url, init = {}) => {
+      const targetUrl = String(url || '');
+      if (targetUrl.startsWith('https://api.onesignal.com/')) {
+        captured.push({
+          url: targetUrl,
+          method: init.method,
+          headers: init.headers,
+          body: init.body ? JSON.parse(init.body) : null
+        });
+        return new Response(JSON.stringify({ id: 'notif-test-123', recipients: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      return originalFetch(url, init);
+    };
+
+    const out = await push.sendToExternalIds(['up-admin'], 'Kavro Drive', 'Teste ativo!', { url: '/administracion' });
+    assert.equal(out.id, 'notif-test-123');
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].headers.Authorization, 'Key os_v2_app_unit_test_dummy_key');
+    assert.equal(captured[0].body.app_id, 'ec6678e3-9723-4080-883f-d5bb0fe74a7b');
+    assert.equal(captured[0].body.chrome_web_icon, 'https://kavrodrive.vercel.app/pwa-icon-192.png');
+    assert.equal(captured[0].body.web_url, 'https://kavrodrive.vercel.app/administracion');
+
+    process.env.ONESIGNAL_APP_ID = 'custom-override-app-id';
+    assert.equal(push.getAppId(), 'custom-override-app-id');
+  } finally {
+    global.fetch = originalFetch;
+    if (prevAppId === undefined) delete process.env.ONESIGNAL_APP_ID;
+    else process.env.ONESIGNAL_APP_ID = prevAppId;
+    if (prevApiKey === undefined) delete process.env.ONESIGNAL_REST_API_KEY;
+    else process.env.ONESIGNAL_REST_API_KEY = prevApiKey;
+    if (prevVercelProdUrl === undefined) delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+    else process.env.VERCEL_PROJECT_PRODUCTION_URL = prevVercelProdUrl;
+  }
+});
