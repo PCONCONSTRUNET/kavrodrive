@@ -167,8 +167,16 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       ...patch,
     };
     const ok = await StorageService.saveConfig(updatedConfig);
+    const syncedConfig = ok ? StorageService.getConfig() : updatedConfig;
+    if (Array.isArray(syncedConfig.partnerBanners)) {
+      setItems(
+        syncedConfig.partnerBanners
+          .slice()
+          .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0))
+      );
+    }
     setIsSaving(false);
-    onConfigSaved(updatedConfig);
+    onConfigSaved(syncedConfig);
     setSaveBannerNotice(
       ok ? message : 'Salvo localmente, mas houve erro ao sincronizar com o servidor.'
     );
@@ -241,13 +249,24 @@ export const AdminPartnersBannersTab: React.FC<AdminPartnersBannersTabProps> = (
       ? resolveItemAreas(existingItem)
       : [activeArea];
 
+    const recordId = editingId || `prt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    let persistedImageUrl = cleanImage;
+    if (cleanImage.startsWith('data:image/')) {
+      setIsSaving(true);
+      const uploadRes = await StorageService.uploadPublicMedia('partner-banner', cleanImage, recordId);
+      if (uploadRes.ok && uploadRes.url) {
+        persistedImageUrl = uploadRes.url;
+      }
+      setIsSaving(false);
+    }
+
     const nextRecord: HomePartnerBanner = {
-      id: editingId || `prt-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: recordId,
       kind,
       displayMode,
       areas: itemAreas,
       placement: deriveLegacyPlacement(itemAreas),
-      imageUrl: cleanImage,
+      imageUrl: persistedImageUrl,
       linkUrl: normalizedLink,
       active,
       sortOrder: existingItem ? Number(existingItem.sortOrder ?? items.length + 1) : items.length + 1,

@@ -549,62 +549,41 @@ async function localQuery(text, params = []) {
   }
   if (upper.startsWith('INSERT INTO PUBLIC.CLIENTS')) {
     const now = new Date().toISOString();
-    let row;
-    if (params.length <= 3) {
-      row = { id: params[0], name: params[1], phone: params[2], saved_addresses: [], created_at: now };
-    } else if (params.length === 8) {
-      row = {
-        id: params[0],
-        name: params[1],
-        phone: params[2],
-        email: params[3],
-        document: params[4],
-        password_hash: params[5],
-        saved_addresses: parseJsonSafe(params[6], []),
-        terms_accepted_at: params[7],
-        created_at: now
-      };
-    } else if (params.length === 9) {
-      row = {
-        id: params[0],
-        name: params[1],
-        phone: params[2],
-        email: params[3],
-        document: params[4],
-        password_hash: params[5],
-        saved_addresses: parseJsonSafe(params[6], []),
-        terms_accepted_at: params[7],
-        terms_signature: parseJsonSafe(params[8], null),
-        created_at: now
-      };
-    } else {
-      row = {
-        id: params[0],
-        name: params[1],
-        phone: params[2],
-        email: params[3],
-        document: params[4],
-        password_hash: params[5],
-        notes: params[6],
-        blocked: params[7],
-        saved_addresses: parseJsonSafe(params[8], []),
-        terms_accepted_at: params[9],
-        created_at: params[10] || now
-      };
+    const colMatch = sql.match(
+      /INSERT\s+INTO\s+public\.clients\s*\(([^)]+)\)\s*VALUES\s*\(([\s\S]*?)\)\s*(?:ON\s+CONFLICT|RETURNING|$)/i
+    );
+    const row = { saved_addresses: [], created_at: now };
+    if (colMatch) {
+      const cols = colMatch[1].split(',').map(s => s.trim().toLowerCase());
+      const vals = colMatch[2].split(',').map(s => s.trim());
+      cols.forEach((col, i) => {
+        const token = vals[i] || '';
+        const pMatch = token.match(/^\$(\d+)$/);
+        const val = pMatch ? params[Number(pMatch[1]) - 1] : (token.toUpperCase() === 'NOW()' ? now : null);
+        if (col === 'saved_addresses') row[col] = parseJsonSafe(val, []);
+        else if (col === 'terms_signature') row[col] = parseJsonSafe(val, null);
+        else row[col] = val;
+      });
+    } else if (params.length <= 3) {
+      row.id = params[0];
+      row.name = params[1];
+      row.phone = params[2];
     }
+    let resultRow = row;
     const idx = localStore.clients.findIndex(c => c.id === row.id);
     if (idx >= 0) {
       localStore.clients[idx] = {
         ...localStore.clients[idx],
         ...row,
+        photo: row.photo || localStore.clients[idx].photo,
         password_hash: row.password_hash || localStore.clients[idx].password_hash
       };
-      row = localStore.clients[idx];
+      resultRow = localStore.clients[idx];
     } else {
       localStore.clients.push(row);
     }
     saveLocalStore();
-    return { rows: [row], rowCount: 1 };
+    return { rows: [resultRow], rowCount: 1 };
   }
   if (upper.startsWith('UPDATE PUBLIC.CLIENTS')) {
     if (upper.includes('SET PASSWORD_HASH = $1 WHERE ID = $2')) {
@@ -695,13 +674,16 @@ async function localQuery(text, params = []) {
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
     }
     if (upper.includes('SET SAVED_ADDRESSES = COALESCE($1')) {
-      const c = localStore.clients.find(item => item.id === params[3]);
+      const hasPhoto = upper.includes('PHOTO = COALESCE($4');
+      const idIdx = hasPhoto ? 4 : 3;
+      const c = localStore.clients.find(item => item.id === params[idIdx]);
       if (c) {
         if (params[0] !== null && params[0] !== undefined) {
           c.saved_addresses = parseJsonSafe(params[0], c.saved_addresses || []);
         }
         if (params[1]) c.terms_accepted_at = params[1];
         if (params[2]) c.terms_signature = parseJsonSafe(params[2], c.terms_signature || null);
+        if (hasPhoto && params[3]) c.photo = params[3];
         saveLocalStore();
       }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
@@ -731,6 +713,21 @@ async function localQuery(text, params = []) {
         c.email = params[2];
         c.document = params[3];
         c.profile_change_request = parseJsonSafe(params[4], params[4]);
+        saveLocalStore();
+      }
+      return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };
+    }
+    if (upper.includes('PHOTO = $6')) {
+      const c = localStore.clients.find(item => item.id === params[8]);
+      if (c) {
+        c.name = params[0];
+        c.phone = params[1];
+        c.email = params[2];
+        c.document = params[3];
+        c.password_hash = params[4];
+        c.photo = params[5];
+        c.terms_accepted_at = params[6];
+        c.terms_signature = parseJsonSafe(params[7], c.terms_signature || null);
         saveLocalStore();
       }
       return { rows: c ? [c] : [], rowCount: c ? 1 : 0 };

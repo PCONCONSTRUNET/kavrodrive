@@ -5,17 +5,26 @@ const crypto = require('crypto');
 
 let supabaseClient = null;
 let r2Client = null;
+let r2CredKey = '';
+let r2OverrideClient = null;
 
 /**
  * Cliente Cloudflare R2 (S3-compatible Object Storage)
  * 10 GB Free, Zero Egress (tráfego grátis), máxima performance sem sobrecarregar o banco de dados.
  */
 function getCloudflareR2() {
-  if (r2Client) return r2Client;
-  const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID;
-  const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY;
-  if (!accountId || !accessKeyId || !secretAccessKey) return null;
+  if (r2OverrideClient) return r2OverrideClient;
+  const accountId = (process.env.CLOUDFLARE_R2_ACCOUNT_ID || '').trim();
+  const accessKeyId = (process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || '').trim();
+  const secretAccessKey = (process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || '').trim();
+  if (!accountId || !accessKeyId || !secretAccessKey) {
+    r2Client = null;
+    r2CredKey = '';
+    return null;
+  }
+
+  const nextCredKey = `${accountId}:${accessKeyId}`;
+  if (r2Client && r2CredKey === nextCredKey) return r2Client;
 
   try {
     const { S3Client } = require('@aws-sdk/client-s3');
@@ -27,12 +36,39 @@ function getCloudflareR2() {
         secretAccessKey
       }
     });
+    r2CredKey = nextCredKey;
     console.log('[KYC Storage] Cloudflare R2 inicializado com sucesso.');
     return r2Client;
   } catch (err) {
     console.warn('[KYC Storage] Erro ao instanciar Cloudflare R2 Client:', err.message);
     return null;
   }
+}
+
+function setCloudflareR2ClientOverride(clientOrNull) {
+  r2OverrideClient = clientOrNull || null;
+}
+
+function getR2PublicBaseUrl() {
+  return (process.env.CLOUDFLARE_R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
+}
+
+function getR2PublicBucketName() {
+  return (process.env.CLOUDFLARE_R2_PUBLIC_BUCKET || 'kavro-media').trim();
+}
+
+function getCloudflareR2Status() {
+  const configured = Boolean(getCloudflareR2());
+  const publicUrlBase = getR2PublicBaseUrl();
+  const publicBucket = getR2PublicBucketName();
+  const privateBucket = (process.env.CLOUDFLARE_R2_BUCKET || 'kyc-documents').trim();
+  return {
+    configured,
+    publicConfigured: Boolean(configured && publicUrlBase && publicBucket),
+    publicUrlBase: publicUrlBase || null,
+    privateBucket,
+    publicBucket
+  };
 }
 
 function getSupabase() {
@@ -386,48 +422,125 @@ async function purgeDriverDocuments(driverId, docInfos = []) {
   return true;
 }
 
+const PUBLIC_MEDIA_EXT_MAP = {
+  'application/pdf': 'pdf',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/svg+xml': 'svg',
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg'
+};
+
+function sanitizeR2PathSegment(rawId, fallback = 'anon') {
+  const cleaned = String(rawId || '')
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, '')
+    .replace(/\.{2,}/g, '')
+    .slice(0, 80);
+  return cleaned || fallback;
+}
+
+function parseMediaDataUrl(dataUrl) {
+  if (typeof dataUrl !== 'string') return null;
+  const base64Match = dataUrl.match(
+    /^data:((?:image\/[a-zA-Z0-9+.-]+)|application\/pdf)(?:;charset=[^;,]+)?;base64,(.+)$/i
+  );
+  if (base64Match) {
+    const mimeType = base64Match[1].toLowerCase();
+    const ext = PUBLIC_MEDIA_EXT_MAP[mimeType] || (mimeType.includes('pdf') ? 'pdf' : 'jpg');
+    return {
+      mimeType,
+      ext,
+      buffer: Buffer.from(base64Match[2], 'base64')
+    };
+  }
+
+  // Suporta SVG inline em DataURL texto/utf8 sem base64
+  const svgPlainMatch = dataUrl.match(/^data:(image\/svg\+xml)(?:;charset=[^;,]+)?,(.*)$/i);
+  if (svgPlainMatch) {
+    let rawBody = svgPlainMatch[2] || '';
+    try {
+      rawBody = decodeURIComponent(rawBody);
+    } catch {
+      // mantém literal caso já esteja decodificado
+    }
+    return {
+      mimeType: 'image/svg+xml',
+      ext: 'svg',
+      buffer: Buffer.from(rawBody, 'utf8')
+    };
+  }
+
+  return null;
+}
+
+function buildPublicMediaKey(ownerId, mediaType, ext, options = {}) {
+  if (options && typeof options.key === 'string' && options.key.trim()) {
+    return options.key.trim().replace(/^\/+/, '');
+  }
+  const safeOwner = sanitizeR2PathSegment(ownerId, 'anon');
+  const suffix = `${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+  switch (mediaType) {
+    case 'client-avatar':
+      return `clients/${safeOwner}/avatar_${suffix}.${ext}`;
+    case 'partner-banner':
+      return `partners/${safeOwner}/banner_${suffix}.${ext}`;
+    case 'config-avatar':
+      return `system/driver-avatar_${suffix}.${ext}`;
+    case 'config-vehicle':
+      return `system/driver-vehicle_${suffix}.${ext}`;
+    case 'landing-banner':
+      return `landing/${safeOwner}.${ext}`;
+    case 'vehicle':
+      return `drivers/${safeOwner}/vehicle_${suffix}.${ext}`;
+    case 'crlv':
+      return `drivers/${safeOwner}/crlv_${suffix}.${ext}`;
+    case 'avatar':
+    default:
+      return `drivers/${safeOwner}/avatar_${suffix}.${ext}`;
+  }
+}
+
+async function uploadBufferToPublicR2(key, buffer, contentType, cacheControl = 'public, max-age=31536000') {
+  const r2 = getCloudflareR2();
+  const publicBase = getR2PublicBaseUrl();
+  const bucket = getR2PublicBucketName();
+  if (!r2 || !publicBase || !bucket || !key || !buffer) {
+    return null;
+  }
+
+  const { PutObjectCommand } = require('@aws-sdk/client-s3');
+  await r2.send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType || 'application/octet-stream',
+    CacheControl: cacheControl
+  }));
+  return `${publicBase}/${key}`;
+}
+
 /**
- * Salva mídia pública permanente (foto de perfil ou foto do veículo) no Cloudflare R2 (bucket público kavro-media)
+ * Salva mídia pública permanente (fotos de perfil, veículos, CRLV e banners) no Cloudflare R2 (bucket público kavro-media).
  * Retorna a URL pública curta para salvar no PostgreSQL em vez de Base64 gigante.
  */
-async function savePublicMedia(driverId, mediaType, dataUrlOrUrl) {
+async function savePublicMedia(ownerId, mediaType, dataUrlOrUrl, options = {}) {
   if (!dataUrlOrUrl || typeof dataUrlOrUrl !== 'string') return dataUrlOrUrl || '';
   if (!dataUrlOrUrl.startsWith('data:image/') && !dataUrlOrUrl.startsWith('data:application/pdf')) {
     return dataUrlOrUrl;
   }
 
-  const r2 = getCloudflareR2();
-  const publicBase = (process.env.CLOUDFLARE_R2_PUBLIC_URL || '').trim().replace(/\/+$/, '');
-  const bucket = (process.env.CLOUDFLARE_R2_PUBLIC_BUCKET || 'kavro-media').trim();
-  if (!r2 || !publicBase || !bucket) {
+  const parsed = parseMediaDataUrl(dataUrlOrUrl);
+  if (!parsed || !parsed.buffer || parsed.buffer.length === 0) {
     return dataUrlOrUrl;
   }
 
-  const match = dataUrlOrUrl.match(/^data:((?:image\/[a-zA-Z0-9+.-]+)|application\/pdf);base64,(.+)$/);
-  if (!match) return dataUrlOrUrl;
-
-  const mimeType = match[1];
-  const ext = mimeType.includes('pdf')
-    ? 'pdf'
-    : mimeType.includes('png')
-    ? 'png'
-    : mimeType.includes('webp')
-    ? 'webp'
-    : 'jpg';
-  const buffer = Buffer.from(match[2], 'base64');
-  const safeType = mediaType === 'vehicle' ? 'vehicle' : mediaType === 'crlv' ? 'crlv' : 'avatar';
-  const key = `drivers/${driverId}/${safeType}_${Date.now()}.${ext}`;
+  const key = buildPublicMediaKey(ownerId, mediaType, parsed.ext, options);
 
   try {
-    const { PutObjectCommand } = require('@aws-sdk/client-s3');
-    await r2.send(new PutObjectCommand({
-      Bucket: bucket,
-      Key: key,
-      Body: buffer,
-      ContentType: mimeType,
-      CacheControl: 'public, max-age=31536000'
-    }));
-    return `${publicBase}/${key}`;
+    const publicUrl = await uploadBufferToPublicR2(key, parsed.buffer, parsed.mimeType);
+    return publicUrl || dataUrlOrUrl;
   } catch (err) {
     console.warn('[Public Media R2] Falha no upload para R2 público:', err.message);
     return dataUrlOrUrl;
@@ -437,9 +550,16 @@ async function savePublicMedia(driverId, mediaType, dataUrlOrUrl) {
 module.exports = {
   saveKycDocument,
   savePublicMedia,
+  uploadBufferToPublicR2,
+  parseMediaDataUrl,
+  buildPublicMediaKey,
   generateTemporarySignedUrl,
   resolveTemporaryDocument,
   purgeDriverDocuments,
   tempSignedTokens,
-  getCloudflareR2
+  getCloudflareR2,
+  getCloudflareR2Status,
+  getR2PublicBaseUrl,
+  getR2PublicBucketName,
+  setCloudflareR2ClientOverride
 };

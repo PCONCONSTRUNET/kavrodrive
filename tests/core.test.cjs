@@ -18,7 +18,8 @@ const finance = require('../server/financeEngine.cjs');
 const audit = require('../server/auditEngine.cjs');
 const realtimeHub = require('../server/realtimeHub.cjs');
 const security = require('../server/securityUtils.cjs');
-const { handleApiRequest } = require('../server/apiHandler.cjs');
+const kycStorage = require('../server/kycStorage.cjs');
+const { handleApiRequest, normalizeConfigMediaToR2 } = require('../server/apiHandler.cjs');
 
 // Garante que chaves de serviços externos carregadas do .env não disparem chamadas externas em testes
 delete process.env.TURNSTILE_SECRET_KEY;
@@ -26,6 +27,9 @@ delete process.env.RESEND_API_KEY;
 delete process.env.OTP_WEBHOOK_URL;
 delete process.env.ONESIGNAL_REST_API_KEY;
 delete process.env.VERCEL;
+delete process.env.CLOUDFLARE_R2_ACCOUNT_ID;
+delete process.env.CLOUDFLARE_R2_ACCESS_KEY_ID;
+delete process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY;
 
 const originalStoreSnapshot = JSON.parse(JSON.stringify(db.localStore));
 
@@ -4198,4 +4202,182 @@ test('Tarifa unica 24h: corrida diurna e madrugada tem o mesmo valor (sem adicio
   assert.equal(dayRes.nightSurcharge, 0);
   assert.equal(nightRes.nightSurcharge, 0);
   assert.equal(nightRes.totalPrice, dayRes.totalPrice);
+});
+
+test('Cloudflare R2 Public Media: banners de parceiros, config master, fotos de motorista e passageiro vao para R2', async () => {
+  const prevR2PubUrl = process.env.CLOUDFLARE_R2_PUBLIC_URL;
+  const prevR2PubBucket = process.env.CLOUDFLARE_R2_PUBLIC_BUCKET;
+  const prevCfgRow = JSON.parse(JSON.stringify(db.localStore.system_config?.default?.config || {}));
+
+  const uploadedObjects = [];
+  kycStorage.setCloudflareR2ClientOverride({
+    send: async (cmd) => {
+      uploadedObjects.push({
+        bucket: cmd?.input?.Bucket,
+        key: cmd?.input?.Key,
+        contentType: cmd?.input?.ContentType,
+        cacheControl: cmd?.input?.CacheControl,
+        size: cmd?.input?.Body ? cmd.input.Body.length : 0
+      });
+      return {};
+    }
+  });
+  process.env.CLOUDFLARE_R2_PUBLIC_URL = 'https://cdn-test.r2.dev';
+  process.env.CLOUDFLARE_R2_PUBLIC_BUCKET = 'kavro-media';
+
+  const tinyPng = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const tinyGif = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const tinyWebp = 'data:image/webp;base64,UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAfQ//73v/+BiOh/AAA=';
+  const tinySvg = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>').toString('base64');
+  const makeValidCpf = (seed) => {
+    const base = String(seed).padStart(9, '0').slice(0, 9).split('').map(Number);
+    const calcDigit = (digits) => {
+      let sum = 0;
+      for (let i = 0; i < digits.length; i++) sum += digits[i] * (digits.length + 1 - i);
+      const rem = (sum * 10) % 11;
+      return rem >= 10 ? 0 : rem;
+    };
+    base.push(calcDigit(base));
+    base.push(calcDigit(base));
+    return base.join('');
+  };
+  const validCpfCli = makeValidCpf(481234567);
+  const validCpfDrv = makeValidCpf(489876543);
+
+  try {
+    // 1) POST /api/media/upload e POST /api/config rejeitam anonimo (401)
+    const unauthUpload = await apiJson('/api/media/upload', {
+      method: 'POST',
+      body: { kind: 'partner-banner', ownerId: 'prt-unauth', dataUrl: tinyGif }
+    });
+    assert.equal(unauthUpload.status, 401);
+
+    // 2) normalizeConfigMediaToR2 converte partnerBanners (GIF, WebP, SVG) + driverPhoto + driverCarPhoto para R2
+    const normalizedCfg = await normalizeConfigMediaToR2({
+      ...prevCfgRow,
+      driverPhoto: tinyPng,
+      driverCarPhoto: tinyWebp,
+      partnerBanners: [
+        { id: 'prt-r2-webp', kind: 'parceiro', displayMode: 'banner', areas: ['site'], imageUrl: tinyWebp, active: true },
+        { id: 'prt-r2-gif', kind: 'patrocinador', displayMode: 'banner', areas: ['client_home'], imageUrl: tinyGif, active: true },
+        { id: 'prt-r2-svg', kind: 'parceiro', displayMode: 'logo', areas: ['site'], imageUrl: tinySvg, active: true }
+      ]
+    });
+    assert.match(normalizedCfg.driverPhoto, /^https:\/\/cdn-test\.r2\.dev\/system\/driver-avatar_.*\.png$/);
+    assert.match(normalizedCfg.driverCarPhoto, /^https:\/\/cdn-test\.r2\.dev\/system\/driver-vehicle_.*\.webp$/);
+    assert.match(normalizedCfg.partnerBanners[0].imageUrl, /^https:\/\/cdn-test\.r2\.dev\/partners\/prt-r2-webp\/banner_.*\.webp$/);
+    assert.match(normalizedCfg.partnerBanners[1].imageUrl, /^https:\/\/cdn-test\.r2\.dev\/partners\/prt-r2-gif\/banner_.*\.gif$/);
+    assert.match(normalizedCfg.partnerBanners[2].imageUrl, /^https:\/\/cdn-test\.r2\.dev\/partners\/prt-r2-svg\/banner_.*\.svg$/);
+
+    // 3) Cadastro e atualizacao de foto de PASSAGEIRO salvam no R2 (clients/<id>/avatar_...)
+    const cliReg = await apiJson('/api/clients/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.251' },
+      body: {
+        name: 'Passageiro Foto R2',
+        phone: '(48) 99981-2233',
+        email: 'passageiro.r2@kavro.test',
+        document: validCpfCli,
+        password: '1234',
+        photo: tinyPng,
+        termsAcceptance: {
+          accepted: true,
+          contractId: 'KAVRO-TC-PASSAGEIRO',
+          contractVersion: '2026.1',
+          acceptedAtClient: new Date().toISOString(),
+          affirmativeText: 'Li e concordo com os Termos.'
+        }
+      }
+    });
+    assert.equal(cliReg.status, 200);
+    assert.match(cliReg.json.client.photo, /^https:\/\/cdn-test\.r2\.dev\/clients\/.*\/avatar_.*\.png$/);
+
+    const cliPhotoUpdate = await apiJson(`/api/clients/${encodeURIComponent(cliReg.json.client.id)}/photo`, {
+      method: 'POST',
+      headers: { 'x-client-token': cliReg.json.clientToken },
+      body: { photo: tinyWebp }
+    });
+    assert.equal(cliPhotoUpdate.status, 200);
+    assert.match(cliPhotoUpdate.json.client.photo, /^https:\/\/cdn-test\.r2\.dev\/clients\/.*\/avatar_.*\.webp$/);
+
+    // Passageiro pode subir avatar direto via POST /api/media/upload, mas nao pode subir partner-banner (401)
+    const cliBannerAttempt = await apiJson('/api/media/upload', {
+      method: 'POST',
+      headers: { 'x-client-token': cliReg.json.clientToken },
+      body: { kind: 'partner-banner', ownerId: 'prt-hack', dataUrl: tinyPng }
+    });
+    assert.equal(cliBannerAttempt.status, 401);
+
+    const cliDirectUpload = await apiJson('/api/media/upload', {
+      method: 'POST',
+      headers: { 'x-client-token': cliReg.json.clientToken },
+      body: { kind: 'client-avatar', ownerId: cliReg.json.client.id, dataUrl: tinyPng }
+    });
+    assert.equal(cliDirectUpload.status, 200);
+    assert.match(cliDirectUpload.json.url, /^https:\/\/cdn-test\.r2\.dev\/clients\/.*\/avatar_.*\.png$/);
+
+    // 4) Cadastro e edicao de foto de MOTORISTA e VEICULO salvam no R2 (drivers/<id>/...)
+    const drvReg = await apiJson('/api/drivers/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.252' },
+      body: {
+        name: 'Motorista Foto R2',
+        phone: '(48) 99982-3344',
+        email: 'motorista.r2@kavro.test',
+        document: validCpfDrv,
+        cnh: '99887766554',
+        password: '1234',
+        photo: tinyPng,
+        vehicleBrand: 'Toyota',
+        vehicleModel: 'Corolla',
+        vehicleColor: 'Prata',
+        vehicleYear: '2024',
+        vehiclePlate: 'R2D2K99',
+        vehiclePhoto: tinyWebp,
+        crlvDocumentPhoto: tinyPng,
+        termsAcceptance: {
+          accepted: true,
+          contractId: 'KAVRO-TC-MOTORISTA',
+          contractVersion: '2026.1',
+          acceptedAtClient: new Date().toISOString(),
+          affirmativeText: 'Li e concordo com o Contrato.'
+        }
+      }
+    });
+    assert.equal(drvReg.status, 200);
+    assert.match(drvReg.json.driver.photo, /^https:\/\/cdn-test\.r2\.dev\/drivers\/.*\/avatar_.*\.png$/);
+    assert.match(drvReg.json.driver.vehiclePhoto, /^https:\/\/cdn-test\.r2\.dev\/drivers\/.*\/vehicle_.*\.webp$/);
+    assert.match(drvReg.json.driver.vehicles[0].crlvDocumentPhoto, /^https:\/\/cdn-test\.r2\.dev\/drivers\/.*\/crlv_.*\.png$/);
+
+    const drvPatch = await apiJson(`/api/drivers/${encodeURIComponent(drvReg.json.driver.id)}`, {
+      method: 'PATCH',
+      headers: { 'x-driver-token': drvReg.json.driverToken },
+      body: { photo: tinyWebp }
+    });
+    assert.equal(drvPatch.status, 200);
+    assert.match(drvPatch.json.driver.photo, /^https:\/\/cdn-test\.r2\.dev\/drivers\/.*\/avatar_.*\.webp$/);
+
+    const drvDirectUpload = await apiJson('/api/media/upload', {
+      method: 'POST',
+      headers: { 'x-driver-token': drvReg.json.driverToken },
+      body: { kind: 'driver-avatar', ownerId: drvReg.json.driver.id, dataUrl: tinyPng }
+    });
+    assert.equal(drvDirectUpload.status, 200);
+    assert.match(drvDirectUpload.json.url, /^https:\/\/cdn-test\.r2\.dev\/drivers\/.*\/avatar_.*\.png$/);
+
+    // Confirma que todos uploads usaram bucket kavro-media e cache de 1 ano
+    assert.ok(uploadedObjects.length >= 12);
+    assert.ok(uploadedObjects.every(o => o.bucket === 'kavro-media' && o.cacheControl === 'public, max-age=31536000'));
+  } finally {
+    kycStorage.setCloudflareR2ClientOverride(null);
+    if (prevR2PubUrl === undefined) delete process.env.CLOUDFLARE_R2_PUBLIC_URL;
+    else process.env.CLOUDFLARE_R2_PUBLIC_URL = prevR2PubUrl;
+    if (prevR2PubBucket === undefined) delete process.env.CLOUDFLARE_R2_PUBLIC_BUCKET;
+    else process.env.CLOUDFLARE_R2_PUBLIC_BUCKET = prevR2PubBucket;
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(prevCfgRow)]
+    );
+  }
 });

@@ -58,6 +58,16 @@ interface HowItWorksStep {
   icon: React.ReactNode;
 }
 
+const R2_PUBLIC_MEDIA_BASE = (
+  import.meta.env.VITE_CLOUDFLARE_R2_PUBLIC_URL ||
+  'https://pub-495954d8f4a94678b2334981e5280457.r2.dev'
+).trim().replace(/\/+$/, '');
+
+function resolveLandingAsset(localPath: string): string {
+  if (!localPath.startsWith('/') || !R2_PUBLIC_MEDIA_BASE) return localPath;
+  return `${R2_PUBLIC_MEDIA_BASE}${localPath}`;
+}
+
 const POPULAR_CITIES = [
   'Lauro Müller - SC, BR',
   'Criciúma - SC, BR',
@@ -216,15 +226,18 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
 
   const mobileHeroBanners = [
     {
-      src: '/landing/banner-0001.png',
+      src: resolveLandingAsset('/landing/banner-0001.png'),
+      fallbackSrc: '/landing/banner-0001.png',
       alt: 'Kavro Drive — Taxas baixas. Mais vantagens para todos.',
     },
     {
-      src: '/landing/banner-urbana.png',
+      src: resolveLandingAsset('/landing/banner-urbana.png'),
+      fallbackSrc: '/landing/banner-urbana.png',
       alt: 'Kavro Drive — Uma plataforma completa de mobilidade urbana.',
     },
     {
-      src: '/landing/banner-motors.png',
+      src: resolveLandingAsset('/landing/banner-motors.png'),
+      fallbackSrc: '/landing/banner-motors.png',
       alt: 'Kavro Drive — Conectando motoristas e passageiros.',
     },
   ];
@@ -437,7 +450,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       num: '01',
       title: 'Informe partida e destino',
       desc: 'Digite os endereços na Kavro Drive ou utilize a localização por GPS para obter a estimativa na hora.',
-      image: '/landing/step-app-phone.jpg',
+      image: resolveLandingAsset('/landing/step-app-phone.jpg'),
       fallbackGradient: 'linear-gradient(135deg, #172721 0%, #0A0F14 100%)',
       icon: <MapPin size={20} strokeWidth={2.2} color="#0A0F14" />,
     },
@@ -445,7 +458,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       num: '02',
       title: 'Selecione a categoria e o pagamento',
       desc: 'Escolha entre Kavro Padrão ou Kavro Entregas e pague via PIX Efí, cartão à vista, saldo em conta ou dinheiro.',
-      image: '/landing/passenger-ride.jpg',
+      image: resolveLandingAsset('/landing/passenger-ride.jpg'),
       fallbackGradient: 'linear-gradient(135deg, #16232D 0%, #0A0F14 100%)',
       icon: <Wallet size={20} strokeWidth={2.1} color="#0A0F14" />,
     },
@@ -453,7 +466,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       num: '03',
       title: 'Motorista cadastrado aceita o chamado',
       desc: 'Motoristas com CNH, documento do veículo e biometria conferidos aceitam sua solicitação com rota visível no mapa.',
-      image: '/landing/driver-smile.jpg',
+      image: resolveLandingAsset('/landing/driver-smile.jpg'),
       fallbackGradient: 'linear-gradient(135deg, #172721 0%, #0A0F14 100%)',
       icon: <UserCheck size={20} strokeWidth={2.1} color="#0A0F14" />,
     },
@@ -461,7 +474,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       num: '04',
       title: 'Embarque com conferência de placa e código',
       desc: 'Confirme modelo, placa do automóvel e código de embarque antes de iniciar o deslocamento.',
-      image: '/landing/hero-traveler.jpg',
+      image: resolveLandingAsset('/landing/hero-traveler.jpg'),
       fallbackGradient: 'linear-gradient(135deg, #16232D 0%, #0A0F14 100%)',
       icon: <ShieldCheck size={20} strokeWidth={2.1} color="#0A0F14" />,
     },
@@ -469,7 +482,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       num: '05',
       title: 'Conclusão e histórico detalhado',
       desc: 'Finalize o trajeto pelo valor acordado e consulte recibos e corridas anteriores direto no painel da conta.',
-      image: '/landing/corporate-ride.jpg',
+      image: resolveLandingAsset('/landing/corporate-ride.jpg'),
       fallbackGradient: 'linear-gradient(135deg, #172721 0%, #0A0F14 100%)',
       icon: <CheckCircle2 size={20} strokeWidth={2.1} color="#0A0F14" />,
     },
@@ -983,6 +996,11 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   <img
                     src={banner.src}
                     alt={banner.alt}
+                    onError={(e) => {
+                      if (e.currentTarget.dataset.fallbackApplied) return;
+                      e.currentTarget.dataset.fallbackApplied = '1';
+                      e.currentTarget.src = banner.fallbackSrc;
+                    }}
                     style={{
                       width: '100%',
                       height: 'auto',
@@ -1317,7 +1335,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
               }}
             >
               <LandingPhoto
-                src="/landing/hero-traveler.jpg"
+                src={resolveLandingAsset('/landing/hero-traveler.jpg')}
                 alt="Passageiro embarcando em viagem pela Kavro Drive"
                 height={isMobile ? 210 : 410}
                 borderRadius={0}
@@ -1526,7 +1544,7 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                 }}
               >
                 <LandingPhoto
-                  src="/landing/driver-smile.jpg"
+                  src={resolveLandingAsset('/landing/driver-smile.jpg')}
                   alt="Motorista parceiro Kavro Drive"
                   height={isMobile ? 225 : 335}
                   borderRadius={0}
@@ -2157,14 +2175,14 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
                   title: 'Reservas programadas & Aeroporto',
                   desc: 'Programe o veículo no horário exato para reuniões externas, eventos e voos.',
                   cta: 'Agendar horário',
-                  image: '/landing/corporate-ride.jpg',
+                  image: resolveLandingAsset('/landing/corporate-ride.jpg'),
                   onClick: () => openClientFlow('schedule'),
                 },
                 {
                   title: 'Entregas expressas no mesmo dia',
                   desc: 'Envie documentos, contratos e encomendas com acompanhamento da rota ao vivo.',
                   cta: 'Solicitar envio',
-                  image: '/landing/package-delivery.jpg',
+                  image: resolveLandingAsset('/landing/package-delivery.jpg'),
                   onClick: () => openClientFlow(),
                 },
               ].map((card) => (
@@ -2794,7 +2812,21 @@ const LandingPhoto: React.FC<{
   borderRadius?: number;
   fallback: string;
 }> = ({ src, alt, height, borderRadius = 12, fallback }) => {
+  const [resolvedSrc, setResolvedSrc] = useState(src);
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setResolvedSrc(src);
+    setFailed(false);
+  }, [src]);
+
+  const handleImgError = () => {
+    if (R2_PUBLIC_MEDIA_BASE && resolvedSrc.startsWith(R2_PUBLIC_MEDIA_BASE)) {
+      setResolvedSrc(resolvedSrc.slice(R2_PUBLIC_MEDIA_BASE.length) || src);
+      return;
+    }
+    setFailed(true);
+  };
 
   return (
     <div
@@ -2809,9 +2841,9 @@ const LandingPhoto: React.FC<{
     >
       {!failed && (
         <img
-          src={src}
+          src={resolvedSrc}
           alt={alt}
-          onError={() => setFailed(true)}
+          onError={handleImgError}
           style={{
             width: '100%',
             height: '100%',

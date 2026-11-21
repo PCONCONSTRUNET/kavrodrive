@@ -746,8 +746,101 @@ async function verifyTurnstileToken(token, remoteIp) {
     return { ok: false, error: 'Verificação anti-robô expirada ou inválida. Tente novamente.' };
   } catch (err) {
     console.warn('[Turnstile] Erro ao validar token:', err.message);
-    return { ok: false, error: 'Não foi possível validar a verificação de segurança. Tente novamente.' };
+  return { ok: false, error: 'Não foi possível validar a verificação de segurança. Tente novamente.' };
   }
+}
+
+async function normalizeConfigMediaToR2(cfgObj) {
+  if (!cfgObj || typeof cfgObj !== 'object') return cfgObj;
+  const next = { ...cfgObj };
+
+  const tasks = [];
+  if (typeof next.driverPhoto === 'string' && next.driverPhoto.startsWith('data:')) {
+    tasks.push(
+      kycStorage.savePublicMedia('master', 'config-avatar', next.driverPhoto).then((url) => {
+        next.driverPhoto = url;
+      })
+    );
+  }
+  if (typeof next.driverCarPhoto === 'string' && next.driverCarPhoto.startsWith('data:')) {
+    tasks.push(
+      kycStorage.savePublicMedia('master', 'config-vehicle', next.driverCarPhoto).then((url) => {
+        next.driverCarPhoto = url;
+      })
+    );
+  }
+  if (Array.isArray(next.partnerBanners)) {
+    tasks.push(
+      Promise.all(
+        next.partnerBanners.map(async (b) => {
+          if (b && typeof b.imageUrl === 'string' && b.imageUrl.startsWith('data:')) {
+            const uploadedUrl = await kycStorage.savePublicMedia(b.id || 'partner', 'partner-banner', b.imageUrl);
+            return { ...b, imageUrl: uploadedUrl };
+          }
+          return b;
+        })
+      ).then((updatedBanners) => {
+        next.partnerBanners = updatedBanners;
+      })
+    );
+  }
+
+  if (tasks.length > 0) {
+    await Promise.all(tasks);
+  }
+  return next;
+}
+
+async function normalizeDriverMediaToR2(driverId, payload) {
+  if (!payload || typeof payload !== 'object') return payload;
+  const next = { ...payload };
+  const tasks = [];
+
+  if (typeof next.photo === 'string' && next.photo.startsWith('data:')) {
+    tasks.push(
+      kycStorage.savePublicMedia(driverId, 'avatar', next.photo).then((url) => {
+        next.photo = url;
+      })
+    );
+  }
+  if (typeof next.vehiclePhoto === 'string' && next.vehiclePhoto.startsWith('data:')) {
+    tasks.push(
+      kycStorage.savePublicMedia(driverId, 'vehicle', next.vehiclePhoto).then((url) => {
+        next.vehiclePhoto = url;
+      })
+    );
+  }
+  if (typeof next.crlvDocumentPhoto === 'string' && next.crlvDocumentPhoto.startsWith('data:')) {
+    tasks.push(
+      kycStorage.savePublicMedia(driverId, 'crlv', next.crlvDocumentPhoto).then((url) => {
+        next.crlvDocumentPhoto = url;
+      })
+    );
+  }
+  if (Array.isArray(next.vehicles)) {
+    tasks.push(
+      Promise.all(
+        next.vehicles.map(async (veh) => {
+          if (!veh || typeof veh !== 'object') return veh;
+          const nextVeh = { ...veh };
+          if (typeof nextVeh.vehiclePhoto === 'string' && nextVeh.vehiclePhoto.startsWith('data:')) {
+            nextVeh.vehiclePhoto = await kycStorage.savePublicMedia(driverId, 'vehicle', nextVeh.vehiclePhoto);
+          }
+          if (typeof nextVeh.crlvDocumentPhoto === 'string' && nextVeh.crlvDocumentPhoto.startsWith('data:')) {
+            nextVeh.crlvDocumentPhoto = await kycStorage.savePublicMedia(driverId, 'crlv', nextVeh.crlvDocumentPhoto);
+          }
+          return nextVeh;
+        })
+      ).then((updatedVehicles) => {
+        next.vehicles = updatedVehicles;
+      })
+    );
+  }
+
+  if (tasks.length > 0) {
+    await Promise.all(tasks);
+  }
+  return next;
 }
 
 function sanitizePublicConfig(cfg, isAdmin = false) {
@@ -1832,6 +1925,7 @@ async function handleApiRequest(req, res) {
     // 0. HEALTH CHECK & REAL-TIME READINESS
     if (pathname === '/api/health') {
       const dbRes = await db.query('SELECT NOW() as now');
+      const r2Status = kycStorage.getCloudflareR2Status();
       return sendJson(res, 200, {
         ok: true,
         now: dbRes.rows[0].now,
@@ -1840,6 +1934,8 @@ async function handleApiRequest(req, res) {
         realtime: realtimeHub.getStats(),
         services: {
           databaseConfigured: Boolean(db.pool),
+          r2Configured: r2Status.configured,
+          r2PublicConfigured: r2Status.publicConfigured,
           pushConfigured: Boolean(process.env.ONESIGNAL_REST_API_KEY),
           googleAuthConfigured: Boolean(getGoogleClientId()),
           turnstileConfigured: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
@@ -2393,7 +2489,8 @@ async function handleApiRequest(req, res) {
         if (!await isAuthorizedAdmin(req)) {
           return sendJson(res, 401, { error: 'Acesso não autorizado: PIN de administrador inválido ou ausente.' });
         }
-        const body = await parseBody(req);
+        const rawBody = await parseBody(req);
+        const body = await normalizeConfigMediaToR2(rawBody);
         const beforeRes = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
         const beforeCfg = beforeRes.rows[0]?.config || {};
         await db.query(`
@@ -2446,6 +2543,68 @@ async function handleApiRequest(req, res) {
         invalidateSystemConfigCache();
         return sendJson(res, 200, { ok: true, config: body });
       }
+    }
+
+    // 2.0.1 UPLOAD DIRETO PARA CLOUDFLARE R2 PÚBLICO (Banners, Fotos de Perfil, Veículos, CRLV)
+    if (pathname === '/api/media/upload' && method === 'POST') {
+      const body = await parseBody(req);
+      const kind = String(body.kind || '').trim();
+      const rawOwnerId = String(body.ownerId || '').trim();
+      const dataUrl = String(body.dataUrl || '').trim();
+
+      const UPLOAD_KIND_SPECS = {
+        'partner-banner': { role: 'admin', mediaType: 'partner-banner', defaultOwner: 'partner' },
+        'config-avatar': { role: 'admin', mediaType: 'config-avatar', defaultOwner: 'master' },
+        'config-vehicle': { role: 'admin', mediaType: 'config-vehicle', defaultOwner: 'master' },
+        'landing-banner': { role: 'admin', mediaType: 'landing-banner', defaultOwner: 'banner' },
+        'driver-avatar': { role: 'driver', mediaType: 'avatar', defaultOwner: '' },
+        'driver-vehicle': { role: 'driver', mediaType: 'vehicle', defaultOwner: '' },
+        'driver-crlv': { role: 'driver', mediaType: 'crlv', defaultOwner: '' },
+        'client-avatar': { role: 'client', mediaType: 'client-avatar', defaultOwner: '' }
+      };
+
+      const spec = UPLOAD_KIND_SPECS[kind];
+      if (!spec) {
+        return sendJson(res, 400, { ok: false, error: 'Tipo de mídia inválido para upload.' });
+      }
+
+      const isAdmin = await isAuthorizedAdmin(req);
+      const driverSession = verifyDriverToken(req);
+      const clientSession = verifyClientToken(req);
+
+      let resolvedOwner = rawOwnerId || spec.defaultOwner;
+      if (!isAdmin) {
+        if (spec.role === 'admin') {
+          return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+        }
+        if (spec.role === 'driver') {
+          if (!driverSession?.sub || (resolvedOwner && resolvedOwner !== driverSession.sub)) {
+            return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida para este upload.' });
+          }
+          resolvedOwner = driverSession.sub;
+        }
+        if (spec.role === 'client') {
+          if (!clientSession?.sub || (resolvedOwner && resolvedOwner !== clientSession.sub)) {
+            return sendJson(res, 401, { ok: false, error: 'Sessão de passageiro inválida para este upload.' });
+          }
+          resolvedOwner = clientSession.sub;
+        }
+      }
+
+      if (!dataUrl.startsWith('data:image/') && !dataUrl.startsWith('data:application/pdf')) {
+        return sendJson(res, 400, { ok: false, error: 'Envie uma imagem ou PDF válido.' });
+      }
+
+      const r2Status = kycStorage.getCloudflareR2Status();
+      if (!r2Status.publicConfigured) {
+        return sendJson(res, 503, { ok: false, error: 'Cloudflare R2 público não configurado no servidor.' });
+      }
+
+      const uploadedUrl = await kycStorage.savePublicMedia(resolvedOwner || 'media', spec.mediaType, dataUrl);
+      if (!uploadedUrl || uploadedUrl.startsWith('data:')) {
+        return sendJson(res, 502, { ok: false, error: 'Falha ao enviar arquivo para o Cloudflare R2.' });
+      }
+      return sendJson(res, 200, { ok: true, url: uploadedUrl });
     }
 
     // 2.1 FROTA VERIFICADA PÚBLICA MULTI-MOTORISTA (SOMENTE FROTA — SEM CORRIDAS OU LOCALIZAÇÕES)
@@ -2719,8 +2878,14 @@ async function handleApiRequest(req, res) {
         });
       }
 
-      const photoUrl = body.photo ? await kycStorage.savePublicMedia(targetId, 'avatar', body.photo) : '';
-      let vehiclePhotoUrl = body.vehiclePhoto ? await kycStorage.savePublicMedia(targetId, 'vehicle', body.vehiclePhoto) : '';
+      const uploadedMedia = await normalizeDriverMediaToR2(targetId, {
+        photo: body.photo || '',
+        vehiclePhoto: body.vehiclePhoto || '',
+        crlvDocumentPhoto: body.crlvDocumentPhoto || ''
+      });
+      const photoUrl = uploadedMedia.photo || '';
+      let vehiclePhotoUrl = uploadedMedia.vehiclePhoto || '';
+      const regCrlvDocUrl = uploadedMedia.crlvDocumentPhoto || '';
       if (!vehiclePhotoUrl && (vehicleBrand || vehicleModel)) {
         try {
           const resolvedVehicle = await resolveVehiclePhotoCached({
@@ -2778,6 +2943,7 @@ async function handleApiRequest(req, res) {
         vehicleCategory: body.vehicleCategory || 'kavro_go',
         vehiclePhoto: vehiclePhotoUrl,
         crlvNumber: String(body.crlvNumber || '').trim(),
+        ...(regCrlvDocUrl ? { crlvDocumentPhoto: regCrlvDocUrl } : {}),
         crlvRegular: body.crlvRegular !== undefined ? Boolean(body.crlvRegular) : true,
         hasFourDoors: body.hasFourDoors !== undefined ? Boolean(body.hasFourDoors) : true,
         hasAirConditioning: body.hasAirConditioning !== undefined ? Boolean(body.hasAirConditioning) : true,
@@ -3148,18 +3314,22 @@ async function handleApiRequest(req, res) {
         } catch (err) {
           return sendJson(res, 400, { ok: false, error: err.message });
         }
-        if (typeof nextUpdates.photo === 'string' && nextUpdates.photo.startsWith('data:image/')) {
-          nextUpdates.photo = await kycStorage.savePublicMedia(existing.id, 'avatar', nextUpdates.photo);
-        }
-        if (typeof nextUpdates.vehiclePhoto === 'string' && nextUpdates.vehiclePhoto.startsWith('data:image/')) {
-          nextUpdates.vehiclePhoto = await kycStorage.savePublicMedia(existing.id, 'vehicle', nextUpdates.vehiclePhoto);
-        }
+        const normalizedUpdates = await normalizeDriverMediaToR2(existing.id, nextUpdates);
         const updated = await finance.saveDriverRecord({
           ...existing,
-          ...nextUpdates,
+          ...normalizedUpdates,
           id: existing.id,
-          approvalStatus: isAdmin ? (nextUpdates.approvalStatus || existing.approvalStatus) : existing.approvalStatus
+          approvalStatus: isAdmin ? (normalizedUpdates.approvalStatus || existing.approvalStatus) : existing.approvalStatus
         });
+        if (normalizedUpdates.photo && normalizedUpdates.photo !== existing.photo) {
+          await db.query(
+            `UPDATE public.rides
+             SET driver_photo = $1
+             WHERE driver_id = $2
+               AND status NOT IN ('finalizada', 'cancelada')`,
+            [normalizedUpdates.photo, existing.id]
+          ).catch(() => {});
+        }
         invalidateDriversCache();
         realtimeHub.publish('driver:updated', {
           driverId: updated.id,
@@ -7392,6 +7562,9 @@ async function handleApiRequest(req, res) {
         });
       } else {
         const newId = body.id || `cli-${Date.now()}`;
+        const regPhotoUrl = typeof body.photo === 'string' && body.photo.trim()
+          ? await kycStorage.savePublicMedia(newId, 'client-avatar', body.photo.trim())
+          : null;
         const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
           clientId: newId,
           name,
@@ -7404,8 +7577,8 @@ async function handleApiRequest(req, res) {
           clientAcceptance: body.termsAcceptance
         });
         const insertRes = await db.query(
-          `INSERT INTO public.clients (id, name, phone, email, document, password_hash, saved_addresses, terms_accepted_at, terms_signature, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          `INSERT INTO public.clients (id, name, phone, email, document, password_hash, photo, saved_addresses, terms_accepted_at, terms_signature, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
            RETURNING *`,
           [
             newId,
@@ -7414,6 +7587,7 @@ async function handleApiRequest(req, res) {
             email || null,
             document || null,
             passwordHash,
+            regPhotoUrl,
             JSON.stringify(body.savedAddresses || []),
             termsSignature.signedAt,
             JSON.stringify(termsSignature)
@@ -7718,6 +7892,11 @@ async function handleApiRequest(req, res) {
       }
 
       const clientIp = getRequestClientIp(req);
+      const googleTargetId = targetRow ? targetRow.id : `cli-${Date.now()}`;
+      const googleBodyPhoto = typeof body.photo === 'string' && body.photo.trim()
+        ? await kycStorage.savePublicMedia(googleTargetId, 'client-avatar', body.photo.trim())
+        : '';
+      const resolvedGooglePhoto = googleBodyPhoto || targetRow?.photo || googleCheck.picture || null;
       let savedClientRow = null;
 
       if (targetRow) {
@@ -7736,8 +7915,8 @@ async function handleApiRequest(req, res) {
         const nextHash = targetRow.password_hash || hashPassword(crypto.randomBytes(24).toString('hex'));
         const updatedRes = await db.query(
           `UPDATE public.clients
-           SET name = $1, phone = $2, email = $3, document = $4, password_hash = $5, terms_accepted_at = $6, terms_signature = $7
-           WHERE id = $8
+           SET name = $1, phone = $2, email = $3, document = $4, password_hash = $5, photo = $6, terms_accepted_at = $7, terms_signature = $8
+           WHERE id = $9
            RETURNING *`,
           [
             finalName,
@@ -7745,6 +7924,7 @@ async function handleApiRequest(req, res) {
             googleEmail,
             finalDoc || null,
             nextHash,
+            resolvedGooglePhoto,
             termsSignature.signedAt,
             JSON.stringify(termsSignature),
             targetRow.id
@@ -7752,7 +7932,7 @@ async function handleApiRequest(req, res) {
         );
         savedClientRow = updatedRes.rows[0];
       } else {
-        const newId = `cli-${Date.now()}`;
+        const newId = googleTargetId;
         const termsSignature = passengerTermsContract.buildPassengerTermsSignature({
           clientId: newId,
           name: finalName,
@@ -7766,8 +7946,8 @@ async function handleApiRequest(req, res) {
         });
         const randomHash = hashPassword(crypto.randomBytes(24).toString('hex'));
         const insertRes = await db.query(
-          `INSERT INTO public.clients (id, name, phone, email, document, password_hash, saved_addresses, terms_accepted_at, terms_signature, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+          `INSERT INTO public.clients (id, name, phone, email, document, password_hash, photo, saved_addresses, terms_accepted_at, terms_signature, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
            RETURNING *`,
           [
             newId,
@@ -7776,6 +7956,7 @@ async function handleApiRequest(req, res) {
             googleEmail,
             rawDocument || null,
             randomHash,
+            resolvedGooglePhoto,
             JSON.stringify([]),
             termsSignature.signedAt,
             JSON.stringify(termsSignature)
@@ -7920,17 +8101,22 @@ async function handleApiRequest(req, res) {
           return sendJson(res, 401, { ok: false, error: 'Autenticação necessária para salvar dados do passageiro.' });
         }
         if (!isAdmin) {
+          const selfPhotoUrl = typeof cli.photo === 'string' && cli.photo.trim()
+            ? await kycStorage.savePublicMedia(clientSession.sub, 'client-avatar', cli.photo.trim())
+            : null;
           const updatedSelfRes = await db.query(
             `UPDATE public.clients
              SET saved_addresses = COALESCE($1, saved_addresses),
                  terms_accepted_at = COALESCE($2, terms_accepted_at),
-                 terms_signature = COALESCE($3, terms_signature)
-             WHERE id = $4
+                 terms_signature = COALESCE($3, terms_signature),
+                 photo = COALESCE($4, photo)
+             WHERE id = $5
              RETURNING *`,
             [
               cli.savedAddresses !== undefined ? JSON.stringify(cli.savedAddresses || []) : null,
               cli.termsAcceptedAt || null,
               cli.termsSignature ? JSON.stringify(cli.termsSignature) : null,
+              selfPhotoUrl,
               clientSession.sub
             ]
           );
@@ -7941,18 +8127,22 @@ async function handleApiRequest(req, res) {
         }
         if (!cli.id) cli.id = `cli-${Date.now()}`;
         const pwdHash = cli.password ? hashPassword(cli.password) : null;
+        const adminClientPhoto = typeof cli.photo === 'string' && cli.photo.trim()
+          ? await kycStorage.savePublicMedia(cli.id, 'client-avatar', cli.photo.trim())
+          : null;
 
         const r = await db.query(`
-          INSERT INTO public.clients (id, name, phone, email, document, password_hash, notes, blocked, saved_addresses, terms_accepted_at, terms_signature, created_at)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+          INSERT INTO public.clients (id, name, phone, email, document, password_hash, photo, notes, blocked, saved_addresses, terms_accepted_at, terms_signature, created_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
           ON CONFLICT (id) DO UPDATE SET
-            name = CASE WHEN $13::boolean THEN EXCLUDED.name ELSE public.clients.name END,
-            phone = CASE WHEN $13::boolean THEN EXCLUDED.phone ELSE public.clients.phone END,
-            email = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.email, public.clients.email) ELSE public.clients.email END,
-            document = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.document, public.clients.document) ELSE public.clients.document END,
-            password_hash = CASE WHEN $13::boolean THEN COALESCE(EXCLUDED.password_hash, public.clients.password_hash) ELSE public.clients.password_hash END,
-            notes = CASE WHEN $13::boolean THEN EXCLUDED.notes ELSE public.clients.notes END,
-            blocked = CASE WHEN $13::boolean THEN EXCLUDED.blocked ELSE public.clients.blocked END,
+            name = CASE WHEN $14::boolean THEN EXCLUDED.name ELSE public.clients.name END,
+            phone = CASE WHEN $14::boolean THEN EXCLUDED.phone ELSE public.clients.phone END,
+            email = CASE WHEN $14::boolean THEN COALESCE(EXCLUDED.email, public.clients.email) ELSE public.clients.email END,
+            document = CASE WHEN $14::boolean THEN COALESCE(EXCLUDED.document, public.clients.document) ELSE public.clients.document END,
+            password_hash = CASE WHEN $14::boolean THEN COALESCE(EXCLUDED.password_hash, public.clients.password_hash) ELSE public.clients.password_hash END,
+            photo = CASE WHEN $14::boolean THEN COALESCE(EXCLUDED.photo, public.clients.photo) ELSE public.clients.photo END,
+            notes = CASE WHEN $14::boolean THEN EXCLUDED.notes ELSE public.clients.notes END,
+            blocked = CASE WHEN $14::boolean THEN EXCLUDED.blocked ELSE public.clients.blocked END,
             saved_addresses = EXCLUDED.saved_addresses,
             terms_accepted_at = COALESCE(EXCLUDED.terms_accepted_at, public.clients.terms_accepted_at),
             terms_signature = COALESCE(EXCLUDED.terms_signature, public.clients.terms_signature)
@@ -7964,6 +8154,7 @@ async function handleApiRequest(req, res) {
           cli.email || null,
           cli.document ? String(cli.document).replace(/\D/g, '') : null,
           pwdHash,
+          adminClientPhoto,
           cli.notes || null,
           Boolean(cli.blocked),
           JSON.stringify(cli.savedAddresses || []),
@@ -9281,5 +9472,7 @@ async function handleApiRequest(req, res) {
 }
 
 module.exports = {
-  handleApiRequest
+  handleApiRequest,
+  normalizeConfigMediaToR2,
+  normalizeDriverMediaToR2
 };

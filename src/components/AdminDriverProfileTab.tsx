@@ -213,12 +213,15 @@ export const AdminDriverProfileTab: React.FC<AdminDriverProfileTabProps> = ({
       companyWhatsapp: cleanWhatsapp,
     };
 
-    await StorageService.saveConfig(updatedConfig);
+    const ok = await StorageService.saveConfig(updatedConfig);
+    const syncedConfig = ok ? StorageService.getConfig() : updatedConfig;
+    setDriverPhoto(syncedConfig.driverPhoto || '');
+    setDriverCarPhoto(syncedConfig.driverCarPhoto || '');
     setIsSaving(false);
     setIsDirty(false);
     setSavedSuccess(true);
     setTimeout(() => setSavedSuccess(false), 3000);
-    onSaved(updatedConfig);
+    onSaved(syncedConfig);
   };
 
   // Estatísticas e Auditoria de Corridas Finalizadas

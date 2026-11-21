@@ -1823,7 +1823,49 @@ export const StorageService = {
         ...this.getAuthHeaders()
       },
       body: JSON.stringify(client)
-    }).catch(err => console.warn('Client sync error:', err));
+    })
+      .then(res => (res.ok ? res.json().catch(() => null) : null))
+      .then(data => {
+        if (data?.client) {
+          const current = this.getCurrentUser();
+          if (current && current.id === data.client.id) {
+            this.setCurrentUser(data.client);
+          }
+        }
+      })
+      .catch(err => console.warn('Client sync error:', err));
+  },
+
+  async uploadPublicMedia(
+    kind:
+      | 'partner-banner'
+      | 'config-avatar'
+      | 'config-vehicle'
+      | 'landing-banner'
+      | 'driver-avatar'
+      | 'driver-vehicle'
+      | 'driver-crlv'
+      | 'client-avatar',
+    dataUrl: string,
+    ownerId?: string
+  ): Promise<{ ok: boolean; url?: string; error?: string }> {
+    try {
+      const res = await fetch('/api/media/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders()
+        },
+        body: JSON.stringify({ kind, ownerId, dataUrl })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.ok && data?.url) {
+        return { ok: true, url: data.url };
+      }
+      return { ok: false, error: data?.error || 'Falha ao enviar arquivo para o Cloudflare R2.' };
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao enviar mídia para o Cloudflare R2.' };
+    }
   },
 
   async fetchClientProfile(clientId: string): Promise<ClientProfile | null> {
@@ -2224,7 +2266,19 @@ export const StorageService = {
       },
       body: JSON.stringify(payload)
     })
-      .then(res => res.ok)
+      .then(async (res) => {
+        if (!res.ok) return false;
+        const data = await res.json().catch(() => null);
+        if (data?.config && typeof data.config === 'object') {
+          try {
+            localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config));
+            window.dispatchEvent(new CustomEvent('up_config_updated', { detail: data.config }));
+          } catch {
+            // Ignora erro de cota local após persistência confirmada no servidor
+          }
+        }
+        return true;
+      })
       .catch(() => false);
   },
 
