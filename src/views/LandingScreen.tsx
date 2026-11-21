@@ -1323,7 +1323,13 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
         sectionEnabled={config.partnerShowOnSite !== false}
         hideWhenEmpty={Boolean(config.partnerHideEmptyPlaceholder)}
         isMobile={isMobile}
-        onBecomePartnerClick={() => setBusinessModalOpen(true)}
+        onBecomePartnerClick={() => {
+          const url = `https://wa.me/5548996915303?text=${encodeURIComponent(
+            'Olá! Tenho interesse em ser parceiro ou patrocinador da Kavro Drive.'
+          )}`;
+          const popup = window.open(url, '_blank', 'noopener,noreferrer');
+          if (!popup) window.location.href = url;
+        }}
       />
 
       {/* ═══ SEÇÃO 2 (NOVA ORDEM — VERDE SUAVE #F2F6F3): MOTORISTAS PARCEIROS EM DESTAQUE ═══ */}
