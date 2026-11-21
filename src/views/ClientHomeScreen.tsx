@@ -220,6 +220,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       style={{
         backgroundColor: '#FFFFFF',
         minHeight: '100%',
+        paddingTop: 'calc(56px + env(safe-area-inset-top, 0px))',
         paddingBottom: 'calc(104px + env(safe-area-inset-bottom, 0px))',
         width: '100%',
         maxWidth: '100%',
@@ -241,20 +242,26 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         onSelect={handleSelectLocation}
       />
 
-      {/* ── HEADER NO TOPO (ESTÁTICO NO TOPO SEM DESLIZAR SOBRE O CONTEÚDO) ──── */}
+      {/* ── HEADER FIXO NO TOPO (NÃO SOBE COM O SCROLL) ────────────────────── */}
       <div style={{
-        position: 'relative',
+        position: 'fixed',
+        top: 0,
+        left: '50%',
+        transform: 'translateX(-50%)',
+        zIndex: 40,
         backgroundColor: '#FFFFFF',
-        margin: 'calc(8px + env(safe-area-inset-top, 0px)) 12px 0 12px',
-        padding: '10px 14px',
-        borderRadius: 20,
+        paddingTop: 'calc(10px + env(safe-area-inset-top, 0px))',
+        paddingBottom: 10,
+        paddingLeft: 16,
+        paddingRight: 16,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 8,
-        border: '1px solid #E2E8F0',
+        borderBottom: '1px solid #E2E8F0',
         boxShadow: '0 4px 14px rgba(15, 23, 42, 0.05)',
-        width: 'calc(100% - 24px)',
+        width: '100%',
+        maxWidth: 480,
         boxSizing: 'border-box'
       }}>
         <img

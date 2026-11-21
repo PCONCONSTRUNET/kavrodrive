@@ -166,6 +166,34 @@ input, select, textarea {
   box-shadow: 0 0 40px rgba(0, 0, 0, 0.06);
 }
 
+@media (pointer: coarse) {
+  html,
+  body {
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+  .kavro-mobile-app-scroll {
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .kavro-mobile-app-scroll::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+}
+
 @media (min-width: 1024px) {
   .admin-mode .app-container {
     max-width: 100%;

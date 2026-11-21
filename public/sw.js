@@ -1,7 +1,7 @@
 // Service Worker do PWA + OneSignal Web Push (um único SW no escopo "/")
 importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
 
-const CACHE_NAME = 'up-mobilidade-v7';
+const CACHE_NAME = 'up-mobilidade-v8';
 const urlsToCache = [
   '/logo-horizontal.png',
   '/logo-icon.png',

@@ -117,11 +117,17 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
     }
   });
 
+  const scrollAppToTop = (behavior: ScrollBehavior) => {
+    const scroller = window.document.querySelector('.kavro-mobile-app-scroll');
+    if (scroller) scroller.scrollTo({ top: 0, behavior });
+    window.scrollTo({ top: 0, behavior });
+  };
+
   // Reset to hub when user taps Conta in bottom navigation bar
   useEffect(() => {
     if (resetKey > 0) {
       setSubView('hub');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      scrollAppToTop('smooth');
     }
   }, [resetKey]);
 
@@ -303,7 +309,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
 
   const openSubView = (target: AccountSubView) => {
     setSubView(target);
-    window.scrollTo({ top: 0, behavior: 'auto' });
+    scrollAppToTop('auto');
   };
 
   const syncUser = (updated: ClientProfile) => {

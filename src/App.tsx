@@ -341,7 +341,7 @@ const ClientApp: React.FC<{
   });
 
   return (
-    <div className="app-container">
+    <div className="app-container kavro-mobile-app-scroll">
       {/* Conteúdo da Aba Ativa (estende por trás da barra flutuante transparente) */}
       <div style={{ flex: 1 }}>
         {currentTab === 'inicio' && (
