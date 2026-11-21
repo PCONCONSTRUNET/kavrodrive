@@ -7258,18 +7258,19 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { error: 'Acesso não autorizado para disparo de notificações.' });
       }
       const body = await parseBody(req);
-      const allowedAudiences = ['cliente', 'motorista', 'ambos', 'admin', 'cliente_especifico', 'motorista_especifico'];
+      const allowedAudiences = ['cliente', 'motorista', 'ambos', 'todos', 'admin', 'cliente_especifico', 'motorista_especifico'];
       const audience = allowedAudiences.includes(body.audience)
         ? body.audience
-        : 'ambos';
-      const title = String(body.title || '').trim();
+        : 'todos';
+      const title = String(body.title || 'Kavro Drive').trim() || 'Kavro Drive';
       const message = String(body.message || '').trim();
-      if (!title || !message) {
-        return sendJson(res, 400, { error: 'Título e mensagem da notificação são obrigatórios.' });
+      if (!message) {
+        return sendJson(res, 400, { error: 'Mensagem da notificação Push é obrigatória.' });
       }
       try {
         const out = await push.broadcastManualPush({
           audience,
+          includeAdmin: audience === 'todos' || Boolean(body.includeAdmin),
           targetClientId: body.targetClientId ? String(body.targetClientId).trim() : null,
           targetDriverId: body.targetDriverId ? String(body.targetDriverId).trim() : null,
           title,

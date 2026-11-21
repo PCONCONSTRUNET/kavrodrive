@@ -23,20 +23,20 @@ function driverExternalId(driverId, phone) {
 
 // Modelos padrão (o admin pode editar/desativar/criar novos no painel -> config.pushTemplates)
 const DEFAULT_TEMPLATES = {
-  admin_new_ride:        { enabled: true, audience: 'admin',     event: 'new_ride',         title: '🚗 Nova corrida agendada', message: '{cliente} agendou para {data} às {hora} • {valor}' },
-  admin_ride_cancelled:  { enabled: true, audience: 'admin',     event: 'ride_cancelled',   title: '❌ Corrida cancelada',      message: '{id} de {cliente} ({data} às {hora}) foi cancelada' },
-  admin_pix_paid:        { enabled: true, audience: 'admin',     event: 'pix_paid',         title: '💰 PIX recebido',          message: '{cliente} pagou {valor} via PIX • {id}' },
-  admin_payment_pending: { enabled: true, audience: 'admin',     event: 'new_ride',         title: '🧾 Pagamento pendente',    message: '{cliente} vai pagar {valor} em {pagamento} • aprove após receber' },
-  driver_new_ride:       { enabled: true, audience: 'motorista', event: 'new_ride',         title: '🚗 Nova corrida disponível!', message: '{cliente} solicitou viagem de {origem} para {destino} • {valor}' },
-  client_ride_booked:    { enabled: true, audience: 'cliente',   event: 'new_ride',         title: '✅ Corrida agendada',       message: 'Sua corrida {id} está marcada para {data} às {hora}.' },
-  client_ride_confirmed: { enabled: true, audience: 'cliente',   event: 'ride_confirmed',   title: '✅ Corrida confirmada!',     message: 'Sua corrida {id} para {data} às {hora} foi confirmada pelo motorista!' },
-  client_ride_started:   { enabled: true, audience: 'cliente',   event: 'driver_on_way',    title: '🚗 Motorista a caminho!',   message: '{motorista} iniciou o deslocamento até você ({origem}). Acompanhe no GPS ao vivo!' },
-  client_ride_in_progress:{ enabled: true, audience: 'cliente',  event: 'ride_in_progress', title: '🚀 Viagem iniciada!',       message: 'Embarque realizado! Sua corrida {id} rumo a {destino} está em andamento.' },
-  client_ride_finished:  { enabled: true, audience: 'cliente',   event: 'ride_finished',    title: '🏁 Viagem concluída!',      message: 'Sua corrida {id} foi finalizada com sucesso. Obrigado por viajar com a Kavro Drive!' },
-  client_ride_cancelled: { enabled: true, audience: 'cliente',   event: 'ride_cancelled',   title: '❌ Corrida cancelada',      message: 'Sua corrida {id} de {data} às {hora} foi cancelada.' },
-  client_payment_approved:{ enabled: true, audience: 'cliente',  event: 'payment_approved', title: '✅ Pagamento aprovado',    message: 'Recebemos seu pagamento de {valor} ({pagamento}). Obrigado!' },
-  client_pix_approved:   { enabled: true, audience: 'cliente',   event: 'pix_paid',         title: '✅ PIX confirmado',         message: 'Seu PIX de {valor} foi confirmado automaticamente. Corrida {id} garantida!' },
-  client_reminder:       { enabled: true, audience: 'cliente',   event: 'reminder',         title: '⏰ Sua corrida é em {minutos} min', message: 'Embarque às {hora} em {origem}. Esteja pronto!', minutesBefore: 30 },
+  admin_new_ride:         { enabled: true, audience: 'admin',     event: 'new_ride',         title: 'Kavro Drive', message: '🚗 Nova corrida: {cliente} solicitou para {data} às {hora} • {valor}' },
+  admin_ride_cancelled:   { enabled: true, audience: 'admin',     event: 'ride_cancelled',   title: 'Kavro Drive', message: '❌ Corrida {id} de {cliente} ({data} às {hora}) foi cancelada.' },
+  admin_pix_paid:         { enabled: true, audience: 'admin',     event: 'pix_paid',         title: 'Kavro Drive', message: '💰 PIX recebido: {cliente} pagou {valor} • Corrida {id}.' },
+  admin_payment_pending:  { enabled: true, audience: 'admin',     event: 'new_ride',         title: 'Kavro Drive', message: '🧾 Pagamento pendente: {cliente} vai pagar {valor} em {pagamento}.' },
+  driver_new_ride:        { enabled: true, audience: 'motorista', event: 'new_ride',         title: 'Kavro Drive', message: '🚗 Nova corrida disponível! {cliente} • {origem} ➔ {destino} ({valor})' },
+  client_ride_booked:     { enabled: true, audience: 'cliente',   event: 'new_ride',         title: 'Kavro Drive', message: '✅ Corrida {id} solicitada para {data} às {hora}. Aguardando confirmação!' },
+  client_ride_confirmed:  { enabled: true, audience: 'cliente',   event: 'ride_confirmed',   title: 'Kavro Drive', message: '✅ Corrida {id} confirmada pelo motorista para {data} às {hora}!' },
+  client_ride_started:    { enabled: true, audience: 'cliente',   event: 'driver_on_way',    title: 'Kavro Drive', message: '🚗 {motorista} iniciou o deslocamento até você ({origem}). Acompanhe no GPS!' },
+  client_ride_in_progress:{ enabled: true, audience: 'cliente',   event: 'ride_in_progress', title: 'Kavro Drive', message: '🚀 Embarque realizado! Sua viagem {id} rumo a {destino} está em andamento.' },
+  client_ride_finished:   { enabled: true, audience: 'cliente',   event: 'ride_finished',    title: 'Kavro Drive', message: '🏁 Viagem {id} concluída! Obrigado por viajar com a Kavro Drive.' },
+  client_ride_cancelled:  { enabled: true, audience: 'cliente',   event: 'ride_cancelled',   title: 'Kavro Drive', message: '❌ Sua corrida {id} de {data} às {hora} foi cancelada.' },
+  client_payment_approved:{ enabled: true, audience: 'cliente',   event: 'payment_approved', title: 'Kavro Drive', message: '✅ Pagamento aprovado de {valor} ({pagamento}). Obrigado!' },
+  client_pix_approved:    { enabled: true, audience: 'cliente',   event: 'pix_paid',         title: 'Kavro Drive', message: '✅ PIX de {valor} confirmado automaticamente! Corrida {id} garantida.' },
+  client_reminder:        { enabled: true, audience: 'cliente',   event: 'reminder',         title: 'Kavro Drive', message: '⏰ Sua corrida começa em {minutos} min ({hora} em {origem}). Esteja pronto!', minutesBefore: 30 },
 };
 
 const PAYMENT_LABEL = {
@@ -130,16 +130,18 @@ async function sendToExternalIds(externalIds, title, message, { url, sendAfter, 
 
 async function resolveRideTargets(audience, eventName, ride = {}) {
   const targets = new Set();
-  if (audience === 'admin') {
+  if (audience === 'admin' || audience === 'todos') {
     targets.add(ADMIN_EXTERNAL_ID);
-    return Array.from(targets);
+    if (audience === 'admin') {
+      return Array.from(targets);
+    }
   }
-  if (audience === 'cliente' || audience === 'ambos') {
+  if (audience === 'cliente' || audience === 'ambos' || audience === 'todos') {
     const pId = clientExternalId(ride.clientPhone);
     if (pId) targets.add(pId);
     if (ride.clientId) targets.add(String(ride.clientId));
   }
-  if (audience === 'motorista' || audience === 'ambos') {
+  if (audience === 'motorista' || audience === 'ambos' || audience === 'todos') {
     if (ride.driverId) {
       const dExt = driverExternalId(ride.driverId);
       if (dExt) targets.add(dExt);
@@ -349,25 +351,30 @@ async function notify(templateKey, ride, extra = {}) {
   const t = templates[templateKey];
   if (!t || !t.enabled) return null;
   const audience = t.audience || 'cliente';
-  const renderedTitle = fill(t.title, ride, extra);
+  const storedAudience = audience === 'todos' ? 'ambos' : audience;
+  const renderedTitle = fill(t.title || 'Kavro Drive', ride, extra) || 'Kavro Drive';
   const renderedMessage = fill(t.message, ride, extra);
   const url =
-    audience === 'admin'
+    t.url ||
+    (audience === 'admin'
       ? '/administracion'
       : audience === 'motorista'
         ? '/kavro-drive'
-        : `/viagem/${encodeURIComponent(ride.id)}`;
+        : `/viagem/${encodeURIComponent(ride.id)}`);
 
-  if (!extra.__sendAfter && (audience === 'cliente' || audience === 'motorista' || audience === 'ambos')) {
+  if (
+    !extra.__sendAfter &&
+    (storedAudience === 'cliente' || storedAudience === 'motorista' || storedAudience === 'ambos' || (t.isCustom && storedAudience === 'admin'))
+  ) {
     await saveAndPublishInAppNotification({
       id: `notif-${templateKey}-${ride.id}-${Date.now()}`,
       title: renderedTitle,
       message: renderedMessage,
-      type: mapTemplateToNotificationType(templateKey, t.event || templateKey),
+      type: t.isCustom ? 'admin_broadcast' : mapTemplateToNotificationType(templateKey, t.event || templateKey),
       rideId: ride.id,
-      audience,
-      targetClientId: audience === 'cliente' ? (ride.clientId || null) : null,
-      targetDriverId: audience === 'motorista' ? (ride.driverId || null) : null,
+      audience: storedAudience,
+      targetClientId: storedAudience === 'cliente' ? (ride.clientId || null) : null,
+      targetDriverId: storedAudience === 'motorista' ? (ride.driverId || null) : null,
       url
     });
   }
@@ -375,7 +382,7 @@ async function notify(templateKey, ride, extra = {}) {
   const target = await resolveRideTargets(audience, t.event || templateKey, ride);
   if (target.length === 0) return null;
   return sendToExternalIds(target, renderedTitle, renderedMessage, {
-    url, data: { rideId: ride.id, event: templateKey, audience }, sendAfter: extra.__sendAfter
+    url, data: { rideId: ride.id, event: templateKey, audience: storedAudience }, sendAfter: extra.__sendAfter
   });
 }
 
@@ -492,16 +499,17 @@ async function handleRideChange(before, after, { source = 'app' } = {}) {
 
 async function broadcastManualPush({
   audience = 'ambos',
+  includeAdmin = false,
   targetClientId = null,
   targetDriverId = null,
-  title,
+  title = 'Kavro Drive',
   message,
   url
 } = {}) {
-  const cleanTitle = String(title || '').trim();
+  const cleanTitle = String(title || 'Kavro Drive').trim() || 'Kavro Drive';
   const cleanMessage = String(message || '').trim();
-  if (!cleanTitle || !cleanMessage) {
-    throw new Error('Título e mensagem são obrigatórios para disparo manual.');
+  if (!cleanMessage) {
+    throw new Error('Mensagem da notificação Push é obrigatória.');
   }
 
   const normalizedAud =
@@ -509,7 +517,10 @@ async function broadcastManualPush({
       ? 'cliente'
       : audience === 'motorista_especifico'
         ? 'motorista'
-        : (['admin', 'cliente', 'motorista', 'ambos'].includes(audience) ? audience : 'ambos');
+        : audience === 'todos'
+          ? 'ambos'
+          : (['admin', 'cliente', 'motorista', 'ambos'].includes(audience) ? audience : 'ambos');
+  const alsoAdmin = normalizedAud === 'admin' || audience === 'todos' || Boolean(includeAdmin);
   const cleanTargetClient = audience === 'cliente_especifico' ? String(targetClientId || '').trim() : null;
   const cleanTargetDriver = audience === 'motorista_especifico' ? String(targetDriverId || '').trim() : null;
 
@@ -521,7 +532,7 @@ async function broadcastManualPush({
   }
 
   const targetIds = new Set();
-  if (normalizedAud === 'admin') {
+  if (alsoAdmin) {
     targetIds.add(ADMIN_EXTERNAL_ID);
   }
   if (normalizedAud === 'cliente' || normalizedAud === 'ambos') {
@@ -577,13 +588,14 @@ async function broadcastManualPush({
       data: {
         type: 'admin_broadcast',
         audience: normalizedAud,
+        includesAdmin: alsoAdmin,
         notificationId: notification?.id || null
       }
     });
   } else if (!cleanTargetClient && !cleanTargetDriver) {
     const roles =
       normalizedAud === 'ambos'
-        ? ['cliente', 'motorista']
+        ? (alsoAdmin ? ['cliente', 'motorista', 'admin'] : ['cliente', 'motorista'])
         : [normalizedAud];
     const filters = [];
     roles.forEach((roleVal, idx) => {
@@ -601,6 +613,7 @@ async function broadcastManualPush({
       data: {
         type: 'admin_broadcast',
         audience: normalizedAud,
+        includesAdmin: alsoAdmin,
         notificationId: notification?.id || null
       }
     });
@@ -612,6 +625,7 @@ async function broadcastManualPush({
     pushSent: Boolean(result?.id || result?.recipients),
     pushRecipients: Number(result?.recipients || 0),
     audience: normalizedAud,
+    includesAdmin: alsoAdmin,
     targetClientId: cleanTargetClient,
     targetDriverId: cleanTargetDriver,
     targetedIdsCount: ids.length,

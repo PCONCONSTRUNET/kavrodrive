@@ -912,8 +912,9 @@ export interface HomePartnerBanner {
   sortOrder?: number;
 }
 
-export type PushAudience = 'admin' | 'cliente' | 'motorista' | 'ambos';
+export type PushAudience = 'admin' | 'cliente' | 'motorista' | 'ambos' | 'todos';
 export type PushTriggerEvent =
+  | 'manual'
   | 'new_ride'
   | 'ride_confirmed'
   | 'driver_on_way'
@@ -933,6 +934,7 @@ export interface PushTemplate {
   event?: PushTriggerEvent;
   label?: string;
   isCustom?: boolean;
+  url?: string;
 }
 
 export interface NotificationItem {

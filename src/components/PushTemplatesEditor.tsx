@@ -1,7 +1,8 @@
 import React, { useMemo, useRef, useState } from 'react';
 import {
-  Bell, BellRing, Send, ChevronDown, ChevronUp, Loader2, Check,
-  Sparkles, Plus, Trash2, Users, Car, ShieldCheck, Globe, Smile, UserCheck
+  Bell, BellRing, Send, Loader2, Check,
+  Plus, Trash2, Users, Car, ShieldCheck, Globe, Smile,
+  Edit3, Power, RotateCcw, BookmarkPlus, Smartphone
 } from 'lucide-react';
 import { ClientProfile, DriverProfile, NotificationItem, PushAudience, PushTemplate, PushTriggerEvent } from '../types';
 import { PushService } from '../services/push';
@@ -13,7 +14,18 @@ const QUICK_EMOJIS = [
   '👏', '🙌', '💬', '📢', '🔔', '🎁', '👋', '🛡️'
 ];
 
+type PushWorkspaceArea = 'todos' | 'admin' | 'motorista' | 'cliente';
+type ManualAudience =
+  | 'todos'
+  | 'cliente'
+  | 'cliente_especifico'
+  | 'motorista'
+  | 'motorista_especifico'
+  | 'ambos'
+  | 'admin';
+
 const EVENT_OPTIONS: { value: PushTriggerEvent; label: string; hint: string }[] = [
+  { value: 'manual', label: 'Campanha / Envio Manual (Disparo quando quiser)', hint: 'Fica salvo na área para editar, ativar/desativar ou disparar manualmente' },
   { value: 'new_ride', label: 'Nova corrida solicitada', hint: 'Disparado assim que o passageiro cria um pedido' },
   { value: 'ride_confirmed', label: 'Corrida aceita / confirmada', hint: 'Quando o motorista ou central confirma a viagem' },
   { value: 'driver_on_way', label: 'Motorista a caminho (GPS)', hint: 'Quando o motorista inicia o deslocamento até o embarque' },
@@ -25,28 +37,114 @@ const EVENT_OPTIONS: { value: PushTriggerEvent; label: string; hint: string }[] 
   { value: 'reminder', label: 'Lembrete pré-viagem agendada', hint: 'Antes do horário de embarque de uma reserva' },
 ];
 
-const AUDIENCE_META: Record<PushAudience, { label: string; short: string; bg: string; color: string; border: string }> = {
-  cliente:   { label: 'Somente Passageiros',    short: 'Passageiro', bg: '#EFF6FF', color: '#1D4ED8', border: '#BFDBFE' },
-  motorista: { label: 'Somente Motoristas',     short: 'Motorista',  bg: '#ECFDF5', color: '#047857', border: '#A7F3D0' },
-  ambos:     { label: 'Passageiros + Motoristas', short: 'Ambos',    bg: '#F5F3FF', color: '#6D28D9', border: '#DDD6FE' },
-  admin:     { label: 'Admin Master',           short: 'Admin',      bg: '#F1F5F9', color: '#0F172A', border: '#CBD5E1' },
+const AREA_CONFIG: Record<PushWorkspaceArea, {
+  id: PushWorkspaceArea;
+  title: string;
+  shortTitle: string;
+  subtitle: string;
+  badgeText: string;
+  accent: string;
+  softBg: string;
+  softBorder: string;
+  defaultUrl: string;
+  sampleMessage: string;
+  defaultEventForNew: PushTriggerEvent;
+  presets: { label: string; message: string }[];
+  icon: React.ComponentType<{ size?: number; color?: string }>;
+}> = {
+  todos: {
+    id: 'todos',
+    title: 'Push para Todos',
+    shortTitle: 'Para Todos',
+    subtitle: 'Envie avisos gerais de uma só vez para Passageiros, Motoristas e Painel Master Donos.',
+    badgeText: 'PARA TODOS',
+    accent: '#6D28D9',
+    softBg: '#F5F3FF',
+    softBorder: '#DDD6FE',
+    defaultUrl: '/',
+    sampleMessage: 'Novidade na Kavro Drive! Aproveite viagens rápidas, seguras e atendimento verificado na sua região.',
+    defaultEventForNew: 'manual',
+    presets: [
+      { label: '📢 Comunicado Geral', message: 'Aviso importante da Kavro Drive: operação funcionando 100% em toda a região!' },
+      { label: '🎉 Novidade no App', message: 'Confira as novidades e melhorias do app Kavro Drive já disponíveis para você.' },
+      { label: '⚡ Feriado / Plantão', message: 'Atendimento ativo 24h durante todo o feriado. Conte com a Kavro Drive!' },
+    ],
+    icon: Globe,
+  },
+  admin: {
+    id: 'admin',
+    title: 'Push para Painel Master Donos',
+    shortTitle: 'Painel Donos',
+    subtitle: 'Alertas operacionais, financeiros, novas corridas e comunicados exclusivos dos proprietários.',
+    badgeText: 'PAINEL MASTER DONOS',
+    accent: '#0F172A',
+    softBg: '#F1F5F9',
+    softBorder: '#CBD5E1',
+    defaultUrl: '/administracion',
+    sampleMessage: 'Alerta do Painel Master Donos: acompanhe o movimento de corridas, PIX e frota online em tempo real.',
+    defaultEventForNew: 'new_ride',
+    presets: [
+      { label: '📊 Resumo Operacional', message: 'Confira os novos repasses PIX, cadastros e corridas em andamento no Painel Master.' },
+      { label: '🚨 Atenção Donos', message: 'Existem pendências de aprovação documental ou alertas críticos aguardando revisão no Painel.' },
+      { label: '💰 Caixa & Repasses', message: 'Movimentação financeira atualizada com sucesso no painel administrativo Kavro Drive.' },
+    ],
+    icon: ShieldCheck,
+  },
+  motorista: {
+    id: 'motorista',
+    title: 'Push para Motorista',
+    shortTitle: 'Motorista',
+    subtitle: 'Chamados de corridas, avisos de alta demanda, campanhas e notificações para toda a frota.',
+    badgeText: 'MOTORISTA',
+    accent: '#047857',
+    softBg: '#ECFDF5',
+    softBorder: '#A7F3D0',
+    defaultUrl: '/kavro-drive',
+    sampleMessage: 'Motorista parceiro, alta demanda de viagens agora na sua cidade! Fique online para receber chamadas.',
+    defaultEventForNew: 'new_ride',
+    presets: [
+      { label: '⚡ Alta Demanda', message: 'Pico de solicitações na região agora! Fique online no Portal do Motorista.' },
+      { label: '💸 Repasse Liberado', message: 'Seu repasse de corridas foi processado. Confira os detalhes no seu histórico financeiro.' },
+      { label: '🛡️ Lembrete Frota', message: 'Mantenha seus documentos CRLV/CNH e foto do veículo sempre em dia no portal.' },
+    ],
+    icon: Car,
+  },
+  cliente: {
+    id: 'cliente',
+    title: 'Push para Passageiros',
+    shortTitle: 'Passageiros',
+    subtitle: 'Atualizações de viagem, confirmações de PIX, lembretes e promoções para clientes/passageiros.',
+    badgeText: 'PASSAGEIROS',
+    accent: '#1D4ED8',
+    softBg: '#EFF6FF',
+    softBorder: '#BFDBFE',
+    defaultUrl: '/cliente',
+    sampleMessage: 'Motoristas disponíveis perto de você! Abra o app Kavro Drive e peça sua viagem ou entrega com segurança.',
+    defaultEventForNew: 'manual',
+    presets: [
+      { label: '🎁 Promoção', message: 'Condição especial hoje na Kavro Drive! Solicite sua corrida pelo app agora mesmo.' },
+      { label: '🚗 Carros Perto', message: 'Temos motoristas disponíveis na sua região prontos para te atender em minutos!' },
+      { label: '📦 Entregas', message: 'Precisa enviar uma encomenda rápida? Use a categoria Entregas direto no app!' },
+    ],
+    icon: Users,
+  },
 };
 
 export const DEFAULT_PUSH_TEMPLATES: Record<string, PushTemplate> = {
-  admin_new_ride:        { enabled: true, audience: 'admin',     event: 'new_ride',         title: '🚗 Nova corrida agendada', message: '{cliente} agendou para {data} às {hora} • {valor}' },
-  admin_ride_cancelled:  { enabled: true, audience: 'admin',     event: 'ride_cancelled',   title: '❌ Corrida cancelada',      message: '{id} de {cliente} ({data} às {hora}) foi cancelada' },
-  admin_pix_paid:        { enabled: true, audience: 'admin',     event: 'pix_paid',         title: '💰 PIX recebido',          message: '{cliente} pagou {valor} via PIX • {id}' },
-  admin_payment_pending: { enabled: true, audience: 'admin',     event: 'new_ride',         title: '🧾 Pagamento pendente',    message: '{cliente} vai pagar {valor} em {pagamento} • aprove após receber' },
-  driver_new_ride:       { enabled: true, audience: 'motorista', event: 'new_ride',         title: '🚗 Nova corrida disponível!', message: '{cliente} solicitou viagem de {origem} para {destino} • {valor}' },
-  client_ride_booked:    { enabled: true, audience: 'cliente',   event: 'new_ride',         title: '✅ Corrida agendada',       message: 'Sua corrida {id} está marcada para {data} às {hora}.' },
-  client_ride_confirmed: { enabled: true, audience: 'cliente',   event: 'ride_confirmed',   title: '✅ Corrida confirmada!',     message: 'Sua corrida {id} para {data} às {hora} foi confirmada pelo motorista!' },
-  client_ride_started:   { enabled: true, audience: 'cliente',   event: 'driver_on_way',    title: '🚗 Motorista a caminho!',   message: '{motorista} iniciou o deslocamento até você ({origem}). Acompanhe no GPS ao vivo!' },
-  client_ride_in_progress:{ enabled: true, audience: 'cliente',  event: 'ride_in_progress', title: '🚀 Viagem iniciada!',       message: 'Embarque realizado! Sua corrida {id} rumo a {destino} está em andamento.' },
-  client_ride_finished:  { enabled: true, audience: 'cliente',   event: 'ride_finished',    title: '🏁 Viagem concluída!',      message: 'Sua corrida {id} foi finalizada com sucesso. Obrigado por viajar com a Kavro Drive!' },
-  client_ride_cancelled: { enabled: true, audience: 'cliente',   event: 'ride_cancelled',   title: '❌ Corrida cancelada',      message: 'Sua corrida {id} de {data} às {hora} foi cancelada.' },
-  client_payment_approved:{ enabled: true, audience: 'cliente',  event: 'payment_approved', title: '✅ Pagamento aprovado',    message: 'Recebemos seu pagamento de {valor} ({pagamento}). Obrigado!' },
-  client_pix_approved:   { enabled: true, audience: 'cliente',   event: 'pix_paid',         title: '✅ PIX confirmado',         message: 'Seu PIX de {valor} foi confirmado automaticamente. Corrida {id} garantida!' },
-  client_reminder:       { enabled: true, audience: 'cliente',   event: 'reminder',         title: '⏰ Sua corrida é em {minutos} min', message: 'Embarque às {hora} em {origem}. Esteja pronto!', minutesBefore: 30 },
+  admin_new_ride:         { enabled: true, audience: 'admin',     event: 'new_ride',         title: 'Kavro Drive', message: '🚗 Nova corrida: {cliente} solicitou para {data} às {hora} • {valor}' },
+  admin_ride_cancelled:   { enabled: true, audience: 'admin',     event: 'ride_cancelled',   title: 'Kavro Drive', message: '❌ Corrida {id} de {cliente} ({data} às {hora}) foi cancelada.' },
+  admin_pix_paid:         { enabled: true, audience: 'admin',     event: 'pix_paid',         title: 'Kavro Drive', message: '💰 PIX recebido: {cliente} pagou {valor} • Corrida {id}.' },
+  admin_payment_pending:  { enabled: true, audience: 'admin',     event: 'new_ride',         title: 'Kavro Drive', message: '🧾 Pagamento pendente: {cliente} vai pagar {valor} em {pagamento}.' },
+  driver_new_ride:        { enabled: true, audience: 'motorista', event: 'new_ride',         title: 'Kavro Drive', message: '🚗 Nova corrida disponível! {cliente} • {origem} ➔ {destino} ({valor})' },
+  client_ride_booked:     { enabled: true, audience: 'cliente',   event: 'new_ride',         title: 'Kavro Drive', message: '✅ Corrida {id} solicitada para {data} às {hora}. Aguardando confirmação!' },
+  client_ride_confirmed:  { enabled: true, audience: 'cliente',   event: 'ride_confirmed',   title: 'Kavro Drive', message: '✅ Corrida {id} confirmada pelo motorista para {data} às {hora}!' },
+  client_ride_started:    { enabled: true, audience: 'cliente',   event: 'driver_on_way',    title: 'Kavro Drive', message: '🚗 {motorista} iniciou o deslocamento até você ({origem}). Acompanhe no GPS!' },
+  client_ride_in_progress:{ enabled: true, audience: 'cliente',   event: 'ride_in_progress', title: 'Kavro Drive', message: '🚀 Embarque realizado! Sua viagem {id} rumo a {destino} está em andamento.' },
+  client_ride_finished:   { enabled: true, audience: 'cliente',   event: 'ride_finished',    title: 'Kavro Drive', message: '🏁 Viagem {id} concluída! Obrigado por viajar com a Kavro Drive.' },
+  client_ride_cancelled:  { enabled: true, audience: 'cliente',   event: 'ride_cancelled',   title: 'Kavro Drive', message: '❌ Sua corrida {id} de {data} às {hora} foi cancelada.' },
+  client_payment_approved:{ enabled: true, audience: 'cliente',   event: 'payment_approved', title: 'Kavro Drive', message: '✅ Pagamento aprovado de {valor} ({pagamento}). Obrigado!' },
+  client_pix_approved:    { enabled: true, audience: 'cliente',   event: 'pix_paid',         title: 'Kavro Drive', message: '✅ PIX de {valor} confirmado automaticamente! Corrida {id} garantida.' },
+  client_reminder:        { enabled: true, audience: 'cliente',   event: 'reminder',         title: 'Kavro Drive', message: '⏰ Sua corrida começa em {minutos} min ({hora} em {origem}). Esteja pronto!', minutesBefore: 30 },
 };
 
 const BUILTIN_LABELS: Record<string, string> = {
@@ -68,28 +166,16 @@ const BUILTIN_LABELS: Record<string, string> = {
 
 const VARIABLES = ['{cliente}', '{motorista}', '{valor}', '{origem}', '{destino}', '{pagamento}', '{data}', '{hora}', '{id}'];
 
-type ManualAudience =
-  | 'cliente'
-  | 'cliente_especifico'
-  | 'motorista'
-  | 'motorista_especifico'
-  | 'ambos'
-  | 'admin';
+function templateBelongsToArea(t: PushTemplate, area: PushWorkspaceArea): boolean {
+  const aud = t.audience || 'cliente';
+  if (area === 'todos') return aud === 'todos' || aud === 'ambos';
+  return aud === area;
+}
 
-const MANUAL_AUDIENCE_META: Record<ManualAudience, { label: string; short: string }> = {
-  ambos: { label: 'Todos (Passageiros + Motoristas)', short: 'Todos' },
-  cliente: { label: 'Todos os Passageiros / Clientes', short: 'Passageiros' },
-  cliente_especifico: { label: 'Passageiro / Cliente Específico', short: 'Cliente único' },
-  motorista: { label: 'Todos os Motoristas', short: 'Motoristas' },
-  motorista_especifico: { label: 'Motorista Específico', short: 'Motorista único' },
-  admin: { label: 'Admin Master', short: 'Admin' }
-};
-
-const QUICK_MANUAL_PRESETS = [
-  { label: '🎉 Promoção', title: '🎉 Condição especial na Kavro Drive!', message: 'Solicite sua corrida agora pelo app com tarifa justa e atendimento verificado.' },
-  { label: '⚡ Alta Demanda', title: '⚡ Alta demanda de corridas na região!', message: 'Motorista parceiro, fique online agora para aproveitar as novas chamadas.' },
-  { label: '📢 Comunicado', title: '📢 Aviso importante da Kavro Drive', message: 'Confira as novidades do atendimento e mantenha seu cadastro sempre atualizado.' }
-];
+function areaToAudience(area: PushWorkspaceArea): PushAudience {
+  if (area === 'todos') return 'todos';
+  return area;
+}
 
 interface Props {
   value?: Record<string, PushTemplate>;
@@ -104,14 +190,15 @@ const ToggleSwitch: React.FC<{ checked: boolean; onClick: (e: React.MouseEvent) 
     type="button"
     onClick={onClick}
     aria-pressed={checked}
+    title={checked ? 'Clique para desativar' : 'Clique para ativar'}
     style={{
-      width: 38,
+      width: 40,
       height: 22,
       borderRadius: 999,
       padding: 2,
       border: 'none',
       cursor: 'pointer',
-      backgroundColor: checked ? '#0F172A' : '#CBD5E1',
+      backgroundColor: checked ? '#10B981' : '#CBD5E1',
       display: 'flex',
       alignItems: 'center',
       justifyContent: checked ? 'flex-end' : 'flex-start',
@@ -119,9 +206,88 @@ const ToggleSwitch: React.FC<{ checked: boolean; onClick: (e: React.MouseEvent) 
       flexShrink: 0,
     }}
   >
-    <span style={{ width: 18, height: 18, borderRadius: '50%', backgroundColor: '#FFFFFF', boxShadow: '0 1px 2px rgba(0,0,0,0.2)' }} />
+    <span style={{ width: 18, height: 18, borderRadius: '50%', backgroundColor: '#FFFFFF', boxShadow: '0 1px 2px rgba(0,0,0,0.22)' }} />
   </button>
 );
+
+const PushPreviewCard: React.FC<{
+  title: string;
+  message: string;
+  areaBadge: string;
+}> = ({ title, message, areaBadge }) => {
+  const [imgErr, setImgErr] = useState(false);
+  return (
+    <div
+      style={{
+        background: 'linear-gradient(145deg, #0F172A 0%, #1E293B 100%)',
+        color: '#FFFFFF',
+        borderRadius: 16,
+        padding: '14px 16px',
+        boxShadow: '0 10px 26px rgba(15, 23, 42, 0.22)',
+        border: '1px solid rgba(255,255,255,0.12)',
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
+      }}
+    >
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 11,
+          backgroundColor: '#020617',
+          border: '1px solid rgba(16, 185, 129, 0.45)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          overflow: 'hidden',
+          fontWeight: 900,
+          fontSize: '1rem',
+          color: '#10B981',
+        }}
+      >
+        {!imgErr ? (
+          <img
+            src="/pwa-icon-192.png"
+            alt="Kavro Drive"
+            onError={() => setImgErr(true)}
+            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          />
+        ) : (
+          'K'
+        )}
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+            <span style={{ fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF', letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {title.trim() || 'Kavro Drive'}
+            </span>
+            <span
+              style={{
+                fontSize: '0.62rem',
+                fontWeight: 800,
+                padding: '1px 7px',
+                borderRadius: 999,
+                backgroundColor: 'rgba(16, 185, 129, 0.2)',
+                color: '#6EE7B7',
+                border: '1px solid rgba(16, 185, 129, 0.35)',
+                flexShrink: 0,
+              }}
+            >
+              {areaBadge}
+            </span>
+          </div>
+          <span style={{ fontSize: '0.68rem', color: '#94A3B8', flexShrink: 0 }}>agora</span>
+        </div>
+        <div style={{ fontSize: '0.82rem', color: '#E2E8F0', marginTop: 4, lineHeight: 1.45, wordBreak: 'break-word' }}>
+          {message.trim() || 'Digite a mensagem que aparecerá aqui em formato de Push...'}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], drivers = [], onChange, onPersist }) => {
   const templates = useMemo(() => {
@@ -135,7 +301,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
           ...tpl,
           enabled: tpl.enabled ?? true,
           audience: tpl.audience || 'cliente',
-          event: tpl.event || 'new_ride',
+          event: tpl.event || 'manual',
           isCustom: tpl.isCustom ?? true,
         };
       }
@@ -143,41 +309,69 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
     return merged;
   }, [value]);
 
-  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [activeArea, setActiveArea] = useState<PushWorkspaceArea>('todos');
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [notifPermission, setNotifPermission] = useState<string>(PushService.permission());
   const [enabling, setEnabling] = useState(false);
   const [testing, setTesting] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
   const [statusFeedback, setStatusFeedback] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
 
-  // ===== Estado: Disparo Manual (Broadcast / Direto) =====
-  const [broadcastAudience, setBroadcastAudience] = useState<ManualAudience>('ambos');
+  // ===== Estado: Compositor da Área Selecionada =====
+  const [targetSpecificMode, setTargetSpecificMode] = useState<'all' | 'specific'>('all');
+  const [includeAdminInAll, setIncludeAdminInAll] = useState<boolean>(true);
   const [selectedClientId, setSelectedClientId] = useState<string>('');
   const [selectedDriverId, setSelectedDriverId] = useState<string>('');
-  const [broadcastTitle, setBroadcastTitle] = useState('🚗 Novidade na Kavro Drive!');
-  const [broadcastMessage, setBroadcastMessage] = useState('Aproveite corridas rápidas, seguras e com tarifa justa hoje mesmo.');
+  const [broadcastTitle, setBroadcastTitle] = useState('Kavro Drive');
+  const [broadcastMessage, setBroadcastMessage] = useState(AREA_CONFIG.todos.sampleMessage);
+  const [messageCustomized, setMessageCustomized] = useState(false);
   const [broadcastUrl, setBroadcastUrl] = useState<string>('');
   const [broadcastFocus, setBroadcastFocus] = useState<'title' | 'message'>('message');
   const [sendingBroadcast, setSendingBroadcast] = useState(false);
   const [sentHistory, setSentHistory] = useState<NotificationItem[]>(() =>
-    StorageService.getNotifications().filter(n => n.type === 'admin_broadcast').slice(0, 12)
+    StorageService.getNotifications().filter(n => n.type === 'admin_broadcast').slice(0, 20)
   );
   const broadcastTitleRef = useRef<HTMLInputElement | null>(null);
   const broadcastMsgRef = useRef<HTMLTextAreaElement | null>(null);
 
-  // ===== Estado: Criador de Novo Gatilho Automático =====
+  // ===== Estado: Criador de Novo Push dentro da Área =====
   const [showCreator, setShowCreator] = useState(false);
   const [newLabel, setNewLabel] = useState('');
-  const [newEvent, setNewEvent] = useState<PushTriggerEvent>('new_ride');
-  const [newAudience, setNewAudience] = useState<PushAudience>('motorista');
-  const [newTitle, setNewTitle] = useState('⚡ Nova oportunidade de viagem!');
-  const [newMessage, setNewMessage] = useState('{cliente} solicitou corrida de {origem} para {destino} ({valor}).');
+  const [newEvent, setNewEvent] = useState<PushTriggerEvent>('manual');
+  const [newAudience, setNewAudience] = useState<PushAudience>('todos');
+  const [newTitle, setNewTitle] = useState('Kavro Drive');
+  const [newMessage, setNewMessage] = useState(AREA_CONFIG.todos.sampleMessage);
   const [newFocus, setNewFocus] = useState<'title' | 'message'>('message');
   const [savingCreator, setSavingCreator] = useState(false);
 
-  const customEntries = Object.entries(templates).filter(([, t]) => Boolean(t.isCustom));
-  const adminEntries = Object.entries(templates).filter(([, t]) => !t.isCustom && t.audience === 'admin');
-  const driverEntries = Object.entries(templates).filter(([, t]) => !t.isCustom && t.audience === 'motorista');
-  const clientEntries = Object.entries(templates).filter(([, t]) => !t.isCustom && (t.audience || 'cliente') === 'cliente');
+  const areaMeta = AREA_CONFIG[activeArea];
+
+  const handleSelectArea = (nextArea: PushWorkspaceArea) => {
+    setActiveArea(nextArea);
+    setTargetSpecificMode('all');
+    setSelectedClientId('');
+    setSelectedDriverId('');
+    setBroadcastUrl('');
+    setEditingKey(null);
+    if (!messageCustomized) {
+      setBroadcastMessage(AREA_CONFIG[nextArea].sampleMessage);
+    }
+    if (showCreator) {
+      setNewAudience(areaToAudience(nextArea));
+      setNewEvent(AREA_CONFIG[nextArea].defaultEventForNew);
+      setNewMessage(AREA_CONFIG[nextArea].sampleMessage);
+    }
+  };
+
+  const persistNextTemplates = async (next: Record<string, PushTemplate>, feedbackText?: string) => {
+    onChange(next);
+    if (onPersist) {
+      await onPersist(next);
+    }
+    if (feedbackText) {
+      setStatusFeedback({ type: 'ok', text: feedbackText });
+    }
+  };
 
   const updateTemplate = (key: string, patch: Partial<PushTemplate>) => {
     onChange({
@@ -186,15 +380,54 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
     });
   };
 
+  const toggleTemplateEnabled = async (key: string) => {
+    const current = templates[key];
+    if (!current) return;
+    const nextEnabled = !current.enabled;
+    const next = {
+      ...templates,
+      [key]: { ...current, enabled: nextEnabled },
+    };
+    setSavingId(key);
+    await persistNextTemplates(
+      next,
+      nextEnabled ? 'Push ativado e salvo com sucesso.' : 'Push desativado — não será mais disparado até ser reativado.'
+    );
+    setSavingId(null);
+  };
+
+  const saveEditedTemplate = async (key: string) => {
+    setSavingId(key);
+    await persistNextTemplates(templates, 'Alterações do Push salvas com sucesso!');
+    setSavingId(null);
+    setEditingKey(null);
+  };
+
+  const restoreDefaultTemplate = async (key: string) => {
+    const def = DEFAULT_PUSH_TEMPLATES[key];
+    if (!def) return;
+    const next = { ...templates, [key]: { ...def } };
+    setSavingId(key);
+    await persistNextTemplates(next, 'Modelo original Kavro Drive restaurado e salvo.');
+    setSavingId(null);
+  };
+
   const deleteCustomTemplate = async (key: string) => {
     const next = { ...templates };
     delete next[key];
-    onChange(next);
-    if (openKey === key) setOpenKey(null);
-    if (onPersist) {
-      await onPersist(next);
-    }
-    setStatusFeedback({ type: 'ok', text: 'Gatilho personalizado removido.' });
+    if (editingKey === key) setEditingKey(null);
+    setSavingId(key);
+    await persistNextTemplates(next, 'Push removido da área com sucesso.');
+    setSavingId(null);
+  };
+
+  const openCreatorForActiveArea = () => {
+    setNewAudience(areaToAudience(activeArea));
+    setNewEvent(areaMeta.defaultEventForNew);
+    setNewTitle('Kavro Drive');
+    setNewMessage(areaMeta.sampleMessage);
+    setNewLabel('');
+    setShowCreator(true);
   };
 
   const handleEnableDevice = async () => {
@@ -205,7 +438,7 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
     setEnabling(false);
     setStatusFeedback(
       res.ok
-        ? { type: 'ok', text: 'Navegador conectado à Torre de Notificações Admin Master.' }
+        ? { type: 'ok', text: 'Este dispositivo dos Donos (Painel Master) está conectado para receber Push!' }
         : { type: 'err', text: 'Permissão negada ou bloqueada pelo navegador.' }
     );
   };
@@ -221,15 +454,15 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
           'x-admin-pin': StorageService.getAdminPin(),
         },
         body: JSON.stringify({
-          title: '🔔 Teste Kavro Drive',
-          message: 'Notificações Admin Master ativas em tempo real.',
+          title: 'Kavro Drive',
+          message: '🔔 Teste de Push do Painel Master Donos ativo em tempo real!',
         }),
       });
       const data = await res.json();
       setStatusFeedback(
         res.ok && data.ok
-          ? { type: 'ok', text: 'Notificação de teste disparada! Verifique os alertas deste navegador.' }
-          : { type: 'err', text: data.error || 'Nenhum navegador Admin inscrito ainda. Clique em "Receber Alertas neste Navegador".' }
+          ? { type: 'ok', text: 'Push de teste disparado para o Painel Master Donos!' }
+          : { type: 'err', text: data.error || 'Nenhum navegador Admin inscrito ainda. Clique em "Ativar Push neste Aparelho".' }
       );
     } catch {
       setStatusFeedback({ type: 'err', text: 'Falha de comunicação ao disparar teste.' });
@@ -237,11 +470,160 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
     setTesting(false);
   };
 
+  const resolveEffectiveBroadcastAudience = (): {
+    audience: ManualAudience;
+    includeAdmin: boolean;
+    label: string;
+  } => {
+    if (activeArea === 'admin') {
+      return { audience: 'admin', includeAdmin: true, label: 'Painel Master Donos' };
+    }
+    if (activeArea === 'motorista') {
+      if (targetSpecificMode === 'specific') {
+        const drv = drivers.find(d => d.id === selectedDriverId);
+        return {
+          audience: 'motorista_especifico',
+          includeAdmin: false,
+          label: drv ? `Motorista ${drv.name}` : 'Motorista Específico',
+        };
+      }
+      return { audience: 'motorista', includeAdmin: false, label: 'Todos os Motoristas' };
+    }
+    if (activeArea === 'cliente') {
+      if (targetSpecificMode === 'specific') {
+        const cli = clients.find(c => c.id === selectedClientId);
+        return {
+          audience: 'cliente_especifico',
+          includeAdmin: false,
+          label: cli ? `Passageiro ${cli.name}` : 'Passageiro Específico',
+        };
+      }
+      return { audience: 'cliente', includeAdmin: false, label: 'Todos os Passageiros' };
+    }
+    return {
+      audience: includeAdminInAll ? 'todos' : 'ambos',
+      includeAdmin: includeAdminInAll,
+      label: includeAdminInAll
+        ? 'Todos (Passageiros + Motoristas + Painel Master Donos)'
+        : 'Todos os Passageiros e Motoristas',
+    };
+  };
+
+  const sendManualPushNow = async (overrideTitle?: string, overrideMessage?: string, overrideUrl?: string) => {
+    const titleToSend = (overrideTitle ?? broadcastTitle).trim() || 'Kavro Drive';
+    const messageToSend = (overrideMessage ?? broadcastMessage).trim();
+    if (!messageToSend) {
+      setStatusFeedback({ type: 'err', text: 'Escreva a mensagem do Push antes de enviar.' });
+      return;
+    }
+    const resolved = resolveEffectiveBroadcastAudience();
+    if (resolved.audience === 'cliente_especifico' && !selectedClientId) {
+      setStatusFeedback({ type: 'err', text: 'Selecione qual passageiro receberá o Push.' });
+      return;
+    }
+    if (resolved.audience === 'motorista_especifico' && !selectedDriverId) {
+      setStatusFeedback({ type: 'err', text: 'Selecione qual motorista receberá o Push.' });
+      return;
+    }
+
+    setSendingBroadcast(true);
+    setStatusFeedback(null);
+    try {
+      const res = await fetch('/api/push/broadcast', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-pin': StorageService.getAdminPin(),
+        },
+        body: JSON.stringify({
+          audience: resolved.audience,
+          includeAdmin: resolved.includeAdmin,
+          targetClientId: resolved.audience === 'cliente_especifico' ? selectedClientId : undefined,
+          targetDriverId: resolved.audience === 'motorista_especifico' ? selectedDriverId : undefined,
+          title: titleToSend,
+          message: messageToSend,
+          url: (overrideUrl ?? broadcastUrl) || areaMeta.defaultUrl,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.ok) {
+        if (data.notification) {
+          setSentHistory(prev => [data.notification, ...prev].slice(0, 20));
+        }
+        const pushNote = data.pushSent
+          ? ` • Web Push disparado (${data.targetedIdsCount || 0} destino(s))`
+          : ' • Entregue no app (sininho + fila Push)';
+        setStatusFeedback({
+          type: 'ok',
+          text: `Push "${titleToSend}" enviado para ${resolved.label}${pushNote}.`,
+        });
+      } else {
+        setStatusFeedback({
+          type: 'err',
+          text: data.error || 'Não foi possível enviar o Push.',
+        });
+      }
+    } catch {
+      setStatusFeedback({ type: 'err', text: 'Erro de comunicação ao disparar Push.' });
+    }
+    setSendingBroadcast(false);
+  };
+
+  const saveComposerAsTemplate = async () => {
+    const cleanMsg = broadcastMessage.trim();
+    if (!cleanMsg) {
+      setStatusFeedback({ type: 'err', text: 'Escreva uma mensagem primeiro para salvar como modelo nesta área.' });
+      return;
+    }
+    const id = `custom_${Date.now()}`;
+    const created: PushTemplate = {
+      enabled: true,
+      isCustom: true,
+      event: 'manual',
+      audience: areaToAudience(activeArea),
+      label: `Push salvo (${areaMeta.shortTitle})`,
+      title: broadcastTitle.trim() || 'Kavro Drive',
+      message: cleanMsg,
+      url: broadcastUrl || areaMeta.defaultUrl,
+    };
+    const next = { ...templates, [id]: created };
+    await persistNextTemplates(next, `Push salvo na área "${areaMeta.title}"! Você pode editar, desativar ou enviar quando quiser.`);
+    setEditingKey(id);
+  };
+
+  const handleCreateTrigger = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newMessage.trim()) {
+      setStatusFeedback({ type: 'err', text: 'Escreva a mensagem do novo Push.' });
+      return;
+    }
+    setSavingCreator(true);
+    const id = `custom_${Date.now()}`;
+    const eventInfo = EVENT_OPTIONS.find(o => o.value === newEvent);
+    const targetAreaCfg = AREA_CONFIG[newAudience === 'ambos' || newAudience === 'todos' ? 'todos' : newAudience];
+    const created: PushTemplate = {
+      enabled: true,
+      isCustom: true,
+      event: newEvent,
+      audience: newAudience,
+      label: newLabel.trim() || `${newEvent === 'manual' ? 'Campanha Push' : eventInfo?.label || 'Push'} (${targetAreaCfg.shortTitle})`,
+      title: newTitle.trim() || 'Kavro Drive',
+      message: newMessage.trim(),
+    };
+    const next = { ...templates, [id]: created };
+    await persistNextTemplates(next, `Novo Push "${created.label}" criado na área ${targetAreaCfg.title}!`);
+    setSavingCreator(false);
+    setShowCreator(false);
+    setNewLabel('');
+    setEditingKey(id);
+  };
+
   const insertEmojiIntoBroadcast = (emoji: string) => {
     if (broadcastFocus === 'title') {
       setBroadcastTitle(prev => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${emoji}`);
       broadcastTitleRef.current?.focus();
     } else {
+      setMessageCustomized(true);
       setBroadcastMessage(prev => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${emoji}`);
       broadcastMsgRef.current?.focus();
     }
@@ -255,272 +637,353 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
     }
   };
 
-  const handleSendBroadcast = async () => {
-    if (!broadcastTitle.trim() || !broadcastMessage.trim()) {
-      setStatusFeedback({ type: 'err', text: 'Preencha o título e a mensagem da notificação antes de enviar.' });
-      return;
-    }
-    if (broadcastAudience === 'cliente_especifico' && !selectedClientId) {
-      setStatusFeedback({ type: 'err', text: 'Selecione o passageiro/cliente que receberá esta notificação.' });
-      return;
-    }
-    if (broadcastAudience === 'motorista_especifico' && !selectedDriverId) {
-      setStatusFeedback({ type: 'err', text: 'Selecione o motorista que receberá esta notificação.' });
-      return;
-    }
-    setSendingBroadcast(true);
-    setStatusFeedback(null);
-    try {
-      const res = await fetch('/api/push/broadcast', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-admin-pin': StorageService.getAdminPin(),
-        },
-        body: JSON.stringify({
-          audience: broadcastAudience,
-          targetClientId: broadcastAudience === 'cliente_especifico' ? selectedClientId : undefined,
-          targetDriverId: broadcastAudience === 'motorista_especifico' ? selectedDriverId : undefined,
-          title: broadcastTitle.trim(),
-          message: broadcastMessage.trim(),
-          url: broadcastUrl || undefined,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        if (data.notification) {
-          setSentHistory(prev => [data.notification, ...prev].slice(0, 12));
-        }
-        const pushNote = data.pushSent
-          ? ` • Web Push enviado (${data.targetedIdsCount || 0} alvo(s))`
-          : ' • Entregue na caixa do sininho no app';
-        setStatusFeedback({
-          type: 'ok',
-          text: `Notificação enviada para ${MANUAL_AUDIENCE_META[broadcastAudience].label}${pushNote}.`,
-        });
-      } else {
-        setStatusFeedback({
-          type: 'err',
-          text: data.error || 'Não foi possível enviar a notificação.',
-        });
-      }
-    } catch {
-      setStatusFeedback({ type: 'err', text: 'Erro de conexão ao disparar notificação.' });
-    }
-    setSendingBroadcast(false);
-  };
-
-  const handleCreateTrigger = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTitle.trim() || !newMessage.trim()) {
-      setStatusFeedback({ type: 'err', text: 'Informe o título e o texto do novo gatilho.' });
-      return;
-    }
-    setSavingCreator(true);
-    const id = `custom_${Date.now()}`;
-    const eventInfo = EVENT_OPTIONS.find(o => o.value === newEvent);
-    const created: PushTemplate = {
-      enabled: true,
-      isCustom: true,
-      event: newEvent,
-      audience: newAudience,
-      label: newLabel.trim() || `${eventInfo?.label || 'Gatilho'} (${AUDIENCE_META[newAudience].short})`,
-      title: newTitle.trim(),
-      message: newMessage.trim(),
+  const areaCounts = useMemo(() => {
+    const counts: Record<PushWorkspaceArea, { total: number; active: number }> = {
+      todos: { total: 0, active: 0 },
+      admin: { total: 0, active: 0 },
+      motorista: { total: 0, active: 0 },
+      cliente: { total: 0, active: 0 },
     };
-    const next = { ...templates, [id]: created };
-    onChange(next);
-    if (onPersist) {
-      await onPersist(next);
+    for (const t of Object.values(templates)) {
+      (['todos', 'admin', 'motorista', 'cliente'] as PushWorkspaceArea[]).forEach((area) => {
+        if (templateBelongsToArea(t, area)) {
+          counts[area].total += 1;
+          if (t.enabled) counts[area].active += 1;
+        }
+      });
     }
-    setSavingCreator(false);
-    setShowCreator(false);
-    setNewLabel('');
-    setOpenKey(id);
-    setStatusFeedback({ type: 'ok', text: `Novo gatilho "${created.label}" criado e salvo com sucesso!` });
-  };
+    return counts;
+  }, [templates]);
 
-  const renderTemplateRow = (key: string, t: PushTemplate) => {
-    const isOpen = openKey === key;
+  const activeAreaTemplates = useMemo(
+    () => Object.entries(templates).filter(([, t]) => templateBelongsToArea(t, activeArea)),
+    [templates, activeArea]
+  );
+
+  const areaSentHistory = useMemo(() => {
+    return sentHistory.filter((item) => {
+      const aud = item.audience || 'ambos';
+      if (activeArea === 'todos') return aud === 'ambos' || aud === 'todos';
+      return aud === activeArea;
+    });
+  }, [sentHistory, activeArea]);
+
+  const effectiveTarget = resolveEffectiveBroadcastAudience();
+
+  const renderTemplateCard = (key: string, t: PushTemplate) => {
+    const isEditing = editingKey === key;
+    const isBuiltIn = Boolean(DEFAULT_PUSH_TEMPLATES[key]);
     const isReminder = key === 'client_reminder' || t.event === 'reminder';
+    const isManual = (t.event || 'manual') === 'manual';
+    const hasVars = /\{[a-z_]+\}/i.test(t.message || '') || /\{[a-z_]+\}/i.test(t.title || '');
+    const eventInfo = EVENT_OPTIONS.find(ev => ev.value === (t.event || 'manual'));
+    const displayLabel = t.label || BUILTIN_LABELS[key] || 'Push Configurado';
     const aud = (t.audience || 'cliente') as PushAudience;
-    const audBadge = AUDIENCE_META[aud] || AUDIENCE_META.cliente;
-    const eventInfo = EVENT_OPTIONS.find(ev => ev.value === t.event);
-    const displayLabel = t.label || BUILTIN_LABELS[key] || key;
+    const itemAreaKey: PushWorkspaceArea = aud === 'ambos' || aud === 'todos' ? 'todos' : aud;
+    const itemArea = AREA_CONFIG[itemAreaKey] || AREA_CONFIG.cliente;
 
     return (
       <div
         key={key}
         style={{
           backgroundColor: '#FFFFFF',
-          border: `1.5px solid ${isOpen ? '#0F172A' : '#CBD5E1'}`,
-          borderRadius: 10,
+          border: `1.5px solid ${isEditing ? '#0F172A' : t.enabled ? '#CBD5E1' : '#E2E8F0'}`,
+          borderRadius: 12,
           overflow: 'hidden',
-          opacity: t.enabled ? 1 : 0.68,
-          transition: 'border-color 0.15s ease',
+          opacity: t.enabled ? 1 : 0.72,
+          transition: 'all 0.15s ease',
         }}
       >
         <div
-          onClick={() => setOpenKey(isOpen ? null : key)}
           style={{
-            padding: '12px 14px',
+            padding: '14px 16px',
             display: 'flex',
-            alignItems: 'center',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
             gap: 12,
-            cursor: 'pointer',
-            backgroundColor: isOpen ? '#F8FAFC' : '#FFFFFF',
+            flexWrap: 'wrap',
+            backgroundColor: isEditing ? '#F8FAFC' : '#FFFFFF',
           }}
         >
-          <ToggleSwitch
-            checked={t.enabled}
-            onClick={(e) => {
-              e.stopPropagation();
-              updateTemplate(key, { enabled: !t.enabled });
-            }}
-          />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.84rem', fontWeight: 700, color: '#0F172A' }}>
-                {displayLabel}
-              </span>
-              <span
-                style={{
-                  fontSize: '0.68rem',
-                  fontWeight: 700,
-                  padding: '2px 8px',
-                  borderRadius: 999,
-                  backgroundColor: audBadge.bg,
-                  color: audBadge.color,
-                  border: `1px solid ${audBadge.border}`,
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flex: '1 1 300px', minWidth: 0 }}>
+            <div style={{ paddingTop: 2 }}>
+              <ToggleSwitch
+                checked={t.enabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  toggleTemplateEnabled(key);
                 }}
-              >
-                {audBadge.short}
-              </span>
-              {t.isCustom && (
+              />
+            </div>
+
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>
+                  {displayLabel}
+                </span>
                 <span
                   style={{
                     fontSize: '0.68rem',
                     fontWeight: 700,
                     padding: '2px 8px',
                     borderRadius: 999,
-                    backgroundColor: '#FEF3C7',
-                    color: '#92400E',
-                    border: '1px solid #FDE68A',
+                    backgroundColor: t.enabled ? '#DCFCE7' : '#F1F5F9',
+                    color: t.enabled ? '#166534' : '#64748B',
+                    border: `1px solid ${t.enabled ? '#86EFAC' : '#CBD5E1'}`,
                   }}
                 >
-                  Personalizado • {eventInfo?.label || t.event}
+                  {t.enabled ? 'Ativo' : 'Desativado'}
                 </span>
-              )}
-            </div>
-            <div style={{ fontSize: '0.75rem', color: '#64748B', marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-              <strong style={{ color: '#334155', fontWeight: 600 }}>{t.title}</strong> — {t.message}
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    backgroundColor: isManual ? '#FEF3C7' : itemArea.softBg,
+                    color: isManual ? '#92400E' : itemArea.accent,
+                    border: `1px solid ${isManual ? '#FDE68A' : itemArea.softBorder}`,
+                  }}
+                >
+                  {isManual ? 'Campanha / Manual' : `Auto • ${eventInfo?.label || t.event}`}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  marginTop: 7,
+                  padding: '8px 11px',
+                  borderRadius: 9,
+                  backgroundColor: '#F8FAFC',
+                  border: '1px solid #E2E8F0',
+                  fontSize: '0.78rem',
+                  color: '#334155',
+                  lineHeight: 1.4,
+                }}
+              >
+                <div style={{ fontWeight: 800, color: '#0F172A', fontSize: '0.77rem' }}>
+                  {t.title || 'Kavro Drive'}
+                </div>
+                <div style={{ marginTop: 2, color: '#475569' }}>{t.message}</div>
+              </div>
             </div>
           </div>
-          {t.isCustom && (
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                deleteCustomTemplate(key);
-              }}
-              title="Excluir gatilho personalizado"
+              onClick={() => toggleTemplateEnabled(key)}
+              disabled={savingId === key}
               style={{
-                padding: '6px 8px',
-                borderRadius: 8,
-                border: '1px solid #FECACA',
-                backgroundColor: '#FEF2F2',
-                color: '#DC2626',
-                cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
+                gap: 5,
+                padding: '7px 11px',
+                borderRadius: 8,
+                border: `1px solid ${t.enabled ? '#FCA5A5' : '#86EFAC'}`,
+                backgroundColor: t.enabled ? '#FEF2F2' : '#F0FDF4',
+                color: t.enabled ? '#B91C1C' : '#15803D',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: 'pointer',
               }}
             >
-              <Trash2 size={14} />
+              <Power size={13} />
+              {t.enabled ? 'Desativar' : 'Ativar'}
             </button>
-          )}
-          {isOpen ? <ChevronUp size={16} color="#64748B" /> : <ChevronDown size={16} color="#64748B" />}
+
+            <button
+              type="button"
+              onClick={() => setEditingKey(isEditing ? null : key)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '7px 11px',
+                borderRadius: 8,
+                border: '1px solid #CBD5E1',
+                backgroundColor: isEditing ? '#0F172A' : '#FFFFFF',
+                color: isEditing ? '#FFFFFF' : '#0F172A',
+                fontSize: '0.75rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              <Edit3 size={13} />
+              {isEditing ? 'Fechar Editor' : 'Editar'}
+            </button>
+
+            {(!hasVars || isManual) && (
+              <button
+                type="button"
+                disabled={sendingBroadcast}
+                onClick={() => {
+                  setBroadcastTitle(t.title || 'Kavro Drive');
+                  setMessageCustomized(true);
+                  setBroadcastMessage(t.message);
+                  sendManualPushNow(t.title || 'Kavro Drive', t.message, t.url);
+                }}
+                title="Enviar este Push agora para esta área"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  padding: '7px 11px',
+                  borderRadius: 8,
+                  border: 'none',
+                  backgroundColor: '#0F172A',
+                  color: '#FFFFFF',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: sendingBroadcast ? 'not-allowed' : 'pointer',
+                }}
+              >
+                <Send size={13} />
+                Enviar Agora
+              </button>
+            )}
+
+            {t.isCustom && (
+              <button
+                type="button"
+                onClick={() => deleteCustomTemplate(key)}
+                title="Excluir Push"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '7px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #FECACA',
+                  backgroundColor: '#FFF1F2',
+                  color: '#DC2626',
+                  fontSize: '0.75rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                <Trash2 size={13} />
+                Excluir
+              </button>
+            )}
+          </div>
         </div>
 
-        {isOpen && (
-          <div style={{ padding: '14px 16px', borderTop: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 10 }}>
+        {isEditing && (
+          <div style={{ padding: '16px', borderTop: '1px solid #E2E8F0', backgroundColor: '#F8FAFC', display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
               <div>
                 <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                  Público-alvo (Quem recebe)
+                  Nome identificador do Push
+                </label>
+                <input
+                  type="text"
+                  value={t.label ?? BUILTIN_LABELS[key] ?? ''}
+                  onChange={e => updateTemplate(key, { label: e.target.value })}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', fontWeight: 600, boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                  Área de Destino
                 </label>
                 <select
-                  value={aud}
+                  value={aud === 'ambos' ? 'todos' : aud}
                   onChange={e => updateTemplate(key, { audience: e.target.value as PushAudience })}
                   style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', fontWeight: 600 }}
                 >
-                  <option value="cliente">Somente Passageiro</option>
-                  <option value="motorista">Somente Motorista</option>
-                  <option value="ambos">Passageiro + Motorista</option>
-                  <option value="admin">Admin Master</option>
+                  <option value="todos">Push para Todos</option>
+                  <option value="admin">Painel Master Donos</option>
+                  <option value="motorista">Motorista</option>
+                  <option value="cliente">Passageiros</option>
                 </select>
               </div>
-              {t.isCustom && (
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
+                  Modo / Evento de Disparo
+                </label>
+                <select
+                  value={t.event || 'manual'}
+                  onChange={e => updateTemplate(key, { event: e.target.value as PushTriggerEvent })}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', fontWeight: 600 }}
+                >
+                  {EVENT_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <label style={{ fontSize: '0.72rem', fontWeight: 700, color: '#475569' }}>
+                      Título do Push
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => updateTemplate(key, { title: 'Kavro Drive' })}
+                      style={{ border: 'none', background: 'none', color: '#2563EB', fontSize: '0.7rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                    >
+                      Usar "Kavro Drive"
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={t.title}
+                    onChange={e => updateTemplate(key, { title: e.target.value })}
+                    placeholder="Kavro Drive"
+                    style={{ width: '100%', padding: '8px 11px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600, boxSizing: 'border-box' }}
+                  />
+                </div>
+
                 <div>
                   <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                    Evento de Disparo
+                    Mensagem em forma de Push
                   </label>
-                  <select
-                    value={t.event || 'new_ride'}
-                    onChange={e => updateTemplate(key, { event: e.target.value as PushTriggerEvent })}
-                    style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', fontWeight: 600 }}
-                  >
-                    {EVENT_OPTIONS.map(opt => (
-                      <option key={opt.value} value={opt.value}>{opt.label}</option>
-                    ))}
-                  </select>
+                  <textarea
+                    rows={3}
+                    value={t.message}
+                    onChange={e => updateTemplate(key, { message: e.target.value })}
+                    style={{ width: '100%', padding: '8px 11px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.83rem', resize: 'vertical', boxSizing: 'border-box' }}
+                  />
                 </div>
-              )}
-            </div>
 
-            <div>
-              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                Título da Notificação
-              </label>
-              <input
-                type="text"
-                value={t.title}
-                onChange={e => updateTemplate(key, { title: e.target.value })}
-                style={{ width: '100%', padding: '8px 11px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.84rem', fontWeight: 500, boxSizing: 'border-box' }}
-              />
-            </div>
-
-            <div>
-              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                Corpo da Mensagem
-              </label>
-              <textarea
-                rows={2}
-                value={t.message}
-                onChange={e => updateTemplate(key, { message: e.target.value })}
-                style={{ width: '100%', padding: '8px 11px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.83rem', resize: 'vertical', boxSizing: 'border-box' }}
-              />
-            </div>
-
-            {isReminder && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                <label style={{ fontSize: '0.74rem', fontWeight: 700, color: '#475569' }}>
-                  Antecedência do disparo:
-                </label>
-                <input
-                  type="number"
-                  min={5}
-                  max={180}
-                  value={t.minutesBefore ?? 30}
-                  onChange={e => updateTemplate(key, { minutesBefore: Number(e.target.value) })}
-                  style={{ width: 72, padding: '6px 8px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', textAlign: 'center', fontWeight: 600 }}
-                />
-                <span style={{ fontSize: '0.74rem', color: '#64748B' }}>minutos antes do embarque</span>
+                {isReminder && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <label style={{ fontSize: '0.74rem', fontWeight: 700, color: '#475569' }}>
+                      Antecedência:
+                    </label>
+                    <input
+                      type="number"
+                      min={5}
+                      max={180}
+                      value={t.minutesBefore ?? 30}
+                      onChange={e => updateTemplate(key, { minutesBefore: Number(e.target.value) })}
+                      style={{ width: 72, padding: '6px 8px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', textAlign: 'center', fontWeight: 600 }}
+                    />
+                    <span style={{ fontSize: '0.74rem', color: '#64748B' }}>minutos antes do embarque</span>
+                  </div>
+                )}
               </div>
-            )}
 
-            {/* Barra de Emojis + Variáveis Dinâmicas */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase' }}>
+                  Pré-visualização em Formato Push
+                </span>
+                <PushPreviewCard
+                  title={t.title || 'Kavro Drive'}
+                  message={t.message}
+                  areaBadge={itemArea.badgeText}
+                />
+              </div>
+            </div>
+
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <Smile size={13} /> Emojis:
                 </span>
@@ -529,40 +992,93 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
                     key={em}
                     type="button"
                     onClick={() => updateTemplate(key, { message: `${t.message}${t.message && !t.message.endsWith(' ') ? ' ' : ''}${em}` })}
-                    style={{
-                      padding: '2px 6px',
-                      borderRadius: 6,
-                      backgroundColor: '#FFFFFF',
-                      border: '1px solid #E2E8F0',
-                      fontSize: '0.9rem',
-                      cursor: 'pointer',
-                    }}
+                    style={{ padding: '2px 6px', borderRadius: 6, backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', fontSize: '0.9rem', cursor: 'pointer' }}
                   >
                     {em}
                   </button>
                 ))}
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-                <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700 }}>Variáveis:</span>
-                {VARIABLES.map(v => (
+              {!isManual && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.7rem', color: '#64748B', fontWeight: 700 }}>Variáveis automáticas:</span>
+                  {VARIABLES.map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => updateTemplate(key, { message: `${t.message}${t.message && !t.message.endsWith(' ') ? ' ' : ''}${v}` })}
+                      style={{ fontSize: '0.71rem', padding: '2px 8px', borderRadius: 6, backgroundColor: '#FFFFFF', border: '1px solid #CBD5E1', color: '#334155', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8, paddingTop: 4 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {isBuiltIn && (
                   <button
-                    key={v}
                     type="button"
-                    onClick={() => updateTemplate(key, { message: `${t.message}${t.message && !t.message.endsWith(' ') ? ' ' : ''}${v}` })}
+                    onClick={() => restoreDefaultTemplate(key)}
                     style={{
-                      fontSize: '0.71rem',
-                      padding: '2px 8px',
-                      borderRadius: 6,
-                      backgroundColor: '#FFFFFF',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      padding: '8px 12px',
+                      borderRadius: 8,
                       border: '1px solid #CBD5E1',
-                      color: '#334155',
-                      fontWeight: 600,
+                      backgroundColor: '#FFFFFF',
+                      color: '#475569',
+                      fontSize: '0.77rem',
+                      fontWeight: 700,
                       cursor: 'pointer',
                     }}
                   >
-                    {v}
+                    <RotateCcw size={13} />
+                    Restaurar Padrão
                   </button>
-                ))}
+                )}
+              </div>
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => setEditingKey(null)}
+                  style={{
+                    padding: '8px 14px',
+                    borderRadius: 8,
+                    border: '1px solid #CBD5E1',
+                    backgroundColor: '#FFFFFF',
+                    color: '#334155',
+                    fontSize: '0.78rem',
+                    fontWeight: 600,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={savingId === key}
+                  onClick={() => saveEditedTemplate(key)}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    padding: '8px 16px',
+                    borderRadius: 8,
+                    border: 'none',
+                    backgroundColor: '#0F172A',
+                    color: '#FFFFFF',
+                    fontSize: '0.8rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {savingId === key ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                  Salvar Alterações
+                </button>
               </div>
             </div>
           </div>
@@ -572,32 +1088,36 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Barra de Status do Dispositivo + Feedback */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {/* Barra superior: Status do Dispositivo Donos + Teste rápido */}
       <div
         style={{
           backgroundColor: '#FFFFFF',
           border: '1px solid #E2E8F0',
           borderRadius: 12,
-          padding: '16px 20px',
+          padding: '14px 18px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           flexWrap: 'wrap',
-          gap: 14,
+          gap: 12,
         }}
       >
-        <div>
-          <h3 style={{ margin: 0, fontSize: '1.02rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: '#F1F5F9', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <BellRing size={18} color="#0F172A" />
-            Central de Notificações Web Push & Gatilhos (OneSignal)
-          </h3>
-          <p style={{ margin: '3px 0 0 0', fontSize: '0.8rem', color: '#64748B' }}>
-            Envie avisos manuais segmentados com emojis e crie regras automáticas para Passageiros, Motoristas ou Admin Master.
-          </p>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.94rem', fontWeight: 700, color: '#0F172A' }}>
+              Torre de Notificações Push (OneSignal • Web &amp; PWA)
+            </div>
+            <div style={{ fontSize: '0.76rem', color: '#64748B' }}>
+              Selecione uma área abaixo para escrever, enviar, editar, desativar ou criar novos Pushs.
+            </div>
+          </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button
             type="button"
             onClick={handleEnableDevice}
@@ -606,18 +1126,18 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
               display: 'inline-flex',
               alignItems: 'center',
               gap: 7,
-              padding: '8px 14px',
+              padding: '8px 13px',
               borderRadius: 8,
               border: '1px solid #CBD5E1',
               backgroundColor: notifPermission === 'granted' ? '#F0FDF4' : '#FFFFFF',
               color: notifPermission === 'granted' ? '#166534' : '#0F172A',
-              fontSize: '0.8rem',
+              fontSize: '0.78rem',
               fontWeight: 700,
               cursor: enabling ? 'not-allowed' : 'pointer',
             }}
           >
-            {enabling ? <Loader2 size={15} className="animate-spin" /> : notifPermission === 'granted' ? <Check size={15} /> : <Bell size={15} />}
-            {notifPermission === 'granted' ? 'Alertas Ativos neste Navegador' : 'Receber Alertas neste Navegador'}
+            {enabling ? <Loader2 size={14} className="animate-spin" /> : notifPermission === 'granted' ? <Check size={14} /> : <Bell size={14} />}
+            {notifPermission === 'granted' ? 'Push Ativo neste Aparelho' : 'Ativar Push neste Aparelho'}
           </button>
 
           <button
@@ -627,21 +1147,94 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
             style={{
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 7,
-              padding: '8px 14px',
+              gap: 6,
+              padding: '8px 13px',
               borderRadius: 8,
               border: '1px solid #E2E8F0',
               backgroundColor: '#F8FAFC',
               color: '#0F172A',
-              fontSize: '0.8rem',
+              fontSize: '0.78rem',
               fontWeight: 700,
               cursor: testing ? 'not-allowed' : 'pointer',
             }}
           >
-            {testing ? <Loader2 size={15} className="animate-spin" /> : <Send size={14} />}
-            Disparar Teste Admin
+            {testing ? <Loader2 size={14} className="animate-spin" /> : <Smartphone size={14} />}
+            Testar no Painel Donos
           </button>
         </div>
+      </div>
+
+      {/* 4 ÁREAS DE NOTIFICAÇÃO PUSH */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 10 }}>
+        {(['todos', 'admin', 'motorista', 'cliente'] as PushWorkspaceArea[]).map((areaKey) => {
+          const cfg = AREA_CONFIG[areaKey];
+          const Icon = cfg.icon;
+          const isActive = activeArea === areaKey;
+          const stats = areaCounts[areaKey];
+          return (
+            <button
+              key={areaKey}
+              type="button"
+              onClick={() => handleSelectArea(areaKey)}
+              style={{
+                textAlign: 'left',
+                padding: '14px 16px',
+                borderRadius: 12,
+                border: isActive ? `2px solid ${cfg.accent}` : '1.5px solid #E2E8F0',
+                backgroundColor: isActive ? cfg.softBg : '#FFFFFF',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                boxShadow: isActive ? '0 4px 14px rgba(15,23,42,0.08)' : 'none',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div
+                  style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 9,
+                    backgroundColor: isActive ? cfg.accent : '#F1F5F9',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Icon size={17} color={isActive ? '#FFFFFF' : cfg.accent} />
+                </div>
+                <span
+                  style={{
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    padding: '2px 8px',
+                    borderRadius: 999,
+                    backgroundColor: isActive ? '#FFFFFF' : '#F8FAFC',
+                    color: isActive ? cfg.accent : '#64748B',
+                    border: `1px solid ${isActive ? cfg.softBorder : '#E2E8F0'}`,
+                  }}
+                >
+                  {stats.active}/{stats.total} ativo(s)
+                </span>
+              </div>
+              <div>
+                <div style={{ fontSize: '0.88rem', fontWeight: 800, color: '#0F172A' }}>
+                  {cfg.title}
+                </div>
+                <div style={{ fontSize: '0.72rem', color: '#64748B', marginTop: 2, lineHeight: 1.35 }}>
+                  {cfg.shortTitle === 'Para Todos'
+                    ? 'Passageiros, Motoristas e Donos'
+                    : cfg.shortTitle === 'Painel Donos'
+                      ? 'Somente administradores donos'
+                      : cfg.shortTitle === 'Motorista'
+                        ? 'Todos ou motorista único'
+                        : 'Todos ou passageiro único'}
+                </div>
+              </div>
+            </button>
+          );
+        })}
       </div>
 
       {statusFeedback && (
@@ -660,41 +1253,150 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
         </div>
       )}
 
-      {/* BLOCO 1: ENVIO DIRETO PARA PASSAGEIROS, CLIENTES & MOTORISTAS */}
+      {/* BLOCO PRINCIPAL DA ÁREA ATIVA: ESCREVER PUSH + VISUALIZAÇÃO REAL EM FORMATO PUSH */}
       <div
         style={{
           backgroundColor: '#FFFFFF',
-          border: '1px solid #E2E8F0',
-          borderRadius: 12,
+          border: `1.5px solid ${areaMeta.softBorder}`,
+          borderRadius: 14,
           padding: 20,
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
-          gap: 20,
+          gap: 22,
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-            <div>
-              <h4 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 7 }}>
-                <Send size={16} color="#0F172A" />
-                Enviar Notificação Direta (Sininho do App + Push)
-              </h4>
-              <p style={{ margin: '2px 0 0 0', fontSize: '0.78rem', color: '#64748B' }}>
-                Envia na mesma hora para o pop-up do sininho no app e via Push para quem escolher abaixo.
-              </p>
-            </div>
+          <div>
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                padding: '3px 10px',
+                borderRadius: 999,
+                backgroundColor: areaMeta.softBg,
+                color: areaMeta.accent,
+                border: `1px solid ${areaMeta.softBorder}`,
+              }}
+            >
+              ÁREA ATIVA: {areaMeta.title.toUpperCase()}
+            </span>
+            <h4 style={{ margin: '8px 0 0 0', fontSize: '1.02rem', fontWeight: 800, color: '#0F172A' }}>
+              Escrever &amp; Disparar Push ({areaMeta.shortTitle})
+            </h4>
+            <p style={{ margin: '3px 0 0 0', fontSize: '0.78rem', color: '#64748B' }}>
+              {areaMeta.subtitle}
+            </p>
           </div>
 
-          {/* Atalhos Rápidos */}
+          {/* Controles específicos de destinatário dentro da área */}
+          {activeArea === 'todos' && (
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 9,
+                padding: '9px 12px',
+                borderRadius: 9,
+                backgroundColor: '#F5F3FF',
+                border: '1px solid #DDD6FE',
+                fontSize: '0.8rem',
+                fontWeight: 700,
+                color: '#4C1D95',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={includeAdminInAll}
+                onChange={e => setIncludeAdminInAll(e.target.checked)}
+              />
+              Incluir também o Painel Master Donos neste Push para Todos
+            </label>
+          )}
+
+          {(activeArea === 'motorista' || activeArea === 'cliente') && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <button
+                  type="button"
+                  onClick={() => setTargetSpecificMode('all')}
+                  style={{
+                    padding: '9px 10px',
+                    borderRadius: 8,
+                    border: `1.5px solid ${targetSpecificMode === 'all' ? areaMeta.accent : '#E2E8F0'}`,
+                    backgroundColor: targetSpecificMode === 'all' ? areaMeta.softBg : '#F8FAFC',
+                    color: targetSpecificMode === 'all' ? areaMeta.accent : '#475569',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {activeArea === 'motorista' ? `Todos Motoristas (${drivers.length})` : `Todos Passageiros (${clients.length})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTargetSpecificMode('specific')}
+                  style={{
+                    padding: '9px 10px',
+                    borderRadius: 8,
+                    border: `1.5px solid ${targetSpecificMode === 'specific' ? areaMeta.accent : '#E2E8F0'}`,
+                    backgroundColor: targetSpecificMode === 'specific' ? areaMeta.softBg : '#F8FAFC',
+                    color: targetSpecificMode === 'specific' ? areaMeta.accent : '#475569',
+                    fontSize: '0.78rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  {activeArea === 'motorista' ? 'Motorista Específico' : 'Passageiro Específico'}
+                </button>
+              </div>
+
+              {activeArea === 'motorista' && targetSpecificMode === 'specific' && (
+                <select
+                  value={selectedDriverId}
+                  onChange={e => setSelectedDriverId(e.target.value)}
+                  style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1.5px solid #6EE7B7', backgroundColor: '#ECFDF5', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600 }}
+                >
+                  <option value="">-- Escolha o motorista ({drivers.length}) --</option>
+                  {drivers.map(d => (
+                    <option key={d.id} value={d.id}>
+                      {d.name} • {d.vehiclePlate || d.phone || d.id}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              {activeArea === 'cliente' && targetSpecificMode === 'specific' && (
+                <select
+                  value={selectedClientId}
+                  onChange={e => setSelectedClientId(e.target.value)}
+                  style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1.5px solid #93C5FD', backgroundColor: '#EFF6FF', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600 }}
+                >
+                  <option value="">-- Escolha o passageiro ({clients.length}) --</option>
+                  {clients.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} • {c.phone || c.email || c.id}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+
+          {/* Atalhos rápidos de texto desta área */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-            <span style={{ fontSize: '0.71rem', fontWeight: 700, color: '#64748B' }}>Modelos rápidos:</span>
-            {QUICK_MANUAL_PRESETS.map((preset) => (
+            <span style={{ fontSize: '0.71rem', fontWeight: 700, color: '#64748B' }}>Sugestões rápidas:</span>
+            {areaMeta.presets.map(p => (
               <button
-                key={preset.label}
+                key={p.label}
                 type="button"
                 onClick={() => {
-                  setBroadcastTitle(preset.title);
-                  setBroadcastMessage(preset.message);
+                  setBroadcastTitle('Kavro Drive');
+                  setMessageCustomized(true);
+                  setBroadcastMessage(p.message);
                 }}
                 style={{
                   padding: '4px 10px',
@@ -704,135 +1406,65 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
                   color: '#0F172A',
                   fontSize: '0.72rem',
                   fontWeight: 700,
-                  cursor: 'pointer'
+                  cursor: 'pointer',
                 }}
               >
-                {preset.label}
+                {p.label}
               </button>
             ))}
           </div>
 
-          {/* Seletor de Público */}
+          {/* Título do Push (padrão Kavro Drive) */}
           <div>
-            <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
-              Enviar para qual público?
-            </label>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))', gap: 8 }}>
-              {([
-                { id: 'ambos', label: 'Todos (Passag. + Mot.)', icon: Globe },
-                { id: 'cliente', label: 'Todos Passageiros', icon: Users },
-                { id: 'cliente_especifico', label: 'Cliente Específico', icon: UserCheck },
-                { id: 'motorista', label: 'Todos Motoristas', icon: Car },
-                { id: 'motorista_especifico', label: 'Motorista Específico', icon: UserCheck },
-                { id: 'admin', label: 'Admin Master', icon: ShieldCheck },
-              ] as { id: ManualAudience; label: string; icon: React.ComponentType<{ size?: number }> }[]).map(opt => {
-                const Icon = opt.icon;
-                const active = broadcastAudience === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    type="button"
-                    onClick={() => setBroadcastAudience(opt.id)}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 7,
-                      padding: '9px 10px',
-                      borderRadius: 8,
-                      border: `1.5px solid ${active ? '#0F172A' : '#E2E8F0'}`,
-                      backgroundColor: active ? '#0F172A' : '#F8FAFC',
-                      color: active ? '#FFFFFF' : '#334155',
-                      fontSize: '0.76rem',
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <Icon size={14} />
-                    {opt.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Seletor de Destinatário Específico quando escolhido */}
-          {broadcastAudience === 'cliente_especifico' && (
-            <div>
-              <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#1D4ED8', marginBottom: 4 }}>
-                Escolha o Passageiro / Cliente destinatário
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <label style={{ fontSize: '0.74rem', fontWeight: 700, color: '#475569' }}>
+                Título do Push (aparece em destaque no celular)
               </label>
-              <select
-                value={selectedClientId}
-                onChange={(e) => setSelectedClientId(e.target.value)}
-                style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1.5px solid #93C5FD', backgroundColor: '#EFF6FF', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600 }}
-              >
-                <option value="">-- Selecione um passageiro ({clients.length}) --</option>
-                {clients.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} • {c.phone || c.email || c.id}
-                  </option>
-                ))}
-              </select>
+              {broadcastTitle !== 'Kavro Drive' && (
+                <button
+                  type="button"
+                  onClick={() => setBroadcastTitle('Kavro Drive')}
+                  style={{ border: 'none', background: 'none', color: '#2563EB', fontSize: '0.71rem', fontWeight: 700, cursor: 'pointer', padding: 0 }}
+                >
+                  Voltar para "Kavro Drive"
+                </button>
+              )}
             </div>
-          )}
-
-          {broadcastAudience === 'motorista_especifico' && (
-            <div>
-              <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#047857', marginBottom: 4 }}>
-                Escolha o Motorista destinatário
-              </label>
-              <select
-                value={selectedDriverId}
-                onChange={(e) => setSelectedDriverId(e.target.value)}
-                style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1.5px solid #6EE7B7', backgroundColor: '#ECFDF5', color: '#0F172A', fontSize: '0.84rem', fontWeight: 600 }}
-              >
-                <option value="">-- Selecione um motorista ({drivers.length}) --</option>
-                {drivers.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name} • {d.vehiclePlate || d.phone || d.id}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          {/* Título e Mensagem */}
-          <div>
-            <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-              Título da Notificação
-            </label>
             <input
               ref={broadcastTitleRef}
               type="text"
               value={broadcastTitle}
               onFocus={() => setBroadcastFocus('title')}
               onChange={e => setBroadcastTitle(e.target.value)}
-              placeholder="Ex: 🔥 Tarifa especial hoje na Kavro Drive!"
+              placeholder="Kavro Drive"
               style={{
                 width: '100%',
                 padding: '10px 12px',
                 borderRadius: 8,
                 border: '1px solid #CBD5E1',
                 fontSize: '0.86rem',
-                fontWeight: 600,
+                fontWeight: 700,
                 color: '#0F172A',
                 boxSizing: 'border-box',
               }}
             />
           </div>
 
+          {/* Mensagem em formato Push */}
           <div>
             <label style={{ display: 'block', fontSize: '0.74rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-              Mensagem
+              Mensagem escrita em forma de Push
             </label>
             <textarea
               ref={broadcastMsgRef}
               rows={3}
               value={broadcastMessage}
               onFocus={() => setBroadcastFocus('message')}
-              onChange={e => setBroadcastMessage(e.target.value)}
-              placeholder="Digite o comunicado que aparecerá na tela do celular/PC..."
+              onChange={e => {
+                setMessageCustomized(true);
+                setBroadcastMessage(e.target.value);
+              }}
+              placeholder="Escreva a mensagem curta e direta que aparecerá na tela de bloqueio..."
               style={{
                 width: '100%',
                 padding: '10px 12px',
@@ -846,11 +1478,10 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
             />
           </div>
 
-          {/* Seletor de Emojis Clicável */}
+          {/* Emojis */}
           <div style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px' }}>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#475569', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Smile size={14} />
-              Clique em um Emoji para inserir ({broadcastFocus === 'title' ? 'no Título' : 'na Mensagem'}):
+            <div style={{ fontSize: '0.71rem', fontWeight: 700, color: '#475569', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 5 }}>
+              <Smile size={13} /> Inserir Emoji ({broadcastFocus === 'title' ? 'no Título' : 'na Mensagem'}):
             </div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
               {QUICK_EMOJIS.map(em => (
@@ -859,12 +1490,12 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
                   type="button"
                   onClick={() => insertEmojiIntoBroadcast(em)}
                   style={{
-                    width: 32,
-                    height: 32,
+                    width: 30,
+                    height: 30,
                     borderRadius: 7,
                     border: '1px solid #E2E8F0',
                     backgroundColor: '#FFFFFF',
-                    fontSize: '1.05rem',
+                    fontSize: '1rem',
                     cursor: 'pointer',
                     display: 'inline-flex',
                     alignItems: 'center',
@@ -878,76 +1509,81 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
           </div>
         </div>
 
-        {/* Coluna Direita: Destino do clique + Preview ao vivo + Botão Enviar */}
+        {/* Coluna Direita: Pré-visualização em forma de Push + Botões */}
         <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', gap: 14, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: 12, padding: 16 }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ fontSize: '0.73rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Pré-visualização em Tempo Real
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                Visualização em Forma de Push
+              </span>
+              <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#0F172A' }}>
+                Destino: {effectiveTarget.label}
+              </span>
             </div>
 
-            <div
-              style={{
-                backgroundColor: '#0F172A',
-                color: '#FFFFFF',
-                borderRadius: 12,
-                padding: '14px 16px',
-                boxShadow: '0 8px 20px rgba(15,23,42,0.16)',
-                display: 'flex',
-                gap: 12,
-                alignItems: 'flex-start',
-              }}
-            >
-              <div style={{ width: 38, height: 38, borderRadius: 10, backgroundColor: '#1E293B', border: '1px solid #334155', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontWeight: 900, fontSize: '0.95rem', color: '#FFFFFF' }}>
-                K
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                  <span style={{ fontSize: '0.7rem', color: '#94A3B8', fontWeight: 700 }}>
-                    KAVRO DRIVE • {MANUAL_AUDIENCE_META[broadcastAudience].short.toUpperCase()}
-                  </span>
-                  <span style={{ fontSize: '0.68rem', color: '#64748B' }}>agora</span>
-                </div>
-                <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#FFFFFF', marginTop: 3, wordBreak: 'break-word' }}>
-                  {broadcastTitle || 'Título da notificação'}
-                </div>
-                <div style={{ fontSize: '0.8rem', color: '#CBD5E1', marginTop: 2, lineHeight: 1.4, wordBreak: 'break-word' }}>
-                  {broadcastMessage || 'Mensagem da notificação...'}
-                </div>
-              </div>
-            </div>
+            <PushPreviewCard
+              title={broadcastTitle || 'Kavro Drive'}
+              message={broadcastMessage}
+              areaBadge={areaMeta.badgeText}
+            />
 
             <div>
               <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#475569', marginBottom: 4 }}>
-                Abrir qual página ao clicar na notificação?
+                Ao clicar no Push, abrir qual página?
               </label>
               <select
                 value={broadcastUrl}
                 onChange={e => setBroadcastUrl(e.target.value)}
                 style={{ width: '100%', padding: '9px 11px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', color: '#0F172A', fontSize: '0.82rem', fontWeight: 600 }}
               >
-                <option value="">Automático conforme o público selecionado</option>
-                <option value="/cliente">App do Passageiro (/cliente)</option>
+                <option value="">Padrão desta área ({areaMeta.defaultUrl})</option>
+                <option value="/cliente">Área do Passageiro (/cliente)</option>
                 <option value="/kavro-drive">Portal do Motorista (/kavro-drive)</option>
-                <option value="/">Página Inicial Kavro Drive (/)</option>
-                <option value="/administracion">Painel Admin Master (/administracion)</option>
+                <option value="/administracion">Painel Master Donos (/administracion)</option>
+                <option value="/">Página Oficial Kavro Drive (/)</option>
               </select>
             </div>
 
-            {sentHistory.length > 0 && (
+            {areaSentHistory.length > 0 && (
               <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 10, padding: '10px 12px' }}>
-                <div style={{ fontSize: '0.71rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 6 }}>
-                  Últimos comunicados enviados ({sentHistory.length})
+                <div style={{ fontSize: '0.7rem', fontWeight: 800, color: '#475569', textTransform: 'uppercase', marginBottom: 6 }}>
+                  Últimos envios em {areaMeta.shortTitle} ({areaSentHistory.length})
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 135, overflowY: 'auto' }}>
-                  {sentHistory.map((item) => (
-                    <div key={item.id} style={{ fontSize: '0.74rem', padding: '6px 8px', borderRadius: 7, backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}>
-                      <div style={{ fontWeight: 800, color: '#0F172A', display: 'flex', justifyContent: 'space-between', gap: 6 }}>
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</span>
-                        <span style={{ fontSize: '0.66rem', color: '#15803D', flexShrink: 0 }}>
-                          {item.audience || 'todos'}
-                        </span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 120, overflowY: 'auto' }}>
+                  {areaSentHistory.slice(0, 6).map(item => (
+                    <div
+                      key={item.id}
+                      style={{
+                        fontSize: '0.73rem',
+                        padding: '6px 8px',
+                        borderRadius: 7,
+                        backgroundColor: '#F8FAFC',
+                        border: '1px solid #E2E8F0',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div style={{ fontWeight: 800, color: '#0F172A', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.title}
+                        </div>
+                        <div style={{ color: '#64748B', fontSize: '0.7rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {item.message}
+                        </div>
                       </div>
-                      <div style={{ color: '#64748B', fontSize: '0.7rem', marginTop: 1 }}>{item.message}</div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBroadcastTitle(item.title || 'Kavro Drive');
+                          setMessageCustomized(true);
+                          setBroadcastMessage(item.message);
+                        }}
+                        style={{ border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', borderRadius: 6, padding: '3px 8px', fontSize: '0.68rem', fontWeight: 700, cursor: 'pointer', color: '#0F172A', flexShrink: 0 }}
+                      >
+                        Reusar
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -955,55 +1591,80 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={handleSendBroadcast}
-            disabled={sendingBroadcast}
-            style={{
-              width: '100%',
-              padding: '12px 16px',
-              borderRadius: 10,
-              border: 'none',
-              backgroundColor: '#0F172A',
-              color: '#FFFFFF',
-              fontSize: '0.88rem',
-              fontWeight: 700,
-              cursor: sendingBroadcast ? 'not-allowed' : 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 8,
-            }}
-          >
-            {sendingBroadcast ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-            {sendingBroadcast ? 'Enviando notificação...' : `Enviar para ${MANUAL_AUDIENCE_META[broadcastAudience].label}`}
-          </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <button
+              type="button"
+              onClick={() => sendManualPushNow()}
+              disabled={sendingBroadcast}
+              style={{
+                width: '100%',
+                padding: '12px 16px',
+                borderRadius: 10,
+                border: 'none',
+                backgroundColor: '#0F172A',
+                color: '#FFFFFF',
+                fontSize: '0.88rem',
+                fontWeight: 700,
+                cursor: sendingBroadcast ? 'not-allowed' : 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+              }}
+            >
+              {sendingBroadcast ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+              {sendingBroadcast ? 'Enviando Push...' : `Enviar Push Agora (${areaMeta.shortTitle})`}
+            </button>
+
+            <button
+              type="button"
+              onClick={saveComposerAsTemplate}
+              style={{
+                width: '100%',
+                padding: '9px 14px',
+                borderRadius: 9,
+                border: '1px solid #CBD5E1',
+                backgroundColor: '#FFFFFF',
+                color: '#0F172A',
+                fontSize: '0.79rem',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 7,
+              }}
+            >
+              <BookmarkPlus size={15} />
+              Salvar Texto como Novo Push em "{areaMeta.shortTitle}"
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* BLOCO 2: CRIADOR DE NOVOS GATILHOS AUTOMÁTICOS */}
-      <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 12, padding: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+      {/* BLOCO DA ÁREA ATIVA: LISTAGEM DE PUSHS COM DESATIVAR, EDITAR E CRIAR NOVO PUSH */}
+      <div style={{ backgroundColor: '#FFFFFF', border: '1px solid #E2E8F0', borderRadius: 14, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 14 }}>
           <div>
-            <h4 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 700, color: '#0F172A', display: 'flex', alignItems: 'center', gap: 7 }}>
-              <Sparkles size={16} color="#0F172A" />
-              Gatilhos Automáticos por Evento ({Object.keys(templates).length} configurados)
+            <h4 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 800, color: '#0F172A' }}>
+              Pushs Salvos &amp; Regras — {areaMeta.title} ({activeAreaTemplates.length})
             </h4>
             <p style={{ margin: '2px 0 0 0', fontSize: '0.78rem', color: '#64748B' }}>
-              Crie novos gatilhos escolhendo o evento da corrida e decidindo se dispara para Motorista, Passageiro ou Ambos.
+              Ative ou desative com 1 clique, edite título ("Kavro Drive") e mensagem ou crie novos Pushs nesta área.
             </p>
           </div>
+
           <button
             type="button"
-            onClick={() => setShowCreator(prev => !prev)}
+            onClick={() => (showCreator ? setShowCreator(false) : openCreatorForActiveArea())}
             style={{
               display: 'inline-flex',
               alignItems: 'center',
               gap: 7,
               padding: '9px 15px',
-              borderRadius: 8,
+              borderRadius: 9,
               border: showCreator ? '1px solid #CBD5E1' : 'none',
-              backgroundColor: showCreator ? '#F8FAFC' : '#0F172A',
+              backgroundColor: showCreator ? '#F8FAFC' : areaMeta.accent,
               color: showCreator ? '#0F172A' : '#FFFFFF',
               fontSize: '0.82rem',
               fontWeight: 700,
@@ -1011,87 +1672,93 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
             }}
           >
             <Plus size={15} />
-            {showCreator ? 'Fechar Criador' : 'Novo Gatilho Automático'}
+            {showCreator ? 'Fechar Criador' : `Criar Novo Push (${areaMeta.shortTitle})`}
           </button>
         </div>
 
+        {/* Formulário de Criação de Novo Push */}
         {showCreator && (
           <form
             onSubmit={handleCreateTrigger}
             style={{
-              marginTop: 16,
+              marginBottom: 16,
               padding: 16,
-              borderRadius: 10,
+              borderRadius: 12,
               backgroundColor: '#F8FAFC',
-              border: '1px solid #CBD5E1',
+              border: `1.5px solid ${areaMeta.softBorder}`,
               display: 'flex',
               flexDirection: 'column',
               gap: 12,
             }}
           >
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12 }}>
+            <div style={{ fontSize: '0.82rem', fontWeight: 800, color: '#0F172A' }}>
+              Criar Novo Push — Título padrão Kavro Drive
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 12 }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                  Nome identificador do gatilho
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                  Nome do Push
                 </label>
                 <input
                   type="text"
                   value={newLabel}
                   onChange={e => setNewLabel(e.target.value)}
-                  placeholder="Ex: Alerta VIP para motorista ao concluir"
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.83rem', boxSizing: 'border-box' }}
+                  placeholder="Ex: Aviso Promocional / Alerta Operacional"
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.82rem', boxSizing: 'border-box' }}
                 />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                  Quando disparar (Evento)
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                  Área Destinatária
+                </label>
+                <select
+                  value={newAudience}
+                  onChange={e => setNewAudience(e.target.value as PushAudience)}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.82rem', fontWeight: 600 }}
+                >
+                  <option value="todos">Push para Todos</option>
+                  <option value="admin">Painel Master Donos</option>
+                  <option value="motorista">Motorista</option>
+                  <option value="cliente">Passageiros</option>
+                </select>
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                  Tipo de Disparo
                 </label>
                 <select
                   value={newEvent}
                   onChange={e => setNewEvent(e.target.value as PushTriggerEvent)}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.83rem', fontWeight: 600 }}
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.82rem', fontWeight: 600 }}
                 >
                   {EVENT_OPTIONS.map(ev => (
                     <option key={ev.value} value={ev.value}>{ev.label}</option>
                   ))}
                 </select>
               </div>
-
-              <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                  Quem recebe este gatilho?
-                </label>
-                <select
-                  value={newAudience}
-                  onChange={e => setNewAudience(e.target.value as PushAudience)}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.83rem', fontWeight: 600 }}
-                >
-                  <option value="motorista">Somente Motorista</option>
-                  <option value="cliente">Somente Passageiro</option>
-                  <option value="ambos">Passageiro + Motorista</option>
-                  <option value="admin">Admin Master</option>
-                </select>
-              </div>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
               <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                  Título da Notificação
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                  Título do Push
                 </label>
                 <input
                   type="text"
                   value={newTitle}
                   onFocus={() => setNewFocus('title')}
                   onChange={e => setNewTitle(e.target.value)}
-                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.84rem', fontWeight: 600, boxSizing: 'border-box' }}
+                  placeholder="Kavro Drive"
+                  style={{ width: '100%', padding: '8px 10px', borderRadius: 8, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', fontSize: '0.84rem', fontWeight: 700, boxSizing: 'border-box' }}
                 />
               </div>
 
               <div>
-                <label style={{ display: 'block', fontSize: '0.73rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
-                  Texto da Mensagem
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                  Mensagem do Push
                 </label>
                 <input
                   type="text"
@@ -1102,6 +1769,12 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
                 />
               </div>
             </div>
+
+            <PushPreviewCard
+              title={newTitle || 'Kavro Drive'}
+              message={newMessage}
+              areaBadge={(AREA_CONFIG[newAudience === 'ambos' || newAudience === 'todos' ? 'todos' : newAudience] || areaMeta).badgeText}
+            />
 
             <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
               <span style={{ fontSize: '0.71rem', color: '#475569', fontWeight: 700 }}>Emojis:</span>
@@ -1115,17 +1788,21 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
                   {em}
                 </button>
               ))}
-              <span style={{ fontSize: '0.71rem', color: '#475569', fontWeight: 700, marginLeft: 8 }}>Variáveis:</span>
-              {VARIABLES.slice(0, 6).map(v => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setNewMessage(prev => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${v}`)}
-                  style={{ padding: '2px 7px', borderRadius: 6, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', cursor: 'pointer', fontSize: '0.71rem', fontWeight: 600, color: '#334155' }}
-                >
-                  {v}
-                </button>
-              ))}
+              {newEvent !== 'manual' && (
+                <>
+                  <span style={{ fontSize: '0.71rem', color: '#475569', fontWeight: 700, marginLeft: 6 }}>Variáveis:</span>
+                  {VARIABLES.slice(0, 6).map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setNewMessage(prev => `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}${v}`)}
+                      style={{ padding: '2px 7px', borderRadius: 6, border: '1px solid #CBD5E1', backgroundColor: '#FFFFFF', cursor: 'pointer', fontSize: '0.71rem', fontWeight: 600, color: '#334155' }}
+                    >
+                      {v}
+                    </button>
+                  ))}
+                </>
+              )}
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -1142,40 +1819,32 @@ export const PushTemplatesEditor: React.FC<Props> = ({ value, clients = [], driv
                 style={{ padding: '8px 16px', borderRadius: 8, border: 'none', backgroundColor: '#0F172A', color: '#FFFFFF', fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
               >
                 {savingCreator ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                Criar & Ativar Gatilho
+                Criar &amp; Salvar Push
               </button>
             </div>
           </form>
         )}
 
-        {/* Listagem Agrupada dos Gatilhos */}
-        {customEntries.length > 0 && (
-          <div style={{ marginTop: 18 }}>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#92400E', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>
-              Gatilhos Personalizados Criados por Você ({customEntries.length})
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 10 }}>
-              {customEntries.map(([k, t]) => renderTemplateRow(k, t))}
-            </div>
+        {/* Lista dos Pushs da Área Selecionada */}
+        {activeAreaTemplates.length === 0 ? (
+          <div
+            style={{
+              padding: '28px 16px',
+              borderRadius: 12,
+              border: '1.5px dashed #CBD5E1',
+              backgroundColor: '#F8FAFC',
+              textAlign: 'center',
+              color: '#64748B',
+              fontSize: '0.84rem',
+            }}
+          >
+            Nenhum Push salvo ainda em <strong>{areaMeta.title}</strong>. Use o botão <strong>"Criar Novo Push"</strong> ou <strong>"Salvar Texto como Novo Push"</strong> acima.
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {activeAreaTemplates.map(([k, t]) => renderTemplateCard(k, t))}
           </div>
         )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 18, marginTop: 18 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Torre Admin Master & Motoristas Parceiros
-            </div>
-            {adminEntries.map(([k, t]) => renderTemplateRow(k, t))}
-            {driverEntries.map(([k, t]) => renderTemplateRow(k, t))}
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Gatilhos Automáticos do Passageiro
-            </div>
-            {clientEntries.map(([k, t]) => renderTemplateRow(k, t))}
-          </div>
-        </div>
       </div>
     </div>
   );

@@ -3935,6 +3935,45 @@ test('Notificacoes segmentadas: Admin envia direto para passageiro/motorista e p
   assert.ok(admNotifs.some(n => n.title === '🎉 Cupom Especial'));
   assert.ok(admNotifs.some(n => n.title === '🔐 Interno Admin Broadcast'));
 
+  // Admin dispara Push para TODOS (incluindo titulo padrao 'Kavro Drive' e Painel Master Donos)
+  const bCastTodos = await push.broadcastManualPush({
+    audience: 'todos',
+    title: 'Kavro Drive',
+    message: 'Comunicado geral para Passageiros, Motoristas e Donos!'
+  });
+  assert.equal(bCastTodos.ok, true);
+  assert.equal(bCastTodos.includesAdmin, true);
+  assert.equal(bCastTodos.audience, 'ambos');
+
+  // Regra desativada (enabled: false) nao dispara push em eventos
+  const prevCfgPush = db.localStore.system_config?.default?.config || {};
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify({
+      ...prevCfgPush,
+      pushTemplates: {
+        ...(prevCfgPush.pushTemplates || {}),
+        client_ride_booked: {
+          enabled: false,
+          audience: 'cliente',
+          event: 'new_ride',
+          title: 'Kavro Drive',
+          message: 'Desativado teste'
+        }
+      }
+    })]
+  );
+  const disabledOut = await push.notify('client_ride_booked', { id: 'KVR-DISABLED', clientId: cliId, clientPhone: '48999990000' });
+  assert.equal(disabledOut, null);
+
+  // Restaura pushTemplates limpo para o passo final de criacao da corrida
+  await db.query(
+    `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+     ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+    [JSON.stringify(prevCfgPush)]
+  );
+
   // Passageiro cria corrida e recebe notificacao da corrida no sininho
   const rideRes = await apiJson('/api/rides', {
     method: 'POST',
@@ -3963,4 +4002,5 @@ test('Notificacoes segmentadas: Admin envia direto para passageiro/motorista e p
   });
   assert.equal(cliNotifsAfterRide.status, 200);
   assert.ok(cliNotifsAfterRide.json.some(n => n.rideId === rideRes.json.ride.id));
+  assert.ok(cliNotifsAfterRide.json.some(n => n.title === 'Kavro Drive' && n.message.includes('Comunicado geral')));
 });

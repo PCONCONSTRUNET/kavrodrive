@@ -1747,7 +1747,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'corridas', label: 'Visão Geral', icon: LayoutDashboard, badge: pendingRides.length > 0 ? String(pendingRides.length) : null },
               { id: 'plataforma', label: 'Motoristas', icon: Car, badge: null },
               { id: 'clientes', label: 'Passageiros', icon: Users, badge: null },
-              { id: 'notificacoes', label: 'Enviar Notificações', icon: Bell, badge: null },
+              { id: 'notificacoes', label: 'Notificações Push', icon: Bell, badge: null },
               { id: 'documentacoes', label: 'Documentações', icon: FileCheck2, badge: pendingDocsCount > 0 ? String(pendingDocsCount) : null },
               { id: 'categorias', label: 'Categorias de Corridas', icon: Sliders, badge: null },
               { id: 'parceiros', label: 'Parceiros & Banners', icon: Award, badge: Array.isArray(currentConfig.partnerBanners) && currentConfig.partnerBanners.length > 0 ? String(currentConfig.partnerBanners.length) : null },
@@ -2032,7 +2032,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'rotas' && 'Rotas GPS'}
                 {activeTab === 'clientes' && 'Passageiros'}
                 {activeTab === 'parceiros' && 'Parceiros & Banners'}
-                {activeTab === 'notificacoes' && 'Enviar Notificações'}
+                {activeTab === 'notificacoes' && 'Notificações Push'}
                 {activeTab === 'config' && 'Tarifas & Regras'}
               </span>
             </div>
@@ -7259,7 +7259,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           />
         )}
 
-        {/* ================= ABA ÚNICA: ENVIAR NOTIFICAÇÕES & PUSH ================= */}
+        {/* ================= ABA EXCLUSIVA: NOTIFICAÇÕES PUSH ================= */}
         {activeTab === 'notificacoes' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div style={{
@@ -7271,10 +7271,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
             }}>
               <div>
                 <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: '#0F172A', margin: 0, letterSpacing: '-0.02em' }}>
-                  Central Única de Notificações (Passageiros, Motoristas &amp; Push)
+                  Central Exclusiva de Notificações Push
                 </h2>
                 <p style={{ fontSize: '0.8rem', color: '#64748B', margin: '3px 0 0 0' }}>
-                  Envie avisos direto para o sininho do app e Push para Passageiros, Clientes específicos, Motoristas ou Todos, além de gerenciar gatilhos automáticos.
+                  Áreas separadas para <strong>Painel Master Donos</strong>, <strong>Motorista</strong>, <strong>Passageiros</strong> e <strong>Push para Todos</strong> — crie, edite, desative ou dispare Push na hora com título Kavro Drive.
                 </p>
               </div>
               <button
@@ -7284,9 +7284,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                   setIsConfigDirty(false);
                   if (ok) {
                     onRefreshData();
-                    alert('Regras e gatilhos de notificação salvos com sucesso!');
+                    alert('Configurações e modelos de Push salvos com sucesso!');
                   } else {
-                    alert('Erro ao salvar gatilhos de notificação no servidor.');
+                    alert('Erro ao salvar configurações de Push no servidor.');
                   }
                 }}
                 style={{
@@ -7305,7 +7305,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 }}
               >
                 <Check size={15} />
-                <span>Salvar Gatilhos &amp; Modelos</span>
+                <span>Salvar Alterações Push</span>
               </button>
             </div>
 
