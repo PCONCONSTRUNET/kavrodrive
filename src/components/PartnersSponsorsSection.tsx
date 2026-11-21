@@ -1,5 +1,5 @@
 import React from 'react';
-import { Award, ExternalLink, Image as ImageIcon, Sparkles } from 'lucide-react';
+import { Award, ExternalLink, Image as ImageIcon, ArrowUpRight } from 'lucide-react';
 import { HomePartnerBanner, PartnerBannerArea } from '../types';
 
 interface PartnersSponsorsSectionProps {
@@ -89,11 +89,11 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
       <section
         id="parceiros"
         style={{
-          backgroundColor: '#0D151C',
-          borderTop: '1px solid rgba(118, 216, 0, 0.12)',
-          borderBottom: '1px solid rgba(118, 216, 0, 0.12)',
-          paddingTop: compactPreview ? 12 : isMobile ? 32 : 44,
-          paddingBottom: compactPreview ? 14 : isMobile ? 34 : 48,
+          backgroundColor: '#0E141B',
+          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          paddingTop: compactPreview ? 12 : isMobile ? 28 : 40,
+          paddingBottom: compactPreview ? 14 : isMobile ? 30 : 42,
           scrollMarginTop: 68,
         }}
       >
@@ -105,7 +105,7 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
             padding: compactPreview ? '0 14px' : isMobile ? '0 18px' : '0 32px',
           }}
         >
-          {/* Cabeçalho da área de Parceiros & Patrocinadores */}
+          {/* Cabeçalho institucional da área de Parceiros & Patrocinadores */}
           <div
             style={{
               display: 'flex',
@@ -113,36 +113,32 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
               justifyContent: 'space-between',
               flexWrap: 'wrap',
               gap: compactPreview ? 8 : 12,
-              marginBottom: compactPreview ? 10 : isMobile ? 16 : 22,
+              marginBottom: compactPreview ? 10 : isMobile ? 14 : 20,
             }}
           >
             <div>
               <div
                 style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
                   fontSize: compactPreview ? '0.62rem' : '0.72rem',
-                  fontWeight: 800,
-                  letterSpacing: '0.06em',
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
                   textTransform: 'uppercase',
-                  color: '#8CE826',
+                  color: '#94A3B8',
                   marginBottom: compactPreview ? 2 : 4,
                 }}
               >
-                <Award size={compactPreview ? 12 : 14} />
-                <span>Parceiros &amp; Patrocinadores</span>
+                Rede Comercial &amp; Parceiros
               </div>
               <h2
                 style={{
-                  fontSize: compactPreview ? '0.96rem' : isMobile ? '1.22rem' : '1.48rem',
-                  fontWeight: 800,
-                  color: '#FFFFFF',
+                  fontSize: compactPreview ? '0.96rem' : isMobile ? '1.18rem' : '1.42rem',
+                  fontWeight: 700,
+                  color: '#F8FAFC',
                   margin: 0,
                   letterSpacing: '-0.02em',
                 }}
               >
-                Marcas que apoiam a Kavro Drive
+                Empresas conveniadas e apoiadores regionais
               </h2>
             </div>
 
@@ -153,12 +149,12 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                 style={{
                   height: 36,
                   padding: '0 14px',
-                  borderRadius: 999,
-                  border: '1px solid rgba(118, 216, 0, 0.34)',
-                  backgroundColor: 'rgba(118, 216, 0, 0.1)',
-                  color: '#8CE826',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                  color: '#F8FAFC',
                   fontSize: '0.78rem',
-                  fontWeight: 700,
+                  fontWeight: 600,
                   cursor: 'pointer',
                   display: 'inline-flex',
                   alignItems: 'center',
@@ -166,104 +162,58 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                   whiteSpace: 'nowrap',
                 }}
               >
-                <Sparkles size={13} />
-                <span>Seja parceiro ou patrocinador</span>
+                <span>Anunciar ou ser parceiro</span>
+                <ArrowUpRight size={14} color="#94A3B8" />
               </button>
             )}
           </div>
 
           {activeItems.length === 0 ? (
-            <div
+            <button
+              type="button"
+              onClick={onBecomePartnerClick}
               style={{
-                display: 'grid',
-                gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-                gap: 12,
+                width: '100%',
+                textAlign: 'left',
+                padding: isMobile ? '16px' : '18px 22px',
+                borderRadius: 10,
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                backgroundColor: '#131B23',
+                color: '#FFFFFF',
+                display: 'flex',
+                flexDirection: isMobile ? 'column' : 'row',
+                alignItems: isMobile ? 'flex-start' : 'center',
+                justifyContent: 'space-between',
+                gap: isMobile ? 12 : 20,
+                cursor: onBecomePartnerClick ? 'pointer' : 'default',
               }}
             >
-              <button
-                type="button"
-                onClick={onBecomePartnerClick}
-                style={{
-                  textAlign: 'left',
-                  padding: '16px 18px',
-                  borderRadius: 16,
-                  border: '1px dashed rgba(118, 216, 0, 0.32)',
-                  backgroundColor: '#111C24',
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  cursor: onBecomePartnerClick ? 'pointer' : 'default',
-                }}
-              >
-                <div
+              <div>
+                <div style={{ fontSize: '0.94rem', fontWeight: 700, color: '#F8FAFC' }}>
+                  Espaço comercial disponível para marcas e estabelecimentos locais
+                </div>
+                <div style={{ fontSize: '0.82rem', color: '#94A3B8', marginTop: 4, lineHeight: 1.45 }}>
+                  Divulgue postos, comércios e serviços na página oficial e no aplicativo dos passageiros.
+                </div>
+              </div>
+              {onBecomePartnerClick && (
+                <span
                   style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 12,
-                    backgroundColor: 'rgba(118, 216, 0, 0.12)',
-                    border: '1px solid rgba(118, 216, 0, 0.25)',
-                    display: 'flex',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    color: '#E2E8F0',
+                    display: 'inline-flex',
                     alignItems: 'center',
-                    justifyContent: 'center',
+                    gap: 5,
+                    whiteSpace: 'nowrap',
                     flexShrink: 0,
-                    color: '#8CE826',
                   }}
                 >
-                  <ImageIcon size={22} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#FFFFFF' }}>
-                    Espaço para Banners Patrocinados
-                  </div>
-                  <div style={{ fontSize: '0.78rem', color: '#94A3B8', marginTop: 2 }}>
-                    Destaque campanhas e promoções locais diretamente na Home.
-                  </div>
-                </div>
-              </button>
-
-              <button
-                type="button"
-                onClick={onBecomePartnerClick}
-                style={{
-                  textAlign: 'left',
-                  padding: '16px 18px',
-                  borderRadius: 16,
-                  border: '1px dashed rgba(148, 163, 184, 0.3)',
-                  backgroundColor: '#111C24',
-                  color: '#FFFFFF',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 14,
-                  cursor: onBecomePartnerClick ? 'pointer' : 'default',
-                }}
-              >
-                <div
-                  style={{
-                    width: 48,
-                    height: 48,
-                    borderRadius: 12,
-                    backgroundColor: 'rgba(255, 255, 255, 0.06)',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                    color: '#CBD5E1',
-                  }}
-                >
-                  <Award size={22} />
-                </div>
-                <div>
-                  <div style={{ fontSize: '0.9rem', fontWeight: 700, color: '#FFFFFF' }}>
-                    Espaço para Logos de Parceiros
-                  </div>
-                  <div style={{ fontSize: '0.78rem', color: '#94A3B8', marginTop: 2 }}>
-                    Exiba logotipos oficiais de postos, comércios e empresas conveniadas.
-                  </div>
-                </div>
-              </button>
-            </div>
+                  <span>Consultar formatos</span>
+                  <ArrowUpRight size={14} color="#94A3B8" />
+                </span>
+              )}
+            </button>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
               {/* Banners em Destaque (mesma proporção 9:2 / 4,5:1 em todas as áreas) */}
@@ -320,11 +270,11 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                           width: !isMobile || banners.length === 1 ? '100%' : undefined,
                           aspectRatio: '9 / 2',
                           scrollSnapAlign: 'start',
-                          borderRadius: compactPreview ? 12 : 16,
+                          borderRadius: compactPreview ? 10 : 12,
                           overflow: 'hidden',
-                          backgroundColor: '#131E26',
-                          border: '1px solid rgba(118, 216, 0, 0.24)',
-                          boxShadow: '0 8px 22px rgba(0, 0, 0, 0.28)',
+                          backgroundColor: '#131B23',
+                          border: '1px solid rgba(255, 255, 255, 0.12)',
+                          boxShadow: '0 8px 22px rgba(0, 0, 0, 0.24)',
                           cursor: safeHref ? 'pointer' : 'default',
                         }}
                       >
@@ -410,9 +360,9 @@ export const PartnersSponsorsSection: React.FC<PartnersSponsorsSectionProps> = (
                         style={{
                           flex: isMobile ? '0 0 132px' : undefined,
                           scrollSnapAlign: 'start',
-                          backgroundColor: '#131E26',
-                          border: '1px solid rgba(118, 216, 0, 0.18)',
-                          borderRadius: compactPreview ? 10 : 14,
+                          backgroundColor: '#131B23',
+                          border: '1px solid rgba(255, 255, 255, 0.1)',
+                          borderRadius: compactPreview ? 8 : 10,
                           padding: compactPreview ? '8px' : '10px',
                           display: 'flex',
                           flexDirection: 'column',
