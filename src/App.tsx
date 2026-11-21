@@ -19,6 +19,7 @@ import { WhatsAppIcon } from './components/WhatsAppIcon';
 import { TermsPrivacyModal } from './components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from './components/PassengerTermsContractModal';
 import { TurnstileWidget, isTurnstileEnabled } from './components/TurnstileWidget';
+import { KavroScrollIndicator } from './components/KavroScrollIndicator';
 import { getCleanWhatsappNumber } from './utils/format';
 
 function lazyNamed<T extends React.ComponentType<any>>(
@@ -1084,6 +1085,8 @@ export const App: React.FC = () => {
   }, []);
 
   return (
+    <>
+    <KavroScrollIndicator />
     <Suspense fallback={<RouteLoadingFallback />}>
       <Routes>
       {/* Rota pública de Rastreamento de Emergência SOS em Tempo Real */}
@@ -1244,5 +1247,6 @@ export const App: React.FC = () => {
       />
     </Routes>
     </Suspense>
+    </>
   );
 };

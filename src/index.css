@@ -69,8 +69,8 @@ html, body, #root {
    BARRA DE SCROLL PERSONALIZADA — TEMA OFICIAL KAVRO DRIVE
    ============================================================== */
 *::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 7px;
+  height: 7px;
 }
 
 *::-webkit-scrollbar-button {
@@ -80,30 +80,30 @@ html, body, #root {
 }
 
 *::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.06);
+  background: rgba(13, 21, 28, 0.08);
   border-radius: 9999px;
 }
 
 html::-webkit-scrollbar-track,
 body::-webkit-scrollbar-track {
-  background: #0B0F19;
+  background: #0D151C;
 }
 
 *::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, #1E293B 0%, #0F172A 100%);
+  background: linear-gradient(180deg, #8CE826 0%, #76D800 55%, #55A600 100%);
   border-radius: 9999px;
-  border: 1.5px solid rgba(118, 216, 0, 0.55);
+  border: 1.5px solid #0D151C;
   transition: background 0.2s ease, border-color 0.2s ease;
 }
 
 *::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(180deg, #76D800 0%, #58AD00 100%);
-  border-color: #0F172A;
+  background: linear-gradient(180deg, #9DF23A 0%, #76D800 100%);
+  border-color: #131E26;
 }
 
 *::-webkit-scrollbar-thumb:active {
   background: #76D800;
-  border-color: #0F172A;
+  border-color: #0D151C;
 }
 
 *::-webkit-scrollbar-corner {
@@ -113,7 +113,7 @@ body::-webkit-scrollbar-track {
 @supports not selector(::-webkit-scrollbar) {
   * {
     scrollbar-width: thin;
-    scrollbar-color: #1E293B #0B0F19;
+    scrollbar-color: #76D800 #0D151C;
   }
 }
 

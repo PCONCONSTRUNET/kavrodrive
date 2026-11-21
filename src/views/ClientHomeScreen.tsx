@@ -241,23 +241,19 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
         onSelect={handleSelectLocation}
       />
 
-      {/* ── HEADER FLUTUANTE TRANSPARENTE (BRANCO GLASSMORPHISM) ──────────────── */}
+      {/* ── HEADER NO TOPO (ESTÁTICO NO TOPO SEM DESLIZAR SOBRE O CONTEÚDO) ──── */}
       <div style={{
-        position: 'sticky',
-        top: 'calc(8px + env(safe-area-inset-top, 0px))',
-        zIndex: 30,
-        background: 'linear-gradient(135deg, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0.24) 100%)',
-        backdropFilter: 'blur(24px) saturate(210%)',
-        WebkitBackdropFilter: 'blur(24px) saturate(210%)',
-        margin: '8px 12px 0 12px',
+        position: 'relative',
+        backgroundColor: '#FFFFFF',
+        margin: 'calc(8px + env(safe-area-inset-top, 0px)) 12px 0 12px',
         padding: '10px 14px',
-        borderRadius: 22,
+        borderRadius: 20,
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         gap: 8,
-        border: '1px solid rgba(255, 255, 255, 0.72)',
-        boxShadow: '0 10px 28px rgba(15, 23, 42, 0.1), inset 0 1.5px 1px rgba(255, 255, 255, 0.9), inset 0 -1px 1px rgba(255, 255, 255, 0.32)',
+        border: '1px solid #E2E8F0',
+        boxShadow: '0 4px 14px rgba(15, 23, 42, 0.05)',
         width: 'calc(100% - 24px)',
         boxSizing: 'border-box'
       }}>
