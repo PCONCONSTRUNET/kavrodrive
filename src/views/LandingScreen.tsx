@@ -915,12 +915,43 @@ export const LandingScreen: React.FC<LandingScreenProps> = ({ config }) => {
       {/* Espaçamento para a navbar fixa */}
       <div style={{ height: 68 }} />
 
+      {/* Banner promocional exclusivo da versão mobile */}
+      {isMobile && (
+        <div
+          style={{
+            backgroundColor: '#0A0F14',
+            padding: '12px 18px 0 18px',
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              borderRadius: 10,
+              overflow: 'hidden',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              backgroundColor: '#0A0F14',
+            }}
+          >
+            <img
+              src="/landing/banner-0001.png"
+              alt="Kavro Drive — Taxas baixas. Mais vantagens para todos."
+              style={{
+                width: '100%',
+                height: 'auto',
+                display: 'block',
+                aspectRatio: '2064 / 762',
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* ═══ SEÇÃO 1: HERO INSTITUCIONAL KAVRO ═══ */}
       <section
         style={{
           backgroundColor: '#0A0F14',
           borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          paddingTop: isMobile ? 28 : 52,
+          paddingTop: isMobile ? 20 : 52,
           paddingBottom: isMobile ? 36 : 68,
         }}
       >
