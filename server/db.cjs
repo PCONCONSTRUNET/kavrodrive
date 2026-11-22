@@ -25,6 +25,7 @@ if (connectionString) {
       allowExitOnIdle: true,
       idleTimeoutMillis: 20000,
       connectionTimeoutMillis: 5000,
+      statement_timeout: 12000,
     });
 
     globalThis.__kavroPgPool.on('error', (err) => {
@@ -267,9 +268,28 @@ async function localQuery(text, params = []) {
     return { rows: [{ next_num: max + 1 }], rowCount: 1 };
   }
   if (upper.startsWith('SELECT') && upper.includes('FROM PUBLIC.RIDES')) {
+    if (upper.includes('WHERE ID = ANY($1')) {
+      const ids = Array.isArray(params[0]) ? params[0].map(String) : [];
+      const rows = localStore.rides.filter(r => ids.includes(String(r.id)));
+      return { rows, rowCount: rows.length };
+    }
     if (upper.includes('WHERE ID = $1')) {
       const found = localStore.rides.find(r => r.id === params[0]);
       return { rows: found ? [found] : [], rowCount: found ? 1 : 0 };
+    }
+    if (upper.includes("WHERE DRIVER_ID = $1 AND STATUS IN ('A_CAMINHO'")) {
+      const rows = localStore.rides.filter(
+        r => r.driver_id === params[0] && (r.status === 'a_caminho' || r.status === 'no_local' || r.status === 'em_andamento')
+      );
+      return { rows: rows.slice(0, 1), rowCount: Math.min(1, rows.length) };
+    }
+    if (upper.includes("STATUS = 'NA_FILA'") && upper.includes('DRIVER_ID = $2')) {
+      const queuedId = String(params[0] || '');
+      const drvId = String(params[1] || '');
+      const rows = localStore.rides.filter(
+        r => (queuedId && r.id === queuedId) || (r.driver_id === drvId && r.status === 'na_fila')
+      );
+      return { rows: rows.slice(0, 1), rowCount: Math.min(1, rows.length) };
     }
     if (upper.includes('WHERE DRIVER_ID = $1') && upper.includes('PASSENGER_RATING')) {
       const rows = localStore.rides.filter(
@@ -304,6 +324,18 @@ async function localQuery(text, params = []) {
         .filter(r => r.driver_id === drvId || (r.status === 'aguardando_confirmacao' && !r.driver_id))
         .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
         .slice(0, 100);
+      return { rows, rowCount: rows.length };
+    }
+    if (upper.includes('CLIENT_ID = ANY($1')) {
+      const ids = Array.isArray(params[0]) ? params[0].map(String) : [];
+      const phones = Array.isArray(params[1]) ? params[1].map(String) : [];
+      const rows = [...localStore.rides]
+        .filter(r => {
+          const rPhone = String(r.client_phone || '').replace(/\D/g, '');
+          return (r.client_id && ids.includes(String(r.client_id))) || (rPhone.length >= 8 && phones.includes(rPhone));
+        })
+        .sort((a, b) => String(b.created_at || b.date || '').localeCompare(String(a.created_at || a.date || '')))
+        .slice(0, 200);
       return { rows, rowCount: rows.length };
     }
     if (upper.includes('CLIENT_ID = $1') && upper.includes('CLIENT_PHONE')) {

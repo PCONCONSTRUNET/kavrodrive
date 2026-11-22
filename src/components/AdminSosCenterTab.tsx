@@ -97,8 +97,21 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
 
   useEffect(() => {
     loadSosAlerts();
-    const timer = setInterval(loadSosAlerts, 5000);
-    return () => clearInterval(timer);
+    const onRtSos = () => {
+      if (document.visibilityState === 'visible') {
+        loadSosAlerts();
+      }
+    };
+    window.addEventListener('up_realtime_sos', onRtSos);
+    const timer = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        loadSosAlerts();
+      }
+    }, 10000);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('up_realtime_sos', onRtSos);
+    };
   }, []);
 
   const handleUpdateAlertStatus = async (sosId: string, status: 'ativo' | 'em_atendimento' | 'resolvido') => {

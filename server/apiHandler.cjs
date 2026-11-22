@@ -563,7 +563,7 @@ async function confirmDigitalRidePaymentAndPublish({ rideId, paidAmountBrl, gate
       `${updatedRide.clientName} pagou R$ ${finalVal.toFixed(2)} (Líquido Motorista: R$ ${split.driverNetAmount.toFixed(2)}). Corrida liberada!`,
       normId
     ]
-  ).catch(() => {});
+  ).then(() => push.invalidateNotificationsCache?.()).catch(() => {});
 
   await push.handleRideChange(before, updatedRide, { source: 'webhook' });
   realtimeHub.publish(
@@ -1691,6 +1691,7 @@ function normalizePhoneDigitsServer(raw) {
 // Cache de curta duração com coalescência de requisições concorrentes (evita tempestade no PostgreSQL em picos de 1000-2000 usuários)
 let sysConfigCache = { value: null, expiresAt: 0, inflight: null };
 let driversListCache = { value: null, expiresAt: 0, inflight: null };
+let blockedSlotsCache = { value: null, expiresAt: 0, inflight: null };
 
 function invalidateSystemConfigCache() {
   sysConfigCache = { value: null, expiresAt: 0, inflight: null };
@@ -1698,6 +1699,10 @@ function invalidateSystemConfigCache() {
 
 function invalidateDriversCache() {
   driversListCache = { value: null, expiresAt: 0, inflight: null };
+}
+
+function invalidateBlockedSlotsCache() {
+  blockedSlotsCache = { value: null, expiresAt: 0, inflight: null };
 }
 
 function patchCachedDriverLocation(driverId, location) {
@@ -1733,9 +1738,9 @@ async function getCachedSystemConfig() {
   return sysConfigCache.inflight;
 }
 
-async function getCachedDriversList() {
+async function getCachedDriversList(preloadedCfg = null) {
   if (!db.pool) {
-    return finance.listDrivers();
+    return finance.listDrivers(preloadedCfg);
   }
   const now = Date.now();
   if (driversListCache.value && now < driversListCache.expiresAt) {
@@ -1745,7 +1750,7 @@ async function getCachedDriversList() {
     return driversListCache.inflight;
   }
   driversListCache.inflight = finance
-    .listDrivers()
+    .listDrivers(preloadedCfg)
     .then((list) => {
       driversListCache = { value: list, expiresAt: Date.now() + 3000, inflight: null };
       return list;
@@ -1755,6 +1760,37 @@ async function getCachedDriversList() {
       throw err;
     });
   return driversListCache.inflight;
+}
+
+async function getCachedBlockedSlotsMap() {
+  const buildMap = (rows) => {
+    const map = {};
+    (rows || []).forEach(r => { map[r.date] = r.slots || []; });
+    return map;
+  };
+  if (!db.pool) {
+    const r = await db.query('SELECT date, slots FROM public.blocked_slots');
+    return buildMap(r.rows);
+  }
+  const now = Date.now();
+  if (blockedSlotsCache.value && now < blockedSlotsCache.expiresAt) {
+    return blockedSlotsCache.value;
+  }
+  if (blockedSlotsCache.inflight) {
+    return blockedSlotsCache.inflight;
+  }
+  blockedSlotsCache.inflight = db
+    .query('SELECT date, slots FROM public.blocked_slots')
+    .then((r) => {
+      const map = buildMap(r.rows);
+      blockedSlotsCache = { value: map, expiresAt: Date.now() + 10000, inflight: null };
+      return map;
+    })
+    .catch((err) => {
+      blockedSlotsCache.inflight = null;
+      throw err;
+    });
+  return blockedSlotsCache.inflight;
 }
 
 function filterAndSortDriverRidesByRadius(rides, selfDriver, cfg) {
@@ -2322,10 +2358,8 @@ async function handleApiRequest(req, res) {
         ? String(clientSession.phone || '').replace(/\D/g, '')
         : '';
 
-      const [allDrivers, cachedSysCfg] = await Promise.all([
-        getCachedDriversList(),
-        getCachedSystemConfig()
-      ]);
+      const cachedSysCfg = await getCachedSystemConfig();
+      const allDrivers = await getCachedDriversList(cachedSysCfg);
       const onlineDriversPublic = allDrivers
         .filter(d => d.approvalStatus === 'aprovado' && d.isOnline)
         .map(d => ({
@@ -2362,18 +2396,13 @@ async function handleApiRequest(req, res) {
         }));
 
       if (isAdmin) {
-        const [ridesRes, expRes, cliRes, adminNotifs, slotsRes] = await Promise.all([
+        const [ridesRes, expRes, cliRes, adminNotifs, blockedSlotsMap] = await Promise.all([
           db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC LIMIT 500'),
           db.query('SELECT * FROM public.expenses ORDER BY date DESC LIMIT 500'),
           db.query('SELECT * FROM public.clients ORDER BY created_at DESC LIMIT 1000'),
           push.queryNotificationsForViewer({ isAdmin: true, limit: 60 }),
-          db.query('SELECT date, slots FROM public.blocked_slots')
+          getCachedBlockedSlotsMap()
         ]);
-
-        const blockedSlotsMap = {};
-        slotsRes.rows.forEach(r => {
-          blockedSlotsMap[r.date] = r.slots || [];
-        });
 
         const adminRidesWithRatings = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
 
@@ -2400,20 +2429,15 @@ async function handleApiRequest(req, res) {
       }
 
       if (isAuthedDriver) {
-        const [ridesRes, slotsRes] = await Promise.all([
+        const [ridesRes, blockedSlotsMap] = await Promise.all([
           db.query(
             `SELECT * FROM public.rides
              WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL)
              ORDER BY created_at DESC LIMIT 100`,
             [verifiedDriverId]
           ),
-          db.query('SELECT date, slots FROM public.blocked_slots')
+          getCachedBlockedSlotsMap()
         ]);
-
-        const blockedSlotsMap = {};
-        slotsRes.rows.forEach(r => {
-          blockedSlotsMap[r.date] = r.slots || [];
-        });
 
         const selfDriver = allDrivers.find(d => d.id === verifiedDriverId);
         const formattedRides = await attachClientRatingsToRides(ridesRes.rows.map(formatRideFromDb));
@@ -2450,7 +2474,7 @@ async function handleApiRequest(req, res) {
           )
         : Promise.resolve({ rows: [] });
 
-      const [ridesRes, slotsRes, selfCliRes] = await Promise.all([
+      const [ridesRes, blockedSlotsMap, selfCliRes] = await Promise.all([
         (verifiedClientId || verifiedClientPhoneDigits.length >= 8)
           ? db.query(
               `SELECT * FROM public.rides
@@ -2460,14 +2484,9 @@ async function handleApiRequest(req, res) {
               [verifiedClientId, verifiedClientPhoneDigits]
             )
           : Promise.resolve({ rows: [] }),
-        db.query('SELECT date, slots FROM public.blocked_slots'),
+        getCachedBlockedSlotsMap(),
         selfClientPromise
       ]);
-
-      const blockedSlotsMap = {};
-      slotsRes.rows.forEach(r => {
-        blockedSlotsMap[r.date] = r.slots || [];
-      });
 
       const rawClientRides = ridesRes.rows.map(formatRideFromDb).filter(ride => {
         const ridePhoneDigits = normalizePhoneDigitsServer(ride.clientPhone);
@@ -2502,8 +2521,8 @@ async function handleApiRequest(req, res) {
     if (pathname === '/api/config') {
       if (method === 'GET') {
         const isAdmin = await isAuthorizedAdmin(req);
-        const r = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
-        return sendJson(res, 200, sanitizePublicConfig(r.rows[0]?.config || {}, isAdmin) || {});
+        const cfgObj = await getCachedSystemConfig();
+        return sendJson(res, 200, sanitizePublicConfig(cfgObj || {}, isAdmin) || {});
       }
       if (method === 'POST') {
         if (!await isAuthorizedAdmin(req)) {
@@ -2561,6 +2580,7 @@ async function handleApiRequest(req, res) {
 
         realtimeHub.publish('config:updated', { updatedAt: new Date().toISOString() });
         invalidateSystemConfigCache();
+        push.invalidateTemplatesCache?.();
         return sendJson(res, 200, { ok: true, config: body });
       }
     }
@@ -2629,12 +2649,10 @@ async function handleApiRequest(req, res) {
 
     // 2.1 FROTA VERIFICADA PÚBLICA MULTI-MOTORISTA (SOMENTE FROTA — SEM CORRIDAS OU LOCALIZAÇÕES)
     if (pathname === '/api/public/fleet' && method === 'GET') {
-      const [cfgRes, allDrivers] = await Promise.all([
-        db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']),
-        finance.listDrivers()
-      ]);
+      const rawCfg = await getCachedSystemConfig();
+      const allDrivers = await getCachedDriversList(rawCfg);
 
-      const cfg = sanitizePublicConfig(cfgRes.rows[0]?.config || {}, false) || {};
+      const cfg = sanitizePublicConfig(rawCfg || {}, false) || {};
 
       const approvedDrivers = allDrivers
         .filter(d => d.approvalStatus === 'aprovado')
@@ -3094,7 +3112,7 @@ async function handleApiRequest(req, res) {
       }
 
       const formatted = await finance.getDriverById(row.id);
-      const wallet = await finance.getDriverWallet(row.id);
+      const wallet = await finance.getDriverWallet(row.id, { driver: formatted });
       return sendJson(res, 200, {
         ok: true,
         driver: formatted,
@@ -3107,7 +3125,8 @@ async function handleApiRequest(req, res) {
       if (!await isAuthorizedAdmin(req)) {
         return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
       }
-      const list = await finance.listDrivers();
+      const cachedCfg = await getCachedSystemConfig();
+      const list = await getCachedDriversList(cachedCfg);
       return sendJson(res, 200, { ok: true, drivers: list });
     }
 
@@ -3220,7 +3239,8 @@ async function handleApiRequest(req, res) {
             error: 'Complete o cadastro do seu veículo e CRLV (Etapa 5) no painel de acompanhamento antes de ficar Online.'
           });
         }
-        const wallet = await finance.getDriverWallet(driverId);
+        const cfg = await getCachedSystemConfig();
+        const wallet = await finance.getDriverWallet(driverId, { driver, cfg });
         if (wallet.isDelinquent) {
           return sendJson(res, 403, {
             ok: false,
@@ -3290,9 +3310,12 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
       }
       if (method === 'GET') {
-        const driver = await finance.getDriverById(driverId);
+        const [driver, cfg] = await Promise.all([
+          finance.getDriverById(driverId),
+          getCachedSystemConfig()
+        ]);
         if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
-        const wallet = await finance.getDriverWallet(driverId);
+        const wallet = await finance.getDriverWallet(driverId, { driver, cfg });
         return sendJson(res, 200, { ok: true, driver, wallet });
       }
       if (method === 'PATCH' || method === 'PUT') {
@@ -4402,8 +4425,8 @@ async function handleApiRequest(req, res) {
 
       const savedRide = await upsertFullRide(ride);
 
-      // Auto-cadastra cliente se necessário
-      if (savedRide.clientPhone && savedRide.clientName) {
+      // Auto-cadastra cliente apenas quando não houver sessão autenticada ou edição de corrida existente
+      if (!before && !clientSession?.sub && savedRide.clientPhone && savedRide.clientName) {
         const cleanPhone = String(savedRide.clientPhone).trim();
         const cleanName = String(savedRide.clientName).trim();
         if (cleanPhone && cleanName) {
@@ -4459,15 +4482,15 @@ async function handleApiRequest(req, res) {
           return sendJson(res, 200, formatted.map(ride => security.sanitizeRideForViewer(ride, { isAdmin: true })));
         }
         if (driverSession?.sub) {
-          const [r, allDrivers, cfg] = await Promise.all([
+          const cfg = await getCachedSystemConfig();
+          const [r, allDrivers] = await Promise.all([
             db.query(
               `SELECT * FROM public.rides
                WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL)
                ORDER BY created_at DESC LIMIT 100`,
               [driverSession.sub]
             ),
-            getCachedDriversList(),
-            getCachedSystemConfig()
+            getCachedDriversList(cfg)
           ]);
           const selfDriver = allDrivers.find(d => d.id === driverSession.sub) || null;
           const formatted = await attachClientRatingsToRides(r.rows.map(formatRideFromDb));
@@ -4530,7 +4553,10 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 409, { ok: false, error: 'Outro motorista já aceitou esta corrida.' });
       }
 
-      const driver = await finance.getDriverById(driverId);
+      const [driver, acceptCfg] = await Promise.all([
+        finance.getDriverById(driverId),
+        getCachedSystemConfig()
+      ]);
       if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
       if (driver.approvalStatus !== 'aprovado') {
         return sendJson(res, 403, { ok: false, error: 'Sua conta de motorista ainda não está aprovada.' });
@@ -4557,8 +4583,16 @@ async function handleApiRequest(req, res) {
         }
       }
 
-      // Verifica se o motorista está inadimplente ao tentar aceitar corrida em dinheiro
-      const wallet = await finance.getDriverWallet(driver.id);
+      // Verifica se o motorista está inadimplente ao tentar aceitar corrida em dinheiro e se já tem corrida ativa em paralelo
+      const [wallet, activeRidesRes] = await Promise.all([
+        finance.getDriverWallet(driver.id, { driver, cfg: acceptCfg }),
+        db.query(
+          `SELECT * FROM public.rides
+           WHERE driver_id = $1 AND status IN ('a_caminho', 'no_local', 'em_andamento')
+           ORDER BY created_at DESC LIMIT 5`,
+          [driver.id]
+        )
+      ]);
       if (wallet.isDelinquent && ride.paymentMethod === 'dinheiro') {
         return sendJson(res, 403, {
           ok: false,
@@ -4566,14 +4600,9 @@ async function handleApiRequest(req, res) {
         });
       }
 
-      // Verifica se o motorista já está em uma corrida ativa (para encaixar na Fila em 2º plano!)
-      const allRidesRes = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC');
-      const allRides = allRidesRes.rows.map(formatRideFromDb);
-      const currentActiveRide = allRides.find(
-        r => r.id !== ride.id &&
-          r.driverId === driver.id &&
-          (r.status === 'a_caminho' || r.status === 'no_local' || r.status === 'em_andamento')
-      );
+      const currentActiveRide = activeRidesRes.rows
+        .map(formatRideFromDb)
+        .find(r => r.id !== ride.id) || null;
 
       const isQueued = Boolean(currentActiveRide);
       const newStatus = isQueued ? 'na_fila' : 'a_caminho';
@@ -4822,7 +4851,10 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida para finalizar corrida.' });
       }
 
-      const cfgForComplete = await finance.getPackageConfig?.() || (await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default'])).rows[0]?.config || {};
+      const [cfgForComplete, driver] = await Promise.all([
+        getCachedSystemConfig(),
+        finance.getDriverById(driverId)
+      ]);
       const finalPrice = body.finalAmount !== undefined ? finance.round2(body.finalAmount) : ride.totalPrice;
       const catsForComplete = finance.normalizeCategoriesServer ? finance.normalizeCategoriesServer(cfgForComplete) : [];
       const mappedCatCompleteId = finance.mapLegacyCategoryIdServer ? finance.mapLegacyCategoryIdServer(ride.category || 'kavro_go') : (ride.category || 'kavro_go');
@@ -4832,7 +4864,6 @@ async function handleApiRequest(req, res) {
         ? finance.resolveCommissionFixedForRide(cfgForComplete, ride)
         : Math.max(0, finance.round2(ride.commissionFixed ?? cfgForComplete.platformCommissionFixed ?? 0));
       const split = finance.calculateSplit(finalPrice, effectiveCompletePct, effectiveCompleteFixed);
-      const driver = await finance.getDriverById(driverId);
 
       let newPaymentStatus = ride.paymentStatus;
       let paidAmount = finalPrice;
@@ -4921,14 +4952,17 @@ async function handleApiRequest(req, res) {
         status: 'finalizada'
       });
 
-      // Verifica se o motorista tem uma PRÓXIMA CORRIDA NA FILA para promover automaticamente!
+      // Verifica se o motorista tem uma PRÓXIMA CORRIDA NA FILA para promover automaticamente (sem scan completo)!
       let promotedNextRide = null;
+      let updatedDriverRecord = driver;
       if (driver) {
-        const allRidesRes = await db.query('SELECT * FROM public.rides ORDER BY date DESC, time DESC');
-        const allRides = allRidesRes.rows.map(formatRideFromDb);
-        const queued = allRides.find(
-          r => r.id === driver.queuedRideId || (r.driverId === driver.id && r.status === 'na_fila')
+        const queuedRes = await db.query(
+          `SELECT * FROM public.rides
+           WHERE ($1 <> '' AND id = $1) OR (driver_id = $2 AND status = 'na_fila')
+           ORDER BY created_at ASC LIMIT 1`,
+          [String(driver.queuedRideId || ''), driver.id]
         );
+        const queued = queuedRes.rows[0] ? formatRideFromDb(queuedRes.rows[0]) : null;
 
         if (queued) {
           promotedNextRide = await upsertFullRide({
@@ -4939,15 +4973,16 @@ async function handleApiRequest(req, res) {
           });
         }
 
-        await finance.saveDriverRecord({
+        updatedDriverRecord = await finance.saveDriverRecord({
           ...driver,
           totalRides: (driver.totalRides || 0) + 1,
           currentRideId: promotedNextRide ? promotedNextRide.id : null,
           queuedRideId: null
         });
+        invalidateDriversCache();
       }
 
-      const wallet = await finance.getDriverWallet(driverId);
+      const wallet = await finance.getDriverWallet(driverId, { driver: updatedDriverRecord, cfg: cfgForComplete });
       const [enrichedCompletedRide] = await attachClientRatingsToRides([completedRide]);
       await push.handleRideChange(ride, enrichedCompletedRide);
       await audit.recordAuditEvent({
@@ -6185,9 +6220,18 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
       }
       const persistedAlerts = await finance.listSosAlertsDb();
-      const ridesRes = await db.query('SELECT * FROM rides ORDER BY created_at DESC');
+      if (persistedAlerts.length === 0) {
+        return sendJson(res, 200, { ok: true, alerts: [] });
+      }
+      const linkedRideIds = Array.from(new Set(persistedAlerts.map(a => a.rideId).filter(Boolean)));
+      const hasUnlinkedAlerts = persistedAlerts.some(a => !a.rideId);
+      const [ridesRes, driversList] = await Promise.all([
+        hasUnlinkedAlerts
+          ? db.query('SELECT * FROM public.rides ORDER BY created_at DESC LIMIT 200')
+          : db.query('SELECT * FROM public.rides WHERE id = ANY($1::text[])', [linkedRideIds]),
+        getCachedDriversList()
+      ]);
       const allRides = ridesRes.rows || [];
-      const driversList = await finance.listDrivers();
       const nowMs = Date.now();
 
       const alerts = persistedAlerts.map((item) => {
@@ -6309,7 +6353,7 @@ async function handleApiRequest(req, res) {
             `Auxílio urgente solicitado! Local: ${alertData.address || `${lat.toFixed(5)}, ${lng.toFixed(5)}`}`,
             alertData.rideId
           ]
-        ).catch(() => {});
+        ).then(() => push.invalidateNotificationsCache?.()).catch(() => {});
 
         push.sendToExternalIds(
           [push.ADMIN_EXTERNAL_ID],
@@ -8474,9 +8518,16 @@ async function handleApiRequest(req, res) {
         emergency_contacts: nextEmergencyList
       };
 
-      // Sincroniza corridas ainda não iniciadas (pré-embarque) para que K-Código ON/OFF/Alteração valha imediatamente
+      // Sincroniza corridas ainda não iniciadas deste passageiro (sem scan na tabela inteira)
       try {
-        const openRes = await db.query('SELECT * FROM public.rides');
+        const clientPhoneDigits = normalizePhoneDigitsServer(savedRow.phone || clientRow.phone || '');
+        const openRes = await db.query(
+          `SELECT * FROM public.rides
+           WHERE ($1 <> '' AND client_id = $1)
+              OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2)
+           ORDER BY created_at DESC LIMIT 80`,
+          [clientId, clientPhoneDigits.length >= 8 ? clientPhoneDigits : '']
+        );
         const preBoardingStatuses = new Set([
           'aguardando_pagamento',
           'aguardando_confirmacao',
@@ -8924,8 +8975,28 @@ async function handleApiRequest(req, res) {
         [guardianId]
       );
       const rawMembers = (memRes.rows || []).filter((m) => m.status !== 'revogado');
-      const allClientsRes = await db.query('SELECT * FROM public.clients');
-      const allRidesRes = await db.query('SELECT * FROM public.rides ORDER BY created_at DESC');
+      if (rawMembers.length === 0) {
+        return sendJson(res, 200, { ok: true, members: [] });
+      }
+      const teenClientIds = Array.from(new Set(rawMembers.map(m => m.teen_client_id).filter(Boolean).map(String)));
+      const teenPhoneDigitsList = Array.from(new Set(
+        rawMembers.map(m => normalizePhoneDigitsServer(m.teen_phone || '')).filter(p => p.length >= 8)
+      ));
+      const [allClientsRes, allRidesRes] = await Promise.all([
+        db.query(
+          `SELECT * FROM public.clients
+           WHERE id = ANY($1::text[])
+              OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = ANY($2::text[])`,
+          [teenClientIds, teenPhoneDigitsList]
+        ),
+        db.query(
+          `SELECT * FROM public.rides
+           WHERE client_id = ANY($1::text[])
+              OR regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = ANY($2::text[])
+           ORDER BY created_at DESC LIMIT 200`,
+          [teenClientIds, teenPhoneDigitsList]
+        )
+      ]);
       const allRides = (allRidesRes.rows || []).map(formatRideFromDb);
       const activeStatuses = new Set(['aguardando_confirmacao', 'aguardando_pagamento', 'aguardando', 'confirmada', 'a_caminho', 'no_local', 'na_fila', 'em_andamento']);
 
@@ -9356,9 +9427,7 @@ async function handleApiRequest(req, res) {
     // 6. BLOCKED SLOTS
     if (pathname === '/api/blocked-slots') {
       if (method === 'GET') {
-        const r = await db.query('SELECT date, slots FROM public.blocked_slots');
-        const map = {};
-        r.rows.forEach(row => { map[row.date] = row.slots || []; });
+        const map = await getCachedBlockedSlotsMap();
         return sendJson(res, 200, map);
       }
       if (method === 'POST') {
@@ -9371,6 +9440,7 @@ async function handleApiRequest(req, res) {
           VALUES ($1, $2, NOW())
           ON CONFLICT (date) DO UPDATE SET slots = EXCLUDED.slots, updated_at = NOW();
         `, [body.date, JSON.stringify(body.slots || [])]);
+        invalidateBlockedSlotsCache();
         return sendJson(res, 200, { ok: true });
       }
     }
@@ -9386,7 +9456,7 @@ async function handleApiRequest(req, res) {
         const drvSession = verifyDriverToken(req);
         if (drvSession?.sub) {
           const drvRidesRes = await db.query(
-            `SELECT * FROM public.rides WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL) ORDER BY created_at DESC LIMIT 100`,
+            `SELECT id FROM public.rides WHERE driver_id = $1 OR (status = 'aguardando_confirmacao' AND driver_id IS NULL) ORDER BY created_at DESC LIMIT 100`,
             [drvSession.sub]
           );
           const items = await push.queryNotificationsForViewer({
@@ -9400,7 +9470,7 @@ async function handleApiRequest(req, res) {
         if (cliSession?.sub) {
           const phoneDigits = normalizePhoneDigitsServer(cliSession.phone || '');
           const cliRidesRes = await db.query(
-            `SELECT * FROM public.rides WHERE ($1 <> '' AND client_id = $1) OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2) ORDER BY created_at DESC LIMIT 80`,
+            `SELECT id FROM public.rides WHERE ($1 <> '' AND client_id = $1) OR ($2 <> '' AND regexp_replace(COALESCE(client_phone, ''), '\\D', '', 'g') = $2) ORDER BY created_at DESC LIMIT 80`,
             [cliSession.sub, phoneDigits]
           );
           const items = await push.queryNotificationsForViewer({
@@ -9436,6 +9506,7 @@ async function handleApiRequest(req, res) {
           return sendJson(res, 401, { error: 'Acesso não autorizado.' });
         }
         await db.query('DELETE FROM public.notifications');
+        push.invalidateNotificationsCache?.();
         return sendJson(res, 200, { ok: true, cleared: true });
       }
     }
@@ -9445,6 +9516,7 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { error: 'Acesso não autorizado.' });
       }
       await db.query('UPDATE public.notifications SET read = true WHERE read = false');
+      push.invalidateNotificationsCache?.();
       return sendJson(res, 200, { ok: true });
     }
 
@@ -9455,6 +9527,7 @@ async function handleApiRequest(req, res) {
       }
       const id = decodeURIComponent(notifMatch[1]);
       await db.query('DELETE FROM public.notifications WHERE id = $1', [id]);
+      push.invalidateNotificationsCache?.();
       return sendJson(res, 200, { ok: true, deleted: id });
     }
 
@@ -9467,6 +9540,7 @@ async function handleApiRequest(req, res) {
       const body = await parseBody(req);
       const isRead = body.read !== undefined ? Boolean(body.read) : true;
       await db.query('UPDATE public.notifications SET read = $1 WHERE id = $2', [isRead, id]);
+      push.invalidateNotificationsCache?.();
       return sendJson(res, 200, { ok: true, id, read: isRead });
     }
 

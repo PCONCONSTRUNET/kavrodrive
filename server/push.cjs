@@ -56,20 +56,48 @@ const PAYMENT_LABEL = {
   cartao_debito: 'Cartão de Débito', online: 'Pagamento Online'
 };
 
+// Cache curto em memória para reduzir pressão no Postgres em picos de /api/sync e novos pedidos
+let templatesCache = { value: null, expiresAt: 0, inflight: null };
+let notificationsTopCache = { value: null, expiresAt: 0, inflight: null };
+let approvedDriverTargetsCache = { value: null, expiresAt: 0, inflight: null };
+
+function invalidateNotificationsCache() {
+  notificationsTopCache = { value: null, expiresAt: 0, inflight: null };
+}
+
+function invalidateTemplatesCache() {
+  templatesCache = { value: null, expiresAt: 0, inflight: null };
+}
+
 async function getTemplates() {
-  let custom = {};
-  try {
-    const r = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
-    custom = r.rows[0]?.config?.pushTemplates || {};
-  } catch { /* usa padrão */ }
-  const merged = {};
-  for (const [k, def] of Object.entries(DEFAULT_TEMPLATES)) merged[k] = { ...def, ...(custom[k] || {}) };
-  for (const [k, tpl] of Object.entries(custom || {})) {
-    if (!DEFAULT_TEMPLATES[k] && tpl && typeof tpl === 'object') {
-      merged[k] = { enabled: true, audience: 'cliente', event: 'new_ride', isCustom: true, ...tpl };
-    }
+  if (db.pool && templatesCache.value && Date.now() < templatesCache.expiresAt) {
+    return templatesCache.value;
   }
-  return merged;
+  const load = async () => {
+    let custom = {};
+    try {
+      const r = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
+      custom = r.rows[0]?.config?.pushTemplates || {};
+    } catch { /* usa padrão */ }
+    const merged = {};
+    for (const [k, def] of Object.entries(DEFAULT_TEMPLATES)) merged[k] = { ...def, ...(custom[k] || {}) };
+    for (const [k, tpl] of Object.entries(custom || {})) {
+      if (!DEFAULT_TEMPLATES[k] && tpl && typeof tpl === 'object') {
+        merged[k] = { enabled: true, audience: 'cliente', event: 'new_ride', isCustom: true, ...tpl };
+      }
+    }
+    if (db.pool) {
+      templatesCache = { value: merged, expiresAt: Date.now() + 3000, inflight: null };
+    }
+    return merged;
+  };
+  if (!db.pool) return load();
+  if (templatesCache.inflight) return templatesCache.inflight;
+  templatesCache.inflight = load().catch((err) => {
+    templatesCache.inflight = null;
+    throw err;
+  });
+  return templatesCache.inflight;
 }
 
 function formatDateBR(d) {
@@ -166,10 +194,19 @@ async function resolveRideTargets(audience, eventName, ride = {}) {
       targets.add(String(ride.driverId));
     } else if (eventName === 'new_ride') {
       try {
-        const res = await db.query(
-          "SELECT id, phone FROM public.drivers WHERE approval_status = 'aprovado' OR approval_status IS NULL"
-        );
-        for (const row of res.rows || []) {
+        let rows = null;
+        if (db.pool && approvedDriverTargetsCache.value && Date.now() < approvedDriverTargetsCache.expiresAt) {
+          rows = approvedDriverTargetsCache.value;
+        } else {
+          const res = await db.query(
+            "SELECT id, phone FROM public.drivers WHERE approval_status = 'aprovado' OR approval_status IS NULL"
+          );
+          rows = res.rows || [];
+          if (db.pool) {
+            approvedDriverTargetsCache = { value: rows, expiresAt: Date.now() + 15000, inflight: null };
+          }
+        }
+        for (const row of rows || []) {
           const dExt = driverExternalId(row.id, row.phone);
           if (dExt) targets.add(dExt);
           if (row.id) targets.add(String(row.id));
@@ -269,6 +306,7 @@ async function saveAndPublishInAppNotification({
         url ? String(url) : null
       ]
     );
+    invalidateNotificationsCache();
   } catch (err) {
     console.warn('[notifications] erro ao persistir notificação:', err.message);
   }
@@ -305,6 +343,32 @@ async function saveAndPublishInAppNotification({
   return item;
 }
 
+async function fetchTopNotificationsCached() {
+  if (!db.pool) {
+    const r = await db.query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 100');
+    return (r.rows || []).map(formatNotificationRow).filter(Boolean);
+  }
+  const now = Date.now();
+  if (notificationsTopCache.value && now < notificationsTopCache.expiresAt) {
+    return notificationsTopCache.value;
+  }
+  if (notificationsTopCache.inflight) {
+    return notificationsTopCache.inflight;
+  }
+  notificationsTopCache.inflight = db
+    .query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 100')
+    .then((r) => {
+      const list = (r.rows || []).map(formatNotificationRow).filter(Boolean);
+      notificationsTopCache = { value: list, expiresAt: Date.now() + 2000, inflight: null };
+      return list;
+    })
+    .catch((err) => {
+      notificationsTopCache.inflight = null;
+      throw err;
+    });
+  return notificationsTopCache.inflight;
+}
+
 async function queryNotificationsForViewer({
   isAdmin = false,
   clientId = '',
@@ -313,8 +377,7 @@ async function queryNotificationsForViewer({
   limit = 60
 } = {}) {
   await ensureNotificationsSchema();
-  const r = await db.query('SELECT * FROM public.notifications ORDER BY timestamp DESC LIMIT 100');
-  const rows = (r.rows || []).map(formatNotificationRow).filter(Boolean);
+  const rows = await fetchTopNotificationsCached();
 
   if (isAdmin) {
     return rows.slice(0, limit);
@@ -555,7 +618,9 @@ async function broadcastManualPush({
   }
   if (normalizedAud === 'cliente' || normalizedAud === 'ambos') {
     try {
-      const r = await db.query('SELECT id, phone FROM public.clients');
+      const r = cleanTargetClient
+        ? await db.query('SELECT id, phone FROM public.clients WHERE id = $1 LIMIT 1', [cleanTargetClient])
+        : await db.query('SELECT id, phone FROM public.clients LIMIT 5000');
       for (const row of r.rows || []) {
         if (cleanTargetClient && String(row.id) !== cleanTargetClient) continue;
         const ext = clientExternalId(row.phone);
@@ -567,7 +632,9 @@ async function broadcastManualPush({
   }
   if (normalizedAud === 'motorista' || normalizedAud === 'ambos') {
     try {
-      const r = await db.query('SELECT id, phone FROM public.drivers');
+      const r = cleanTargetDriver
+        ? await db.query('SELECT id, phone FROM public.drivers WHERE id = $1 LIMIT 1', [cleanTargetDriver])
+        : await db.query('SELECT id, phone FROM public.drivers LIMIT 5000');
       for (const row of r.rows || []) {
         if (cleanTargetDriver && String(row.id) !== cleanTargetDriver) continue;
         const ext = driverExternalId(row.id, row.phone);
@@ -658,6 +725,8 @@ module.exports = {
   DEFAULT_TEMPLATES,
   getAppId,
   isConfigured,
+  invalidateNotificationsCache,
+  invalidateTemplatesCache,
   clientExternalId,
   driverExternalId,
   ensureNotificationsSchema,

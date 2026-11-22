@@ -454,8 +454,25 @@ async function ensureExtendedSchema() {
       ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS driver_plate VARCHAR(20);
       ALTER TABLE public.sos_alerts ADD COLUMN IF NOT EXISTS ride_code VARCHAR(30);
       CREATE INDEX IF NOT EXISTS idx_rides_status_driver ON public.rides (status, driver_id);
+      CREATE INDEX IF NOT EXISTS idx_rides_driver_created ON public.rides (driver_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_rides_pending_created ON public.rides (created_at DESC) WHERE status = 'aguardando_confirmacao' AND driver_id IS NULL;
       CREATE INDEX IF NOT EXISTS idx_rides_client_id ON public.rides (client_id);
+      CREATE INDEX IF NOT EXISTS idx_rides_client_created ON public.rides (client_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_rides_client_phone_digits ON public.rides (regexp_replace(COALESCE(client_phone, ''), '\D', '', 'g'), created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_rides_created_at_desc ON public.rides (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_drivers_created_desc ON public.drivers (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_drivers_online_approval ON public.drivers (is_online, approval_status);
+      CREATE INDEX IF NOT EXISTS idx_drivers_email_lower ON public.drivers (LOWER(COALESCE(email, '')));
       CREATE INDEX IF NOT EXISTS idx_financial_ledger_driver_created ON public.financial_ledger (driver_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_withdrawal_requests_driver_created ON public.withdrawal_requests (driver_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_withdrawal_requests_created ON public.withdrawal_requests (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_payment_transactions_ride_created ON public.payment_transactions (ride_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_payment_transactions_created ON public.payment_transactions (created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_saved_cards_client ON public.saved_cards (client_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_notifications_timestamp_desc ON public.notifications (timestamp DESC);
+      CREATE INDEX IF NOT EXISTS idx_clients_phone_digits ON public.clients (regexp_replace(COALESCE(phone, ''), '\D', '', 'g'));
+      CREATE INDEX IF NOT EXISTS idx_clients_email_lower ON public.clients (LOWER(COALESCE(email, '')));
+      CREATE INDEX IF NOT EXISTS idx_clients_created_desc ON public.clients (created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_sos_alerts_active_updated ON public.sos_alerts (active, updated_at DESC);
     `);
     extendedSchemaReady = true;
@@ -1166,9 +1183,9 @@ function formatPaymentTxRow(row) {
 // ============================================================
 // Operações de Motoristas (1.000+ Motoristas)
 // ============================================================
-async function listDrivers() {
+async function listDrivers(preloadedCfg = null) {
   await ensureExtendedSchema();
-  const cfg = await getSystemConfig();
+  const cfg = preloadedCfg || await getSystemConfig();
   const cats = normalizeCategoriesServer(cfg);
   if (!db.pool) {
     return (db.localStore.drivers || []).map(row => formatDriverRow(row, cats));
@@ -1731,12 +1748,7 @@ async function listPaymentTransactions() {
 // ============================================================
 // Cálculo da Carteira do Motorista (100% Baseado no Livro-Razão)
 // ============================================================
-async function getDriverWallet(driverId) {
-  const cfg = await getSystemConfig();
-  const driver = await getDriverById(driverId);
-  const ledger = await listLedgerEntries(driverId);
-  const withdrawals = await listWithdrawals(driverId);
-
+function computeDriverWalletSummary({ driverId, driver = null, cfg = {}, ledger = [], withdrawals = [] }) {
   let netDigitalAvailable = 0;
   let separateCashDebtDelta = 0;
   let pendingBalance = 0;
@@ -1785,48 +1797,73 @@ async function getDriverWallet(driverId) {
     driver?.financialBlocked ||
     (cfg.autoBlockDelinquentDrivers !== false && debtBalance >= maxDebtLimit && maxDebtLimit > 0)
   );
-
-  // Atualiza flag de bloqueio financeiro automático no cadastro do motorista se necessário
-  if (driver) {
-    const shouldBlock = cfg.autoBlockDelinquentDrivers !== false && debtBalance >= maxDebtLimit && maxDebtLimit > 0;
-    if (shouldBlock && !driver.financialBlocked) {
-      await saveDriverRecord({
-        ...driver,
-        financialBlocked: true,
-        financialBlockReason: `Limite de dívida atingido (R$ ${debtBalance.toFixed(2)} / máx R$ ${maxDebtLimit.toFixed(2)})`
-      });
-    } else if (!shouldBlock && driver.financialBlocked && String(driver.financialBlockReason || '').startsWith('Limite de dívida')) {
-      await saveDriverRecord({
-        ...driver,
-        financialBlocked: false,
-        financialBlockReason: null
-      });
-    }
-  }
+  const shouldBlock = Boolean(
+    driver && cfg.autoBlockDelinquentDrivers !== false && debtBalance >= maxDebtLimit && maxDebtLimit > 0 && !driver.financialBlocked
+  );
+  const shouldUnblock = Boolean(
+    driver &&
+    !(cfg.autoBlockDelinquentDrivers !== false && debtBalance >= maxDebtLimit && maxDebtLimit > 0) &&
+    driver.financialBlocked &&
+    String(driver.financialBlockReason || '').startsWith('Limite de dívida')
+  );
 
   return {
-    driverId,
-    driverName: driver?.name || 'Motorista',
-    availableBalance: round2(availableBalance),
-    pendingBalance: round2(Math.max(0, pendingBalance)),
-    totalGrossEarnings: round2(totalGrossEarnings),
-    totalNetEarnings: round2(Math.max(0, totalNetEarnings)),
-    totalCashReceived: round2(totalCashReceived),
-    totalCommissionPaid: round2(totalCommissionPaid + Math.max(0, totalCashCommissionDebited - debtBalance)),
-    totalCommissionPending: round2(debtBalance),
-    debtBalance: round2(debtBalance),
-    separateDebtBalance: round2(separateDebtBalance),
-    maxDebtLimit: round2(maxDebtLimit),
-    isDelinquent,
-    financialBlocked: Boolean(driver?.financialBlocked || isDelinquent),
-    totalWithdrawn: round2(totalWithdrawn),
-    pixKey: driver?.pixKey || '',
-    pixType: driver?.pixType || 'cpf',
-    pixKeys: Array.isArray(driver?.pixKeys) ? driver.pixKeys : [],
-    autoPayoutWeekly: driver?.autoPayoutWeekly !== false,
-    ledger,
-    withdrawals
+    shouldBlock,
+    shouldUnblock,
+    debtBalance,
+    maxDebtLimit,
+    wallet: {
+      driverId,
+      driverName: driver?.name || 'Motorista',
+      availableBalance: round2(availableBalance),
+      pendingBalance: round2(Math.max(0, pendingBalance)),
+      totalGrossEarnings: round2(totalGrossEarnings),
+      totalNetEarnings: round2(Math.max(0, totalNetEarnings)),
+      totalCashReceived: round2(totalCashReceived),
+      totalCommissionPaid: round2(totalCommissionPaid + Math.max(0, totalCashCommissionDebited - debtBalance)),
+      totalCommissionPending: round2(debtBalance),
+      debtBalance: round2(debtBalance),
+      separateDebtBalance: round2(separateDebtBalance),
+      maxDebtLimit: round2(maxDebtLimit),
+      isDelinquent,
+      financialBlocked: Boolean(driver?.financialBlocked || isDelinquent),
+      totalWithdrawn: round2(totalWithdrawn),
+      pixKey: driver?.pixKey || '',
+      pixType: driver?.pixType || 'cpf',
+      pixKeys: Array.isArray(driver?.pixKeys) ? driver.pixKeys : [],
+      autoPayoutWeekly: driver?.autoPayoutWeekly !== false,
+      ledger,
+      withdrawals
+    }
   };
+}
+
+async function getDriverWallet(driverId, opts = {}) {
+  const [cfg, driver, ledger, withdrawals] = await Promise.all([
+    opts.cfg ? Promise.resolve(opts.cfg) : getSystemConfig(),
+    opts.driver !== undefined ? Promise.resolve(opts.driver) : getDriverById(driverId),
+    listLedgerEntries(driverId),
+    listWithdrawals(driverId)
+  ]);
+
+  const summary = computeDriverWalletSummary({ driverId, driver, cfg, ledger, withdrawals });
+
+  // Atualiza flag de bloqueio financeiro automático no cadastro do motorista se necessário
+  if (driver && summary.shouldBlock) {
+    await saveDriverRecord({
+      ...driver,
+      financialBlocked: true,
+      financialBlockReason: `Limite de dívida atingido (R$ ${summary.debtBalance.toFixed(2)} / máx R$ ${summary.maxDebtLimit.toFixed(2)})`
+    });
+  } else if (driver && summary.shouldUnblock) {
+    await saveDriverRecord({
+      ...driver,
+      financialBlocked: false,
+      financialBlockReason: null
+    });
+  }
+
+  return summary.wallet;
 }
 
 // ============================================================
@@ -3304,12 +3341,15 @@ async function getPlatformFinancialOverview() {
   const cfg = await getSystemConfig();
   const commPctDefault = Number(cfg.platformCommissionPercent ?? 20);
   const commFixedDefault = round2(Math.max(0, Number(cfg.platformCommissionFixed ?? 0)));
-  const drivers = await listDrivers();
-  let transactions = await listPaymentTransactions();
+  const [drivers, initialTransactions] = await Promise.all([
+    listDrivers(cfg),
+    listPaymentTransactions()
+  ]);
+  let transactions = initialTransactions;
 
-  // Garante conciliação automática de todas as corridas registradas no sistema
+  // Garante conciliação automática das corridas mais recentes registradas no sistema
   try {
-    const ridesRes = await db.query('SELECT * FROM rides ORDER BY created_at DESC');
+    const ridesRes = await db.query('SELECT * FROM public.rides ORDER BY created_at DESC LIMIT 500');
     const existingRideIds = new Set(transactions.map(t => t.rideId));
     for (const r of (ridesRes.rows || [])) {
       if (!r || !r.id || existingRideIds.has(r.id)) continue;
@@ -3347,9 +3387,38 @@ async function getPlatformFinancialOverview() {
     // continua normalmente
   }
 
-  const ledger = await listLedgerEntries();
-  const withdrawals = await listWithdrawals();
-  const driverWallets = await Promise.all(drivers.map(d => getDriverWallet(d.id)));
+  const [ledgerAll, withdrawals] = await Promise.all([
+    !db.pool
+      ? Promise.resolve((db.localStore.financial_ledger || []).map(formatLedgerRow))
+      : db.query('SELECT * FROM public.financial_ledger ORDER BY created_at DESC LIMIT 10000').then(r => r.rows.map(formatLedgerRow)),
+    listWithdrawals()
+  ]);
+
+  const ledgerByDriver = new Map();
+  for (const entry of ledgerAll) {
+    if (!entry?.driverId) continue;
+    let arr = ledgerByDriver.get(entry.driverId);
+    if (!arr) { arr = []; ledgerByDriver.set(entry.driverId, arr); }
+    arr.push(entry);
+  }
+  const withdrawalsByDriver = new Map();
+  for (const w of withdrawals) {
+    if (!w?.driverId) continue;
+    let arr = withdrawalsByDriver.get(w.driverId);
+    if (!arr) { arr = []; withdrawalsByDriver.set(w.driverId, arr); }
+    arr.push(w);
+  }
+
+  const driverWallets = drivers.map(d =>
+    computeDriverWalletSummary({
+      driverId: d.id,
+      driver: d,
+      cfg,
+      ledger: (ledgerByDriver.get(d.id) || []).slice(0, 500),
+      withdrawals: withdrawalsByDriver.get(d.id) || []
+    }).wallet
+  );
+  const ledger = ledgerAll.slice(0, 300);
 
   let totalGrossVolume = 0;
   let totalPlatformCommission = 0;

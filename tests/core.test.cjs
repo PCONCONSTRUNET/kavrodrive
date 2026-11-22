@@ -4661,4 +4661,9 @@ test('Otimizacao de escala: updateDriverLocationOnly preserva perfil/veiculos se
   assert.equal(syncRes.status, 200);
   const meInSync = syncRes.json.drivers.find(d => d.id === drvId);
   assert.equal(meInSync.location.lat, -28.4123);
+
+  // Overview financeiro em lote (sem N+1) agrega carteiras de todos motoristas
+  const overview = await finance.getPlatformFinancialOverview();
+  assert.ok(Array.isArray(overview.driverWallets));
+  assert.ok(overview.driverWallets.some(w => w.driverId === drvId));
 });

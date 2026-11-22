@@ -148,8 +148,10 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   useEffect(() => {
     if (!isOpen || !pendingPixEntry || pendingPixEntry.status !== 'aguardando') return;
     const t = setInterval(() => {
-      refreshAll();
-    }, 3000);
+      if (document.visibilityState === 'visible') {
+        refreshAll();
+      }
+    }, 5000);
     return () => clearInterval(t);
   }, [isOpen, pendingPixEntry, refreshAll]);
 

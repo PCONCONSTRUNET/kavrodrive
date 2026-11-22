@@ -244,7 +244,11 @@ export const SosLiveTrackingScreen: React.FC<SosLiveTrackingScreenProps> = () =>
 
   useEffect(() => {
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 3000);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        fetchTelemetry();
+      }
+    }, 5000);
     return () => clearInterval(interval);
   }, [sosId]);
 

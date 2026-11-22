@@ -79,7 +79,12 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     computeDocsCount(StorageService.getDrivers());
     StorageService.fetchDriversList().then(computeDocsCount).catch(() => {});
     const onSyncDocs = () => computeDocsCount(StorageService.getDrivers());
-    const onRtDocs = () => { StorageService.fetchDriversList().then(computeDocsCount).catch(() => {}); };
+    const onRtDocs = (evt: Event) => {
+      const detail = (evt as CustomEvent)?.detail;
+      // Ignora pings puros de GPS/online (nao disparam refetch completo da frota a cada coordenada)
+      if (detail && detail.location && !detail.driver) return;
+      StorageService.fetchDriversList().then(computeDocsCount).catch(() => {});
+    };
     window.addEventListener('up_database_synced', onSyncDocs);
     window.addEventListener('up_realtime_driver', onRtDocs);
     return () => {
@@ -91,7 +96,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   useEffect(() => {
     const checkSosCount = async () => {
       try {
-        const res = await fetch(`/api/sos/alerts?_t=${Date.now()}`);
+        const res = await fetch(`/api/sos/alerts?_t=${Date.now()}`, {
+          headers: StorageService.getAuthHeaders()
+        });
         if (!res.ok) return;
         const data = await res.json();
         if (Array.isArray(data.alerts)) {
@@ -100,8 +107,21 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
       } catch {}
     };
     checkSosCount();
-    const t = setInterval(checkSosCount, 3000);
-    return () => clearInterval(t);
+    const onRtSos = () => {
+      if (document.visibilityState === 'visible') {
+        checkSosCount();
+      }
+    };
+    window.addEventListener('up_realtime_sos', onRtSos);
+    const t = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        checkSosCount();
+      }
+    }, 12000);
+    return () => {
+      clearInterval(t);
+      window.removeEventListener('up_realtime_sos', onRtSos);
+    };
   }, []);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [filterDate, setFilterDate] = useState<string>('');
