@@ -172,7 +172,7 @@ export const ClientMyRidesScreen: React.FC<ClientMyRidesScreenProps> = ({
       if (document.visibilityState === 'visible') {
         StorageService.syncFromDatabase().then(() => updateFromStore());
       }
-    }, 2000);
+    }, 12000);
 
     return () => {
       clearInterval(interval);

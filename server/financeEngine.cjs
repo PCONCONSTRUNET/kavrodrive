@@ -1416,6 +1416,50 @@ async function saveDriverRecord(driverRow) {
   return formatDriverRow(r.rows[0], cats);
 }
 
+/** Lightweight GPS-only update for active/online drivers (avoids rewriting full metadata JSONB). */
+async function updateDriverLocationOnly(driverId, location) {
+  if (!driverId || !location) return null;
+  await ensureExtendedSchema();
+  const now = new Date().toISOString();
+  const normalizedLoc = {
+    lat: Number(location.lat),
+    lng: Number(location.lng),
+    heading: Number(location.heading || 0),
+    speedKmH: Number(location.speedKmH || 0),
+    updatedAt: location.updatedAt || now
+  };
+
+  if (!db.pool) {
+    const idx = (db.localStore.drivers || []).findIndex(d => d.id === driverId);
+    if (idx < 0) return null;
+    db.localStore.drivers[idx] = {
+      ...db.localStore.drivers[idx],
+      location: normalizedLoc,
+      updated_at: now
+    };
+    db.saveLocalStore();
+    return {
+      id: db.localStore.drivers[idx].id,
+      isOnline: Boolean(db.localStore.drivers[idx].is_online ?? db.localStore.drivers[idx].isOnline ?? false),
+      location: normalizedLoc
+    };
+  }
+
+  const r = await db.query(
+    `UPDATE public.drivers
+     SET location = $1, updated_at = NOW()
+     WHERE id = $2
+     RETURNING id, is_online, location`,
+    [JSON.stringify(normalizedLoc), driverId]
+  );
+  if (!r.rows[0]) return null;
+  return {
+    id: r.rows[0].id,
+    isOnline: Boolean(r.rows[0].is_online),
+    location: r.rows[0].location || normalizedLoc
+  };
+}
+
 // ============================================================
 // Livro-Razão Financeiro (Imutável + Idempotente)
 // ============================================================
@@ -4248,6 +4292,7 @@ module.exports = {
   getDriverById,
   findDriverByIdentifier,
   saveDriverRecord,
+  updateDriverLocationOnly,
   recordLedgerEntry,
   listLedgerEntries,
   savePaymentTransaction,

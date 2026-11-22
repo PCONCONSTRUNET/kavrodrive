@@ -1700,6 +1700,13 @@ function invalidateDriversCache() {
   driversListCache = { value: null, expiresAt: 0, inflight: null };
 }
 
+function patchCachedDriverLocation(driverId, location) {
+  if (!Array.isArray(driversListCache.value) || !driverId || !location) return;
+  driversListCache.value = driversListCache.value.map((d) =>
+    d && d.id === driverId ? { ...d, location } : d
+  );
+}
+
 async function getCachedSystemConfig() {
   if (!db.pool) {
     const r = await db.query('SELECT config FROM public.system_config WHERE id = $1', ['default']);
@@ -1716,7 +1723,7 @@ async function getCachedSystemConfig() {
     .query('SELECT config FROM public.system_config WHERE id = $1', ['default'])
     .then((r) => {
       const val = r.rows[0]?.config || {};
-      sysConfigCache = { value: val, expiresAt: Date.now() + 2000, inflight: null };
+      sysConfigCache = { value: val, expiresAt: Date.now() + 5000, inflight: null };
       return val;
     })
     .catch((err) => {
@@ -1740,7 +1747,7 @@ async function getCachedDriversList() {
   driversListCache.inflight = finance
     .listDrivers()
     .then((list) => {
-      driversListCache = { value: list, expiresAt: Date.now() + 1500, inflight: null };
+      driversListCache = { value: list, expiresAt: Date.now() + 3000, inflight: null };
       return list;
     })
     .catch((err) => {
@@ -3251,17 +3258,21 @@ async function handleApiRequest(req, res) {
         return sendJson(res, 401, { ok: false, error: 'Sessão de motorista inválida ou expirada.' });
       }
       const body = await parseBody(req);
-      const driver = await finance.getDriverById(driverId);
-      if (!driver) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+      const lat = Number(body.lat);
+      const lng = Number(body.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        return sendJson(res, 400, { ok: false, error: 'Coordenadas inválidas.' });
+      }
       const loc = {
-        lat: Number(body.lat ?? driver.location?.lat ?? -28.3919),
-        lng: Number(body.lng ?? driver.location?.lng ?? -49.3967),
+        lat,
+        lng,
         heading: Number(body.heading || 0),
         speedKmH: Number(body.speedKmH || 0),
         updatedAt: new Date().toISOString()
       };
-      const updated = await finance.saveDriverRecord({ ...driver, location: loc });
-      invalidateDriversCache();
+      const updated = await finance.updateDriverLocationOnly(driverId, loc);
+      if (!updated) return sendJson(res, 404, { ok: false, error: 'Motorista não encontrado.' });
+      patchCachedDriverLocation(updated.id, updated.location);
       realtimeHub.publish('driver:updated', {
         driverId: updated.id,
         isOnline: updated.isOnline,

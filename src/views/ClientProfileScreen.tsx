@@ -219,7 +219,11 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
       }
     };
     syncMe();
-    const t = setInterval(syncMe, 5000);
+    const t = setInterval(() => {
+      if (window.document.visibilityState === 'visible') {
+        syncMe();
+      }
+    }, 20000);
     return () => {
       active = false;
       clearInterval(t);

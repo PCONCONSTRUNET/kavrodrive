@@ -359,9 +359,11 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
     window.addEventListener('up_database_synced', syncActive);
     window.addEventListener('up_realtime_ride', syncActive);
     window.addEventListener('up_realtime_chat', handleRealtimeChat);
-    const intervalMs = RealtimeService.isConnected() ? 8000 : 2500;
+    const intervalMs = RealtimeService.isConnected() ? 15000 : 5000;
     const interval = setInterval(() => {
-      StorageService.syncFromDatabase().then(syncActive);
+      if (document.visibilityState === 'visible') {
+        StorageService.syncFromDatabase().then(syncActive);
+      }
     }, intervalMs);
 
     const gpsInterval =
@@ -371,13 +373,14 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
       activeRide.status !== 'finalizada' &&
       activeRide.status !== 'cancelada'
         ? setInterval(async () => {
+            if (document.visibilityState === 'hidden') return;
             const live = await StorageService.fetchRideLiveLocation(activeRide.id);
             if (live?.driverLocation?.lat && live?.driverLocation?.lng) {
               setActiveRide((prev) =>
                 prev ? { ...prev, driverLocation: live.driverLocation, status: live.status || prev.status } : prev
               );
             }
-          }, 2500)
+          }, 4500)
         : null;
 
     return () => {

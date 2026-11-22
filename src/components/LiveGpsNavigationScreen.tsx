@@ -562,8 +562,12 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
     let watchId: number | null = null;
 
     if (isDriver) {
-      // MOTORISTA: Captura GPS físico real do aparelho (sem andar sozinho!)
-      const publishDriverGps = (pos: GeolocationPosition) => {
+      let lastRideGpsSentAt = 0;
+      let lastRideGpsLat = latestDriverPosRef.current.lat;
+      let lastRideGpsLng = latestDriverPosRef.current.lng;
+
+      // MOTORISTA: Captura GPS físico real do aparelho (throttled para 3s / 20m para evitar enxurrada de PATCH)
+      const publishDriverGps = (pos: GeolocationPosition, forcePush = false) => {
         const newLat = pos.coords.latitude;
         const newLng = pos.coords.longitude;
         const newHeading =
@@ -578,6 +582,17 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         setSpeed(newSpeed);
         setGpsFixed(true);
 
+        const now = Date.now();
+        const movedKm = lastRideGpsSentAt > 0
+          ? calculateHaversineDistance(lastRideGpsLat, lastRideGpsLng, newLat, newLng)
+          : 99;
+        if (!forcePush && now - lastRideGpsSentAt < 3000 && movedKm < 0.02) {
+          return;
+        }
+        lastRideGpsSentAt = now;
+        lastRideGpsLat = newLat;
+        lastRideGpsLng = newLng;
+
         StorageService.updateRideDriverLocation(ride.id, {
           lat: newLat,
           lng: newLng,
@@ -587,28 +602,32 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
       };
 
       if ('geolocation' in navigator) {
-        navigator.geolocation.getCurrentPosition(publishDriverGps, () => {}, {
+        navigator.geolocation.getCurrentPosition((pos) => publishDriverGps(pos, true), () => {}, {
           enableHighAccuracy: true,
           timeout: 10000,
           maximumAge: 0
         });
 
         watchId = navigator.geolocation.watchPosition(
-          publishDriverGps,
+          (pos) => publishDriverGps(pos, false),
           (err) => console.warn('GPS Real Motorista warning:', err),
-          { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
+          { enableHighAccuracy: true, maximumAge: 2500, timeout: 10000 }
         );
       }
 
-      // Heartbeat a cada 1.5s: envia posição atual do motorista e busca posição ao vivo do passageiro
+      // Heartbeat a cada 4s: usa o próprio retorno do PATCH (que já traz clientLocation e status) sem duplicar GET
       const syncInterval = setInterval(async () => {
-        StorageService.updateRideDriverLocation(ride.id, {
+        if (document.visibilityState === 'hidden') return;
+        const now = Date.now();
+        lastRideGpsSentAt = now;
+        lastRideGpsLat = latestDriverPosRef.current.lat;
+        lastRideGpsLng = latestDriverPosRef.current.lng;
+        const live = await StorageService.updateRideDriverLocation(ride.id, {
           lat: latestDriverPosRef.current.lat,
           lng: latestDriverPosRef.current.lng,
           heading: latestDriverPosRef.current.heading,
           speedKmH: latestSpeedRef.current
         });
-        const live = await StorageService.fetchRideLiveLocation(ride.id);
         if (live?.clientLocation?.lat && live?.clientLocation?.lng) {
           updateClientPosIfChanged(live.clientLocation.lat, live.clientLocation.lng);
         }
@@ -721,14 +740,31 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
       window.addEventListener('up_database_synced', syncFromLocalRides);
 
       pullDriverLocation();
-      const pollInterval = setInterval(pullDriverLocation, 1500);
+      const pollInterval = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          pullDriverLocation();
+        }
+      }, 4000);
 
-      // Também envia a geolocalização real do passageiro para o motorista visualizar no mapa
+      // Também envia a geolocalização real do passageiro para o motorista visualizar no mapa (com throttle 6s / 25m)
       if ('geolocation' in navigator) {
-        const publishClientGps = (pos: GeolocationPosition) => {
+        let lastClientGpsSentAt = 0;
+        let lastClientGpsLat = 0;
+        let lastClientGpsLng = 0;
+        const publishClientGps = (pos: GeolocationPosition, forcePush = false) => {
           const cLat = pos.coords.latitude;
           const cLng = pos.coords.longitude;
           updateClientPosIfChanged(cLat, cLng);
+          const now = Date.now();
+          const movedKm = lastClientGpsSentAt > 0
+            ? calculateHaversineDistance(lastClientGpsLat, lastClientGpsLng, cLat, cLng)
+            : 99;
+          if (!forcePush && now - lastClientGpsSentAt < 6000 && movedKm < 0.025) {
+            return;
+          }
+          lastClientGpsSentAt = now;
+          lastClientGpsLat = cLat;
+          lastClientGpsLng = cLng;
           StorageService.updateRideClientLocation(ride.id, {
             lat: cLat,
             lng: cLng,
@@ -737,16 +773,16 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           });
         };
 
-        navigator.geolocation.getCurrentPosition(publishClientGps, () => {}, {
+        navigator.geolocation.getCurrentPosition((pos) => publishClientGps(pos, true), () => {}, {
           enableHighAccuracy: true,
           timeout: 10000,
           maximumAge: 0
         });
 
         watchId = navigator.geolocation.watchPosition(
-          publishClientGps,
+          (pos) => publishClientGps(pos, false),
           () => {},
-          { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
+          { enableHighAccuracy: true, maximumAge: 4000, timeout: 10000 }
         );
       }
 

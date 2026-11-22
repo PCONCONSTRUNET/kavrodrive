@@ -114,10 +114,10 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
     let active = true;
     setIsLoadingTracked(true);
     const run = async () => {
-      if (active) await fetchTrackedRide();
+      if (active && document.visibilityState === 'visible') await fetchTrackedRide();
     };
-    run();
-    const t = setInterval(run, 4000);
+    fetchTrackedRide();
+    const t = setInterval(run, 6000);
     return () => {
       active = false;
       clearInterval(t);
@@ -214,10 +214,11 @@ export const PassengerTrackingScreen: React.FC<PassengerTrackingScreenProps> = (
     }
     window.addEventListener('up_realtime_ride', handleRealtimeUpdate);
 
-    const intervalMs = RealtimeService.isConnected() ? 10000 : 3000;
+    const intervalMs = RealtimeService.isConnected() ? 15000 : 5000;
     const interval = trackToken
       ? null
       : setInterval(async () => {
+          if (document.visibilityState !== 'visible') return;
           await StorageService.syncFromDatabase();
           refreshData();
         }, intervalMs);

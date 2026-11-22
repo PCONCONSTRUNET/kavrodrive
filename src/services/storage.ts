@@ -207,103 +207,118 @@ export const DEFAULT_CONFIG: SystemConfig = {
 };
 
 let lastConfigSaveTimestamp = 0;
+let syncInFlightPromise: Promise<boolean> | null = null;
 
 export const StorageService = {
-  async syncFromDatabase(): Promise<boolean> {
-    try {
-      await this.flushPendingDeletes();
-      const isAdmin = this.isAdminAuthenticated();
-      const currentUser = this.getCurrentUser();
-      const currentDriver = this.getCurrentDriver();
-      const params = new URLSearchParams({ _t: String(Date.now()) });
-      if (currentUser?.id) params.set('clientId', currentUser.id);
-      if (currentUser?.phone) params.set('clientPhone', currentUser.phone);
-      if (currentDriver?.id) params.set('driverId', currentDriver.id);
+  async syncFromDatabase(force = false): Promise<boolean> {
+    if (!force && syncInFlightPromise) {
+      return syncInFlightPromise;
+    }
 
-      const headers: Record<string, string> = this.getAuthHeaders();
-      if (currentUser?.id) headers['x-client-id'] = currentUser.id;
-      if (currentUser?.phone) headers['x-client-phone'] = currentUser.phone;
-      if (currentDriver?.id) headers['x-driver-id'] = currentDriver.id;
+    const runSync = async (): Promise<boolean> => {
+      try {
+        await this.flushPendingDeletes();
+        const isAdmin = this.isAdminAuthenticated();
+        const currentUser = this.getCurrentUser();
+        const currentDriver = this.getCurrentDriver();
+        const params = new URLSearchParams({ _t: String(Date.now()) });
+        if (currentUser?.id) params.set('clientId', currentUser.id);
+        if (currentUser?.phone) params.set('clientPhone', currentUser.phone);
+        if (currentDriver?.id) params.set('driverId', currentDriver.id);
 
-      const res = await fetch(`/api/sync?${params.toString()}`, {
-        cache: 'no-store',
-        headers
-      });
-      if (!res.ok) return false;
-      const data = await res.json();
-      const pending = this.getPendingDeletes();
-      const notPending = (kind: string) => (item: { id: string }) =>
-        !pending.some(p => p.kind === kind && p.id === item.id);
+        const headers: Record<string, string> = this.getAuthHeaders();
+        if (currentUser?.id) headers['x-client-id'] = currentUser.id;
+        if (currentUser?.phone) headers['x-client-phone'] = currentUser.phone;
+        if (currentDriver?.id) headers['x-driver-id'] = currentDriver.id;
 
-      if (data.config && Date.now() - lastConfigSaveTimestamp > 8000) {
-        localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config));
-      }
-      if (Array.isArray(data.rides)) {
-        const filteredRides = data.rides.filter(notPending('rides'));
-        const oldRides = localStorage.getItem(STORAGE_KEYS.RIDES) || '[]';
-        const newRidesStr = JSON.stringify(filteredRides);
-        if (oldRides !== newRidesStr) {
-          localStorage.setItem(STORAGE_KEYS.RIDES, newRidesStr);
-          window.dispatchEvent(new CustomEvent('up_rides_updated'));
+        const res = await fetch(`/api/sync?${params.toString()}`, {
+          cache: 'no-store',
+          headers
+        });
+        if (!res.ok) return false;
+        const data = await res.json();
+        const pending = this.getPendingDeletes();
+        const notPending = (kind: string) => (item: { id: string }) =>
+          !pending.some(p => p.kind === kind && p.id === item.id);
+
+        if (data.config && Date.now() - lastConfigSaveTimestamp > 8000) {
+          localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(data.config));
         }
-      }
-      if (Array.isArray(data.drivers)) {
-        localStorage.setItem(STORAGE_KEYS.DRIVERS, JSON.stringify(data.drivers));
-        localStorage.setItem(
-          'up_online_drivers',
-          JSON.stringify(data.drivers.filter((d: DriverProfile) => d.approvalStatus === 'aprovado' && d.isOnline))
-        );
-        if (currentDriver) {
-          const updatedSelf = data.drivers.find((d: DriverProfile) => d.id === currentDriver.id);
-          if (updatedSelf) {
-            this.setCurrentDriver({ ...currentDriver, ...updatedSelf });
+        if (Array.isArray(data.rides)) {
+          const filteredRides = data.rides.filter(notPending('rides'));
+          const oldRides = localStorage.getItem(STORAGE_KEYS.RIDES) || '[]';
+          const newRidesStr = JSON.stringify(filteredRides);
+          if (oldRides !== newRidesStr) {
+            localStorage.setItem(STORAGE_KEYS.RIDES, newRidesStr);
+            window.dispatchEvent(new CustomEvent('up_rides_updated'));
           }
         }
-      } else if (Array.isArray(data.onlineDrivers)) {
-        localStorage.setItem('up_online_drivers', JSON.stringify(data.onlineDrivers));
-        if (!isAdmin && !currentDriver) {
-          localStorage.removeItem(STORAGE_KEYS.DRIVERS);
+        if (Array.isArray(data.drivers)) {
+          localStorage.setItem(STORAGE_KEYS.DRIVERS, JSON.stringify(data.drivers));
+          localStorage.setItem(
+            'up_online_drivers',
+            JSON.stringify(data.drivers.filter((d: DriverProfile) => d.approvalStatus === 'aprovado' && d.isOnline))
+          );
+          if (currentDriver) {
+            const updatedSelf = data.drivers.find((d: DriverProfile) => d.id === currentDriver.id);
+            if (updatedSelf) {
+              this.setCurrentDriver({ ...currentDriver, ...updatedSelf });
+            }
+          }
+        } else if (Array.isArray(data.onlineDrivers)) {
+          localStorage.setItem('up_online_drivers', JSON.stringify(data.onlineDrivers));
+          if (!isAdmin && !currentDriver) {
+            localStorage.removeItem(STORAGE_KEYS.DRIVERS);
+          }
         }
-      }
-      if (typeof data.onlineDriversCount === 'number') {
-        localStorage.setItem('up_online_drivers_count', String(data.onlineDriversCount));
-      }
+        if (typeof data.onlineDriversCount === 'number') {
+          localStorage.setItem('up_online_drivers_count', String(data.onlineDriversCount));
+        }
 
-      if (isAdmin && Array.isArray(data.expenses)) {
-        localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(data.expenses.filter(notPending('expenses'))));
-      } else if (!isAdmin) {
-        localStorage.removeItem(STORAGE_KEYS.EXPENSES);
-      }
-      if (isAdmin && Array.isArray(data.clients)) {
-        localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(data.clients.filter(notPending('clients'))));
-      } else if (!isAdmin) {
-        localStorage.removeItem(STORAGE_KEYS.CLIENTS);
-        if (Array.isArray(data.clients) && data.clients[0] && currentUser && data.clients[0].id === currentUser.id) {
-          this.setCurrentUser({ ...currentUser, ...data.clients[0] });
+        if (isAdmin && Array.isArray(data.expenses)) {
+          localStorage.setItem(STORAGE_KEYS.EXPENSES, JSON.stringify(data.expenses.filter(notPending('expenses'))));
+        } else if (!isAdmin) {
+          localStorage.removeItem(STORAGE_KEYS.EXPENSES);
         }
-      }
-      if (Array.isArray(data.notifications)) {
-        if (isAdmin) {
-          localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(data.notifications));
-        } else {
-          const viewerScope = currentDriver?.id ? `driver_${currentDriver.id}` : `client_${currentUser?.id || 'anon'}`;
-          const readIds = this.getLocalNotificationIdSet('read', viewerScope);
-          const dismissedIds = this.getLocalNotificationIdSet('dismissed', viewerScope);
-          const scopedList = (data.notifications as NotificationItem[])
-            .filter(n => !dismissedIds.has(n.id))
-            .map(n => (readIds.has(n.id) ? { ...n, read: true } : n));
-          localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(scopedList));
+        if (isAdmin && Array.isArray(data.clients)) {
+          localStorage.setItem(STORAGE_KEYS.CLIENTS, JSON.stringify(data.clients.filter(notPending('clients'))));
+        } else if (!isAdmin) {
+          localStorage.removeItem(STORAGE_KEYS.CLIENTS);
+          if (Array.isArray(data.clients) && data.clients[0] && currentUser && data.clients[0].id === currentUser.id) {
+            this.setCurrentUser({ ...currentUser, ...data.clients[0] });
+          }
         }
-        window.dispatchEvent(new CustomEvent('up_notifications_updated'));
+        if (Array.isArray(data.notifications)) {
+          if (isAdmin) {
+            localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(data.notifications));
+          } else {
+            const viewerScope = currentDriver?.id ? `driver_${currentDriver.id}` : `client_${currentUser?.id || 'anon'}`;
+            const readIds = this.getLocalNotificationIdSet('read', viewerScope);
+            const dismissedIds = this.getLocalNotificationIdSet('dismissed', viewerScope);
+            const scopedList = (data.notifications as NotificationItem[])
+              .filter(n => !dismissedIds.has(n.id))
+              .map(n => (readIds.has(n.id) ? { ...n, read: true } : n));
+            localStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(scopedList));
+          }
+          window.dispatchEvent(new CustomEvent('up_notifications_updated'));
+        }
+        if (data.blockedSlots) {
+          localStorage.setItem('up_blocked_slots', JSON.stringify(data.blockedSlots));
+        }
+        window.dispatchEvent(new CustomEvent('up_database_synced'));
+        return true;
+      } catch {
+        return false;
       }
-      if (data.blockedSlots) {
-        localStorage.setItem('up_blocked_slots', JSON.stringify(data.blockedSlots));
+    };
+
+    const promise = runSync().finally(() => {
+      if (syncInFlightPromise === promise) {
+        syncInFlightPromise = null;
       }
-      window.dispatchEvent(new CustomEvent('up_database_synced'));
-      return true;
-    } catch {
-      return false;
-    }
+    });
+    syncInFlightPromise = promise;
+    return promise;
   },
 
   markRidesCancelledInList(rides: Ride[], ids: string[]): Ride[] {
@@ -1622,10 +1637,15 @@ export const StorageService = {
     }
   },
 
-  updateRideDriverLocation(
-    rideId: string, 
+  async updateRideDriverLocation(
+    rideId: string,
     location: { lat: number; lng: number; heading?: number; speedKmH?: number }
-  ): void {
+  ): Promise<{
+    status?: Ride['status'];
+    paymentStatus?: Ride['paymentStatus'];
+    driverLocation?: Ride['driverLocation'];
+    clientLocation?: Ride['clientLocation'];
+  } | null> {
     const updatedLoc = {
       lat: location.lat,
       lng: location.lng,
@@ -1639,26 +1659,29 @@ export const StorageService = {
       rides[index].driverLocation = updatedLoc;
       rides[index].updatedAt = new Date().toISOString();
       localStorage.setItem(STORAGE_KEYS.RIDES, JSON.stringify(rides));
-      window.dispatchEvent(new CustomEvent('up_driver_location_update', { 
-        detail: { rideId, location: updatedLoc } 
+      window.dispatchEvent(new CustomEvent('up_driver_location_update', {
+        detail: { rideId, location: updatedLoc }
       }));
     }
 
-    fetch(`/api/rides/${encodeURIComponent(rideId)}/location`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json', 'x-admin-pin': this.getAdminPin() },
-      body: JSON.stringify({ role: 'driver', location: updatedLoc }),
-      keepalive: true
-    })
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => {
-        if (data?.clientLocation) {
-          window.dispatchEvent(new CustomEvent('up_client_location_update', {
-            detail: { rideId, location: data.clientLocation }
-          }));
-        }
-      })
-      .catch(() => {});
+    try {
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/location`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify({ role: 'driver', location: updatedLoc }),
+        keepalive: true
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data?.clientLocation) {
+        window.dispatchEvent(new CustomEvent('up_client_location_update', {
+          detail: { rideId, location: data.clientLocation }
+        }));
+      }
+      return data;
+    } catch {
+      return null;
+    }
   },
 
   updateRideClientLocation(
@@ -1703,7 +1726,10 @@ export const StorageService = {
     clientLocation?: Ride['clientLocation'];
   } | null> {
     try {
-      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/location?_t=${Date.now()}`, { cache: 'no-store' });
+      const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/location?_t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: this.getAuthHeaders()
+      });
       if (!res.ok) return null;
       const data = await res.json();
       if (!data?.ok) return null;

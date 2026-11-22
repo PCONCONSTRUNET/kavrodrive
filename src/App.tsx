@@ -1046,11 +1046,11 @@ export const App: React.FC = () => {
 
     syncNow();
 
-    // Se SSE está conectado, eventos chegam instantaneamente; mantém fallback leve de 12s (ou 2.5s se cair em fallback)
+    // Se SSE está conectado, eventos chegam instantaneamente; mantém fallback leve de 20s (ou 6s se cair em fallback)
     let pollInterval: number | null = null;
     const resetPollingSpeed = () => {
       if (pollInterval !== null) clearInterval(pollInterval);
-      const intervalMs = RealtimeService.isConnected() ? 12000 : 2500;
+      const intervalMs = RealtimeService.isConnected() ? 20000 : 6000;
       pollInterval = window.setInterval(syncNow, intervalMs);
     };
     resetPollingSpeed();

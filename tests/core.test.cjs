@@ -4598,3 +4598,67 @@ test('OneSignal Push usa novas credenciais dinamica e corretamente em /api/healt
     else process.env.VERCEL_PROJECT_PRODUCTION_URL = prevVercelProdUrl;
   }
 });
+
+test('Otimizacao de escala: updateDriverLocationOnly preserva perfil/veiculos sem estourar cache e PATCH /rides/:id/location retorna estado completo', async () => {
+  const finance = require('../server/financeEngine.cjs');
+  const ts = Date.now();
+  const drvId = `drv-scale-${ts}`;
+  db.localStore.drivers = db.localStore.drivers.filter(d => d.id !== drvId);
+  db.localStore.drivers.push({
+    id: drvId,
+    name: 'Motorista Escala Teste',
+    phone: `(48) 99600-${String(ts).slice(-4)}`,
+    email: `scale.drv.${ts}@kavro.test`,
+    document: '12345678909',
+    cnh: '11223344556',
+    password_hash: scryptHash('1234'),
+    vehicle_brand: 'Honda',
+    vehicle_model: 'Civic',
+    vehicle_color: 'Preto',
+    vehicle_year: '2024',
+    vehicle_plate: 'KVR1S23',
+    vehicle_category: 'kavro_go',
+    eligible_categories: ['kavro_go'],
+    approval_status: 'aprovado',
+    financial_blocked: false,
+    is_online: true,
+    pix_key: '12345678909',
+    pix_type: 'cpf',
+    location: { lat: -28.39, lng: -49.39, heading: 0, speedKmH: 0, updatedAt: new Date().toISOString() },
+    created_at: new Date().toISOString()
+  });
+
+  const loginRes = await apiJson('/api/drivers/login', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.250' },
+    body: { identifier: `scale.drv.${ts}@kavro.test`, password: '1234' }
+  });
+  assert.equal(loginRes.status, 200);
+  const drvToken = loginRes.json.driverToken;
+
+  const locRes = await apiJson(`/api/drivers/${encodeURIComponent(drvId)}/location`, {
+    method: 'PATCH',
+    headers: { 'x-driver-token': drvToken },
+    body: { lat: -28.4123, lng: -49.4567, heading: 90, speedKmH: 42 }
+  });
+  assert.equal(locRes.status, 200);
+  assert.equal(locRes.json.ok, true);
+  assert.equal(locRes.json.driver.location.lat, -28.4123);
+  assert.equal(locRes.json.driver.location.lng, -49.4567);
+  assert.equal(locRes.json.driver.location.speedKmH, 42);
+
+  // Confirma que dados completos do motorista nao foram sobrescritos/apagados
+  const preserved = await finance.getDriverById(drvId);
+  assert.equal(preserved.name, 'Motorista Escala Teste');
+  assert.equal(preserved.vehiclePlate, 'KVR1S23');
+  assert.equal(preserved.pixKey, '12345678909');
+  assert.equal(preserved.location.lat, -28.4123);
+
+  // Sync autenticado ja enxerga coordenada atualizada
+  const syncRes = await apiJson(`/api/sync?driverId=${encodeURIComponent(drvId)}`, {
+    headers: { 'x-driver-token': drvToken }
+  });
+  assert.equal(syncRes.status, 200);
+  const meInSync = syncRes.json.drivers.find(d => d.id === drvId);
+  assert.equal(meInSync.location.lat, -28.4123);
+});

@@ -92,7 +92,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
       if (document.visibilityState === 'visible') {
         StorageService.syncFromDatabase().then(checkActiveRide);
       }
-    }, 1500);
+    }, 15000);
 
     return () => {
       clearInterval(interval);

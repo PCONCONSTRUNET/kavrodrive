@@ -364,12 +364,27 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
         PushService.identify('motorista', drvExt).catch(() => {});
       }
       loadDriverAndWallet(currentDriver.id);
+      const refreshSelfOnEvent = (evt?: Event) => {
+        const detail = (evt as CustomEvent)?.detail;
+        if (evt?.type === 'up_realtime_driver' && detail?.driverId && detail.driverId !== currentDriver.id) {
+          return;
+        }
+        if (document.visibilityState === 'visible') {
+          loadDriverAndWallet(currentDriver.id);
+        }
+      };
+      window.addEventListener('up_rides_updated', refreshSelfOnEvent);
+      window.addEventListener('up_realtime_driver', refreshSelfOnEvent);
       const t = setInterval(() => {
         if (document.visibilityState === 'visible') {
           loadDriverAndWallet(currentDriver.id);
         }
-      }, 3000);
-      return () => clearInterval(t);
+      }, 15000);
+      return () => {
+        clearInterval(t);
+        window.removeEventListener('up_rides_updated', refreshSelfOnEvent);
+        window.removeEventListener('up_realtime_driver', refreshSelfOnEvent);
+      };
     }
   }, [currentDriver?.id, currentDriver?.approvalStatus, isLookupOnlySession]);
 
@@ -430,7 +445,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       const now = Date.now();
       const prev = lastIdleGpsPushRef.current;
       const movedKm = prev.ts > 0 ? calculateHaversineDistance(prev.lat, prev.lng, lat, lng) : 99;
-      if (!forcePush && now - prev.ts < 5500 && movedKm < 0.03) {
+      if (!forcePush && now - prev.ts < 10000 && movedKm < 0.05) {
         return;
       }
 
@@ -455,7 +470,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       watchId = navigator.geolocation.watchPosition(
         (pos) => handleGpsPosition(pos, false),
         () => {},
-        { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+        { enableHighAccuracy: true, maximumAge: 6000, timeout: 10000 }
       );
     }
 
