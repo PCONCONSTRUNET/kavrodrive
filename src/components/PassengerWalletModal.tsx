@@ -940,7 +940,8 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                         gap: 4
                       }}
                     >
-                      <Plus size={13} />
+                      <PaymentMethodIcon method="cartao_credito" size={14} />
+                      <Plus size={12} />
                       <span>Adicionar cartão</span>
                     </button>
                   </div>

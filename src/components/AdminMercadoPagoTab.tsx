@@ -49,6 +49,7 @@ export const AdminMercadoPagoTab: React.FC<AdminMercadoPagoTabProps> = ({ onConf
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
+  const [isTestingWebhook, setIsTestingWebhook] = useState(false);
 
   const [enabled, setEnabled] = useState(false);
   const [sandbox, setSandbox] = useState(true);
@@ -172,6 +173,17 @@ export const AdminMercadoPagoTab: React.FC<AdminMercadoPagoTabProps> = ({ onConf
       text: res.message || res.error || (res.ok ? 'Conexão Mercado Pago OK!' : 'Falha na conexão com o Mercado Pago.')
     });
     await loadConfig();
+  };
+
+  const handleTestWebhook = async () => {
+    setFeedback(null);
+    setIsTestingWebhook(true);
+    const res = await StorageService.testAdminMercadoPagoWebhook(buildPayload());
+    setIsTestingWebhook(false);
+    setFeedback({
+      type: res.ok ? 'ok' : 'err',
+      text: res.message || res.error || (res.ok ? 'Webhook Mercado Pago OK!' : 'Falha na validação do webhook.')
+    });
   };
 
   if (isLoading && !config) {
@@ -680,6 +692,45 @@ export const AdminMercadoPagoTab: React.FC<AdminMercadoPagoTabProps> = ({ onConf
             {isTesting ? <Loader2 size={15} className="animate-spin" /> : <ShieldCheck size={15} color="#009EE3" />}
             <span>{isTesting ? 'Testando API...' : 'Testar Conexão Mercado Pago'}</span>
           </button>
+
+          <button
+            type="button"
+            onClick={handleTestWebhook}
+            disabled={isTestingWebhook}
+            style={{
+              height: 42,
+              padding: '0 16px',
+              borderRadius: 9,
+              border: '1px solid #BAE6FD',
+              backgroundColor: '#F0F9FF',
+              color: '#0369A1',
+              fontSize: '0.82rem',
+              fontWeight: 800,
+              cursor: isTestingWebhook ? 'wait' : 'pointer',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 7
+            }}
+          >
+            {isTestingWebhook ? <Loader2 size={15} className="animate-spin" /> : <Webhook size={15} />}
+            <span>{isTestingWebhook ? 'Validando Webhook...' : 'Validar Webhook HMAC'}</span>
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 14,
+            padding: '10px 12px',
+            borderRadius: 8,
+            backgroundColor: '#F8FAFC',
+            border: '1px solid #E2E8F0',
+            fontSize: '0.73rem',
+            color: '#475569',
+            lineHeight: 1.5
+          }}
+        >
+          <strong>Como criar o Webhook no Mercado Pago Developers:</strong>{' '}
+          1) Copie a URL acima &rarr; 2) No painel do Mercado Pago acesse <strong>Webhooks &rarr; Configurar notificações</strong> (Produção ou Teste), cole a URL e marque apenas <strong>Pagamentos (<code>payment</code>)</strong> &rarr; 3) Salve lá e copie a <strong>Assinatura secreta</strong> gerada &rarr; 4) Cole no campo <em>Assinatura Secreta Webhook</em> acima e clique em <strong>Salvar Mercado Pago</strong>.
         </div>
       </div>
     </div>

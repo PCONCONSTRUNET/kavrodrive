@@ -4820,6 +4820,13 @@ test('Gateway Mercado Pago: config persistida, ativar/desativar, máscara, PIX, 
     const badConn = await mpGateway.testConnection({ accessToken: 'INVALID-TOKEN' });
     assert.equal(badConn.ok, false);
 
+    const whNoSecret = await mpGateway.testWebhookSetup({ webhookSecret: '' });
+    assert.equal(whNoSecret.webhookUrl.endsWith('/api/webhooks/mercadopago'), true);
+    const whOkTest = await mpGateway.testWebhookSetup();
+    assert.equal(whOkTest.ok, true);
+    assert.equal(whOkTest.signatureSelfTestOk, true);
+    assert.equal(whOkTest.hasSecret, true);
+
     // 6) Cria corrida PIX (como Efí está desligada, Mercado Pago gera o QR PIX) + confirma via webhook HMAC-SHA256
     const mpTestIp = '198.51.100.251';
     const cliReg = await apiJson('/api/clients/register', {

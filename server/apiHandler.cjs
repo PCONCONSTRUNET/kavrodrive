@@ -6652,6 +6652,18 @@ async function handleApiRequest(req, res) {
       return sendJson(res, testRes.ok ? 200 : 400, testRes);
     }
 
+    if (pathname === '/api/admin/gateways/mercadopago/test-webhook' && method === 'POST') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const protoHeader = String(req.headers['x-forwarded-proto'] || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
+      const requestOrigin = String(req.headers.origin || '').trim() || (hostHeader ? `${protoHeader}://${hostHeader}` : 'https://kavrodrive.vercel.app');
+      const body = await parseBody(req);
+      const whRes = await mercadoPagoGateway.testWebhookSetup(body || {}, requestOrigin);
+      return sendJson(res, whRes.ok ? 200 : 400, whRes);
+    }
+
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
       const isAdmin = await isAuthorizedAdmin(req);
       const driverSession = verifyDriverToken(req);
@@ -7160,8 +7172,8 @@ async function handleApiRequest(req, res) {
       const clientSession = verifyClientToken(req);
 
       if (pathname === '/api/webhooks/mercadopago') {
-        const paymentId = body?.data?.id || url.searchParams.get('data.id') || url.searchParams.get('id');
-        const topic = body?.type || body?.topic || url.searchParams.get('type') || url.searchParams.get('topic');
+        const paymentId = url.searchParams.get('data.id') || body?.data?.id || url.searchParams.get('id') || body?.id;
+        const topic = url.searchParams.get('type') || body?.type || url.searchParams.get('topic') || body?.topic;
         if (!paymentId || (topic && topic !== 'payment')) return sendJson(res, 200, { ok: true, ignored: true });
         if (!(await verifyMercadoPagoWebhookSignature(req, paymentId))) {
           return sendJson(res, 401, { ok: false, error: 'Assinatura de webhook Mercado Pago inválida.' });

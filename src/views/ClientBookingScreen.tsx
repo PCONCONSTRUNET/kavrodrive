@@ -1951,6 +1951,7 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
             allowPix={allowPix}
             allowWallet={allowWallet}
             allowCreditCard={allowCardModal}
+            gatewayProvider={paymentsConfig.gatewayProvider}
             savedCards={savedCards}
             selectedCardId={selectedCardId}
             onClose={() => setSheetView('choose')}

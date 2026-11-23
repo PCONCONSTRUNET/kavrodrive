@@ -379,9 +379,9 @@ async function testConnection(overrideInput = null) {
   }
 }
 
-async function verifyWebhookSignature(req, dataId) {
+async function verifyWebhookSignature(req, dataId, { secretOverride } = {}) {
   const cfg = await getMercadoPagoConfig();
-  const secret = String(cfg.webhookSecret || '').trim();
+  const secret = String(secretOverride !== undefined ? secretOverride : (cfg.webhookSecret || '')).trim();
   const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
   if (!secret) {
     // Em produção/Vercel exige obrigatoriamente webhookSecret configurado (fail-closed)
@@ -398,11 +398,66 @@ async function verifyWebhookSignature(req, dataId) {
   });
   if (!kv.ts || !kv.v1) return false;
 
-  const manifest = `id:${dataId || ''};request-id:${reqId};ts:${kv.ts};`;
+  const cleanDataId = String(dataId || '').toLowerCase();
+  const manifest = `id:${cleanDataId};request-id:${reqId};ts:${kv.ts};`;
   const expectedHex = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
   const a = Buffer.from(String(kv.v1).toLowerCase(), 'utf8');
   const b = Buffer.from(expectedHex.toLowerCase(), 'utf8');
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+async function testWebhookSetup(overrideInput = null, requestOrigin = '') {
+  const saved = await getMercadoPagoConfig({ forceFresh: true });
+  const webhookUrl = buildComputedWebhookUrl(requestOrigin || saved.webhookUrl || 'https://kavrodrive.vercel.app');
+  const candidateSecret = String(
+    overrideInput?.webhookSecret && String(overrideInput.webhookSecret).trim()
+      ? overrideInput.webhookSecret
+      : (saved.webhookSecret || '')
+  ).trim();
+  const candidateToken = String(
+    overrideInput?.accessToken && String(overrideInput.accessToken).trim()
+      ? overrideInput.accessToken
+      : (saved.accessToken || '')
+  ).trim();
+
+  if (!candidateSecret) {
+    return {
+      ok: false,
+      webhookUrl,
+      hasSecret: false,
+      hasAccessToken: Boolean(candidateToken),
+      signatureSelfTestOk: false,
+      error: 'Endpoint do Webhook ativo, mas falta colar a Assinatura Secreta gerada no painel Webhooks do Mercado Pago.'
+    };
+  }
+
+  const ts = String(Math.floor(Date.now() / 1000));
+  const reqId = `kavro-wh-test-${Date.now()}`;
+  const samplePaymentId = '123456';
+  const manifest = `id:${samplePaymentId};request-id:${reqId};ts:${ts};`;
+  const sig = crypto.createHmac('sha256', candidateSecret).update(manifest).digest('hex');
+  const fakeReq = {
+    headers: {
+      'x-signature': `ts=${ts},v1=${sig}`,
+      'x-request-id': reqId
+    }
+  };
+  const signatureSelfTestOk = await verifyWebhookSignature(fakeReq, samplePaymentId, {
+    secretOverride: candidateSecret
+  });
+
+  return {
+    ok: signatureSelfTestOk,
+    webhookUrl,
+    hasSecret: true,
+    hasAccessToken: Boolean(candidateToken),
+    signatureSelfTestOk,
+    message: signatureSelfTestOk
+      ? candidateToken
+        ? `Webhook Mercado Pago validado! Assinatura HMAC x-signature OK para ${webhookUrl}.`
+        : 'Assinatura HMAC validada, mas falta preencher o Access Token.'
+      : 'Falha na validação HMAC local do webhook.'
+  };
 }
 
 async function getPaymentStatus(paymentId) {
@@ -514,6 +569,7 @@ module.exports = {
   getActiveCredentials,
   mpFetch,
   testConnection,
+  testWebhookSetup,
   verifyWebhookSignature,
   getPaymentStatus,
   createPixPayment,

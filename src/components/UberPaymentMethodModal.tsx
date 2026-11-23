@@ -14,6 +14,7 @@ interface UberPaymentMethodModalProps {
   allowPix: boolean;
   allowWallet: boolean;
   allowCreditCard: boolean;
+  gatewayProvider?: 'efibank' | 'mercadopago' | 'sandbox';
   savedCards: SavedCard[];
   selectedCardId: string;
   onClose: () => void;
@@ -33,6 +34,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
   allowPix,
   allowWallet,
   allowCreditCard,
+  gatewayProvider,
   savedCards,
   selectedCardId,
   onClose,
@@ -41,6 +43,13 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
   onOpenAddCard,
 }) => {
   if (!isOpen) return null;
+
+  const pixGatewaySuffix =
+    gatewayProvider === 'efibank'
+      ? ' (Efí Bank)'
+      : gatewayProvider === 'mercadopago'
+        ? ' (Mercado Pago)'
+        : '';
 
   const isWalletSelected = paymentMethod === 'carteira';
   const hasEnoughWalletBalance = isLoggedIn && walletBalance + 0.001 >= totalPrice;
@@ -217,7 +226,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                     Créditos Kavro: {walletBalance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </div>
                   <div style={{ fontSize: '0.72rem', color: '#64748B', fontWeight: 600 }}>
-                    Recarga instantânea via PIX Efí Bank
+                    Recarga instantânea via PIX{pixGatewaySuffix}
                   </div>
                 </div>
               </div>
@@ -260,7 +269,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
             Formas de pagamento
           </h2>
 
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {allowCash && (
               <button
                 type="button"
@@ -274,10 +283,10 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 12,
-                  padding: '15px 4px',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: '1px solid #F1F5F9',
+                  padding: '13px 12px',
+                  backgroundColor: paymentMethod === 'dinheiro' ? '#F8FAFC' : '#FFFFFF',
+                  border: paymentMethod === 'dinheiro' ? '1.5px solid #0F172A' : '1px solid #F1F5F9',
+                  borderRadius: 14,
                   textAlign: 'left',
                   cursor: 'pointer',
                 }}
@@ -285,10 +294,10 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <PaymentMethodIcon method="dinheiro" size={26} />
                   <div>
-                    <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0F172A' }}>
+                    <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
                       Dinheiro
                     </div>
-                    <div style={{ fontSize: '0.76rem', color: '#64748B', fontWeight: 500 }}>
+                    <div style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 500 }}>
                       Pague diretamente ao motorista na entrega ou embarque
                     </div>
                   </div>
@@ -326,10 +335,10 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 12,
-                  padding: '15px 4px',
-                  background: 'none',
-                  border: 'none',
-                  borderBottom: '1px solid #F1F5F9',
+                  padding: '13px 12px',
+                  backgroundColor: paymentMethod === 'pix' ? '#F8FAFC' : '#FFFFFF',
+                  border: paymentMethod === 'pix' ? '1.5px solid #0F172A' : '1px solid #F1F5F9',
+                  borderRadius: 14,
                   textAlign: 'left',
                   cursor: 'pointer',
                 }}
@@ -337,11 +346,11 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <PaymentMethodIcon method="pix" size={26} />
                   <div>
-                    <div style={{ fontSize: '0.98rem', fontWeight: 800, color: '#0F172A' }}>
+                    <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
                       PIX
                     </div>
-                    <div style={{ fontSize: '0.76rem', color: '#64748B', fontWeight: 500 }}>
-                      QR Code ou Copia e Cola instantâneo (Efí Bank)
+                    <div style={{ fontSize: '0.74rem', color: '#64748B', fontWeight: 500 }}>
+                      QR Code ou Copia e Cola instantâneo{pixGatewaySuffix}
                     </div>
                   </div>
                 </div>
@@ -383,21 +392,21 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                     alignItems: 'center',
                     justifyContent: 'space-between',
                     gap: 12,
-                    padding: '15px 4px',
-                    background: 'none',
-                    border: 'none',
-                    borderBottom: '1px solid #F1F5F9',
+                    padding: '13px 12px',
+                    backgroundColor: isCardSelected ? '#F8FAFC' : '#FFFFFF',
+                    border: isCardSelected ? '1.5px solid #0F172A' : '1px solid #F1F5F9',
+                    borderRadius: 14,
                     textAlign: 'left',
                     cursor: 'pointer',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <PaymentMethodIcon method="cartao_credito" size={24} />
+                    <PaymentMethodIcon method="cartao_credito" size={26} />
                     <div>
                       <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
                         {String(c.brand || 'Cartão').toUpperCase()} •••• {c.last4}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: '#64748B' }}>
+                      <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
                         {c.cardType === 'cartao_debito' ? 'Débito (à vista)' : 'Crédito à vista (1x)'} • Val {c.expMonth}/{c.expYear}
                       </div>
                     </div>
@@ -428,23 +437,50 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                 type="button"
                 onClick={onOpenAddCard}
                 style={{
-                  marginTop: 14,
-                  padding: '12px 14px',
+                  width: '100%',
+                  marginTop: savedCards.length > 0 ? 4 : 0,
+                  padding: '13px 12px',
                   borderRadius: 14,
                   border: '1.5px dashed #CBD5E1',
                   backgroundColor: '#F8FAFC',
                   color: '#0F172A',
-                  fontSize: '0.84rem',
-                  fontWeight: 800,
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 8,
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  textAlign: 'left',
                   cursor: 'pointer',
                 }}
               >
-                <Plus size={16} />
-                <span>Adicionar novo cartão (à vista)</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <PaymentMethodIcon method="cartao_credito" size={26} />
+                  <div>
+                    <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
+                      {savedCards.length > 0 ? 'Adicionar novo cartão' : 'Cartão de Crédito ou Débito'}
+                    </div>
+                    <div style={{ fontSize: '0.73rem', color: '#64748B', fontWeight: 500 }}>
+                      Cobrança à vista (1x) • Visa, Mastercard, Elo
+                    </div>
+                  </div>
+                </div>
+
+                <span
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: 999,
+                    backgroundColor: '#0F172A',
+                    color: '#FFFFFF',
+                    fontSize: '0.72rem',
+                    fontWeight: 800,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    flexShrink: 0,
+                  }}
+                >
+                  <Plus size={12} />
+                  <span>Adicionar</span>
+                </span>
               </button>
             )}
           </div>

@@ -852,6 +852,27 @@ export const StorageService = {
     }
   },
 
+  async testAdminMercadoPagoWebhook(overridePayload?: import('../types').MercadoPagoConfigUpdatePayload): Promise<{
+    ok: boolean;
+    webhookUrl?: string;
+    hasSecret?: boolean;
+    hasAccessToken?: boolean;
+    signatureSelfTestOk?: boolean;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/mercadopago/test-webhook', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(overridePayload || {})
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao validar webhook do Mercado Pago.' };
+    }
+  },
+
   async saveTokenizedCard(payload: {
     clientId?: string;
     clientPhone?: string;
