@@ -19,6 +19,7 @@ import {
   resolveCategoryType
 } from '../utils/categoryEngine';
 import { StorageService } from '../services/storage';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { formatCurrency, formatRideCode } from '../utils/format';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
@@ -43,6 +44,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
   const [isLoadingDrivers, setIsLoadingDrivers] = useState<boolean>(false);
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveFeedback, setSaveFeedback] = useState<string>('');
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
 
   // Estados de Simulação Comparativa
   const [simKm, setSimKm] = useState<number>(8);
@@ -220,12 +222,10 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
 
   const handleDeleteCustomCategory = (catId: string) => {
     if (catId === 'kavro_go' || catId === 'kavro_entregas') {
-      alert('As categorias nativas (Padrão e Entregas) não podem ser excluídas, apenas ativadas ou desativadas.');
+      showToast('As categorias nativas (Padrão e Entregas) não podem ser excluídas, apenas ativadas ou desativadas.', 'warning');
       return;
     }
-    if (!window.confirm('Deseja realmente remover esta categoria personalizada? Corridas antigas preservarão o histórico.')) {
-      return;
-    }
+    if (!confirmOrArm(`del-cat-${catId}`)) return;
     const next = categories.filter(c => c.id !== catId);
     persistCategories(next, 'Categoria removida com sucesso.');
     if (selectedCategoryId === catId) {
@@ -746,11 +746,11 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                     style={{
                       padding: '6px 10px',
                       borderRadius: 6,
-                      border: '1px solid #FECACA',
-                      backgroundColor: '#FEF2F2',
-                      color: '#DC2626',
+                      border: isConfirming(`del-cat-${selectedCategory.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                      backgroundColor: isConfirming(`del-cat-${selectedCategory.id}`) ? '#DC2626' : '#FEF2F2',
+                      color: isConfirming(`del-cat-${selectedCategory.id}`) ? '#FFFFFF' : '#DC2626',
                       fontSize: '0.73rem',
-                      fontWeight: 600,
+                      fontWeight: 700,
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 4,
@@ -758,7 +758,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                     }}
                   >
                     <Trash2 size={13} />
-                    <span>Excluir Categoria</span>
+                    <span>{isConfirming(`del-cat-${selectedCategory.id}`) ? 'Confirmar Exclusão?' : 'Excluir Categoria'}</span>
                   </button>
                 )}
               </div>
@@ -1438,23 +1438,23 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (window.confirm('Deseja limpar toda a lista de modelos restritos desta categoria (liberando qualquer modelo pelo ano mínimo)?')) {
-                        handleUpdateCategoryField(selectedCategory.id, 'allowedModels', []);
-                      }
+                      if (!confirmOrArm(`clear-models-${selectedCategory.id}`)) return;
+                      handleUpdateCategoryField(selectedCategory.id, 'allowedModels', []);
+                      showToast('Lista de modelos restritos limpa.', 'info');
                     }}
                     style={{
                       height: 34,
                       padding: '0 10px',
                       borderRadius: 6,
-                      border: '1px solid #CBD5E1',
-                      backgroundColor: '#FFFFFF',
-                      color: '#64748B',
+                      border: isConfirming(`clear-models-${selectedCategory.id}`) ? '1px solid #B91C1C' : '1px solid #CBD5E1',
+                      backgroundColor: isConfirming(`clear-models-${selectedCategory.id}`) ? '#DC2626' : '#FFFFFF',
+                      color: isConfirming(`clear-models-${selectedCategory.id}`) ? '#FFFFFF' : '#64748B',
                       fontSize: '0.72rem',
-                      fontWeight: 600,
+                      fontWeight: 700,
                       cursor: 'pointer'
                     }}
                   >
-                    Aceitar Todos os Modelos
+                    {isConfirming(`clear-models-${selectedCategory.id}`) ? 'Confirmar Limpeza?' : 'Aceitar Todos os Modelos'}
                   </button>
                 )}
               </div>
@@ -1730,7 +1730,7 @@ export const AdminRideCategoriesTab: React.FC<AdminRideCategoriesTabProps> = ({
                   onClick={() => {
                     const cityClean = newOverrideCity.trim();
                     if (!cityClean) {
-                      alert('Informe o nome da cidade.');
+                      showToast('Informe o nome da cidade.', 'warning');
                       return;
                     }
                     const overrideItem: CityCategoryPricingOverride = {

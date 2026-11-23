@@ -12,6 +12,7 @@ import { PassengerLiveMap } from '../components/PassengerLiveMap';
 import { PassengerFeatureCarousel } from '../components/PassengerFeatureCarousel';
 import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
 import { NotificationsModal } from '../components/NotificationsModal';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 
 interface ClientHomeScreenProps {
   config: SystemConfig;
@@ -51,6 +52,7 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
   const [cancellingBannerRideId, setCancellingBannerRideId] = useState<string | null>(null);
   const [recentDestinations, setRecentDestinations] = useState<LocationPoint[]>([]);
   const [activeLiveRide, setActiveLiveRide] = useState<Ride | null>(null);
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
   const [isNotificationsOpen, setIsNotificationsOpen] = useState<boolean>(false);
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() => {
     return StorageService.getVisibleNotificationsForRole('client').filter(n => !n.read).length;
@@ -163,10 +165,10 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
   // Limpar todos os recentes
   const handleClearAllRecents = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm('Deseja limpar todo o histórico de endereços recentes?')) {
-      StorageService.clearRecentDestinations();
-      setRecentDestinations([]);
-    }
+    if (!confirmOrArm('clear-recents')) return;
+    StorageService.clearRecentDestinations();
+    setRecentDestinations([]);
+    showToast('Histórico recente limpo.', 'info');
   };
 
   // Aplicar endereço fixo como Partida
@@ -854,16 +856,17 @@ export const ClientHomeScreen: React.FC<ClientHomeScreenProps> = ({
                 type="button"
                 onClick={handleClearAllRecents}
                 style={{
-                  background: 'none',
-                  border: 'none',
-                  color: '#64748B',
+                  background: isConfirming('clear-recents') ? '#FEE2E2' : 'none',
+                  border: isConfirming('clear-recents') ? '1px solid #FECACA' : 'none',
+                  borderRadius: 6,
+                  color: isConfirming('clear-recents') ? '#DC2626' : '#64748B',
                   fontSize: '0.72rem',
-                  fontWeight: 600,
+                  fontWeight: isConfirming('clear-recents') ? 800 : 600,
                   cursor: 'pointer',
-                  padding: '2px 4px'
+                  padding: '2px 6px'
                 }}
               >
-                Limpar
+                {isConfirming('clear-recents') ? 'Confirmar limpeza?' : 'Limpar'}
               </button>
             </div>
 

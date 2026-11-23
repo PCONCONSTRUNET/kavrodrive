@@ -26,6 +26,7 @@ import {
   SystemConfig
 } from '../types';
 import { StorageService } from '../services/storage';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
 
 interface PassengerWalletModalProps {
@@ -90,6 +91,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   const [pendingPixEntry, setPendingPixEntry] = useState<ClientWalletEntry | null>(null);
   const [copiedPix, setCopiedPix] = useState(false);
   const [isConfirmingPix, setIsConfirmingPix] = useState(false);
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
 
   const allowApplePay = false;
 
@@ -243,7 +245,7 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   };
 
   const handleDeleteCard = async (cardId: string) => {
-    if (!window.confirm('Remover este cartão salvo da sua carteira?')) return;
+    if (!confirmOrArm(`del-card-${cardId}`)) return;
     const res = await StorageService.deleteSavedCard(cardId);
     if (res.ok) {
       const next = savedCards.filter(c => c.id !== cardId);
@@ -251,6 +253,9 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
       if (selectedCardId === cardId) {
         setSelectedCardId(next[0]?.id || '');
       }
+      showToast('Cartão removido da carteira.', 'info');
+    } else {
+      showToast(res.error || 'Não foi possível remover o cartão.', 'error');
     }
   };
 
@@ -975,14 +980,21 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                             onClick={() => handleDeleteCard(card.id)}
                             aria-label="Excluir cartão"
                             style={{
-                              background: 'none',
+                              background: isConfirming(`del-card-${card.id}`) ? '#DC2626' : 'none',
                               border: 'none',
-                              color: '#EF4444',
+                              borderRadius: isConfirming(`del-card-${card.id}`) ? 8 : 0,
+                              color: isConfirming(`del-card-${card.id}`) ? '#FFFFFF' : '#EF4444',
                               cursor: 'pointer',
-                              padding: 6
+                              padding: isConfirming(`del-card-${card.id}`) ? '5px 9px' : 6,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              fontSize: '0.7rem',
+                              fontWeight: 800
                             }}
                           >
-                            <Trash2 size={15} />
+                            <Trash2 size={14} />
+                            {isConfirming(`del-card-${card.id}`) && <span>Remover?</span>}
                           </button>
                         </div>
                       ))}

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useInlineConfirm } from '../utils/uiFeedback';
 import {
   ArrowLeft,
   Briefcase,
@@ -374,6 +375,7 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [isPickingOnMap, setIsPickingOnMap] = useState(false);
   const [mapLabelPreset, setMapLabelPreset] = useState('Favorito');
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
   const [recentList, setRecentList] = useState<LocationPoint[]>(() =>
     StorageService.getRecentDestinations()
   );
@@ -839,14 +841,17 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
 
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => {
+                if (!confirmOrArm('logout-profile')) return;
+                onLogout();
+              }}
               style={{
                 width: '100%',
                 padding: '13px 16px',
                 borderRadius: 14,
-                border: '1px solid #FECACA',
-                backgroundColor: '#FEF2F2',
-                color: '#DC2626',
+                border: isConfirming('logout-profile') ? '1px solid #B91C1C' : '1px solid #FECACA',
+                backgroundColor: isConfirming('logout-profile') ? '#DC2626' : '#FEF2F2',
+                color: isConfirming('logout-profile') ? '#FFFFFF' : '#DC2626',
                 fontSize: '0.88rem',
                 fontWeight: 800,
                 cursor: 'pointer',
@@ -857,7 +862,7 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
               }}
             >
               <LogOut size={16} />
-              <span>Sair da conta neste aparelho</span>
+              <span>{isConfirming('logout-profile') ? 'Toque novamente para sair' : 'Sair da conta neste aparelho'}</span>
             </button>
           </>
         )}
@@ -1564,14 +1569,17 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
 
             <button
               type="button"
-              onClick={onLogout}
+              onClick={() => {
+                if (!confirmOrArm('logout-settings')) return;
+                onLogout();
+              }}
               style={{
                 width: '100%',
                 padding: '13px 16px',
                 borderRadius: 14,
-                border: '1px solid #FECACA',
-                backgroundColor: '#FEF2F2',
-                color: '#DC2626',
+                border: isConfirming('logout-settings') ? '1px solid #B91C1C' : '1px solid #FECACA',
+                backgroundColor: isConfirming('logout-settings') ? '#DC2626' : '#FEF2F2',
+                color: isConfirming('logout-settings') ? '#FFFFFF' : '#DC2626',
                 fontSize: '0.88rem',
                 fontWeight: 800,
                 cursor: 'pointer',
@@ -1582,7 +1590,7 @@ export const AccountSubViews: React.FC<AccountSubViewsProps> = ({
               }}
             >
               <LogOut size={16} />
-              <span>Sair da conta</span>
+              <span>{isConfirming('logout-settings') ? 'Toque novamente para sair' : 'Sair da conta'}</span>
             </button>
           </>
         )}

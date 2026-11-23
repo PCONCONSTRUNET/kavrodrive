@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { DriverProfile, KycAuditLog, DriverKycData } from '../types';
 import { StorageService } from '../services/storage';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { DriverTermsContractModal } from './DriverTermsContractModal';
 
 interface AdminKycReviewModalProps {
@@ -50,6 +51,7 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
   const [cnhImgError, setCnhImgError] = useState(false);
   const [selfieImgError, setSelfieImgError] = useState(false);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
 
   // Controles de visualização profissional para a equipe
   const [focusView, setFocusView] = useState<'split' | 'cnh' | 'selfie'>('split');
@@ -162,10 +164,7 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
   };
 
   const handlePurgeDocuments = async () => {
-    const confirm = window.confirm(
-      `Confirma a eliminação definitiva das fotografias e laudos biométricos de ${driver.name}? Esta ação atende à política de retenção LGPD e não pode ser desfeita.`
-    );
-    if (!confirm) return;
+    if (!confirmOrArm(`purge-kyc-${driver.id}`)) return;
 
     setActionInProgress('purge');
     const res = await StorageService.adminPurgeKycDocuments({
@@ -178,6 +177,7 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
     if (res.ok && res.driver) {
       onUpdated(res.driver);
       loadFreshKyc();
+      showToast(`Mídias biométricas de ${driver.name} removidas conforme LGPD.`, 'success');
     } else {
       setFormError(res.error || 'Erro ao purgar documentos.');
     }
@@ -1063,9 +1063,9 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
                   type="button"
                   onClick={handlePurgeDocuments}
                   style={{
-                    backgroundColor: 'transparent',
-                    border: '1px solid #FCA5A5',
-                    color: '#DC2626',
+                    backgroundColor: isConfirming(`purge-kyc-${driver.id}`) ? '#DC2626' : 'transparent',
+                    border: isConfirming(`purge-kyc-${driver.id}`) ? '1px solid #B91C1C' : '1px solid #FCA5A5',
+                    color: isConfirming(`purge-kyc-${driver.id}`) ? '#FFFFFF' : '#DC2626',
                     padding: '4px 9px',
                     borderRadius: 7,
                     fontSize: '0.7rem',
@@ -1077,7 +1077,7 @@ export const AdminKycReviewModal: React.FC<AdminKycReviewModalProps> = ({
                   }}
                 >
                   <Trash2 size={12} />
-                  <span>Purgar Mídias Sensíveis</span>
+                  <span>{isConfirming(`purge-kyc-${driver.id}`) ? 'Confirmar Purga LGPD?' : 'Purgar Mídias Sensíveis'}</span>
                 </button>
               </div>
 

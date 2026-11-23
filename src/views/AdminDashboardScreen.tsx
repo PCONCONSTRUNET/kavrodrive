@@ -44,6 +44,7 @@ import {
   formatCurrency, formatCurrencyValue, getCleanWhatsappNumber 
 } from '../utils/format';
 import { computeClientAutoScore } from '../utils/scoringEngine';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 
 interface AdminDashboardScreenProps {
   rides: Ride[];
@@ -59,6 +60,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onExitAdmin,
 }) => {
   const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'repasses' | 'taxas' | 'gateways' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'parceiros' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
+  const [rejectingClientReqId, setRejectingClientReqId] = useState<string | null>(null);
+  const [rejectClientReason, setRejectClientReason] = useState('');
   const [repassesInitialSubTab, setRepassesInitialSubTab] = useState<'saques' | 'motoristas' | 'corridas_split' | 'livro_razao'>('saques');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
@@ -185,7 +189,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
 
   const handleOpenEditRide = (ride: Ride) => {
     if (!ride.isManualBooking) {
-      alert('Somente agendamentos e transações adicionados manualmente pelo motorista podem ser editados.');
+      showToast('Somente agendamentos e transações adicionados manualmente pelo motorista podem ser editados.', 'warning');
       return;
     }
     setEditingRide(ride);
@@ -345,24 +349,26 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     setBlockedSlots(StorageService.getBlockedSlots());
   };
 
-  const handleReviewClientProfileChange = async (client: ClientProfile, decision: 'aprovar' | 'recusar') => {
-    let rejectionReason: string | undefined;
-    if (decision === 'recusar') {
-      const reason = window.prompt(
-        `Motivo da recusa para alteração cadastral de ${client.name}:`,
-        'Dados incompatíveis ou alteração não autorizada'
-      );
-      if (reason === null) return;
-      rejectionReason = reason.trim() || undefined;
-    }
+  const handleReviewClientProfileChange = async (client: ClientProfile, decision: 'aprovar' | 'recusar', reasonOverride?: string) => {
+    const rejectionReason = decision === 'recusar'
+      ? (reasonOverride?.trim() || 'Dados incompatíveis ou alteração não autorizada')
+      : undefined;
     const res = await StorageService.reviewProfileChangeRequest('client', client.id, decision, rejectionReason);
     if (!res.ok) {
-      window.alert(res.error || 'Erro ao analisar solicitação de alteração.');
+      showToast(res.error || 'Erro ao analisar solicitação de alteração.', 'error');
       return;
     }
+    setRejectingClientReqId(null);
+    setRejectClientReason('');
     await StorageService.syncFromDatabase();
     setClientsList(StorageService.getClients());
     onRefreshData();
+    showToast(
+      decision === 'aprovar'
+        ? `Alteração cadastral de ${client.name} aprovada.`
+        : `Solicitação de ${client.name} recusada.`,
+      'info'
+    );
   };
 
   const toggleBlockSlot = (slotTime: string) => {
@@ -721,8 +727,10 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   const ensureVehicleConfigured = (): boolean => {
     const missing = getMissingVehicleFields(currentConfig);
     if (missing.length > 0) {
-      alert(
-        `⚠️ CADASTRO DO VEÍCULO OBRIGATÓRIO\n\nPara segurança e transparência com o passageiro, preencha manualmente os dados reais do seu veículo antes de confirmar ou iniciar uma corrida:\n\n• ${missing.join('\n• ')}\n\nVocê será direcionado para a aba Perfil do Motorista.`
+      showToast(
+        `Cadastro do veículo obrigatório — preencha os campos pendentes em Perfil do Motorista: ${missing.join(', ')}.`,
+        'warning',
+        6000
       );
       setSelectedRideDetail(null);
       setActiveTab('perfil');
@@ -787,18 +795,17 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
     }
   };
 
-  // Excluir Corrida
+  // Excluir Corrida (confirmação já feita inline no botão antes de chamar)
   const handleDeleteRide = (rideId: string) => {
     const ride = rides.find(r => r.id === rideId);
-    if (window.confirm('Tem certeza que deseja excluir esta corrida? O horário agendado será liberado imediatamente.')) {
-      if (ride) {
-        StorageService.unblockSlot(ride.date, ride.time);
-        setBlockedSlots(StorageService.getBlockedSlots());
-      }
-      StorageService.deleteRide(rideId);
-      setSelectedRideDetail(null);
-      onRefreshData();
+    if (ride) {
+      StorageService.unblockSlot(ride.date, ride.time);
+      setBlockedSlots(StorageService.getBlockedSlots());
     }
+    StorageService.deleteRide(rideId);
+    setSelectedRideDetail(null);
+    onRefreshData();
+    showToast('Corrida excluída do sistema.', 'info');
   };
 
   // Abertura do Modal Compacto de Entrada / Saída
@@ -906,18 +913,17 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
 
   const handleDeleteExpense = (id: string) => {
     const item = expenses.find(x => x.id === id);
-    const label = item?.type === 'entrada' ? 'esta entrada' : 'esta despesa';
-    if (window.confirm(`Tem certeza que deseja excluir ${label}?`)) {
-      StorageService.deleteExpense(id);
-      setExpenses(StorageService.getExpenses());
-      if (editingExpenseId === id) {
-        handleCancelEditExpense();
-      }
-      if (selectedExpenseDetail?.id === id) {
-        setSelectedExpenseDetail(null);
-      }
-      onRefreshData();
+    const label = item?.type === 'entrada' ? 'Entrada' : 'Despesa';
+    StorageService.deleteExpense(id);
+    setExpenses(StorageService.getExpenses());
+    if (editingExpenseId === id) {
+      handleCancelEditExpense();
     }
+    if (selectedExpenseDetail?.id === id) {
+      setSelectedExpenseDetail(null);
+    }
+    onRefreshData();
+    showToast(`${label} excluída.`, 'info');
   };
 
   const handleShareFinanceSummary = () => {
@@ -1726,14 +1732,15 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                   type="button"
                   onClick={() => {
                     const id = selectedExpenseDetail.id;
+                    if (!confirmOrArm(`del-exp-modal-${id}`)) return;
                     handleDeleteExpense(id);
                   }}
                   style={{
                     padding: '11px',
                     borderRadius: 12,
-                    backgroundColor: 'rgba(239, 68, 68, 0.18)',
-                    color: '#F87171',
-                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    backgroundColor: isConfirming(`del-exp-modal-${selectedExpenseDetail.id}`) ? '#DC2626' : 'rgba(239, 68, 68, 0.18)',
+                    color: isConfirming(`del-exp-modal-${selectedExpenseDetail.id}`) ? '#FFFFFF' : '#F87171',
+                    border: isConfirming(`del-exp-modal-${selectedExpenseDetail.id}`) ? '1px solid #B91C1C' : '1px solid rgba(239, 68, 68, 0.35)',
                     fontWeight: 800,
                     fontSize: '0.82rem',
                     cursor: 'pointer',
@@ -1744,7 +1751,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                   }}
                 >
                   <Trash2 size={15} />
-                  <span>Excluir</span>
+                  <span>{isConfirming(`del-exp-modal-${selectedExpenseDetail.id}`) ? 'Confirmar Exclusão?' : 'Excluir'}</span>
                 </button>
               </div>
             </div>
@@ -2689,8 +2696,12 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             {/* Botão Direto: Excluir Corrida */}
                             <button
                               type="button"
-                              onClick={() => handleDeleteRide(ride.id)}
-                              title="Excluir corrida permanentemente"
+                              onClick={() => {
+                                const key = `del-ride-card-${ride.id}`;
+                                if (!confirmOrArm(key)) return;
+                                handleDeleteRide(ride.id);
+                              }}
+                              title={isConfirming(`del-ride-card-${ride.id}`) ? 'Clique novamente para excluir' : 'Excluir corrida permanentemente'}
                               style={{
                                 display: 'flex',
                                 alignItems: 'center',
@@ -2699,17 +2710,17 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 height: 40,
                                 padding: '0 14px',
                                 borderRadius: 12,
-                                backgroundColor: '#FEF2F2',
-                                color: '#DC2626',
-                                border: '1.5px solid #FECACA',
+                                backgroundColor: isConfirming(`del-ride-card-${ride.id}`) ? '#DC2626' : '#FEF2F2',
+                                color: isConfirming(`del-ride-card-${ride.id}`) ? '#FFFFFF' : '#DC2626',
+                                border: isConfirming(`del-ride-card-${ride.id}`) ? '1.5px solid #B91C1C' : '1.5px solid #FECACA',
                                 fontSize: '0.8rem',
                                 fontWeight: 700,
                                 cursor: 'pointer',
                                 transition: 'all 0.15s ease'
                               }}
                             >
-                              <Trash2 size={14} color="#DC2626" />
-                              <span>Excluir</span>
+                              <Trash2 size={14} color={isConfirming(`del-ride-card-${ride.id}`) ? '#FFFFFF' : '#DC2626'} />
+                              <span>{isConfirming(`del-ride-card-${ride.id}`) ? 'Confirmar?' : 'Excluir'}</span>
                             </button>
                           </div>
 
@@ -2726,9 +2737,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (confirm('Deseja realmente recusar / cancelar este agendamento?')) {
-                                      handleUpdateStatus(ride.id, 'cancelada');
-                                    }
+                                    if (!confirmOrArm(`cancel-wait-${ride.id}`)) return;
+                                    handleUpdateStatus(ride.id, 'cancelada');
                                   }}
                                   style={{
                                     height: 44,
@@ -2736,9 +2746,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     gap: 5,
-                                    backgroundColor: '#FEE2E2',
-                                    color: '#991B1B',
-                                    border: '1px solid #FECACA',
+                                    backgroundColor: isConfirming(`cancel-wait-${ride.id}`) ? '#DC2626' : '#FEE2E2',
+                                    color: isConfirming(`cancel-wait-${ride.id}`) ? '#FFFFFF' : '#991B1B',
+                                    border: isConfirming(`cancel-wait-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
                                     borderRadius: 12,
                                     fontSize: '0.82rem',
                                     fontWeight: 700,
@@ -2746,7 +2756,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                   }}
                                 >
                                   <X size={15} />
-                                  <span>Recusar</span>
+                                  <span>{isConfirming(`cancel-wait-${ride.id}`) ? 'Confirmar?' : 'Recusar'}</span>
                                 </button>
 
                                 <button
@@ -2782,9 +2792,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (confirm('Deseja cancelar esta corrida confirmada?')) {
-                                      handleUpdateStatus(ride.id, 'cancelada');
-                                    }
+                                    if (!confirmOrArm(`cancel-conf-${ride.id}`)) return;
+                                    handleUpdateStatus(ride.id, 'cancelada');
                                   }}
                                   style={{
                                     height: 44,
@@ -2792,9 +2801,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     gap: 5,
-                                    backgroundColor: '#FEE2E2',
-                                    color: '#991B1B',
-                                    border: '1px solid #FECACA',
+                                    backgroundColor: isConfirming(`cancel-conf-${ride.id}`) ? '#DC2626' : '#FEE2E2',
+                                    color: isConfirming(`cancel-conf-${ride.id}`) ? '#FFFFFF' : '#991B1B',
+                                    border: isConfirming(`cancel-conf-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
                                     borderRadius: 12,
                                     fontSize: '0.82rem',
                                     fontWeight: 700,
@@ -2802,7 +2811,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                   }}
                                 >
                                   <X size={15} />
-                                  <span>Cancelar</span>
+                                  <span>{isConfirming(`cancel-conf-${ride.id}`) ? 'Confirmar?' : 'Cancelar'}</span>
                                 </button>
 
                                 <button
@@ -2842,9 +2851,8 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => {
-                                    if (confirm('Deseja cancelar esta corrida?')) {
-                                      handleUpdateStatus(ride.id, 'cancelada');
-                                    }
+                                    if (!confirmOrArm(`cancel-way-${ride.id}`)) return;
+                                    handleUpdateStatus(ride.id, 'cancelada');
                                   }}
                                   style={{
                                     height: 44,
@@ -2852,9 +2860,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                     alignItems: 'center',
                                     justifyContent: 'center',
                                     gap: 5,
-                                    backgroundColor: '#FEE2E2',
-                                    color: '#991B1B',
-                                    border: '1px solid #FECACA',
+                                    backgroundColor: isConfirming(`cancel-way-${ride.id}`) ? '#DC2626' : '#FEE2E2',
+                                    color: isConfirming(`cancel-way-${ride.id}`) ? '#FFFFFF' : '#991B1B',
+                                    border: isConfirming(`cancel-way-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
                                     borderRadius: 12,
                                     fontSize: '0.82rem',
                                     fontWeight: 700,
@@ -2862,7 +2870,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                   }}
                                 >
                                   <X size={15} />
-                                  <span>Cancelar</span>
+                                  <span>{isConfirming(`cancel-way-${ride.id}`) ? 'Confirmar?' : 'Cancelar'}</span>
                                 </button>
 
                                 <button
@@ -3683,21 +3691,23 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          if (window.confirm('Deseja liberar todos os horários bloqueados manualmente nesta data?')) {
-                            StorageService.saveBlockedSlots(selectedAgendaDate, []);
-                            setBlockedSlots(StorageService.getBlockedSlots());
-                          }
+                          if (!confirmOrArm(`unblock-all-${selectedAgendaDate}`)) return;
+                          StorageService.saveBlockedSlots(selectedAgendaDate, []);
+                          setBlockedSlots(StorageService.getBlockedSlots());
+                          showToast('Todos os horários bloqueados foram liberados.', 'info');
                         }}
                         style={{
-                          background: 'none',
+                          background: isConfirming(`unblock-all-${selectedAgendaDate}`) ? '#DC2626' : 'none',
                           border: 'none',
-                          color: '#EF4444',
+                          borderRadius: 6,
+                          padding: isConfirming(`unblock-all-${selectedAgendaDate}`) ? '3px 8px' : 0,
+                          color: isConfirming(`unblock-all-${selectedAgendaDate}`) ? '#FFFFFF' : '#EF4444',
                           fontSize: '0.74rem',
                           fontWeight: 700,
                           cursor: 'pointer'
                         }}
                       >
-                        Liberar Todos
+                        {isConfirming(`unblock-all-${selectedAgendaDate}`) ? 'Confirmar Liberação?' : 'Liberar Todos'}
                       </button>
                     )}
                   </div>
@@ -3990,43 +4000,49 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                             <button
                               type="button"
                               onClick={() => {
-                                if (window.confirm(`Deseja cancelar o agendamento de ${ride.clientName} e liberar o horário ${ride.time}?`)) {
-                                  handleUpdateStatus(ride.id, 'cancelada');
-                                }
+                                if (!confirmOrArm(`cancel-agenda-${ride.id}`)) return;
+                                handleUpdateStatus(ride.id, 'cancelada');
                               }}
                               style={{
                                 padding: '6px 12px',
                                 borderRadius: 8,
-                                backgroundColor: '#FEF2F2',
-                                border: '1px solid #FECACA',
+                                backgroundColor: isConfirming(`cancel-agenda-${ride.id}`) ? '#DC2626' : '#FEF2F2',
+                                border: isConfirming(`cancel-agenda-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
                                 fontSize: '0.74rem',
                                 fontWeight: 800,
-                                color: '#DC2626',
+                                color: isConfirming(`cancel-agenda-${ride.id}`) ? '#FFFFFF' : '#DC2626',
                                 cursor: 'pointer',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: 4
                               }}
                             >
-                              <span>🚫 Cancelar (Liberar Horário)</span>
+                              <span>{isConfirming(`cancel-agenda-${ride.id}`) ? 'Confirmar Cancelamento?' : '🚫 Cancelar (Liberar Horário)'}</span>
                             </button>
 
                             <button
                               type="button"
-                              onClick={() => handleDeleteRide(ride.id)}
+                              onClick={() => {
+                                if (!confirmOrArm(`del-agenda-${ride.id}`)) return;
+                                handleDeleteRide(ride.id);
+                              }}
                               style={{
                                 padding: '6px 10px',
                                 borderRadius: 8,
-                                backgroundColor: '#FFF',
-                                border: '1px solid #E2E8F0',
+                                backgroundColor: isConfirming(`del-agenda-${ride.id}`) ? '#DC2626' : '#FFF',
+                                border: isConfirming(`del-agenda-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #E2E8F0',
                                 fontSize: '0.74rem',
                                 fontWeight: 700,
-                                color: '#64748B',
-                                cursor: 'pointer'
+                                color: isConfirming(`del-agenda-${ride.id}`) ? '#FFFFFF' : '#64748B',
+                                cursor: 'pointer',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4
                               }}
-                              title="Excluir corrida permanentemente"
+                              title={isConfirming(`del-agenda-${ride.id}`) ? 'Clique novamente para excluir' : 'Excluir corrida permanentemente'}
                             >
-                              <Trash2 size={13} color="#DC2626" />
+                              <Trash2 size={13} color={isConfirming(`del-agenda-${ride.id}`) ? '#FFFFFF' : '#DC2626'} />
+                              {isConfirming(`del-agenda-${ride.id}`) && <span>Confirmar?</span>}
                             </button>
                           </div>
                         </div>
@@ -4315,22 +4331,21 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          if (window.confirm('Deseja recusar e cancelar este agendamento?')) {
-                                            handleUpdateStatus(ride.id, 'cancelada');
-                                          }
+                                          if (!confirmOrArm(`reject-cal-${ride.id}`)) return;
+                                          handleUpdateStatus(ride.id, 'cancelada');
                                         }}
                                         style={{
                                           padding: '5px 10px',
                                           borderRadius: 8,
-                                          backgroundColor: '#FEF2F2',
-                                          border: '1px solid #FECACA',
-                                          color: '#DC2626',
+                                          backgroundColor: isConfirming(`reject-cal-${ride.id}`) ? '#DC2626' : '#FEF2F2',
+                                          border: isConfirming(`reject-cal-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                                          color: isConfirming(`reject-cal-${ride.id}`) ? '#FFFFFF' : '#DC2626',
                                           fontSize: '0.72rem',
                                           fontWeight: 800,
                                           cursor: 'pointer'
                                         }}
                                       >
-                                        Recusar
+                                        {isConfirming(`reject-cal-${ride.id}`) ? 'Confirmar?' : 'Recusar'}
                                       </button>
                                       <button
                                         type="button"
@@ -4361,22 +4376,21 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          if (window.confirm('Deseja cancelar esta corrida?')) {
-                                            handleUpdateStatus(ride.id, 'cancelada');
-                                          }
+                                          if (!confirmOrArm(`cancel-cal-${ride.id}`)) return;
+                                          handleUpdateStatus(ride.id, 'cancelada');
                                         }}
                                         style={{
                                           padding: '5px 10px',
                                           borderRadius: 8,
-                                          backgroundColor: '#FEF2F2',
-                                          border: '1px solid #FECACA',
-                                          color: '#DC2626',
+                                          backgroundColor: isConfirming(`cancel-cal-${ride.id}`) ? '#DC2626' : '#FEF2F2',
+                                          border: isConfirming(`cancel-cal-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                                          color: isConfirming(`cancel-cal-${ride.id}`) ? '#FFFFFF' : '#DC2626',
                                           fontSize: '0.72rem',
                                           fontWeight: 700,
                                           cursor: 'pointer'
                                         }}
                                       >
-                                        Cancelar
+                                        {isConfirming(`cancel-cal-${ride.id}`) ? 'Confirmar?' : 'Cancelar'}
                                       </button>
                                       <button
                                         type="button"
@@ -5968,18 +5982,19 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                     type="button"
                                     onClick={(e) => {
                                       e.stopPropagation();
+                                      if (!confirmOrArm(`del-exp-card-${exp.id}`)) return;
                                       handleDeleteExpense(exp.id);
                                     }}
-                                    title={isEntrada ? 'Excluir entrada' : 'Excluir despesa'}
+                                    title={isConfirming(`del-exp-card-${exp.id}`) ? 'Clique novamente para excluir' : (isEntrada ? 'Excluir entrada' : 'Excluir despesa')}
                                     style={{
                                       display: 'inline-flex',
                                       alignItems: 'center',
                                       gap: 4,
                                       padding: '5px 9px',
                                       borderRadius: 8,
-                                      backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                                      color: '#F87171',
-                                      border: '1px solid rgba(239, 68, 68, 0.3)',
+                                      backgroundColor: isConfirming(`del-exp-card-${exp.id}`) ? '#DC2626' : 'rgba(239, 68, 68, 0.15)',
+                                      color: isConfirming(`del-exp-card-${exp.id}`) ? '#FFFFFF' : '#F87171',
+                                      border: isConfirming(`del-exp-card-${exp.id}`) ? '1px solid #B91C1C' : '1px solid rgba(239, 68, 68, 0.3)',
                                       fontSize: '0.7rem',
                                       fontWeight: 700,
                                       cursor: 'pointer',
@@ -5987,7 +6002,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                     }}
                                   >
                                     <Trash2 size={12} />
-                                    <span>Excluir</span>
+                                    <span>{isConfirming(`del-exp-card-${exp.id}`) ? 'Confirmar?' : 'Excluir'}</span>
                                   </button>
                                 </div>
                               </div>
@@ -6115,7 +6130,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                 {rf.document !== undefined && <span><strong>CPF:</strong> {pv.document || '—'} → <strong style={{ color: '#0F172A' }}>{rf.document || '—'}</strong></span>}
                               </div>
                             </div>
-                            <div style={{ display: 'flex', gap: 8 }}>
+                            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
                               <button
                                 type="button"
                                 onClick={() => handleReviewClientProfileChange(cli, 'aprovar')}
@@ -6132,22 +6147,79 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                               >
                                 ✓ Aprovar Alteração
                               </button>
-                              <button
-                                type="button"
-                                onClick={() => handleReviewClientProfileChange(cli, 'recusar')}
-                                style={{
-                                  padding: '6px 12px',
-                                  borderRadius: 6,
-                                  border: '1px solid #FCA5A5',
-                                  backgroundColor: '#FFFFFF',
-                                  color: '#DC2626',
-                                  fontSize: '0.74rem',
-                                  fontWeight: 700,
-                                  cursor: 'pointer'
-                                }}
-                              >
-                                ✕ Recusar
-                              </button>
+                              {rejectingClientReqId === cli.id ? (
+                                <>
+                                  <input
+                                    type="text"
+                                    value={rejectClientReason}
+                                    onChange={(e) => setRejectClientReason(e.target.value)}
+                                    placeholder="Motivo da recusa (opcional)..."
+                                    style={{
+                                      height: 30,
+                                      padding: '0 8px',
+                                      borderRadius: 6,
+                                      border: '1px solid #FCA5A5',
+                                      fontSize: '0.74rem',
+                                      minWidth: 180
+                                    }}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => handleReviewClientProfileChange(cli, 'recusar', rejectClientReason)}
+                                    style={{
+                                      padding: '6px 10px',
+                                      borderRadius: 6,
+                                      border: 'none',
+                                      backgroundColor: '#DC2626',
+                                      color: '#FFFFFF',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 700,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    Confirmar Recusa
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setRejectingClientReqId(null);
+                                      setRejectClientReason('');
+                                    }}
+                                    style={{
+                                      padding: '6px 10px',
+                                      borderRadius: 6,
+                                      border: '1px solid #CBD5E1',
+                                      backgroundColor: '#FFFFFF',
+                                      color: '#475569',
+                                      fontSize: '0.72rem',
+                                      fontWeight: 600,
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    Cancelar
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRejectingClientReqId(cli.id);
+                                    setRejectClientReason('Dados incompatíveis ou alteração não autorizada');
+                                  }}
+                                  style={{
+                                    padding: '6px 12px',
+                                    borderRadius: 6,
+                                    border: '1px solid #FCA5A5',
+                                    backgroundColor: '#FFFFFF',
+                                    color: '#DC2626',
+                                    fontSize: '0.74rem',
+                                    fontWeight: 700,
+                                    cursor: 'pointer'
+                                  }}
+                                >
+                                  ✕ Recusar
+                                </button>
+                              )}
                             </div>
                           </div>
                         );
@@ -6380,23 +6452,27 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                                   <button
                                     type="button"
                                     onClick={() => {
-                                      if (window.confirm(`Deseja realmente excluir o passageiro ${c.name}?`)) {
-                                        handleDeleteClient(c.id);
-                                      }
+                                      if (!confirmOrArm(`del-cli-row-${c.id}`)) return;
+                                      handleDeleteClient(c.id);
+                                      showToast(`Passageiro ${c.name} excluído.`, 'info');
                                     }}
                                     style={{
                                       padding: '5px 8px',
                                       borderRadius: 6,
-                                      border: '1px solid #FECACA',
-                                      backgroundColor: '#FFFFFF',
-                                      color: '#DC2626',
+                                      border: isConfirming(`del-cli-row-${c.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                                      backgroundColor: isConfirming(`del-cli-row-${c.id}`) ? '#DC2626' : '#FFFFFF',
+                                      color: isConfirming(`del-cli-row-${c.id}`) ? '#FFFFFF' : '#DC2626',
                                       fontSize: '0.72rem',
-                                      fontWeight: 600,
-                                      cursor: 'pointer'
+                                      fontWeight: 700,
+                                      cursor: 'pointer',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4
                                     }}
-                                    title="Excluir"
+                                    title={isConfirming(`del-cli-row-${c.id}`) ? 'Clique novamente para excluir' : 'Excluir'}
                                   >
                                     <Trash2 size={12} />
+                                    {isConfirming(`del-cli-row-${c.id}`) && <span>Confirmar?</span>}
                                   </button>
                                 </div>
                               </td>
@@ -7221,9 +7297,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                   setIsConfigDirty(false);
                   if (ok) {
                     onRefreshData();
-                    alert('Configurações e modelos de Push salvos com sucesso!');
+                    showToast('Configurações e modelos de Push salvos com sucesso!', 'success');
                   } else {
-                    alert('Erro ao salvar configurações de Push no servidor.');
+                    showToast('Erro ao salvar configurações de Push no servidor.', 'error');
                   }
                 }}
                 style={{

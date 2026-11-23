@@ -4,6 +4,7 @@ import {
   CreditCard, QrCode, Banknote, Send, Wallet, Receipt, ChevronRight
 } from 'lucide-react';
 import { Expense, PaymentMethod } from '../types';
+import { useInlineConfirm } from '../utils/uiFeedback';
 
 export interface TreasuryMetrics {
   ridesCount: number;
@@ -73,6 +74,7 @@ export const AdminFinanceTreasurySection: React.FC<AdminFinanceTreasurySectionPr
   const [amountStr, setAmountStr] = useState('');
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('pix');
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
   const [notes, setNotes] = useState('');
 
   const handleSubmitEntry = (e: React.FormEvent) => {
@@ -712,23 +714,28 @@ export const AdminFinanceTreasurySection: React.FC<AdminFinanceTreasurySectionPr
                       <td style={{ padding: '10px 16px', textAlign: 'right' }}>
                         <button
                           type="button"
-                          onClick={() => onDeleteExpense(exp.id)}
-                          title="Excluir lançamento"
+                          onClick={() => {
+                            const key = `del-exp-${exp.id}`;
+                            if (!confirmOrArm(key)) return;
+                            onDeleteExpense(exp.id);
+                          }}
+                          title={isConfirming(`del-exp-${exp.id}`) ? 'Clique novamente para excluir' : 'Excluir lançamento'}
                           style={{
                             padding: '4px 8px',
                             borderRadius: 6,
-                            border: '1px solid #FECACA',
-                            backgroundColor: '#FFFFFF',
-                            color: '#DC2626',
+                            border: isConfirming(`del-exp-${exp.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                            backgroundColor: isConfirming(`del-exp-${exp.id}`) ? '#DC2626' : '#FFFFFF',
+                            color: isConfirming(`del-exp-${exp.id}`) ? '#FFFFFF' : '#DC2626',
                             cursor: 'pointer',
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: 4,
                             fontSize: '0.7rem',
-                            fontWeight: 600
+                            fontWeight: 700
                           }}
                         >
                           <Trash2 size={12} />
+                          {isConfirming(`del-exp-${exp.id}`) && <span>Confirmar?</span>}
                         </button>
                       </td>
                     </tr>

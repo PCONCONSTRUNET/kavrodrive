@@ -38,6 +38,7 @@ import { PassengerWalletModal } from '../components/PassengerWalletModal';
 import { SafetyCenterInitialView, SafetyCenterModal } from '../components/SafetyCenterModal';
 import { RideReceiptModal } from '../components/RideReceiptModal';
 import { PartnersSponsorsSection } from '../components/PartnersSponsorsSection';
+import { useInlineConfirm } from '../utils/uiFeedback';
 import {
   AccountSubView,
   AccountSubViews,
@@ -106,6 +107,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
 
   const [walletBalance, setWalletBalance] = useState<number>(Number(currentUser?.walletBalance || 0));
   const [allRides, setAllRides] = useState<Ride[]>(() => propRides || StorageService.getRides());
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(() =>
     StorageService.getNotifications().filter((n) => !n.read).length
   );
@@ -384,16 +386,14 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
   };
 
   const handleLogout = () => {
-    if (window.confirm('Deseja realmente sair da sua conta neste aparelho?')) {
-      StorageService.setCurrentUser(null);
-      setCurrentUser(null);
-      setName('');
-      setPhone('');
-      setEmail('');
-      setDocument('');
-      setSubView('hub');
-      if (onUserChange) onUserChange(null);
-    }
+    StorageService.setCurrentUser(null);
+    setCurrentUser(null);
+    setName('');
+    setPhone('');
+    setEmail('');
+    setDocument('');
+    setSubView('hub');
+    if (onUserChange) onUserChange(null);
   };
 
   const supportWhatsapp = getCleanWhatsappNumber(config.companyWhatsapp || config.companyPhone || '48996915303');
@@ -1092,14 +1092,18 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
             </span>
             <button
               type="button"
-              onClick={handleLogout}
+              onClick={() => {
+                if (!confirmOrArm('logout-hub')) return;
+                handleLogout();
+              }}
               style={{
-                background: 'none',
+                background: isConfirming('logout-hub') ? '#DC2626' : 'none',
                 border: 'none',
-                padding: '6px 8px',
+                borderRadius: isConfirming('logout-hub') ? 8 : 0,
+                padding: '6px 10px',
                 fontSize: '0.78rem',
                 fontWeight: 800,
-                color: '#DC2626',
+                color: isConfirming('logout-hub') ? '#FFFFFF' : '#DC2626',
                 cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -1107,7 +1111,7 @@ export const ClientProfileScreen: React.FC<ClientProfileScreenProps> = ({
               }}
             >
               <LogOut size={14} />
-              <span>Sair da conta</span>
+              <span>{isConfirming('logout-hub') ? 'Confirmar saída?' : 'Sair da conta'}</span>
             </button>
           </div>
         </div>

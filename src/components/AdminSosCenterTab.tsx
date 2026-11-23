@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Ride, SystemConfig } from '../types';
 import { StorageService } from '../services/storage';
+import { showToast } from '../utils/uiFeedback';
 
 export interface SosAlertItem {
   id: string;
@@ -58,6 +59,8 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
   const [audioSignedUrls, setAudioSignedUrls] = useState<Record<string, string>>({});
   const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
   const [audioLoadError, setAudioLoadError] = useState<string>('');
+  const [resolvingSosId, setResolvingSosId] = useState<string | null>(null);
+  const [resolveNotes, setResolveNotes] = useState<string>('');
 
   const handleLoadSafetyAudio = async (rideId: string, clipId: string) => {
     const key = `${rideId}:${clipId}`;
@@ -114,9 +117,13 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
     };
   }, []);
 
-  const handleUpdateAlertStatus = async (sosId: string, status: 'ativo' | 'em_atendimento' | 'resolvido') => {
+  const handleUpdateAlertStatus = async (
+    sosId: string,
+    status: 'ativo' | 'em_atendimento' | 'resolvido',
+    notesOverride?: string
+  ) => {
     const notes = status === 'resolvido'
-      ? window.prompt('Registre o desfecho do atendimento SOS:') || 'Ocorrência encerrada pela Central.'
+      ? (notesOverride?.trim() || 'Ocorrência encerrada pela Central.')
       : undefined;
     try {
       await fetch(`/api/sos/${encodeURIComponent(sosId)}/status`, {
@@ -124,9 +131,14 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
         headers: { 'Content-Type': 'application/json', ...StorageService.getAuthHeaders() },
         body: JSON.stringify({ status, notes })
       });
+      if (status === 'resolvido') {
+        setResolvingSosId(null);
+        setResolveNotes('');
+        showToast('Ocorrência SOS marcada como resolvida.', 'success');
+      }
       await loadSosAlerts();
     } catch {
-      // Silencioso
+      showToast('Erro ao atualizar status da ocorrência SOS.', 'error');
     }
   };
 
@@ -454,10 +466,13 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
                         </button>
                       )}
 
-                      {alert.status !== 'resolvido' && (
+                      {alert.status !== 'resolvido' && resolvingSosId !== alert.id && (
                         <button
                           type="button"
-                          onClick={() => handleUpdateAlertStatus(alert.id, 'resolvido')}
+                          onClick={() => {
+                            setResolvingSosId(alert.id);
+                            setResolveNotes('');
+                          }}
                           style={{
                             padding: '5px 10px',
                             borderRadius: 6,
@@ -474,6 +489,75 @@ export const AdminSosCenterTab: React.FC<AdminSosCenterTabProps> = ({
                       )}
                     </div>
                   </div>
+
+                  {resolvingSosId === alert.id && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        flexWrap: 'wrap',
+                        marginBottom: 12,
+                        padding: '10px 12px',
+                        borderRadius: 8,
+                        backgroundColor: '#F8FAFC',
+                        border: '1px solid #CBD5E1'
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={resolveNotes}
+                        onChange={(e) => setResolveNotes(e.target.value)}
+                        placeholder="Desfecho do atendimento SOS (opcional)..."
+                        style={{
+                          flex: 1,
+                          minWidth: 220,
+                          height: 34,
+                          padding: '0 10px',
+                          borderRadius: 6,
+                          border: '1px solid #CBD5E1',
+                          fontSize: '0.78rem'
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleUpdateAlertStatus(alert.id, 'resolvido', resolveNotes)}
+                        style={{
+                          height: 34,
+                          padding: '0 12px',
+                          borderRadius: 6,
+                          border: 'none',
+                          backgroundColor: '#16A34A',
+                          color: '#FFFFFF',
+                          fontSize: '0.74rem',
+                          fontWeight: 700,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Confirmar Encerramento
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setResolvingSosId(null);
+                          setResolveNotes('');
+                        }}
+                        style={{
+                          height: 34,
+                          padding: '0 10px',
+                          borderRadius: 6,
+                          border: '1px solid #CBD5E1',
+                          backgroundColor: '#FFFFFF',
+                          color: '#475569',
+                          fontSize: '0.74rem',
+                          fontWeight: 600,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  )}
 
                   {/* 3 Colunas: Passageiro, Motorista/Veículo e Links de Localização */}
                   <div style={{

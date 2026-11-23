@@ -20,6 +20,7 @@ import { TermsPrivacyModal } from './components/TermsPrivacyModal';
 import { PassengerTermsContractModal } from './components/PassengerTermsContractModal';
 import { TurnstileWidget, isTurnstileEnabled } from './components/TurnstileWidget';
 import { KavroScrollIndicator } from './components/KavroScrollIndicator';
+import { GlobalToastViewport } from './components/GlobalToastViewport';
 import { getCleanWhatsappNumber } from './utils/format';
 
 function lazyNamed<T extends React.ComponentType<any>>(
@@ -1294,6 +1295,7 @@ export const App: React.FC = () => {
       />
     </Routes>
     </Suspense>
+    <GlobalToastViewport />
     </>
   );
 };

@@ -10,6 +10,7 @@ import { StorageService } from '../services/storage';
 import { formatPhone, formatDocument, getCleanWhatsappNumber } from '../utils/format';
 import { computeClientAutoScore } from '../utils/scoringEngine';
 import { WhatsAppIcon } from './WhatsAppIcon';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { PassengerTermsContractModal } from './PassengerTermsContractModal';
 import { PaymentMethodBadge } from './PaymentMethodIcon';
 
@@ -364,6 +365,7 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'resumo' | 'corridas' | 'financeiro'>('resumo');
   const [isTermsModalOpen, setIsTermsModalOpen] = useState(false);
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
 
   useEffect(() => {
     if (isOpen) {
@@ -571,23 +573,24 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
             <button
               type="button"
               onClick={() => {
-                if (window.confirm(`Deseja realmente excluir o passageiro ${client.name}?`)) {
-                  onDeleteClient(client.id);
-                  onClose();
-                }
+                const key = `del-client-${client.id}`;
+                if (!confirmOrArm(key)) return;
+                onDeleteClient(client.id);
+                showToast(`Passageiro ${client.name} excluído.`, 'info');
+                onClose();
               }}
               style={{
                 padding: '6px 12px',
                 borderRadius: 6,
-                border: '1px solid #FECACA',
-                backgroundColor: '#FFFFFF',
-                color: '#DC2626',
+                border: isConfirming(`del-client-${client.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                backgroundColor: isConfirming(`del-client-${client.id}`) ? '#DC2626' : '#FFFFFF',
+                color: isConfirming(`del-client-${client.id}`) ? '#FFFFFF' : '#DC2626',
                 fontSize: '0.74rem',
-                fontWeight: 600,
+                fontWeight: 700,
                 cursor: 'pointer'
               }}
             >
-              Excluir
+              {isConfirming(`del-client-${client.id}`) ? 'Confirmar Exclusão?' : 'Excluir'}
             </button>
 
             <button

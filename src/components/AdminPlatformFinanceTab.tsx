@@ -31,6 +31,7 @@ import {
   formatPixKey
 } from '../utils/format';
 import { computeDriverAutoScore } from '../utils/scoringEngine';
+import { showToast } from '../utils/uiFeedback';
 
 interface AdminPlatformFinanceTabProps {
   config: SystemConfig;
@@ -98,6 +99,15 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   const [driverAuditSeverityFilter, setDriverAuditSeverityFilter] = useState<string>('todas');
   const [driverAuditVerifyStates, setDriverAuditVerifyStates] = useState<Record<number, { loading: boolean; ok?: boolean; msg?: string }>>({});
   const [copiedIdKey, setCopiedIdKey] = useState<string | null>(null);
+  const [inlinePrompt, setInlinePrompt] = useState<{
+    kind: 'driver_profile' | 'withdrawal' | 'payment';
+    targetId: string;
+    driver?: DriverProfile;
+    subAction?: 'refund' | 'dispute';
+    title: string;
+    placeholder: string;
+    value: string;
+  } | null>(null);
 
   useEffect(() => {
     setSubTab(initialSection === 'repasses_central' ? repassesDefaultTab : initialSection);
@@ -225,7 +235,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       (cleanName ? drivers.find(d => d.name.trim().toLowerCase() === cleanName) : undefined) ||
       (cleanId === 'drv-default' ? drivers[0] : undefined);
     if (!target) {
-      window.alert('Perfil deste motorista não localizado na base atual.');
+      showToast('Perfil deste motorista não localizado na base atual.', 'warning');
       return;
     }
     setDriverModalTab(tab);
@@ -288,21 +298,25 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     await loadAll();
   };
 
-  const handleReviewDriverProfileChange = async (driver: DriverProfile, decision: 'aprovar' | 'recusar') => {
-    let rejectionReason: string | undefined;
-    if (decision === 'recusar') {
-      const reason = window.prompt(
-        `Motivo da recusa para alteração cadastral de ${driver.name}:`,
-        'Dados divergentes da documentação cadastrada'
-      );
-      if (reason === null) return;
-      rejectionReason = reason.trim() || undefined;
-    }
-    const res = await StorageService.reviewProfileChangeRequest('driver', driver.id, decision, rejectionReason);
-    if (!res.ok) {
-      window.alert(res.error || 'Erro ao analisar solicitação de alteração cadastral.');
+  const handleReviewDriverProfileChange = async (driver: DriverProfile, decision: 'aprovar' | 'recusar', reasonOverride?: string) => {
+    if (decision === 'recusar' && reasonOverride === undefined) {
+      setInlinePrompt({
+        kind: 'driver_profile',
+        targetId: driver.id,
+        driver,
+        title: `Motivo da recusa cadastral (${driver.name})`,
+        placeholder: 'Informe o motivo (opcional)...',
+        value: 'Dados divergentes da documentação cadastrada'
+      });
       return;
     }
+    const rejectionReason = decision === 'recusar' ? (reasonOverride?.trim() || undefined) : undefined;
+    const res = await StorageService.reviewProfileChangeRequest('driver', driver.id, decision, rejectionReason);
+    if (!res.ok) {
+      showToast(res.error || 'Erro ao analisar solicitação de alteração cadastral.', 'error');
+      return;
+    }
+    setInlinePrompt(null);
     await loadAll();
   };
 
@@ -320,7 +334,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
       reviewedBy: analystName
     });
     if (!res.ok) {
-      window.alert(res.error || 'Erro ao analisar veículo.');
+      showToast(res.error || 'Erro ao analisar veículo.', 'error');
       return;
     }
     await loadAll();
@@ -334,22 +348,39 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     await loadAll();
   };
 
-  const handleProcessWithdrawal = async (id: string, action: 'approve' | 'reject') => {
+  const handleProcessWithdrawal = async (id: string, action: 'approve' | 'reject', notesOverride?: string) => {
+    if (action === 'reject' && notesOverride === undefined) {
+      setInlinePrompt({
+        kind: 'withdrawal',
+        targetId: id,
+        title: 'Recusar solicitação de saque (saldo será estornado ao motorista)',
+        placeholder: 'Motivo da rejeição (opcional)...',
+        value: ''
+      });
+      return;
+    }
     const notes = action === 'reject'
-      ? window.prompt('Informe o motivo da rejeição (o valor será estornado automaticamente para o saldo do motorista):') || ''
+      ? (notesOverride?.trim() || 'Saque recusado pela Central Financeira')
       : 'Repasse PIX efetuado pela Central Financeira';
+    setInlinePrompt(null);
     await StorageService.adminProcessWithdrawal(id, action, notes);
     await loadAll();
   };
 
-  const handlePaymentAction = async (txId: string, action: 'refund' | 'dispute') => {
-    const reason = window.prompt(
-      action === 'refund'
-        ? 'Confirme o motivo do reembolso integral ao passageiro:'
-        : 'Informe o motivo da contestação / chargeback:'
-    );
-    if (reason === null) return;
-    await StorageService.adminPaymentAction(txId, action, reason);
+  const handlePaymentAction = async (txId: string, action: 'refund' | 'dispute', reasonOverride?: string) => {
+    if (reasonOverride === undefined) {
+      setInlinePrompt({
+        kind: 'payment',
+        targetId: txId,
+        subAction: action,
+        title: action === 'refund' ? 'Confirmar reembolso integral ao passageiro' : 'Registrar contestação / chargeback',
+        placeholder: action === 'refund' ? 'Motivo do reembolso (opcional)...' : 'Motivo da contestação (opcional)...',
+        value: ''
+      });
+      return;
+    }
+    setInlinePrompt(null);
+    await StorageService.adminPaymentAction(txId, action, reasonOverride.trim());
     await loadAll();
   };
 
@@ -571,9 +602,91 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   };
 
   const handleDeleteExpenseEntry = (id: string) => {
-    if (!window.confirm('Deseja excluir este lançamento do caixa da empresa?')) return;
     StorageService.deleteExpense(id);
     setExpenses(StorageService.getExpenses());
+    showToast('Lançamento excluído do caixa.', 'info');
+  };
+
+  const renderInlinePromptBar = (kind: 'driver_profile' | 'withdrawal' | 'payment') => {
+    if (!inlinePrompt || inlinePrompt.kind !== kind) return null;
+    const handleConfirm = async () => {
+      if (inlinePrompt.kind === 'driver_profile' && inlinePrompt.driver) {
+        await handleReviewDriverProfileChange(inlinePrompt.driver, 'recusar', inlinePrompt.value);
+      } else if (inlinePrompt.kind === 'withdrawal') {
+        await handleProcessWithdrawal(inlinePrompt.targetId, 'reject', inlinePrompt.value);
+      } else if (inlinePrompt.kind === 'payment' && inlinePrompt.subAction) {
+        await handlePaymentAction(inlinePrompt.targetId, inlinePrompt.subAction, inlinePrompt.value);
+      }
+    };
+    return (
+      <div
+        style={{
+          margin: '10px 14px',
+          padding: '10px 12px',
+          borderRadius: 8,
+          backgroundColor: '#FEF2F2',
+          border: '1px solid #FECACA',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexWrap: 'wrap'
+        }}
+      >
+        <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#991B1B' }}>
+          {inlinePrompt.title}:
+        </span>
+        <input
+          type="text"
+          value={inlinePrompt.value}
+          onChange={(e) => setInlinePrompt((prev) => (prev ? { ...prev, value: e.target.value } : null))}
+          placeholder={inlinePrompt.placeholder}
+          style={{
+            flex: 1,
+            minWidth: 200,
+            height: 32,
+            padding: '0 10px',
+            borderRadius: 6,
+            border: '1px solid #FCA5A5',
+            fontSize: '0.76rem',
+            backgroundColor: '#FFFFFF'
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void handleConfirm()}
+          style={{
+            height: 32,
+            padding: '0 12px',
+            borderRadius: 6,
+            border: 'none',
+            backgroundColor: '#DC2626',
+            color: '#FFFFFF',
+            fontSize: '0.73rem',
+            fontWeight: 700,
+            cursor: 'pointer'
+          }}
+        >
+          Confirmar
+        </button>
+        <button
+          type="button"
+          onClick={() => setInlinePrompt(null)}
+          style={{
+            height: 32,
+            padding: '0 10px',
+            borderRadius: 6,
+            border: '1px solid #CBD5E1',
+            backgroundColor: '#FFFFFF',
+            color: '#475569',
+            fontSize: '0.73rem',
+            fontWeight: 600,
+            cursor: 'pointer'
+          }}
+        >
+          Cancelar
+        </button>
+      </div>
+    );
   };
 
   const handleExportFinanceCsv = () => {
@@ -1733,6 +1846,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           ))}
                         </tbody>
                       </table>
+                      {renderInlinePromptBar('withdrawal')}
                     </div>
                   )}
                 </div>
@@ -2230,6 +2344,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   );
                 })}
               </div>
+              {renderInlinePromptBar('driver_profile')}
             </div>
           );
         })()}
@@ -3443,6 +3558,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                     ))}
                   </tbody>
                 </table>
+                {renderInlinePromptBar('payment')}
               </div>
             )}
           </div>
@@ -3853,6 +3969,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   ))}
                 </tbody>
               </table>
+              {renderInlinePromptBar('withdrawal')}
             </div>
           )}
           </div>

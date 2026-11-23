@@ -10,6 +10,7 @@ import { calculateRidePrice, StorageService } from '../services/storage';
 import { AddressPickerModal } from '../components/AddressPickerModal';
 import { PaymentMethodIcon } from '../components/PaymentMethodIcon';
 import { formatPhone, formatRideCode, parseCurrencyInput, parseCurrencyToFloat } from '../utils/format';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 
 interface ManualRideModalProps {
   isOpen: boolean;
@@ -53,6 +54,7 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
 
   const [pickingOrigin, setPickingOrigin] = useState(false);
   const [pickingDestination, setPickingDestination] = useState(false);
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
 
   useEffect(() => {
     if (isOpen) {
@@ -99,7 +101,7 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!origin || !destination) {
-      alert('Por favor, selecione os pontos de embarque e destino.');
+      showToast('Por favor, selecione os pontos de embarque e destino.', 'warning');
       return;
     }
 
@@ -206,27 +208,32 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (window.confirm(`Tem certeza que deseja excluir a corrida ${editingRide.id}?`)) {
-                    onDeleteRide(editingRide.id);
-                    onClose();
-                  }
+                  const key = `del-manual-${editingRide.id}`;
+                  if (!confirmOrArm(key)) return;
+                  onDeleteRide(editingRide.id);
+                  onClose();
                 }}
-                title="Excluir corrida"
+                title={isConfirming(`del-manual-${editingRide.id}`) ? 'Clique novamente para excluir' : 'Excluir corrida'}
                 style={{
-                  background: '#FEE2E2',
+                  background: isConfirming(`del-manual-${editingRide.id}`) ? '#DC2626' : '#FEE2E2',
                   border: 'none',
-                  borderRadius: '50%',
-                  width: 32,
+                  borderRadius: isConfirming(`del-manual-${editingRide.id}`) ? 999 : '50%',
+                  width: isConfirming(`del-manual-${editingRide.id}`) ? 'auto' : 32,
+                  padding: isConfirming(`del-manual-${editingRide.id}`) ? '0 10px' : 0,
                   height: 32,
                   cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  color: '#DC2626',
+                  gap: 5,
+                  color: isConfirming(`del-manual-${editingRide.id}`) ? '#FFFFFF' : '#DC2626',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
                   flexShrink: 0
                 }}
               >
-                <Trash2 size={15} />
+                <Trash2 size={14} />
+                {isConfirming(`del-manual-${editingRide.id}`) && <span>Confirmar?</span>}
               </button>
             )}
 

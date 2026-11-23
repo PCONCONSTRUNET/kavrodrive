@@ -8,6 +8,7 @@ import { compareFacesKyc, captureFrameFromVideo } from '../services/kycService';
 import { StorageService } from '../services/storage';
 import { convertPdfToImageDataUrl, isPdfDocument } from '../utils/pdfToImage';
 import { compressDataUrlForUpload } from '../utils/imageCompression';
+import { showToast } from '../utils/uiFeedback';
 import { KycBiometricPrivacyModal } from './KycBiometricPrivacyModal';
 import { SystemConfig } from '../types';
 
@@ -245,9 +246,9 @@ export const DriverKycVerificationModal: React.FC<DriverKycVerificationModalProp
         }
       }
       // Se não houver arquivo no clipboard API nativo, instrui o atalho de teclado
-      alert('Para colar a CNH da área de transferência, pressione Ctrl+V no teclado.');
+      showToast('Para colar a CNH da área de transferência, pressione Ctrl+V no teclado.', 'info');
     } catch {
-      alert('Para colar a CNH da área de transferência, pressione Ctrl+V no teclado.');
+      showToast('Para colar a CNH da área de transferência, pressione Ctrl+V no teclado.', 'info');
     }
   };
 
@@ -311,7 +312,7 @@ export const DriverKycVerificationModal: React.FC<DriverKycVerificationModalProp
       onSuccess(res.driver);
       onClose();
     } else {
-      alert(res.error || 'Erro ao enviar documentos para o cofre seguro.');
+      showToast(res.error || 'Erro ao enviar documentos para o cofre seguro.', 'error');
     }
   };
 

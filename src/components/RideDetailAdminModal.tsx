@@ -11,6 +11,7 @@ import { WhatsAppIcon } from './WhatsAppIcon';
 import { RideReceiptModal } from './RideReceiptModal';
 import { RideRoutePlaybackModal } from './RideRoutePlaybackModal';
 import { formatPhone, formatRideCode } from '../utils/format';
+import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { PaymentMethodIcon, getPaymentMethodLabel } from './PaymentMethodIcon';
 
 interface RideDetailAdminModalProps {
@@ -41,6 +42,7 @@ export const RideDetailAdminModal: React.FC<RideDetailAdminModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [isRoutePlaybackOpen, setIsRoutePlaybackOpen] = useState(false);
+  const { isConfirming, confirmOrArm } = useInlineConfirm();
 
   if (!isOpen || !ride) return null;
 
@@ -1010,10 +1012,10 @@ export const RideDetailAdminModal: React.FC<RideDetailAdminModalProps> = ({
             <button
               type="button"
               onClick={() => {
-                if (window.confirm(`Deseja realmente excluir a corrida ${ride.id} do sistema?`)) {
-                  onDeleteRide(ride.id);
-                  onClose();
-                }
+                if (!confirmOrArm(`delete-ride-${ride.id}`)) return;
+                onDeleteRide(ride.id);
+                showToast(`Corrida ${rideCode} excluída do sistema.`, 'success');
+                onClose();
               }}
               style={{
                 display: 'flex',
@@ -1022,16 +1024,16 @@ export const RideDetailAdminModal: React.FC<RideDetailAdminModalProps> = ({
                 gap: 6,
                 padding: '9px 12px',
                 borderRadius: 10,
-                backgroundColor: '#FEE2E2',
-                border: '1px solid #FECACA',
-                color: '#DC2626',
+                backgroundColor: isConfirming(`delete-ride-${ride.id}`) ? '#DC2626' : '#FEE2E2',
+                border: isConfirming(`delete-ride-${ride.id}`) ? '1px solid #B91C1C' : '1px solid #FECACA',
+                color: isConfirming(`delete-ride-${ride.id}`) ? '#FFFFFF' : '#DC2626',
                 fontSize: '0.78rem',
                 fontWeight: 800,
                 cursor: 'pointer'
               }}
             >
               <Trash2 size={14} />
-              <span>Excluir Corrida</span>
+              <span>{isConfirming(`delete-ride-${ride.id}`) ? 'Confirmar Exclusão?' : 'Excluir Corrida'}</span>
             </button>
           </div>
         </div>
