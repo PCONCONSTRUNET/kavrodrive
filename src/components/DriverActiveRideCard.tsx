@@ -230,10 +230,10 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
           padding: '0 4px 10px 4px',
           pointerEvents: 'none'
         }}>
-          {/* Esquerda horizontal: Placa 30 LIMITE + Escudo Azul SOS */}
+          {/* Esquerda horizontal: Velocímetro real + Escudo Azul SOS */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'auto' }}>
             <div style={{
-              width: 38,
+              width: 42,
               backgroundColor: '#FFFFFF',
               borderRadius: 7,
               border: '1.5px solid #D1D5DB',
@@ -242,8 +242,10 @@ export const DriverActiveRideCard: React.FC<DriverActiveRideCardProps> = ({
               textAlign: 'center',
               color: '#111111'
             }}>
-              <div style={{ fontSize: '0.92rem', fontWeight: 900, lineHeight: 1 }}>30</div>
-              <div style={{ fontSize: '0.46rem', fontWeight: 800, letterSpacing: '0.03em', marginTop: 1 }}>LIMITE</div>
+              <div style={{ fontSize: '0.92rem', fontWeight: 900, lineHeight: 1 }}>
+                {Math.round(ride.driverLocation?.speedKmH || 0)}
+              </div>
+              <div style={{ fontSize: '0.46rem', fontWeight: 800, letterSpacing: '0.03em', marginTop: 1 }}>KM/H</div>
             </div>
 
             {onOpenSos && isTripInProgress && (

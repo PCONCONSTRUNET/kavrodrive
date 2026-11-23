@@ -17,7 +17,8 @@ import { LiveGpsNavigationScreen } from '../components/LiveGpsNavigationScreen';
 import { MercosulPlateBadge } from '../components/MercosulPlateBadge';
 import { WhatsAppIcon } from '../components/WhatsAppIcon';
 import { ScreenWakeLockManager, playNewRideSound, stopNewRideSound, unlockNewRideAudio } from '../utils/soundAndVoice';
-import { calculateHaversineDistance, formatCityStateValue } from '../utils/geo';
+import { calculateExactMeters, formatCityStateValue } from '../utils/geo';
+import { GpsMotionFilter, useDeviceCompass } from '../utils/compassAndGps';
 import { CityStateSelector } from '../components/CityStateSelector';
 import { formatRideCode, getCleanWhatsappNumber, formatPhone, formatCPF, formatMercosulPlate, formatCNH } from '../utils/format';
 import { evaluateDriverWithdrawalRule } from '../utils/withdrawalSchedule';
@@ -415,8 +416,12 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       )?.id || null
     : null;
 
-  // PWA Radar Contínuo: mantém GPS ativo, Wake Lock e ressincronização imediata ao voltar para o app
+  // PWA Radar Contínuo: mantém GPS ativo (inclusive durante corrida ativa quando tela cheia não está aberta),
+  // Wake Lock e ressincronização imediata ao voltar para o app
   const lastIdleGpsPushRef = useRef<{ lat: number; lng: number; ts: number }>({ lat: 0, lng: 0, ts: 0 });
+  const lastActiveRideGpsPushRef = useRef<{ lat: number; lng: number; ts: number }>({ lat: 0, lng: 0, ts: 0 });
+  const portalGpsFilterRef = useRef<GpsMotionFilter>(new GpsMotionFilter());
+
   const isDriverOnlineVerified = Boolean(
     currentDriver?.id &&
     currentDriver.isOnline &&
@@ -424,53 +429,79 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
     !isLookupOnlySession
   );
 
+  const portalCompass = useDeviceCompass(
+    Boolean((isDriverOnlineVerified || topLevelActiveRideId) && !isGpsOpen)
+  );
+  const portalCompassHeadingRef = useRef<number | null>(null);
+  const portalCompassAvailableRef = useRef<boolean>(false);
+
   useEffect(() => {
-    if (!isDriverOnlineVerified || !currentDriver?.id) return;
+    portalCompassHeadingRef.current = portalCompass.heading;
+    portalCompassAvailableRef.current = portalCompass.available;
+  }, [portalCompass.heading, portalCompass.available]);
+
+  useEffect(() => {
+    const shouldTrackGps = Boolean((isDriverOnlineVerified || topLevelActiveRideId) && !isGpsOpen);
+    if (!shouldTrackGps || !currentDriver?.id) return;
 
     const driverId = currentDriver.id;
+    const activeRideId = topLevelActiveRideId;
     const wakeLock = new ScreenWakeLockManager();
     wakeLock.request();
 
     let watchId: number | null = null;
     const handleGpsPosition = (pos: GeolocationPosition, forcePush = false) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      const heading =
-        typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)
-          ? Math.round(pos.coords.heading)
-          : 0;
-      const speedKmH =
-        pos.coords.speed && pos.coords.speed > 0.6 ? Math.round(pos.coords.speed * 3.6) : 0;
+      const fix = portalGpsFilterRef.current.process(
+        pos,
+        portalCompassHeadingRef.current,
+        portalCompassAvailableRef.current
+      );
+      if (!fix) return;
 
+      const { lat, lng, heading, speedKmH } = fix;
       const now = Date.now();
-      const prev = lastIdleGpsPushRef.current;
-      const movedKm = prev.ts > 0 ? calculateHaversineDistance(prev.lat, prev.lng, lat, lng) : 99;
-      if (!forcePush && now - prev.ts < 10000 && movedKm < 0.05) {
-        return;
-      }
 
-      lastIdleGpsPushRef.current = { lat, lng, ts: now };
-      StorageService.updateDriverLocation(driverId, { lat, lng, heading, speedKmH });
       setCurrentDriver((prevDrv) =>
         prevDrv && prevDrv.id === driverId
           ? {
               ...prevDrv,
-              location: { lat, lng, heading, speedKmH, updatedAt: new Date().toISOString() }
+              location: { lat, lng, heading, speedKmH, updatedAt: new Date(now).toISOString() }
             }
           : prevDrv
       );
+
+      if (activeRideId) {
+        const prevRidePush = lastActiveRideGpsPushRef.current;
+        const movedRideMeters =
+          prevRidePush.ts > 0
+            ? calculateExactMeters(prevRidePush.lat, prevRidePush.lng, lat, lng)
+            : 999;
+
+        if (forcePush || now - prevRidePush.ts >= 2500 || movedRideMeters >= 18) {
+          lastActiveRideGpsPushRef.current = { lat, lng, ts: now };
+          StorageService.updateRideDriverLocation(activeRideId, { lat, lng, heading, speedKmH });
+        }
+      }
+
+      const prevIdle = lastIdleGpsPushRef.current;
+      const movedIdleMeters =
+        prevIdle.ts > 0 ? calculateExactMeters(prevIdle.lat, prevIdle.lng, lat, lng) : 999;
+      if (forcePush || now - prevIdle.ts >= 10000 || movedIdleMeters >= 45) {
+        lastIdleGpsPushRef.current = { lat, lng, ts: now };
+        StorageService.updateDriverLocation(driverId, { lat, lng, heading, speedKmH });
+      }
     };
 
-    if (!topLevelActiveRideId && 'geolocation' in navigator) {
+    if ('geolocation' in navigator) {
       navigator.geolocation.getCurrentPosition(
         (pos) => handleGpsPosition(pos, true),
         () => {},
-        { enableHighAccuracy: true, timeout: 8000, maximumAge: 10000 }
+        { enableHighAccuracy: true, timeout: 8000, maximumAge: activeRideId ? 0 : 10000 }
       );
       watchId = navigator.geolocation.watchPosition(
         (pos) => handleGpsPosition(pos, false),
         () => {},
-        { enableHighAccuracy: true, maximumAge: 6000, timeout: 10000 }
+        { enableHighAccuracy: true, maximumAge: activeRideId ? 2000 : 6000, timeout: 10000 }
       );
     }
 
@@ -479,7 +510,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       wakeLock.handleVisibilityChange();
       loadDriverAndWallet(driverId);
       StorageService.syncFromDatabase().catch(() => {});
-      if (!topLevelActiveRideId && 'geolocation' in navigator) {
+      if ('geolocation' in navigator) {
         navigator.geolocation.getCurrentPosition(
           (pos) => handleGpsPosition(pos, true),
           () => {},
@@ -499,7 +530,7 @@ export const DriverPortalScreen: React.FC<DriverPortalScreenProps> = ({
       document.removeEventListener('visibilitychange', handleResumeApp);
       window.removeEventListener('focus', handleResumeApp);
     };
-  }, [isDriverOnlineVerified, currentDriver?.id, topLevelActiveRideId]);
+  }, [isDriverOnlineVerified, currentDriver?.id, topLevelActiveRideId, isGpsOpen]);
 
   useEffect(() => {
     setUnreadChatCount(0);

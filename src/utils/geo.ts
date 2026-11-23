@@ -2,15 +2,25 @@
 import { LocationPoint } from '../types';
 
 /**
- * Calcula a distância geodésica em quilômetros usando a fórmula de Haversine
+ * Calcula a distância geodésica EXATA em metros usando a fórmula de Haversine,
+ * sem multiplicador urbano e sem arredondamento grosseiro.
+ * Essencial para gatilhos de manobra (45m / 30m), desvio de rota e proximidade real.
  */
-export function calculateHaversineDistance(
+export function calculateExactMeters(
   lat1: number,
   lon1: number,
   lat2: number,
   lon2: number
 ): number {
-  const R = 6371; // Raio da Terra em km
+  if (
+    !Number.isFinite(lat1) ||
+    !Number.isFinite(lon1) ||
+    !Number.isFinite(lat2) ||
+    !Number.isFinite(lon2)
+  ) {
+    return 0;
+  }
+  const R = 6371000; // Raio da Terra em metros
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;
   const a =
@@ -20,10 +30,72 @@ export function calculateHaversineDistance(
       Math.sin(dLon / 2) *
       Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  const straightDistance = R * c;
+  return R * c;
+}
+
+/**
+ * Normaliza qualquer ângulo para o intervalo [0, 360).
+ */
+export function normalizeAngle360(deg: number): number {
+  if (!Number.isFinite(deg)) return 0;
+  return ((deg % 360) + 360) % 360;
+}
+
+/**
+ * Menor diferença angular com sinal entre dois azimutes, no intervalo (-180, 180].
+ */
+export function shortestAngleDelta(fromDeg: number, toDeg: number): number {
+  const from = normalizeAngle360(fromDeg);
+  const to = normalizeAngle360(toDeg);
+  let delta = to - from;
+  if (delta > 180) delta -= 360;
+  if (delta <= -180) delta += 360;
+  return delta;
+}
+
+/**
+ * Suavização circular de ângulos sem salto na transição 359° <-> 0°.
+ */
+export function smoothAngle(currentDeg: number, targetDeg: number, alpha = 0.35): number {
+  if (!Number.isFinite(currentDeg)) return normalizeAngle360(targetDeg);
+  if (!Number.isFinite(targetDeg)) return normalizeAngle360(currentDeg);
+  return normalizeAngle360(currentDeg + shortestAngleDelta(currentDeg, targetDeg) * alpha);
+}
+
+/**
+ * Calcula o azimute geográfico (bearing) entre dois pontos em graus [0, 360),
+ * onde 0° = Norte, 90° = Leste, 180° = Sul, 270° = Oeste.
+ */
+export function calculateBearingDegrees(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const y = Math.sin(dLon) * Math.cos(phi2);
+  const x =
+    Math.cos(phi1) * Math.sin(phi2) -
+    Math.sin(phi1) * Math.cos(phi2) * Math.cos(dLon);
+  const brng = (Math.atan2(y, x) * 180) / Math.PI;
+  return normalizeAngle360(brng);
+}
+
+/**
+ * Calcula a distância estimada de trajeto em quilômetros usando Haversine + fator viário (1.3x)
+ */
+export function calculateHaversineDistance(
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number {
+  const straightKm = calculateExactMeters(lat1, lon1, lat2, lon2) / 1000;
 
   // Em rotas urbanas e rodoviárias, a distância real por ruas costuma ser entre 1.25 a 1.35x a linha reta
-  return Math.round(straightDistance * 1.3 * 10) / 10;
+  return Math.round(straightKm * 1.3 * 10) / 10;
 }
 
 /**
@@ -774,21 +846,47 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string> 
   return `GPS: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
 }
 
+export interface SnapPointOptions {
+  /** Índice do segmento atual na rota para favorecer continuidade progressiva */
+  hintStartIndex?: number;
+  /** Direção atual do veículo/bússola em graus [0, 360) para desambiguar cruzamentos e pistas paralelas */
+  preferredHeading?: number | null;
+  /** Diferença máxima de ângulo antes de aplicar penalidade direcional (padrão 100°) */
+  maxHeadingDiffDeg?: number;
+}
+
+export interface SnappedRoutePoint {
+  lat: number;
+  lng: number;
+  heading: number;
+  snapped: boolean;
+  distanceMeters: number;
+  segmentIndex: number;
+}
+
 /**
- * Projeta um ponto (lat, lng) para o ponto mais próximo sobre a rota viária (polyline OSRM).
- * Evita que o ícone do carro fique dentro de casas, calçadas ou pátios.
- * Retorna { lat, lng, heading } alinhado à direção da via.
+ * Projeta um ponto (lat, lng) para o ponto mais próximo sobre a rota viária (polyline OSRM),
+ * considerando opcionalmente a direção do veículo (preferredHeading) e o progresso na rota (hintStartIndex).
+ * Evita que o ícone do carro fique dentro de casas, calçadas ou pule para vias paralelas.
  */
 export function snapPointToRoute(
   point: { lat: number; lng: number; heading?: number },
   polyline: [number, number][],
-  maxSnapDistanceMeters = 150
-): { lat: number; lng: number; heading: number } {
-  if (!point || !point.lat || !point.lng) {
-    return { lat: 0, lng: 0, heading: 0 };
+  maxSnapDistanceMeters = 150,
+  options?: SnapPointOptions
+): SnappedRoutePoint {
+  if (!point || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) {
+    return { lat: 0, lng: 0, heading: 0, snapped: false, distanceMeters: Infinity, segmentIndex: 0 };
   }
   if (!polyline || polyline.length < 2) {
-    return { lat: point.lat, lng: point.lng, heading: point.heading || 0 };
+    return {
+      lat: point.lat,
+      lng: point.lng,
+      heading: normalizeAngle360(point.heading || 0),
+      snapped: false,
+      distanceMeters: Infinity,
+      segmentIndex: 0,
+    };
   }
 
   const pLat = point.lat;
@@ -798,10 +896,19 @@ export function snapPointToRoute(
   const mPerDegLat = 110540;
   const mPerDegLng = 111320 * cosLat;
 
-  let minDistanceMeters = Infinity;
+  const preferredHeading =
+    typeof options?.preferredHeading === 'number' && Number.isFinite(options.preferredHeading)
+      ? normalizeAngle360(options.preferredHeading)
+      : null;
+  const maxHeadingDiffDeg = options?.maxHeadingDiffDeg ?? 100;
+  const hintIdx = typeof options?.hintStartIndex === 'number' ? options.hintStartIndex : null;
+
+  let bestScore = Infinity;
+  let bestRawDistMeters = Infinity;
   let bestLat = pLat;
   let bestLng = pLng;
-  let bestHeading = point.heading || 0;
+  let bestHeading = normalizeAngle360(point.heading || 0);
+  let bestSegmentIndex = 0;
 
   for (let i = 0; i < polyline.length - 1; i++) {
     const [aLat, aLng] = polyline[i];
@@ -828,33 +935,119 @@ export function snapPointToRoute(
     const qy = ay + t * dy;
     const distMeters = Math.sqrt(qx * qx + qy * qy);
 
-    if (distMeters < minDistanceMeters) {
-      minDistanceMeters = distMeters;
+    // Ângulo do segmento da rua em graus (0° = Norte, 90° = Leste, 180° = Sul, 270° = Oeste)
+    const segAngle = segLenSq > 0.0001
+      ? normalizeAngle360((Math.atan2(dx, dy) * 180) / Math.PI)
+      : bestHeading;
+
+    let score = distMeters;
+
+    if (preferredHeading !== null && segLenSq > 0.0001) {
+      const angleDiff = Math.abs(shortestAngleDelta(preferredHeading, segAngle));
+      if (angleDiff > maxHeadingDiffDeg) {
+        score += 35 + (angleDiff - maxHeadingDiffDeg) * 0.45;
+      }
+    }
+
+    if (hintIdx !== null) {
+      if (i < hintIdx - 2) {
+        score += 18;
+      } else if (i > hintIdx + 35) {
+        score += 10;
+      }
+    }
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestRawDistMeters = distMeters;
       bestLat = pLat + qy / mPerDegLat;
       bestLng = pLng + qx / mPerDegLng;
-
-      // Ângulo do segmento da rua em graus (0° = Norte, 90° = Leste, 180° = Sul, 270° = Oeste)
-      const segAngle = (Math.atan2(dx, dy) * 180) / Math.PI;
-      const normalizedAngle = (segAngle + 360) % 360;
-      bestHeading = Math.round(normalizedAngle);
+      bestHeading = Math.round(segAngle) % 360;
+      bestSegmentIndex = i;
     }
   }
 
-  // Se o ponto estiver razoavelmente perto da rota (< maxSnapDistanceMeters), encaixa perfeitamente na rota
-  if (minDistanceMeters <= maxSnapDistanceMeters) {
+  // Se o ponto estiver razoavelmente perto da rota (< maxSnapDistanceMeters), encaixa na rota
+  if (bestRawDistMeters <= maxSnapDistanceMeters) {
     return {
       lat: bestLat,
       lng: bestLng,
-      heading: bestHeading
+      heading: bestHeading,
+      snapped: true,
+      distanceMeters: bestRawDistMeters,
+      segmentIndex: bestSegmentIndex,
     };
   }
 
-  // Se estiver além do limite da rota (ex: o motorista ainda está em outro bairro distante),
-  // mantém o ponto real do GPS com seu próprio heading
+  // Se estiver além do limite da rota (fora de rota ou longe), mantém o ponto real do GPS
   return {
     lat: pLat,
     lng: pLng,
-    heading: point.heading || 0
+    heading: Math.round(normalizeAngle360(point.heading || 0)) % 360,
+    snapped: false,
+    distanceMeters: bestRawDistMeters,
+    segmentIndex: bestSegmentIndex,
+  };
+}
+
+/**
+ * Calcula a distância restante exata em metros ao longo da polilinha da rota
+ * a partir do ponto encaixado (segmentIndex, snappedLat, snappedLng) até o destino.
+ */
+export function computeRemainingRouteMeters(
+  polyline: [number, number][],
+  segmentIndex: number,
+  snappedLat: number,
+  snappedLng: number
+): number {
+  if (!polyline || polyline.length < 2) return 0;
+  const safeIdx = Math.max(0, Math.min(polyline.length - 2, segmentIndex));
+  const nextVertex = polyline[safeIdx + 1];
+  let total = calculateExactMeters(snappedLat, snappedLng, nextVertex[0], nextVertex[1]);
+  for (let i = safeIdx + 1; i < polyline.length - 1; i++) {
+    total += calculateExactMeters(
+      polyline[i][0],
+      polyline[i][1],
+      polyline[i + 1][0],
+      polyline[i + 1][1]
+    );
+  }
+  return Math.max(0, Math.round(total));
+}
+
+/**
+ * Determina o melhor índice de etapa turn-by-turn com base na posição atual,
+ * permitindo avançar quando o veículo passa da manobra atual ou já se aproximou da próxima.
+ */
+export function resolveActiveNavigationStepIndex<T extends { location: [number, number] }>(
+  steps: T[],
+  currentIndex: number,
+  lat: number,
+  lng: number,
+  advanceRadiusMeters = 38
+): { stepIndex: number; metersToStep: number } {
+  if (!steps || steps.length === 0) return { stepIndex: 0, metersToStep: 0 };
+  let idx = Math.max(0, Math.min(steps.length - 1, currentIndex));
+  const loc = steps[idx]?.location;
+  let dist = loc && loc[0] && loc[1] ? calculateExactMeters(lat, lng, loc[0], loc[1]) : 0;
+
+  while (idx < steps.length - 1) {
+    const nextLoc = steps[idx + 1]?.location;
+    const nextDist = nextLoc && nextLoc[0] && nextLoc[1]
+      ? calculateExactMeters(lat, lng, nextLoc[0], nextLoc[1])
+      : Infinity;
+
+    if (dist <= advanceRadiusMeters || (nextDist < dist * 0.72 && nextDist <= 90)) {
+      idx += 1;
+      dist = nextDist;
+    } else {
+      break;
+    }
+  }
+
+  return {
+    stepIndex: idx,
+    metersToStep: Math.max(0, Math.round(dist)),
   };
 }
 

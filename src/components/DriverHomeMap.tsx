@@ -1,8 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { MapContainer, TileLayer, Polyline, Marker, useMap } from 'react-leaflet';
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
+import { Compass } from 'lucide-react';
 import { Ride } from '../types';
+import {
+  computeRemainingRouteMeters,
+  resolveActiveNavigationStepIndex,
+  snapPointToRoute,
+} from '../utils/geo';
+import { GpsMotionFilter, useDeviceCompass } from '../utils/compassAndGps';
+import { fetchDrivingRoute } from '../utils/routing';
+import { RouteStep } from '../utils/soundAndVoice';
+import { MapLibreNavCanvas, NavCameraMode } from './MapLibreNavCanvas';
 
 export interface RouteStepSummary {
   streetName: string;
@@ -13,7 +20,7 @@ export interface RouteStepSummary {
 }
 
 interface DriverHomeMapProps {
-  driverLocation?: { lat: number; lng: number; heading?: number } | null;
+  driverLocation?: { lat: number; lng: number; heading?: number; speedKmH?: number } | null;
   isOnline: boolean;
   activeRide?: Ride | null;
   recenterSignal?: number;
@@ -26,105 +33,6 @@ interface DriverHomeMapProps {
 
 const DEFAULT_CENTER: [number, number] = [-28.39123, -49.39354];
 
-const createUberArrowPuckIcon = (heading = 0) =>
-  L.divIcon({
-    className: 'kavro-uber-arrow-puck',
-    html: `
-      <div style="
-        width: 44px;
-        height: 44px;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.96);
-        border: 3px solid #111111;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.28);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transform: rotate(${Math.round(heading)}deg);
-        transition: transform 0.25s ease;
-      ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#111111">
-          <path d="M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z" />
-        </svg>
-      </div>
-    `,
-    iconSize: [44, 44],
-    iconAnchor: [22, 22],
-  });
-
-const createUberGreenTargetPin = () =>
-  L.divIcon({
-    className: 'kavro-uber-green-pin',
-    html: `
-      <div style="display:flex;flex-direction:column;align-items:center;">
-        <div style="
-          width: 34px;
-          height: 34px;
-          border-radius: 50%;
-          background: #15803D;
-          border: 3px solid #FFFFFF;
-          box-shadow: 0 4px 12px rgba(21,128,61,0.45);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        ">
-          <div style="width: 10px; height: 10px; background: #DCFCE7; border-radius: 2px;"></div>
-        </div>
-        <div style="width: 3px; height: 11px; background: #15803D; border-radius: 2px; margin-top: -1px;"></div>
-        <div style="width: 8px; height: 4px; border-radius: 50%; background: rgba(0,0,0,0.25);"></div>
-      </div>
-    `,
-    iconSize: [34, 48],
-    iconAnchor: [17, 46],
-  });
-
-const MapViewportController: React.FC<{
-  center: [number, number];
-  bounds: L.LatLngBoundsExpression | null;
-  recenterSignal?: number;
-}> = ({ center, bounds, recenterSignal }) => {
-  const map = useMap();
-  const prevSignalRef = useRef<number | undefined>(recenterSignal);
-
-  useEffect(() => {
-    const t1 = setTimeout(() => map.invalidateSize(), 120);
-    const t2 = setTimeout(() => map.invalidateSize(), 420);
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-    };
-  }, [map]);
-
-  useEffect(() => {
-    if (bounds) {
-      map.fitBounds(bounds, {
-        paddingTopLeft: [36, 130],
-        paddingBottomRight: [36, 145],
-        maxZoom: 16,
-      });
-    } else {
-      map.setView(center, 15, { animate: true });
-    }
-  }, [bounds, center[0], center[1], map]);
-
-  useEffect(() => {
-    if (recenterSignal !== undefined && recenterSignal !== prevSignalRef.current) {
-      prevSignalRef.current = recenterSignal;
-      if (bounds) {
-        map.fitBounds(bounds, {
-          paddingTopLeft: [36, 130],
-          paddingBottomRight: [36, 145],
-          maxZoom: 16,
-        });
-      } else {
-        map.setView(center, 16, { animate: true });
-      }
-    }
-  }, [recenterSignal, bounds, center, map]);
-
-  return null;
-};
-
 export const DriverHomeMap: React.FC<DriverHomeMapProps> = ({
   driverLocation,
   isOnline,
@@ -132,46 +40,127 @@ export const DriverHomeMap: React.FC<DriverHomeMapProps> = ({
   recenterSignal,
   onRouteInfoUpdate,
 }) => {
-  const [liveGps, setLiveGps] = useState<[number, number] | null>(
-    driverLocation?.lat && driverLocation?.lng ? [driverLocation.lat, driverLocation.lng] : null
-  );
-  const [liveHeading, setLiveHeading] = useState<number>(driverLocation?.heading || 0);
-  const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
+  const compass = useDeviceCompass(true);
+  const compassHeadingRef = useRef<number | null>(null);
+  const compassFreshRef = useRef<boolean>(false);
 
+  useEffect(() => {
+    compassHeadingRef.current = compass.heading;
+    compassFreshRef.current = compass.available;
+  }, [compass.heading, compass.available]);
+
+  const localFilterRef = useRef<GpsMotionFilter>(new GpsMotionFilter());
+  const [localGps, setLocalGps] = useState<{
+    lat: number;
+    lng: number;
+    heading: number;
+    speedKmH: number;
+  } | null>(
+    driverLocation?.lat && driverLocation?.lng
+      ? {
+          lat: driverLocation.lat,
+          lng: driverLocation.lng,
+          heading: driverLocation.heading || 0,
+          speedKmH: driverLocation.speedKmH || 0,
+        }
+      : null
+  );
+
+  const [cameraMode, setCameraMode] = useState<NavCameraMode>('heading_3d');
+  const [localRecenterTick, setLocalRecenterTick] = useState(0);
+  const prevSignalRef = useRef<number | undefined>(recenterSignal);
+
+  const [routeCoords, setRouteCoords] = useState<[number, number][]>([]);
+  const [routeSteps, setRouteSteps] = useState<RouteStep[]>([]);
+  const [routeMeta, setRouteMeta] = useState<{ distanceMeters: number; durationSeconds: number }>({
+    distanceMeters: 0,
+    durationSeconds: 0,
+  });
+  const [rerouteTick, setRerouteTick] = useState(0);
+
+  const snappedSegIdxRef = useRef<number>(0);
+  const activeStepIdxRef = useRef<number>(0);
+  const offRouteSinceRef = useRef<number>(0);
+  const lastRerouteAtRef = useRef<number>(0);
+  const lastRouteInfoPushRef = useRef<number>(0);
+
+  // Sincroniza localização vinda do DriverPortalScreen (com complemento da bússola quando parado)
   useEffect(() => {
     if (driverLocation?.lat && driverLocation?.lng) {
-      setLiveGps([driverLocation.lat, driverLocation.lng]);
-      if (typeof driverLocation.heading === 'number') {
-        setLiveHeading(driverLocation.heading);
-      }
+      setLocalGps((prev) => {
+        const spd = driverLocation.speedKmH ?? prev?.speedKmH ?? 0;
+        const resolvedHeading =
+          spd < 5 && compass.available && compass.heading !== null
+            ? compass.heading
+            : typeof driverLocation.heading === 'number' && driverLocation.heading > 0
+              ? driverLocation.heading
+              : prev?.heading || 0;
+        return {
+          lat: driverLocation.lat,
+          lng: driverLocation.lng,
+          heading: resolvedHeading,
+          speedKmH: spd,
+        };
+      });
     }
-  }, [driverLocation?.lat, driverLocation?.lng, driverLocation?.heading]);
+  }, [driverLocation?.lat, driverLocation?.lng, driverLocation?.heading, driverLocation?.speedKmH, compass.heading, compass.available]);
 
-  // Watch local device GPS when on map
+  // Leitura local leve quando o motorista ainda não ficou online (offline preview na home)
   useEffect(() => {
+    if (isOnline || activeRide) return;
     if (typeof navigator === 'undefined' || !('geolocation' in navigator)) return;
+
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setLiveGps([pos.coords.latitude, pos.coords.longitude]);
-        if (typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)) {
-          setLiveHeading(pos.coords.heading);
+        const fix = localFilterRef.current.process(
+          pos,
+          compassHeadingRef.current,
+          compassFreshRef.current
+        );
+        if (fix) {
+          setLocalGps({
+            lat: fix.lat,
+            lng: fix.lng,
+            heading: fix.heading,
+            speedKmH: fix.speedKmH,
+          });
         }
       },
       () => {},
-      { enableHighAccuracy: true, timeout: 6000, maximumAge: 15000 }
+      { enableHighAccuracy: true, timeout: 7000, maximumAge: 10000 }
     );
-  }, []);
+  }, [isOnline, Boolean(activeRide)]);
 
-  const currentCenter: [number, number] = useMemo(() => {
-    if (activeRide?.driverLocation?.lat && activeRide?.driverLocation?.lng) {
-      return [activeRide.driverLocation.lat, activeRide.driverLocation.lng];
-    }
-    if (liveGps) return liveGps;
-    if (activeRide?.origin?.lat && activeRide?.origin?.lng) {
-      return [activeRide.origin.lat, activeRide.origin.lng];
-    }
-    return DEFAULT_CENTER;
-  }, [activeRide?.driverLocation?.lat, activeRide?.driverLocation?.lng, activeRide?.origin?.lat, activeRide?.origin?.lng, liveGps]);
+  // Quando parado/lento sem movimento, mantém a seta acompanhando a bússola em tempo real
+  const rawVehiclePos = useMemo(() => {
+    const baseLat = activeRide?.driverLocation?.lat || localGps?.lat || activeRide?.origin?.lat || DEFAULT_CENTER[0];
+    const baseLng = activeRide?.driverLocation?.lng || localGps?.lng || activeRide?.origin?.lng || DEFAULT_CENTER[1];
+    const baseSpeed = activeRide?.driverLocation?.speedKmH ?? localGps?.speedKmH ?? 0;
+    const baseHeading =
+      baseSpeed < 5 && compass.available && compass.heading !== null
+        ? compass.heading
+        : localGps?.heading ?? activeRide?.driverLocation?.heading ?? 0;
+
+    return {
+      lat: baseLat,
+      lng: baseLng,
+      heading: baseHeading,
+      speedKmH: baseSpeed,
+    };
+  }, [
+    activeRide?.driverLocation?.lat,
+    activeRide?.driverLocation?.lng,
+    activeRide?.driverLocation?.heading,
+    activeRide?.driverLocation?.speedKmH,
+    activeRide?.origin?.lat,
+    activeRide?.origin?.lng,
+    localGps?.lat,
+    localGps?.lng,
+    localGps?.heading,
+    localGps?.speedKmH,
+    compass.available,
+    compass.heading,
+  ]);
 
   const targetPoint = useMemo(() => {
     if (!activeRide) return null;
@@ -179,142 +168,257 @@ export const DriverHomeMap: React.FC<DriverHomeMapProps> = ({
     return isTripInProgress ? activeRide.destination : activeRide.origin;
   }, [activeRide]);
 
-  // Fetch OSRM route when activeRide exists
+  // Busca rota OSRM quando muda a corrida, o status ou dispara recálculo fora de rota
   useEffect(() => {
     if (!activeRide || !targetPoint?.lat || !targetPoint?.lng) {
       setRouteCoords([]);
+      setRouteSteps([]);
+      snappedSegIdxRef.current = 0;
+      activeStepIdxRef.current = 0;
       return;
     }
 
-    const startLat = activeRide.driverLocation?.lat || liveGps?.[0] || activeRide.origin.lat;
-    const startLng = activeRide.driverLocation?.lng || liveGps?.[1] || activeRide.origin.lng;
+    const startLat = rawVehiclePos.lat;
+    const startLng = rawVehiclePos.lng;
     const endLat = targetPoint.lat;
     const endLng = targetPoint.lng;
-
     if (!startLat || !startLng) return;
 
-    let cancelled = false;
-    const url = `https://router.project-osrm.org/route/v1/driving/${startLng},${startLat};${endLng},${endLat}?overview=full&geometries=geojson&steps=true`;
+    const abortController = new AbortController();
+    snappedSegIdxRef.current = 0;
+    activeStepIdxRef.current = 0;
+    offRouteSinceRef.current = 0;
 
-    fetch(url)
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        const route = data?.routes?.[0];
-        if (!route?.geometry?.coordinates) {
-          setRouteCoords([
-            [startLat, startLng],
-            [endLat, endLng],
-          ]);
-          return;
-        }
-        const latLngs: [number, number][] = route.geometry.coordinates.map(
-          (c: [number, number]) => [c[1], c[0]]
-        );
-        setRouteCoords(latLngs);
-
-        if (onRouteInfoUpdate) {
-          const distKm = Math.max(0.1, Number((route.distance / 1000).toFixed(1)));
-          const durMin = Math.max(1, Math.round(route.duration / 60));
-          const steps = route.legs?.[0]?.steps || [];
-          const firstStep = steps[0];
-          const secondStep = steps[1] || steps[0];
-          const rawStreet = firstStep?.name || activeRide.origin.address.split(',')[0] || 'Via local';
-          const nextStreet = secondStep?.name || targetPoint.address.split(',')[0] || 'Destino';
-          const stepDist = Math.max(20, Math.round(firstStep?.distance || 50));
-
-          onRouteInfoUpdate({
-            distanceKm: distKm,
-            durationMin: durMin,
-            step: {
-              streetName: rawStreet,
-              nextStreetName: nextStreet,
-              distanceMeters: stepDist,
-              maneuverType: secondStep?.maneuver?.type,
-              maneuverModifier: secondStep?.maneuver?.modifier,
-            },
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setRouteCoords([
-            [startLat, startLng],
-            [endLat, endLng],
-          ]);
-        }
+    fetchDrivingRoute(
+      [
+        { lat: startLat, lng: startLng },
+        { lat: endLat, lng: endLng },
+      ],
+      { signal: abortController.signal }
+    ).then((res) => {
+      if (!res || abortController.signal.aborted) return;
+      setRouteCoords(res.coordinates);
+      setRouteSteps(res.steps);
+      setRouteMeta({
+        distanceMeters: res.distanceMeters,
+        durationSeconds: res.durationSeconds,
       });
+    });
 
     return () => {
-      cancelled = true;
+      abortController.abort();
     };
+  }, [activeRide?.id, activeRide?.status, targetPoint?.lat, targetPoint?.lng, rerouteTick]);
+
+  // Map Matching direcional + detecção automática de desvio de rota
+  const activeRideId = activeRide?.id;
+  const activeRideOriginAddress = activeRide?.origin?.address || '';
+  const activeRideDestAddress = activeRide?.destination?.address || '';
+
+  const snappedVehicle = useMemo(() => {
+    if (!activeRideId || routeCoords.length < 2) {
+      return {
+        lat: rawVehiclePos.lat,
+        lng: rawVehiclePos.lng,
+        heading: rawVehiclePos.heading,
+        snapped: false,
+        distanceMeters: 0,
+        segmentIndex: 0,
+      };
+    }
+    return snapPointToRoute(rawVehiclePos, routeCoords, 60, {
+      preferredHeading: rawVehiclePos.heading,
+      maxHeadingDiffDeg: 100,
+    });
+  }, [activeRideId, rawVehiclePos, routeCoords]);
+
+  useEffect(() => {
+    if (snappedVehicle.snapped) {
+      snappedSegIdxRef.current = snappedVehicle.segmentIndex;
+    }
+  }, [snappedVehicle.snapped, snappedVehicle.segmentIndex]);
+
+  // Recalcula rota se o motorista sair mais de 60m da linha por >= 2.5s (com cooldown de 10s)
+  useEffect(() => {
+    if (!activeRideId || routeCoords.length < 2) {
+      offRouteSinceRef.current = 0;
+      return;
+    }
+    const now = Date.now();
+    if (!snappedVehicle.snapped && snappedVehicle.distanceMeters > 60) {
+      if (offRouteSinceRef.current === 0) {
+        offRouteSinceRef.current = now;
+      } else if (
+        now - offRouteSinceRef.current >= 2500 &&
+        now - lastRerouteAtRef.current >= 10000
+      ) {
+        lastRerouteAtRef.current = now;
+        offRouteSinceRef.current = 0;
+        setRerouteTick((t) => t + 1);
+      }
+    } else {
+      offRouteSinceRef.current = 0;
+    }
+  }, [activeRideId, snappedVehicle.snapped, snappedVehicle.distanceMeters, routeCoords.length]);
+
+  // Atualiza painel turn-by-turn em tempo real com metros exatos e próximo passo
+  useEffect(() => {
+    if (!activeRideId || !onRouteInfoUpdate || routeCoords.length < 2) return;
+
+    const now = Date.now();
+    if (now - lastRouteInfoPushRef.current < 900 && routeSteps.length > 0) {
+      return;
+    }
+    lastRouteInfoPushRef.current = now;
+
+    const remainingMeters = snappedVehicle.snapped
+      ? computeRemainingRouteMeters(
+          routeCoords,
+          snappedVehicle.segmentIndex,
+          snappedVehicle.lat,
+          snappedVehicle.lng
+        )
+      : routeMeta.distanceMeters;
+
+    const distKm = Math.max(0.1, Number((remainingMeters / 1000).toFixed(1)));
+    const avgSpeedMs =
+      routeMeta.distanceMeters > 0 && routeMeta.durationSeconds > 0
+        ? routeMeta.distanceMeters / routeMeta.durationSeconds
+        : 9.5;
+    const liveSpeedMs = rawVehiclePos.speedKmH >= 8 ? rawVehiclePos.speedKmH / 3.6 : avgSpeedMs;
+    const durMin = Math.max(1, Math.round(remainingMeters / Math.max(4, liveSpeedMs) / 60));
+
+    const { stepIndex, metersToStep } = resolveActiveNavigationStepIndex(
+      routeSteps,
+      activeStepIdxRef.current,
+      snappedVehicle.lat,
+      snappedVehicle.lng,
+      38
+    );
+    activeStepIdxRef.current = stepIndex;
+
+    const currentStep = routeSteps[stepIndex];
+    const nextStep = routeSteps[stepIndex + 1] || currentStep;
+
+    const fallbackStreet = activeRideOriginAddress.split(',')[0] || 'Via local';
+    const fallbackDest = (targetPoint?.address || activeRideDestAddress).split(',')[0] || 'Destino';
+
+    onRouteInfoUpdate({
+      distanceKm: distKm,
+      durationMin: durMin,
+      step: {
+        streetName: currentStep?.streetName || currentStep?.shortText || fallbackStreet,
+        nextStreetName: nextStep?.streetName || nextStep?.instruction || fallbackDest,
+        distanceMeters: Math.max(10, metersToStep || currentStep?.distanceMeters || 50),
+        maneuverType: currentStep?.type,
+        maneuverModifier: currentStep?.modifier,
+      },
+    });
   }, [
-    activeRide?.id,
-    activeRide?.status,
-    targetPoint?.lat,
-    targetPoint?.lng,
-    currentCenter[0],
-    currentCenter[1],
+    activeRideId,
+    activeRideOriginAddress,
+    activeRideDestAddress,
+    onRouteInfoUpdate,
+    routeCoords,
+    routeSteps,
+    routeMeta.distanceMeters,
+    routeMeta.durationSeconds,
+    snappedVehicle.lat,
+    snappedVehicle.lng,
+    snappedVehicle.segmentIndex,
+    snappedVehicle.snapped,
+    rawVehiclePos.speedKmH,
+    targetPoint?.address,
   ]);
 
-  const activeBounds: L.LatLngBoundsExpression | null = useMemo(() => {
-    if (!activeRide || !targetPoint?.lat || !targetPoint?.lng) return null;
-    if (routeCoords.length >= 2) {
-      return L.latLngBounds(routeCoords);
+  // Controle do botão de bússola/centralizar externo (DriverPortalScreen / DriverActiveRideCard)
+  useEffect(() => {
+    if (recenterSignal !== undefined && recenterSignal !== prevSignalRef.current) {
+      prevSignalRef.current = recenterSignal;
+      if (compass.needsPermission) {
+        compass.requestPermission().catch(() => {});
+      }
+      setCameraMode((prev) => {
+        if (prev === 'free') return 'heading_3d';
+        if (activeRide) return prev === 'heading_3d' ? 'overview' : 'heading_3d';
+        return 'heading_3d';
+      });
+      setLocalRecenterTick((t) => t + 1);
     }
-    return L.latLngBounds([currentCenter, [targetPoint.lat, targetPoint.lng]]);
-  }, [activeRide, targetPoint?.lat, targetPoint?.lng, routeCoords, currentCenter]);
+  }, [recenterSignal, activeRide, compass]);
 
-  const driverIcon = useMemo(() => createUberArrowPuckIcon(liveHeading), [liveHeading]);
-  const greenPinIcon = useMemo(() => createUberGreenTargetPin(), []);
+  const handleCompassPillTap = async () => {
+    if (compass.needsPermission) {
+      await compass.requestPermission();
+    }
+    setCameraMode((prev) => (prev === 'heading_3d' && activeRide ? 'overview' : 'heading_3d'));
+    setLocalRecenterTick((t) => t + 1);
+  };
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 1, backgroundColor: '#E8EDF3' }}>
-      <MapContainer
-        center={currentCenter}
-        zoom={15}
-        style={{ width: '100%', height: '100%' }}
-        zoomControl={false}
-        attributionControl={false}
-      >
-        <TileLayer
-          url="https://{s}.google.com/vt/lyrs=m&hl=pt-BR&x={x}&y={y}&z={z}"
-          subdomains={['mt0', 'mt1', 'mt2', 'mt3']}
-          maxZoom={20}
-        />
+      <MapLibreNavCanvas
+        vehiclePos={{
+          lat: snappedVehicle.lat,
+          lng: snappedVehicle.lng,
+          heading: snappedVehicle.heading,
+        }}
+        vehicleStyle="uber_puck"
+        speedKmH={rawVehiclePos.speedKmH}
+        cameraMode={cameraMode}
+        recenterSignal={localRecenterTick}
+        onUserPanMap={() => setCameraMode('free')}
+        mapLayer="streets"
+        routeCoordinates={activeRide ? routeCoords : []}
+        snappedSegmentIndex={snappedVehicle.segmentIndex}
+        isSnappedToRoute={snappedVehicle.snapped}
+        routeColor="#111111"
+        pickupPoint={
+          activeRide && targetPoint?.lat && targetPoint?.lng
+            ? { lat: targetPoint.lat, lng: targetPoint.lng }
+            : null
+        }
+        pickupMode="uber_green_pin"
+        navPadding={{ top: 140, bottom: activeRide ? 185 : 220, left: 20, right: 20 }}
+        overviewPadding={{ top: 135, bottom: 165, left: 42, right: 42 }}
+        showVehicleMarker={true}
+      />
 
-        <MapViewportController
-          center={currentCenter}
-          bounds={activeBounds}
-          recenterSignal={recenterSignal}
-        />
-
-        {/* Rota preta crisp estilo Uber Driver Turn-by-Turn */}
-        {activeRide && routeCoords.length >= 2 && (
-          <>
-            <Polyline
-              positions={routeCoords}
-              pathOptions={{ color: '#000000', weight: 7, opacity: 0.92, lineCap: 'round', lineJoin: 'round' }}
-            />
-            {/* Pequeno segmento de destaque de tráfego estilo Google/Uber */}
-            {routeCoords.length > 6 && (
-              <Polyline
-                positions={routeCoords.slice(Math.floor(routeCoords.length * 0.25), Math.floor(routeCoords.length * 0.42))}
-                pathOptions={{ color: '#D97706', weight: 4.5, opacity: 0.95, lineCap: 'round' }}
-              />
-            )}
-          </>
-        )}
-
-        {/* Pin verde do ponto de encontro / destino */}
-        {activeRide && targetPoint?.lat && targetPoint?.lng && (
-          <Marker position={[targetPoint.lat, targetPoint.lng]} icon={greenPinIcon} />
-        )}
-
-        {/* Marcador circular com seta preta do motorista */}
-        <Marker position={currentCenter} icon={driverIcon} />
-      </MapContainer>
+      {/* Pílula discreta quando o usuário arrastou o mapa ou no iOS quando precisa liberar a bússola */}
+      {(cameraMode !== 'heading_3d' || compass.needsPermission) && (
+        <button
+          type="button"
+          onClick={handleCompassPillTap}
+          style={{
+            position: 'fixed',
+            top: activeRide ? 'calc(104px + env(safe-area-inset-top, 0px))' : 'calc(72px + env(safe-area-inset-top, 0px))',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 65,
+            backgroundColor: 'rgba(17, 17, 17, 0.9)',
+            color: '#FFFFFF',
+            border: '1px solid rgba(118, 216, 0, 0.65)',
+            borderRadius: 999,
+            padding: '7px 14px',
+            fontSize: '0.74rem',
+            fontWeight: 800,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            boxShadow: '0 6px 18px rgba(0,0,0,0.28)',
+            cursor: 'pointer',
+          }}
+        >
+          <Compass size={15} color="#76D800" />
+          <span>
+            {compass.needsPermission
+              ? 'Ativar Bússola 3D'
+              : cameraMode === 'overview'
+                ? 'Voltar p/ Bússola 3D'
+                : 'Recentrar Bússola 3D'}
+          </span>
+        </button>
+      )}
     </div>
   );
 };
-

@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { MapContainer, TileLayer, Polyline, Marker, useMap } from 'react-leaflet';
-import L from 'leaflet';
 import { 
   X, Navigation, Compass, Phone, ExternalLink, 
   CheckCircle2, Locate, Check, Volume2, VolumeX, CornerUpRight, CornerUpLeft, ArrowUp, RotateCw
@@ -15,12 +13,20 @@ import { RideSearchingStageCard } from './RideSearchingStageCard';
 import { RideCancelModal } from './RideCancelModal';
 import { MercosulPlateBadge } from './MercosulPlateBadge';
 import { formatPhone, getCleanWhatsappNumber } from '../utils/format';
-import { getGoogleMapsRouteUrl, calculateHaversineDistance, snapPointToRoute } from '../utils/geo';
+import {
+  getGoogleMapsRouteUrl,
+  calculateExactMeters,
+  computeRemainingRouteMeters,
+  resolveActiveNavigationStepIndex,
+  snapPointToRoute
+} from '../utils/geo';
+import { GpsMotionFilter, useDeviceCompass } from '../utils/compassAndGps';
+import { fetchDrivingRoute } from '../utils/routing';
+import { MapLibreNavCanvas, NavCameraMode } from './MapLibreNavCanvas';
 import { 
   ScreenWakeLockManager, speakVoiceInstruction, stopVoiceSpeech, 
-  translateOsrmStep, RouteStep 
+  RouteStep 
 } from '../utils/soundAndVoice';
-import 'leaflet/dist/leaflet.css';
 
 interface LiveGpsNavigationScreenProps {
   ride: Ride;
@@ -39,121 +45,6 @@ if (typeof window !== 'undefined') {
     img.src = src;
   });
 }
-
-// Marcador Customizado Oficial do Veículo Kavro Drive (instância estável — rotação aplicada via DOM sem recriar o ícone):
-// - Motorista (isDriver = true): Seta 3D de navegação estilo Google Maps (/driver-arrow-marker.png)
-// - Cliente (isDriver = false): Carrinho plotado Kavro Drive em movimento (/car-marker-v2.png)
-const createCarIcon = (isDriver: boolean = false) => {
-  const iconSrc = isDriver ? '/driver-arrow-marker.png' : '/car-marker-v2.png';
-  const imgWidth = isDriver ? 52 : 40;
-  const imgHeight = isDriver ? 58 : 66;
-  return L.divIcon({
-    className: 'custom-car-marker',
-    html: `
-      <div style="position: relative; width: 68px; height: 68px; display: flex; align-items: center; justify-content: center; pointer-events: none;">
-        <div style="position: absolute; width: 54px; height: 54px; border-radius: 50%; background: rgba(118, 216, 0, 0.20); border: 1.5px solid rgba(118, 216, 0, 0.45);"></div>
-        <img
-          class="up-vehicle-icon-img"
-          src="${iconSrc}"
-          alt="Navegação Kavro Drive"
-          style="width: ${imgWidth}px; height: ${imgHeight}px; object-fit: contain; transform: rotate(0deg); transition: transform 0.35s ease; filter: drop-shadow(0 5px 10px rgba(0, 0, 0, 0.45)); position: relative; z-index: 2; will-change: transform; backface-visibility: hidden; -webkit-backface-visibility: hidden;"
-        />
-      </div>
-    `,
-    iconSize: [68, 68],
-    iconAnchor: [34, 34],
-  });
-};
-
-// Instâncias estáticas únicas dos marcadores para nunca recriar o DOM a cada segundo do timer
-const CLIENT_LIVE_ICON = L.divIcon({
-  className: 'custom-client-live-marker',
-  html: `
-    <div style="display: flex; flex-direction: column; align-items: center;">
-      <div style="background: #2563EB; color: #FFFFFF; font-size: 9px; font-weight: 800; padding: 2px 7px; border-radius: 10px; border: 1px solid #FFFFFF; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.25); margin-bottom: 2px;">
-        PASSAGEIRO
-      </div>
-      <div style="width: 18px; height: 18px; border-radius: 50%; background: #2563EB; border: 3px solid #FFFFFF; box-shadow: 0 3px 10px rgba(37, 99, 235, 0.6);"></div>
-    </div>
-  `,
-  iconSize: [70, 38],
-  iconAnchor: [35, 34],
-});
-
-const PICKUP_ICON = L.divIcon({
-  className: 'custom-pickup-marker',
-  html: `
-    <div style="display: flex; flex-direction: column; align-items: center;">
-      <div style="background: #121A21; color: #76D800; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 10px; border: 1px solid #76D800; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.25); margin-bottom: 2px;">
-        EMBARQUE
-      </div>
-      <div style="width: 22px; height: 22px; border-radius: 50%; background: #76D800; border: 3px solid #FFFFFF; box-shadow: 0 3px 10px rgba(118, 216, 0, 0.5); display: flex; align-items: center; justify-content: center;">
-        <div style="width: 6px; height: 6px; border-radius: 50%; background: #121A21;"></div>
-      </div>
-    </div>
-  `,
-  iconSize: [70, 44],
-  iconAnchor: [35, 40],
-});
-
-const PICKUP_SEARCH_ICON = L.divIcon({
-  className: 'custom-pickup-search-marker',
-  html: `
-    <div style="position: relative; width: 72px; height: 72px; display: flex; align-items: center; justify-content: center;">
-      <div class="kavro-map-sonar"></div>
-      <div class="kavro-map-sonar-delay"></div>
-      <div style="position: relative; z-index: 2; width: 22px; height: 22px; border-radius: 50%; background: #76D800; border: 3px solid #FFFFFF; box-shadow: 0 3px 10px rgba(0,0,0,0.35); display: flex; align-items: center; justify-content: center;">
-        <div style="width: 7px; height: 7px; border-radius: 50%; background: #121A21;"></div>
-      </div>
-    </div>
-  `,
-  iconSize: [72, 72],
-  iconAnchor: [36, 36],
-});
-
-const DESTINATION_ICON = L.divIcon({
-  className: 'custom-destination-marker',
-  html: `
-    <div style="display: flex; flex-direction: column; align-items: center;">
-      <div style="background: #121A21; color: #FFFFFF; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 10px; border: 1px solid #475569; white-space: nowrap; box-shadow: 0 2px 6px rgba(0,0,0,0.25); margin-bottom: 2px;">
-        DESTINO
-      </div>
-      <div style="width: 22px; height: 22px; border-radius: 50%; background: #121A21; border: 3px solid #FFFFFF; box-shadow: 0 3px 10px rgba(0,0,0,0.4); display: flex; align-items: center; justify-content: center;">
-        <div style="width: 6px; height: 6px; border-radius: 50%; background: #76D800;"></div>
-      </div>
-    </div>
-  `,
-  iconSize: [70, 44],
-  iconAnchor: [35, 40],
-});
-
-// Componente para controlar visualização e recenteamento do mapa
-const MapFollowController: React.FC<{ 
-  center: [number, number]; 
-  followMode: boolean;
-  bounds?: [[number, number], [number, number]];
-}> = ({ center, followMode, bounds }) => {
-  const map = useMap();
-  useEffect(() => {
-    const t1 = setTimeout(() => map.invalidateSize(), 100);
-    const t2 = setTimeout(() => map.invalidateSize(), 600);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
-  }, [map]);
-
-  useEffect(() => {
-    if (followMode) {
-      map.setView(center, Math.max(map.getZoom(), 16), { animate: true, duration: 0.6 });
-    }
-  }, [center[0], center[1], followMode, map]);
-
-  useEffect(() => {
-    if (bounds && !followMode) {
-      map.fitBounds(bounds, { padding: [60, 60] });
-    }
-  }, [bounds, followMode, map]);
-
-  return null;
-};
 
 export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = ({
   ride,
@@ -204,7 +95,10 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
     rideStatus === 'em_andamento'
   );
   const isWaitingDriver = !isDriver && (!hasAssignedDriver || rideStatus === 'aguardando_confirmacao' || rideStatus === 'aguardando_pagamento');
-  const [followMode, setFollowMode] = useState<boolean>(isDriver || Boolean(liveRide.driverLocation?.lat));
+  const [cameraMode, setCameraMode] = useState<NavCameraMode>(
+    isDriver ? 'heading_3d' : (liveRide.driverLocation?.lat ? 'north_follow' : 'overview')
+  );
+  const [recenterTick, setRecenterTick] = useState<number>(0);
   const [mapLayer, setMapLayer] = useState<'streets' | 'hybrid'>('streets');
   const [routeCoordinates, setRouteCoordinates] = useState<[number, number][]>([]);
   const [metersToClient, setMetersToClient] = useState<number>(Math.round((liveRide.distanceKm || 0.5) * 1000));
@@ -214,10 +108,28 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
   const [isSosModalOpen, setIsSosModalOpen] = useState<boolean>(false);
   const [isCancelModalOpen, setIsCancelModalOpen] = useState<boolean>(false);
   const [gpsFixed, setGpsFixed] = useState<boolean>(Boolean(liveRide.driverLocation?.lat));
+  const [gpsAccuracy, setGpsAccuracy] = useState<number | null>(null);
+  const [rerouteTick, setRerouteTick] = useState<number>(0);
+  const [isRerouting, setIsRerouting] = useState<boolean>(false);
   const [closingNotice, setClosingNotice] = useState<string | null>(null);
   const [externalMapHint, setExternalMapHint] = useState<string | null>(null);
   const [isDriverHudExpanded, setIsDriverHudExpanded] = useState<boolean>(false);
   const hasAutoClosedRef = useRef(false);
+
+  const compass = useDeviceCompass(isOpen && isDriver);
+  const compassHeadingRef = useRef<number | null>(null);
+  const compassFreshRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    compassHeadingRef.current = compass.heading;
+    compassFreshRef.current = compass.available;
+  }, [compass.heading, compass.available]);
+
+  const gpsFilterRef = useRef<GpsMotionFilter>(new GpsMotionFilter());
+  const snappedSegIdxRef = useRef<number>(0);
+  const offRouteSinceRef = useRef<number>(0);
+  const lastRerouteAtRef = useRef<number>(0);
+  const initialGpsRouteTriggeredRef = useRef<boolean>(false);
 
   useEffect(() => {
     setIsDriverHudExpanded(false);
@@ -280,34 +192,84 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
 
   const latestDriverPosRef = useRef(currentPos);
   const latestSpeedRef = useRef(speed);
-  const carMarkerRef = useRef<L.Marker | null>(null);
-  const carIcon = useMemo(() => createCarIcon(isDriver), [isDriver]);
 
-  useEffect(() => {
-    latestDriverPosRef.current = currentPos;
-    latestSpeedRef.current = speed;
-  }, [currentPos, speed]);
-
-  // Encaixe geométrico inteligente na rota (Road Snapping / Map Matching)
-  // Garante que o carro fique 100% sobre o asfalto da rota e nunca dentro de casas ou calçadas
-  const displayVehiclePos = useMemo(() => {
-    return snapPointToRoute(currentPos, routeCoordinates, 150);
-  }, [currentPos.lat, currentPos.lng, currentPos.heading, routeCoordinates]);
-
-  // Atualiza rotação do ícone diretamente no elemento DOM existente para nunca recriar nem piscar a imagem
-  useEffect(() => {
-    const el = carMarkerRef.current?.getElement();
-    if (!el) return;
-    const img = el.querySelector('.up-vehicle-icon-img') as HTMLElement | null;
-    if (img) {
-      img.style.transform = `rotate(${displayVehiclePos.heading || 0}deg)`;
+  // Quando parado ou lento (< 5 km/h), mantém o heading alinhado à bússola magnética em tempo real
+  const effectiveDriverHeading = useMemo(() => {
+    if (isDriver && speed < 5 && compass.available && compass.heading !== null) {
+      return compass.heading;
     }
-  }, [displayVehiclePos.heading, displayVehiclePos.lat, displayVehiclePos.lng, isOpen]);
+    return currentPos.heading || 0;
+  }, [isDriver, speed, compass.available, compass.heading, currentPos.heading]);
+
+  useEffect(() => {
+    latestDriverPosRef.current = {
+      lat: currentPos.lat,
+      lng: currentPos.lng,
+      heading: effectiveDriverHeading,
+    };
+    latestSpeedRef.current = speed;
+  }, [currentPos.lat, currentPos.lng, effectiveDriverHeading, speed]);
+
+  // Encaixe geométrico direcional na rota (Road Snapping / Map Matching)
+  // Garante que o carro fique sobre o asfalto da rota e detecta desvios reais (> 60m)
+  const displayVehiclePos = useMemo(() => {
+    return snapPointToRoute(
+      { lat: currentPos.lat, lng: currentPos.lng, heading: effectiveDriverHeading },
+      routeCoordinates,
+      60,
+      {
+        preferredHeading: effectiveDriverHeading,
+        maxHeadingDiffDeg: 100,
+      }
+    );
+  }, [currentPos.lat, currentPos.lng, effectiveDriverHeading, routeCoordinates]);
+
+  useEffect(() => {
+    if (displayVehiclePos.snapped) {
+      snappedSegIdxRef.current = displayVehiclePos.segmentIndex;
+    }
+  }, [displayVehiclePos.snapped, displayVehiclePos.segmentIndex]);
+
+  // Recálculo automático se o motorista sair mais de 60m da rota por >= 2.5s (cooldown 10s)
+  useEffect(() => {
+    if (!isOpen || !isDriver || !gpsFixed || routeCoordinates.length < 2) {
+      offRouteSinceRef.current = 0;
+      return;
+    }
+    const now = Date.now();
+    if (!displayVehiclePos.snapped && displayVehiclePos.distanceMeters > 60) {
+      if (offRouteSinceRef.current === 0) {
+        offRouteSinceRef.current = now;
+      } else if (
+        now - offRouteSinceRef.current >= 2500 &&
+        now - lastRerouteAtRef.current >= 10000
+      ) {
+        lastRerouteAtRef.current = now;
+        offRouteSinceRef.current = 0;
+        snappedSegIdxRef.current = 0;
+        setIsRerouting(true);
+        setRerouteTick((t) => t + 1);
+        if (voiceEnabled) {
+          speakVoiceInstruction('Recalculando rota.', voiceEnabled);
+        }
+      }
+    } else {
+      offRouteSinceRef.current = 0;
+    }
+  }, [
+    isOpen,
+    isDriver,
+    gpsFixed,
+    routeCoordinates.length,
+    displayVehiclePos.snapped,
+    displayVehiclePos.distanceMeters,
+    voiceEnabled,
+  ]);
 
   const cleanPhone = (ride.clientPhone || '').replace(/\D/g, '');
   const whatsappUrl = `https://wa.me/55${cleanPhone}?text=Ol%C3%A1%20${encodeURIComponent(ride.clientName)},%20sou%20seu%20motorista%20da%20Kavro%20Drive%20e%20estou%20no%20GPS%20a%20caminho%20da%20sua%20corrida%20${encodeURIComponent(String(ride.rideCode || ride.id).replace(/^#?\s*UP\b/i, '#KV'))}.`;
 
-  // Atualiza cálculo em tempo real de metros até o cliente, metros até o destino e ETA em segundos
+  // Atualiza cálculo em tempo real (metros exatos) até o cliente, destino e ETA em segundos
   useEffect(() => {
     if (!hasRealTelemetry) {
       setEtaSecondsLeft(0);
@@ -319,23 +281,48 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
 
     let calcMetersClient = 0;
     if (clientTargetLat && clientTargetLng && currentPos.lat && currentPos.lng) {
-      const dClientKm = calculateHaversineDistance(currentPos.lat, currentPos.lng, clientTargetLat, clientTargetLng);
-      calcMetersClient = Math.max(0, Math.round(dClientKm * 1000));
+      calcMetersClient = Math.max(
+        0,
+        Math.round(calculateExactMeters(currentPos.lat, currentPos.lng, clientTargetLat, clientTargetLng))
+      );
       setMetersToClient(calcMetersClient);
     }
 
     let calcMetersDest = 0;
-    if (liveRide.destination?.lat && liveRide.destination?.lng && currentPos.lat && currentPos.lng) {
-      const dDestKm = calculateHaversineDistance(currentPos.lat, currentPos.lng, liveRide.destination.lat, liveRide.destination.lng);
-      calcMetersDest = Math.max(0, Math.round(dDestKm * 1000));
+    if (
+      rideStatus === 'em_andamento' &&
+      displayVehiclePos.snapped &&
+      routeCoordinates.length >= 2
+    ) {
+      calcMetersDest = computeRemainingRouteMeters(
+        routeCoordinates,
+        displayVehiclePos.segmentIndex,
+        displayVehiclePos.lat,
+        displayVehiclePos.lng
+      );
+      setMetersToDestination(calcMetersDest);
+    } else if (liveRide.destination?.lat && liveRide.destination?.lng && currentPos.lat && currentPos.lng) {
+      calcMetersDest = Math.max(
+        0,
+        Math.round(
+          calculateExactMeters(
+            currentPos.lat,
+            currentPos.lng,
+            liveRide.destination.lat,
+            liveRide.destination.lng
+          ) * 1.25
+        )
+      );
       setMetersToDestination(calcMetersDest);
     }
 
-    const isHeadingToPickup = (rideStatus === 'a_caminho' || rideStatus === 'confirmada' || rideStatus === 'na_fila') && calcMetersClient > 35;
+    const isHeadingToPickup =
+      (rideStatus === 'a_caminho' || rideStatus === 'confirmada' || rideStatus === 'na_fila') &&
+      calcMetersClient > 35;
     const activeMeters = isHeadingToPickup ? calcMetersClient : calcMetersDest;
 
-    // Velocidade efetiva em m/s (usa velocidade real do GPS se > 6 km/h, senão média urbana 36 km/h = 10 m/s)
-    const effectiveSpeedMs = speed >= 6 ? speed / 3.6 : 10;
+    // Velocidade efetiva em m/s (usa velocidade real do GPS se > 6 km/h, senão média urbana 34 km/h = 9.5 m/s)
+    const effectiveSpeedMs = speed >= 6 ? speed / 3.6 : 9.5;
     const rawSeconds = activeMeters <= 25 ? 0 : Math.max(15, Math.round(activeMeters / effectiveSpeedMs));
     setEtaSecondsLeft(rawSeconds);
   }, [
@@ -344,6 +331,11 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
     currentPos.lng,
     clientPos?.lat,
     clientPos?.lng,
+    displayVehiclePos.snapped,
+    displayVehiclePos.segmentIndex,
+    displayVehiclePos.lat,
+    displayVehiclePos.lng,
+    routeCoordinates,
     speed,
     rideStatus,
     liveRide.origin.lat,
@@ -376,113 +368,131 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
     return arrival.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
   }, [Math.floor(etaSecondsLeft / 15)]);
 
-  // 1. Obter rota real da malha viária via OSRM público
+  // 1. Obter rota real da malha viária via OSRM (inicial ou após recálculo fora de rota)
   useEffect(() => {
-    let isCancelled = false;
+    if (!isOpen) return;
+    const origLat = liveRide.origin.lat;
+    const origLng = liveRide.origin.lng;
+    const destLat = liveRide.destination.lat;
+    const destLng = liveRide.destination.lng;
+    if (!origLat || !origLng || !destLat || !destLng) return;
 
-    async function loadRoute() {
-      const origLat = liveRide.origin.lat;
-      const origLng = liveRide.origin.lng;
-      const destLat = liveRide.destination.lat;
-      const destLng = liveRide.destination.lng;
+    const controller = new AbortController();
+    const curLat = latestDriverPosRef.current.lat;
+    const curLng = latestDriverPosRef.current.lng;
 
-      if (!origLat || !origLng || !destLat || !destLng) return;
-
-      try {
-        const waypoints =
-          (rideStatus === 'a_caminho' || rideStatus === 'confirmada') &&
-          currentPos.lat &&
-          currentPos.lng &&
-          calculateHaversineDistance(currentPos.lat, currentPos.lng, origLat, origLng) > 0.08
-            ? `${currentPos.lng},${currentPos.lat};${origLng},${origLat};${destLng},${destLat}`
-            : `${origLng},${origLat};${destLng},${destLat}`;
-
-        const url = `https://router.project-osrm.org/route/v1/driving/${waypoints}?overview=full&geometries=geojson&steps=true`;
-        const res = await fetch(url);
-        if (res.ok) {
-          const data = await res.json();
-          const coords = data.routes?.[0]?.geometry?.coordinates;
-          if (coords && coords.length > 0 && !isCancelled) {
-            const leafletCoords: [number, number][] = coords.map((c: [number, number]) => [c[1], c[0]]);
-            setRouteCoordinates(leafletCoords);
-
-            // Extrai as etapas com manobras para a navegação por voz
-            const extractedSteps: RouteStep[] = [];
-            if (data.routes?.[0]?.legs) {
-              for (const leg of data.routes[0].legs) {
-                if (Array.isArray(leg.steps)) {
-                  for (const s of leg.steps) {
-                    extractedSteps.push(translateOsrmStep(s));
-                  }
-                }
-              }
-            }
-            if (extractedSteps.length > 0) {
-              setNavigationSteps(extractedSteps);
-              setCurrentStepIndex(0);
-              if (isDriver && voiceEnabled && !spokenStepsRef.current.has('route-start')) {
-                spokenStepsRef.current.add('route-start');
-                const first = extractedSteps[0];
-                speakVoiceInstruction(
-                  first?.instruction || 'Iniciando rota rumo ao destino. Siga em frente.',
-                  voiceEnabled
-                );
-              }
-            }
-            return;
-          }
-        }
-      } catch (err) {
-        console.warn('OSRM routing fallback used:', err);
+    const waypoints: Array<{ lat: number; lng: number }> = (() => {
+      if (
+        (rideStatus === 'a_caminho' || rideStatus === 'confirmada') &&
+        curLat &&
+        curLng &&
+        calculateExactMeters(curLat, curLng, origLat, origLng) > 65
+      ) {
+        return [
+          { lat: curLat, lng: curLng },
+          { lat: origLat, lng: origLng },
+          { lat: destLat, lng: destLng },
+        ];
       }
+      if (rideStatus === 'em_andamento' && curLat && curLng && rerouteTick > 0) {
+        return [
+          { lat: curLat, lng: curLng },
+          { lat: destLat, lng: destLng },
+        ];
+      }
+      return [
+        { lat: origLat, lng: origLng },
+        { lat: destLat, lng: destLng },
+      ];
+    })();
 
-      if (!isCancelled) {
-        setRouteCoordinates([
-          [origLat, origLng],
-          [destLat, destLng],
-        ]);
+    snappedSegIdxRef.current = 0;
+
+    fetchDrivingRoute(waypoints, { signal: controller.signal }).then((res) => {
+      if (!res || controller.signal.aborted) return;
+      setIsRerouting(false);
+      setRouteCoordinates(res.coordinates);
+
+      if (res.steps.length > 0) {
+        setNavigationSteps(res.steps);
+        setCurrentStepIndex(0);
+        if (rerouteTick > 0) {
+          const hadRouteStart = spokenStepsRef.current.has('route-start');
+          spokenStepsRef.current.clear();
+          if (hadRouteStart) spokenStepsRef.current.add('route-start');
+        }
+        if (isDriver && voiceEnabled && !spokenStepsRef.current.has('route-start')) {
+          spokenStepsRef.current.add('route-start');
+          const first = res.steps[0];
+          speakVoiceInstruction(
+            first?.instruction || 'Iniciando rota rumo ao destino. Siga em frente.',
+            voiceEnabled
+          );
+        }
+      }
+    });
+
+    return () => {
+      controller.abort();
+    };
+  }, [
+    isOpen,
+    liveRide.origin.lat,
+    liveRide.origin.lng,
+    liveRide.destination.lat,
+    liveRide.destination.lng,
+    rideStatus,
+    rerouteTick,
+  ]);
+
+  // Quando o GPS trava pela primeira vez durante ida ao embarque, garante a rota desde a posição real
+  useEffect(() => {
+    if (isDriver && gpsFixed && !initialGpsRouteTriggeredRef.current) {
+      initialGpsRouteTriggeredRef.current = true;
+      if (rideStatus === 'a_caminho' || rideStatus === 'confirmada') {
+        setRerouteTick((t) => t + 1);
       }
     }
+  }, [isDriver, gpsFixed, rideStatus]);
 
-    loadRoute();
-    return () => { isCancelled = true; };
-  }, [liveRide.origin.lat, liveRide.origin.lng, liveRide.destination.lat, liveRide.destination.lng, rideStatus, gpsFixed]);
-
-  // Passo ativo da rota para HUD e áudio
-  const activeStep = navigationSteps[currentStepIndex] || null;
-
-  const metersToNextManeuver = useMemo(() => {
-    if (!activeStep || !activeStep.location[0] || !currentPos.lat || !currentPos.lng) return 0;
-    const dKm = calculateHaversineDistance(
-      currentPos.lat,
-      currentPos.lng,
-      activeStep.location[0],
-      activeStep.location[1]
+  // Passo ativo da rota + distância EXATA em metros até a próxima manobra
+  const stepResolution = useMemo(() => {
+    if (!navigationSteps.length || !displayVehiclePos.lat || !displayVehiclePos.lng) {
+      return { stepIndex: 0, metersToStep: 0 };
+    }
+    return resolveActiveNavigationStepIndex(
+      navigationSteps,
+      currentStepIndex,
+      displayVehiclePos.lat,
+      displayVehiclePos.lng,
+      38
     );
-    return Math.max(0, Math.round(dKm * 1000));
-  }, [activeStep, currentPos.lat, currentPos.lng]);
+  }, [navigationSteps, currentStepIndex, displayVehiclePos.lat, displayVehiclePos.lng]);
+
+  const activeStep = navigationSteps[stepResolution.stepIndex] || null;
+  const metersToNextManeuver = stepResolution.metersToStep;
+
+  useEffect(() => {
+    if (stepResolution.stepIndex !== currentStepIndex) {
+      setCurrentStepIndex(stepResolution.stepIndex);
+    }
+  }, [stepResolution.stepIndex, currentStepIndex]);
 
   // Disparo automático e inteligente das instruções por voz turn-by-turn do motorista
   useEffect(() => {
     if (!isOpen || !isDriver || !activeStep) return;
 
-    // Se já passou da manobra (< 30m), avança para a próxima etapa da rota
-    if (metersToNextManeuver <= 30 && currentStepIndex < navigationSteps.length - 1) {
-      setCurrentStepIndex(prev => prev + 1);
-      return;
-    }
-
     // 1. Aviso antecipado (em ~200m)
     const earlyKey = `step-${currentStepIndex}-200m`;
-    if (metersToNextManeuver >= 150 && metersToNextManeuver <= 250 && !spokenStepsRef.current.has(earlyKey)) {
+    if (metersToNextManeuver >= 145 && metersToNextManeuver <= 260 && !spokenStepsRef.current.has(earlyKey)) {
       spokenStepsRef.current.add(earlyKey);
       const text = `Em duzentos metros, ${activeStep.shortText.toLowerCase()}${activeStep.streetName ? ' na ' + activeStep.streetName : ''}`;
       speakVoiceInstruction(text, voiceEnabled);
     }
 
-    // 2. Aviso imediato no ponto de virar (< 45m)
+    // 2. Aviso imediato no ponto de virar (< 50m)
     const turnKey = `step-${currentStepIndex}-now`;
-    if (metersToNextManeuver <= 45 && metersToNextManeuver > 15 && !spokenStepsRef.current.has(turnKey)) {
+    if (metersToNextManeuver <= 50 && metersToNextManeuver > 15 && !spokenStepsRef.current.has(turnKey)) {
       spokenStepsRef.current.add(turnKey);
       speakVoiceInstruction(activeStep.instruction, voiceEnabled);
     }
@@ -492,7 +502,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
       spokenStepsRef.current.add('dest-arrive');
       speakVoiceInstruction('Você está chegando ao destino.', voiceEnabled);
     }
-  }, [isOpen, isDriver, metersToNextManeuver, metersToDestination, currentStepIndex, activeStep, voiceEnabled, navigationSteps.length]);
+  }, [isOpen, isDriver, metersToNextManeuver, metersToDestination, currentStepIndex, activeStep, voiceEnabled]);
 
   const driverDisplayName = liveRide.driverName || 'Motorista Parceiro';
   const driverPhoneRaw = liveRide.driverPhone || '';
@@ -566,27 +576,30 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
       let lastRideGpsLat = latestDriverPosRef.current.lat;
       let lastRideGpsLng = latestDriverPosRef.current.lng;
 
-      // MOTORISTA: Captura GPS físico real do aparelho (throttled para 3s / 20m para evitar enxurrada de PATCH)
+      // MOTORISTA: Captura GPS físico real com filtro de precisão + fusão com bússola magnética
       const publishDriverGps = (pos: GeolocationPosition, forcePush = false) => {
-        const newLat = pos.coords.latitude;
-        const newLng = pos.coords.longitude;
-        const newHeading =
-          typeof pos.coords.heading === 'number' && !Number.isNaN(pos.coords.heading)
-            ? Math.round(pos.coords.heading)
-            : latestDriverPosRef.current.heading || 0;
-        // Só mostra velocidade > 0 se realmente estiver em movimento (> 0.6 m/s ≈ 2 km/h)
-        const rawSpeedMs = pos.coords.speed || 0;
-        const newSpeed = rawSpeedMs > 0.6 ? Math.round(rawSpeedMs * 3.6) : 0;
+        const fix = gpsFilterRef.current.process(
+          pos,
+          compassHeadingRef.current,
+          compassFreshRef.current
+        );
+        if (!fix) return;
+
+        const newLat = fix.lat;
+        const newLng = fix.lng;
+        const newHeading = fix.heading;
+        const newSpeed = fix.speedKmH;
 
         updateDriverPosIfChanged(newLat, newLng, newHeading);
         setSpeed(newSpeed);
+        setGpsAccuracy(fix.accuracyMeters);
         setGpsFixed(true);
 
         const now = Date.now();
-        const movedKm = lastRideGpsSentAt > 0
-          ? calculateHaversineDistance(lastRideGpsLat, lastRideGpsLng, newLat, newLng)
-          : 99;
-        if (!forcePush && now - lastRideGpsSentAt < 3000 && movedKm < 0.02) {
+        const movedMeters = lastRideGpsSentAt > 0
+          ? calculateExactMeters(lastRideGpsLat, lastRideGpsLng, newLat, newLng)
+          : 999;
+        if (!forcePush && now - lastRideGpsSentAt < 2500 && movedMeters < 18) {
           return;
         }
         lastRideGpsSentAt = now;
@@ -756,10 +769,10 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           const cLng = pos.coords.longitude;
           updateClientPosIfChanged(cLat, cLng);
           const now = Date.now();
-          const movedKm = lastClientGpsSentAt > 0
-            ? calculateHaversineDistance(lastClientGpsLat, lastClientGpsLng, cLat, cLng)
-            : 99;
-          if (!forcePush && now - lastClientGpsSentAt < 6000 && movedKm < 0.025) {
+          const movedMeters = lastClientGpsSentAt > 0
+            ? calculateExactMeters(lastClientGpsLat, lastClientGpsLng, cLat, cLng)
+            : 999;
+          if (!forcePush && now - lastClientGpsSentAt < 6000 && movedMeters < 25) {
             return;
           }
           lastClientGpsSentAt = now;
@@ -857,21 +870,15 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
     }
   }, [isOpen, isDriver, ride.id]);
 
-  // Limites do mapa (inclui carro apenas quando houver motorista/GPS real)
-  const mapBounds: [[number, number], [number, number]] = useMemo(() => {
-    const lats = [liveRide.origin.lat, liveRide.destination.lat];
-    const lngs = [liveRide.origin.lng, liveRide.destination.lng];
-    if (showCarMarker && currentPos.lat && currentPos.lng) {
-      lats.push(currentPos.lat);
-      lngs.push(currentPos.lng);
-    }
-    return [
-      [Math.min(...lats) - 0.005, Math.min(...lngs) - 0.005],
-      [Math.max(...lats) + 0.005, Math.max(...lngs) + 0.005]
-    ];
-  }, [liveRide.origin.lat, liveRide.origin.lng, liveRide.destination.lat, liveRide.destination.lng, showCarMarker, currentPos.lat, currentPos.lng]);
-
   if (!isOpen) return null;
+
+  const handleRecenterCompass = async () => {
+    if (isDriver && compass.needsPermission) {
+      await compass.requestPermission();
+    }
+    setCameraMode(isDriver ? 'heading_3d' : 'north_follow');
+    setRecenterTick((t) => t + 1);
+  };
 
   const handleAdvanceStatus = (newStatus: RideStatus) => {
     setRideStatus(newStatus);
@@ -1165,15 +1172,15 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
           gap: 7,
           pointerEvents: 'auto'
         }}>
-          {/* Recentrar no Carro */}
+          {/* Recentrar / Bússola 3D */}
           <button
-            onClick={() => setFollowMode(true)}
+            onClick={handleRecenterCompass}
             style={{
               width: 36,
               height: 36,
               borderRadius: 11,
-              backgroundColor: followMode ? '#76D800' : 'rgba(18, 26, 33, 0.92)',
-              color: followMode ? '#121A21' : '#FFFFFF',
+              backgroundColor: cameraMode === 'heading_3d' || cameraMode === 'north_follow' ? '#76D800' : 'rgba(18, 26, 33, 0.92)',
+              color: cameraMode === 'heading_3d' || cameraMode === 'north_follow' ? '#121A21' : '#FFFFFF',
               border: '1px solid #2C3E50',
               display: 'flex',
               alignItems: 'center',
@@ -1181,20 +1188,27 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               boxShadow: '0 3px 10px rgba(0,0,0,0.3)',
               cursor: 'pointer'
             }}
-            title={followMode ? 'Seguindo veículo' : 'Recentrar no veículo'}
+            title={
+              isDriver
+                ? (cameraMode === 'heading_3d' ? 'Bússola 3D Ativa' : 'Ativar Bússola 3D (Heading-Up)')
+                : 'Recentrar no veículo'
+            }
           >
             <Locate size={17} />
           </button>
 
           {/* Alternar Rota Inteira */}
           <button
-            onClick={() => setFollowMode(false)}
+            onClick={() => {
+              setCameraMode('overview');
+              setRecenterTick((t) => t + 1);
+            }}
             style={{
               width: 36,
               height: 36,
               borderRadius: 11,
-              backgroundColor: !followMode ? '#76D800' : 'rgba(18, 26, 33, 0.92)',
-              color: !followMode ? '#121A21' : '#FFFFFF',
+              backgroundColor: cameraMode === 'overview' ? '#76D800' : 'rgba(18, 26, 33, 0.92)',
+              color: cameraMode === 'overview' ? '#121A21' : '#FFFFFF',
               border: '1px solid #2C3E50',
               display: 'flex',
               alignItems: 'center',
@@ -1224,7 +1238,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               cursor: 'pointer',
               fontSize: '0.95rem'
             }}
-            title="Alternar Ruas / Satélite"
+            title="Alternar Ruas 3D / Satélite"
           >
             🛰️
           </button>
@@ -1258,92 +1272,78 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
         </div>
       </div>
 
-      {/* ── MAPA LEAFLET EM TELA CHEIA ────── */}
+      {/* ── MAPA MAPLIBRE 3D HEADING-UP EM TELA CHEIA ────── */}
       <div style={{ flex: 1, width: '100%', height: '100%', position: 'relative' }}>
-        <MapContainer
-          center={[currentPos.lat, currentPos.lng]}
-          zoom={16}
-          style={{ width: '100%', height: '100%', zIndex: 1 }}
-          zoomControl={false}
-        >
-          <TileLayer
-            key={mapLayer}
-            url={
-              mapLayer === 'hybrid'
-                ? 'https://{s}.google.com/vt/lyrs=y&hl=pt-BR&x={x}&y={y}&z={z}'
-                : 'https://{s}.google.com/vt/lyrs=m&hl=pt-BR&x={x}&y={y}&z={z}'
-            }
-            subdomains={['mt0', 'mt1', 'mt2', 'mt3']}
-            maxZoom={20}
-            attribution="&copy; Google Maps"
-          />
+        <MapLibreNavCanvas
+          vehiclePos={{
+            lat: displayVehiclePos.lat,
+            lng: displayVehiclePos.lng,
+            heading: displayVehiclePos.heading,
+          }}
+          vehicleStyle={isDriver ? 'driver_arrow' : 'passenger_car'}
+          speedKmH={speed}
+          cameraMode={cameraMode}
+          recenterSignal={recenterTick}
+          onUserPanMap={() => setCameraMode('free')}
+          mapLayer={mapLayer}
+          routeCoordinates={routeCoordinates}
+          snappedSegmentIndex={displayVehiclePos.segmentIndex}
+          isSnappedToRoute={displayVehiclePos.snapped}
+          routeColor="#276EF1"
+          pickupPoint={
+            liveRide.origin.lat && liveRide.origin.lng
+              ? { lat: liveRide.origin.lat, lng: liveRide.origin.lng }
+              : null
+          }
+          pickupMode={isWaitingDriver ? 'searching' : 'pickup'}
+          destinationPoint={
+            liveRide.destination.lat && liveRide.destination.lng
+              ? { lat: liveRide.destination.lat, lng: liveRide.destination.lng }
+              : null
+          }
+          clientLivePoint={clientPos}
+          navPadding={isDriver ? { top: 155, bottom: 85, left: 20, right: 20 } : { top: 80, bottom: 80, left: 20, right: 20 }}
+          overviewPadding={{ top: 145, bottom: 90, left: 48, right: 48 }}
+          showVehicleMarker={showCarMarker}
+          fallbackCenter={[liveRide.origin.lat || -28.39, liveRide.origin.lng || -49.39]}
+        />
 
-          <MapFollowController
-            center={[displayVehiclePos.lat, displayVehiclePos.lng]}
-            followMode={followMode}
-            bounds={mapBounds}
-          />
+        {/* Pílula para habilitar bússola no iOS ou voltar p/ Heading-Up após arraste */}
+        {isDriver && (compass.needsPermission || cameraMode === 'free' || isRerouting) && (
+          <button
+            type="button"
+            onClick={handleRecenterCompass}
+            style={{
+              position: 'absolute',
+              right: 12,
+              bottom: 12,
+              zIndex: 10001,
+              backgroundColor: isRerouting ? '#1D4ED8' : 'rgba(17, 17, 17, 0.92)',
+              color: '#FFFFFF',
+              border: '1px solid rgba(118, 216, 0, 0.7)',
+              borderRadius: 999,
+              padding: '6px 12px',
+              fontSize: '0.7rem',
+              fontWeight: 800,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
+              boxShadow: '0 4px 14px rgba(0,0,0,0.3)',
+              cursor: 'pointer'
+            }}
+          >
+            <Compass size={14} color="#76D800" />
+            <span>
+              {isRerouting
+                ? 'Recalculando rota...'
+                : compass.needsPermission
+                  ? 'Ativar Bússola'
+                  : 'Voltar p/ Bússola 3D'}
+            </span>
+          </button>
+        )}
 
-          {/* Linha do Trajeto estilo Uber (Preto crisp p/ motorista | Azul vibrante p/ cliente) */}
-          {routeCoordinates.length > 0 && (
-            <>
-              <Polyline
-                positions={routeCoordinates}
-                pathOptions={{ color: isDriver ? '#000000' : '#0F172A', weight: isDriver ? 7.5 : 8, opacity: isDriver ? 0.92 : 0.6 }}
-              />
-              {!isDriver && (
-                <Polyline
-                  positions={routeCoordinates}
-                  pathOptions={{ color: '#276EF1', weight: 5, opacity: 0.96 }}
-                />
-              )}
-            </>
-          )}
-
-          {/* Marcador do Ponto de Embarque (com ondas radar quando aguardando motorista) */}
-          {liveRide.origin.lat && liveRide.origin.lng && (
-            <Marker
-              position={[liveRide.origin.lat, liveRide.origin.lng]}
-              icon={isWaitingDriver ? PICKUP_SEARCH_ICON : PICKUP_ICON}
-            />
-          )}
-
-          {/* Marcador do Ponto de Destino */}
-          {liveRide.destination.lat && liveRide.destination.lng && (
-            <Marker
-              position={[liveRide.destination.lat, liveRide.destination.lng]}
-              icon={DESTINATION_ICON}
-            />
-          )}
-
-          {/* Marcador ao Vivo do Passageiro (quando disponível) */}
-          {clientPos && (
-            <Marker
-              position={[clientPos.lat, clientPos.lng]}
-              icon={CLIENT_LIVE_ICON}
-            />
-          )}
-
-          {/* Marcador do Veículo do Motorista (apenas quando motorista aceito e com GPS ou na visão do próprio motorista) */}
-          {showCarMarker && (
-            <Marker
-              ref={carMarkerRef}
-              position={[displayVehiclePos.lat, displayVehiclePos.lng]}
-              icon={carIcon}
-              eventHandlers={{
-                add: (e) => {
-                  const el = e.target.getElement?.();
-                  const img = el?.querySelector?.('.up-vehicle-icon-img') as HTMLElement | null;
-                  if (img) {
-                    img.style.transform = `rotate(${displayVehiclePos.heading || 0}deg)`;
-                  }
-                }
-              }}
-            />
-          )}
-        </MapContainer>
-
-        {/* ── VELOCÍMETRO / LIMITE ESTILO UBER (EXCLUSIVO MOTORISTA) ────── */}
+        {/* ── VELOCÍMETRO REAL + STATUS GPS/BÚSSOLA (EXCLUSIVO MOTORISTA) ────── */}
         {isDriver && (
           <div style={{
             position: 'absolute',
@@ -1355,7 +1355,7 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
             gap: 8
           }}>
             <div style={{
-              width: 44,
+              width: 48,
               backgroundColor: '#FFFFFF',
               padding: '5px 4px',
               borderRadius: 8,
@@ -1364,8 +1364,8 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               textAlign: 'center',
               color: '#111111'
             }}>
-              <div style={{ fontSize: '1.02rem', fontWeight: 900, lineHeight: 1 }}>{speed > 0 ? speed : 30}</div>
-              <div style={{ fontSize: '0.52rem', fontWeight: 800, marginTop: 1 }}>{speed > 0 ? 'KM/H' : 'LIMITE'}</div>
+              <div style={{ fontSize: '1.02rem', fontWeight: 900, lineHeight: 1 }}>{speed}</div>
+              <div style={{ fontSize: '0.52rem', fontWeight: 800, marginTop: 1 }}>KM/H</div>
             </div>
             <div style={{
               backgroundColor: 'rgba(20, 20, 20, 0.92)',
@@ -1374,9 +1374,18 @@ export const LiveGpsNavigationScreen: React.FC<LiveGpsNavigationScreenProps> = (
               color: '#FFFFFF',
               fontSize: '0.66rem',
               fontWeight: 700,
-              boxShadow: '0 4px 12px rgba(0,0,0,0.22)'
+              boxShadow: '0 4px 12px rgba(0,0,0,0.22)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5
             }}>
-              {gpsFixed ? '● GPS Ao Vivo' : 'Conectando...'}
+              <span style={{ color: gpsFixed ? '#76D800' : '#F59E0B' }}>●</span>
+              <span>
+                {gpsFixed
+                  ? (gpsAccuracy ? `GPS ±${gpsAccuracy}m` : 'GPS Ao Vivo')
+                  : 'Conectando...'}
+                {cameraMode === 'heading_3d' ? ' • 3D' : ''}
+              </span>
             </div>
           </div>
         )}

@@ -80,6 +80,7 @@ export default defineConfig(({ mode }) => {
             if (id.includes('@vladmandic/human') || id.includes('@tensorflow')) return 'vendor-biometrics'
             if (id.includes('pdfjs-dist')) return 'vendor-pdfjs'
             if (id.includes('jspdf') || id.includes('html2canvas')) return 'vendor-pdf-export'
+            if (id.includes('maplibre-gl')) return 'vendor-maplibre'
             if (id.includes('leaflet')) return 'vendor-maps'
             if (id.includes('react') || id.includes('lucide-react')) return 'vendor-react'
             return 'vendor-misc'
