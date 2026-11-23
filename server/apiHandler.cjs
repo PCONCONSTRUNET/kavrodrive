@@ -4,6 +4,7 @@ const push = require('./push.cjs');
 const env = require('./env.cjs');
 const finance = require('./financeEngine.cjs');
 const efiBankGateway = require('./efiBankGateway.cjs');
+const mercadoPagoGateway = require('./mercadoPagoGateway.cjs');
 const kycStorage = require('./kycStorage.cjs');
 const driverTermsContract = require('./driverTermsContract.cjs');
 const passengerTermsContract = require('./passengerTermsContract.cjs');
@@ -120,29 +121,8 @@ function verifyWebhookSecret(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-function verifyMercadoPagoWebhookSignature(req, dataId) {
-  const secret = String(process.env.MERCADOPAGO_WEBHOOK_SECRET || '').trim();
-  const isProd = process.env.NODE_ENV === 'production' || Boolean(process.env.VERCEL);
-  if (!secret) {
-    // Em produção/Vercel exige obrigatoriamente MERCADOPAGO_WEBHOOK_SECRET configurado (fail-closed)
-    return !isProd;
-  }
-  const sigHeader = String(req.headers['x-signature'] || '').trim();
-  const reqId = String(req.headers['x-request-id'] || '').trim();
-  if (!sigHeader) return false;
-
-  const kv = {};
-  sigHeader.split(',').forEach(part => {
-    const [k, v] = part.split('=').map(s => String(s || '').trim());
-    if (k && v) kv[k] = v;
-  });
-  if (!kv.ts || !kv.v1) return false;
-
-  const manifest = `id:${dataId || ''};request-id:${reqId};ts:${kv.ts};`;
-  const expectedHex = crypto.createHmac('sha256', secret).update(manifest).digest('hex');
-  const a = Buffer.from(String(kv.v1).toLowerCase(), 'utf8');
-  const b = Buffer.from(expectedHex.toLowerCase(), 'utf8');
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+async function verifyMercadoPagoWebhookSignature(req, dataId) {
+  return mercadoPagoGateway.verifyWebhookSignature(req, dataId);
 }
 
 function verifyAdminSessionToken(rawToken) {
@@ -1978,6 +1958,10 @@ async function handleApiRequest(req, res) {
     if (pathname === '/api/health') {
       const dbRes = await db.query('SELECT NOW() as now');
       const r2Status = kycStorage.getCloudflareR2Status();
+      const [mpConfigured, efiConfigured] = await Promise.all([
+        mercadoPagoGateway.isMercadoPagoEnabled(),
+        efiBankGateway.isEfiEnabled()
+      ]);
       return sendJson(res, 200, {
         ok: true,
         now: dbRes.rows[0].now,
@@ -1991,7 +1975,8 @@ async function handleApiRequest(req, res) {
           pushConfigured: push.isConfigured(),
           googleAuthConfigured: Boolean(getGoogleClientId()),
           turnstileConfigured: Boolean((process.env.TURNSTILE_SECRET_KEY || '').trim()),
-          mercadopagoConfigured: Boolean(process.env.MERCADOPAGO_ACCESS_TOKEN || process.env.MERCADOPAGO_PUBLIC_KEY),
+          efiConfigured: Boolean(efiConfigured),
+          mercadopagoConfigured: Boolean(mpConfigured),
           otpEmailConfigured: Boolean(process.env.RESEND_API_KEY),
           otpWebhookConfigured: Boolean(process.env.OTP_WEBHOOK_URL)
         }
@@ -5448,7 +5433,8 @@ async function handleApiRequest(req, res) {
         }
       } else if (isCardLikeMethod(before.paymentMethod)) {
         const authorizedMax = finance.round2(tx?.estimatedAmount || before.estimatedPrice || before.totalPrice || 0);
-        const isRealCardHold = Boolean(tx && env.MERCADOPAGO_ACCESS_TOKEN && /^\d+$/.test(String(tx.gatewayTxId || '')));
+        const mpCreds = await mercadoPagoGateway.getActiveCredentials({ allowWhenDisabled: true });
+        const isRealCardHold = Boolean(tx && mpCreds.accessToken && /^\d+$/.test(String(tx.gatewayTxId || '')));
         if (split.grossAmount > authorizedMax + 0.01 && isRealCardHold) {
           const reAuth = await finance.authorizeCardForRide(
             {
@@ -6483,14 +6469,17 @@ async function handleApiRequest(req, res) {
     // 3.5 GATEWAY DE PAGAMENTOS: EFÍ BANK, PIX DINÂMICO, CARTÕES E WEBHOOKS
     // ============================================================
     if (pathname === '/api/payments/config' && method === 'GET') {
-      const mpPublicKey = String(process.env.MERCADOPAGO_PUBLIC_KEY || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim();
-      const mpOn = Boolean(env.MERCADOPAGO_ACCESS_TOKEN);
+      const mpCfg = await mercadoPagoGateway.getMercadoPagoConfig();
+      const mpOn = await mercadoPagoGateway.isMercadoPagoEnabled();
+      const mpPixActive = await mercadoPagoGateway.isMercadoPagoPixActive();
+      const mpCardActive = await mercadoPagoGateway.isMercadoPagoCardActive();
+      const mpPublicKey = mpCardActive ? String(mpCfg.publicKey || '').trim() : '';
       const efiCfg = await efiBankGateway.getEfiConfig();
       const efiOn = await efiBankGateway.isEfiEnabled();
       const efiPixActive = await efiBankGateway.isEfiPixActive();
       const efiSplitEnabled = await efiBankGateway.isEfiSplitActive();
       const efiDriverPixSendEnabled = await efiBankGateway.isEfiDriverPayoutActive();
-      const gatewayProvider = efiPixActive ? 'efibank' : (mpOn ? 'mercadopago' : 'sandbox');
+      const gatewayProvider = efiPixActive ? 'efibank' : (mpPixActive || mpOn ? 'mercadopago' : 'sandbox');
       return sendJson(res, 200, {
         ok: true,
         gatewayProvider,
@@ -6500,6 +6489,9 @@ async function handleApiRequest(req, res) {
         efiDriverPixSendEnabled,
         efiSandbox: Boolean(efiCfg.sandbox),
         mercadopagoEnabled: mpOn,
+        mercadopagoPixActive: mpPixActive,
+        mercadopagoCardActive: mpCardActive,
+        mercadopagoSandbox: Boolean(mpCfg.sandbox),
         mercadopagoPublicKey: mpPublicKey,
         cardMaxInstallments: finance.CARD_MAX_INSTALLMENTS || 1,
         cardOnlyAtSight: true,
@@ -6594,6 +6586,70 @@ async function handleApiRequest(req, res) {
       } catch (err) {
         return sendJson(res, 400, { ok: false, error: err?.message || 'Falha ao registrar webhook na Efí Bank.' });
       }
+    }
+
+    // CONFIGURAÇÃO EXCLUSIVA PAINEL MASTER: MERCADO PAGO (PUBLIC KEY, ACCESS TOKEN, CARTÃO & PIX)
+    if (pathname === '/api/admin/gateways/mercadopago') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const hostHeader = String(req.headers['x-forwarded-host'] || req.headers.host || '').trim();
+      const protoHeader = String(req.headers['x-forwarded-proto'] || (hostHeader.includes('localhost') || hostHeader.startsWith('127.') ? 'http' : 'https')).split(',')[0].trim();
+      const requestOrigin = String(req.headers.origin || '').trim() || (hostHeader ? `${protoHeader}://${hostHeader}` : 'https://kavrodrive.vercel.app');
+
+      if (method === 'GET') {
+        const cfg = await mercadoPagoGateway.getMercadoPagoConfig({ forceFresh: true });
+        return sendJson(res, 200, {
+          ok: true,
+          config: mercadoPagoGateway.sanitizeMercadoPagoConfigForAdmin(cfg),
+          computedWebhookUrl: mercadoPagoGateway.buildComputedWebhookUrl(requestOrigin)
+        });
+      }
+      if (method === 'POST') {
+        const body = await parseBody(req);
+        try {
+          const prev = await mercadoPagoGateway.getMercadoPagoConfig({ forceFresh: true });
+          const saved = await mercadoPagoGateway.saveMercadoPagoConfig(body || {});
+          const actor = getAdminActorContext(req);
+          await audit.recordAuditEvent({
+            category: 'financeiro_config',
+            actionKey: 'mercadopago_config_updated',
+            title: `Mercado Pago ${saved.enabled ? 'ativado' : 'desativado'} no Painel Master (${saved.sandbox ? 'Sandbox' : 'Produção'})`,
+            summary: `Mercado Pago ${saved.enabled ? 'ATIVADO' : 'DESATIVADO'} • Cartões: ${saved.useForCard ? 'Sim' : 'Não'} • PIX Cobrança: ${saved.useForPassengerPix ? 'Sim' : 'Não'}.`,
+            severity: 'info',
+            actorRole: actor.actorRole,
+            actorId: actor.actorId,
+            actorName: actor.actorName,
+            entityType: 'gateway',
+            entityId: 'mercadopago',
+            entityLabel: 'Mercado Pago Cartão & PIX',
+            changes: [
+              { field: 'enabled', label: 'Status Gateway Mercado Pago', before: String(prev.enabled), after: String(saved.enabled) },
+              { field: 'sandbox', label: 'Ambiente', before: prev.sandbox ? 'Sandbox' : 'Produção', after: saved.sandbox ? 'Sandbox' : 'Produção' },
+              { field: 'useForCard', label: 'Cartão de Crédito/Débito', before: String(prev.useForCard), after: String(saved.useForCard) },
+              { field: 'useForPassengerPix', label: 'PIX Mercado Pago', before: String(prev.useForPassengerPix), after: String(saved.useForPassengerPix) }
+            ],
+            ipAddress: actor.ipAddress,
+            userAgent: actor.userAgent
+          });
+          return sendJson(res, 200, {
+            ok: true,
+            config: mercadoPagoGateway.sanitizeMercadoPagoConfigForAdmin(saved),
+            computedWebhookUrl: mercadoPagoGateway.buildComputedWebhookUrl(requestOrigin)
+          });
+        } catch (err) {
+          return sendJson(res, 400, { ok: false, error: err?.message || 'Erro ao salvar configurações do Mercado Pago.' });
+        }
+      }
+    }
+
+    if (pathname === '/api/admin/gateways/mercadopago/test' && method === 'POST') {
+      if (!await isAuthorizedAdmin(req)) {
+        return sendJson(res, 401, { ok: false, error: 'Acesso restrito ao Administrador Master.' });
+      }
+      const body = await parseBody(req);
+      const testRes = await mercadoPagoGateway.testConnection(body || {});
+      return sendJson(res, testRes.ok ? 200 : 400, testRes);
     }
 
     if (pathname === '/api/payments/pix/create' && method === 'POST') {
@@ -6790,8 +6846,9 @@ async function handleApiRequest(req, res) {
       }
 
       const efiPixActive = await efiBankGateway.isEfiPixActive();
-      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN;
-      if (efiPixActive && !isAdmin && !hasValidWebhookSecret) {
+      const mpPixActive = await mercadoPagoGateway.isMercadoPagoPixActive();
+      const isSandboxMode = !efiPixActive && !mpPixActive;
+      if ((efiPixActive || mpPixActive) && !isAdmin && !hasValidWebhookSecret) {
         if (!clientSession) {
           return sendJson(res, 401, { ok: false, error: 'Sessão inválida para confirmar depósito.' });
         }
@@ -6804,7 +6861,7 @@ async function handleApiRequest(req, res) {
           const wallet = await finance.getClientWallet(clientSession.sub, { skipGatewaySync: true });
           return sendJson(res, 200, { ok: true, entry: ownedEntry, wallet });
         }
-        if (ownedEntry.gatewayTxId && (ownedEntry.metadata?.provider === 'efibank' || String(ownedEntry.gatewayTxId).startsWith('KVWLT'))) {
+        if (efiPixActive && ownedEntry.gatewayTxId && (ownedEntry.metadata?.provider === 'efibank' || String(ownedEntry.gatewayTxId).startsWith('KVWLT'))) {
           try {
             const efiCheck = await efiBankGateway.getPixChargeStatus(ownedEntry.gatewayTxId);
             if (efiCheck && efiCheck.paid) {
@@ -6812,6 +6869,20 @@ async function handleApiRequest(req, res) {
                 entryId: ownedEntry.id,
                 gatewayTxId: ownedEntry.gatewayTxId,
                 paidAmount: efiCheck.amountBrl || ownedEntry.amount
+              });
+              realtimeHub.publish('wallet:updated', { clientId: clientSession.sub, balance: conf.wallet.balance }, { clientId: clientSession.sub });
+              return sendJson(res, 200, { ok: true, ...conf });
+            }
+          } catch {}
+        }
+        if (mpPixActive && ownedEntry.gatewayTxId && (ownedEntry.metadata?.provider === 'mercadopago' || /^\d+$/.test(String(ownedEntry.gatewayTxId)))) {
+          try {
+            const mpCheck = await mercadoPagoGateway.getPaymentStatus(ownedEntry.gatewayTxId);
+            if (mpCheck.ok && mpCheck.paid) {
+              const conf = await finance.confirmClientWalletTopup({
+                entryId: ownedEntry.id,
+                gatewayTxId: ownedEntry.gatewayTxId,
+                paidAmount: mpCheck.amountBrl || ownedEntry.amount
               });
               realtimeHub.publish('wallet:updated', { clientId: clientSession.sub, balance: conf.wallet.balance }, { clientId: clientSession.sub });
               return sendJson(res, 200, { ok: true, ...conf });
@@ -7059,6 +7130,23 @@ async function handleApiRequest(req, res) {
           return sendJson(res, 400, { ok: false, paid: false, error: err.message });
         }
       }
+      if (tx?.gatewayTxId && /^\d+$/.test(String(tx.gatewayTxId)) && (await mercadoPagoGateway.isMercadoPagoPixActive())) {
+        try {
+          const mpCheck = await mercadoPagoGateway.getPaymentStatus(tx.gatewayTxId);
+          if (mpCheck.ok && mpCheck.paid) {
+            const settled = await confirmDigitalRidePaymentAndPublish({
+              rideId,
+              paidAmountBrl: mpCheck.amountBrl || ride.totalPrice,
+              gatewayTxId: String(tx.gatewayTxId),
+              gatewayLabel: 'Mercado Pago PIX'
+            });
+            return sendJson(res, 200, { ok: true, paid: true, ...settled });
+          }
+          return sendJson(res, 200, { ok: true, paid: false, status: mpCheck?.status || 'pending' });
+        } catch (err) {
+          return sendJson(res, 400, { ok: false, paid: false, error: err.message });
+        }
+      }
       return sendJson(res, 200, { ok: true, paid: false, status: ride.paymentStatus });
     }
 
@@ -7075,22 +7163,40 @@ async function handleApiRequest(req, res) {
         const paymentId = body?.data?.id || url.searchParams.get('data.id') || url.searchParams.get('id');
         const topic = body?.type || body?.topic || url.searchParams.get('type') || url.searchParams.get('topic');
         if (!paymentId || (topic && topic !== 'payment')) return sendJson(res, 200, { ok: true, ignored: true });
-        if (!verifyMercadoPagoWebhookSignature(req, paymentId)) {
+        if (!(await verifyMercadoPagoWebhookSignature(req, paymentId))) {
           return sendJson(res, 401, { ok: false, error: 'Assinatura de webhook Mercado Pago inválida.' });
         }
-        const token = env.MERCADOPAGO_ACCESS_TOKEN;
-        if (!token) return sendJson(res, 200, { ok: false, reason: 'token_missing' });
-        const mpRes = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`, {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        if (!mpRes.ok) return sendJson(res, 200, { ok: false, reason: `mp_${mpRes.status}` });
-        const payment = await mpRes.json();
-        if (payment.status !== 'approved' || !payment.external_reference) {
-          return sendJson(res, 200, { ok: true, status: payment.status });
+        const mpStatus = await mercadoPagoGateway.getPaymentStatus(paymentId);
+        if (!mpStatus.ok) {
+          return sendJson(res, 200, { ok: false, reason: mpStatus.reason || 'token_missing' });
+        }
+        if (!mpStatus.paid || !mpStatus.externalReference) {
+          return sendJson(res, 200, { ok: true, status: mpStatus.status });
+        }
+        const extRef = String(mpStatus.externalReference || '').trim();
+        if (extRef.startsWith('cw-topup-')) {
+          const conf = await finance.confirmClientWalletTopup({
+            entryId: extRef,
+            gatewayTxId: String(paymentId),
+            paidAmount: mpStatus.amountBrl || undefined
+          });
+          if (conf?.entry?.clientId && conf?.wallet) {
+            realtimeHub.publish('wallet:updated', { clientId: conf.entry.clientId, balance: conf.wallet.balance }, { clientId: conf.entry.clientId });
+          }
+          return sendJson(res, 200, { ok: true, type: 'wallet_topup', ...conf });
+        }
+        if (extRef.startsWith('DEBT_')) {
+          const driverId = extRef.slice('DEBT_'.length);
+          const debtResult = await finance.confirmDriverDebtSettlementWebhook({
+            driverId,
+            amount: mpStatus.amountBrl,
+            gatewayTxId: String(paymentId)
+          });
+          return sendJson(res, 200, { ok: true, type: 'driver_debt', ...debtResult });
         }
         const mpResult = await confirmDigitalRidePaymentAndPublish({
-          rideId: payment.external_reference,
-          paidAmountBrl: payment.transaction_amount,
+          rideId: extRef,
+          paidAmountBrl: mpStatus.amountBrl,
           gatewayTxId: String(paymentId),
           gatewayLabel: 'Mercado Pago'
         });
@@ -7100,7 +7206,8 @@ async function handleApiRequest(req, res) {
 
       // Endpoint interno /api/payments/webhook: exige Admin, x-webhook-secret válido, ou modo sandbox (sem Efí/MP Live) pelo dono autenticado
       const efiPixActive = await efiBankGateway.isEfiPixActive();
-      const isSandboxMode = !efiPixActive && !env.MERCADOPAGO_ACCESS_TOKEN;
+      const mpPixActive = await mercadoPagoGateway.isMercadoPagoPixActive();
+      const isSandboxMode = !efiPixActive && !mpPixActive;
 
       // 1) Quitação de dívida de motorista via PIX
       if (eventType === 'debt.confirmed' && body.driverId) {

@@ -44,7 +44,12 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box'
 };
 
-export const AdminEfiBankTab: React.FC = () => {
+interface AdminEfiBankTabProps {
+  onConfigUpdated?: (cfg: EfiBankAdminConfig) => void;
+  refreshSignal?: number;
+}
+
+export const AdminEfiBankTab: React.FC<AdminEfiBankTabProps> = ({ onConfigUpdated, refreshSignal = 0 }) => {
   const [config, setConfig] = useState<EfiBankAdminConfig | null>(null);
   const [computedWebhookUrl, setComputedWebhookUrl] = useState('');
   const [isLoading, setIsLoading] = useState(true);
@@ -94,6 +99,7 @@ export const AdminEfiBankTab: React.FC = () => {
     setDriverPixSendEnabled(cfg.driverPixSendEnabled !== false);
     setSkipMtlsWebhook(cfg.skipMtlsWebhook !== false);
     if (whUrl) setComputedWebhookUrl(whUrl);
+    onConfigUpdated?.(cfg);
   };
 
   const loadConfig = async () => {
@@ -109,7 +115,8 @@ export const AdminEfiBankTab: React.FC = () => {
 
   useEffect(() => {
     loadConfig();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshSignal]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];

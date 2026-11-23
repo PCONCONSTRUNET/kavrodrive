@@ -28,7 +28,7 @@ import { RideRoutePlaybackModal } from '../components/RideRoutePlaybackModal';
 import { AdminRecordedRoutesTab } from '../components/AdminRecordedRoutesTab';
 import { AdminPlatformFinanceTab } from '../components/AdminPlatformFinanceTab';
 import { AdminFinancialFeesTab } from '../components/AdminFinancialFeesTab';
-import { AdminEfiBankTab } from '../components/AdminEfiBankTab';
+import { AdminGatewaysTab } from '../components/AdminGatewaysTab';
 import { AdminAuditTab } from '../components/AdminAuditTab';
 import { AdminDocumentsCenterTab } from '../components/AdminDocumentsCenterTab';
 import { AdminMasterOverviewTab } from '../components/AdminMasterOverviewTab';
@@ -58,7 +58,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
   onRefreshData,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'repasses' | 'taxas' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'parceiros' | 'perfil' | 'config' | 'notificacoes'>('corridas');
+  const [activeTab, setActiveTab] = useState<'corridas' | 'plataforma' | 'documentacoes' | 'categorias' | 'agenda' | 'rotas' | 'financeiro' | 'repasses' | 'taxas' | 'gateways' | 'efibank' | 'auditoria' | 'sos' | 'clientes' | 'parceiros' | 'perfil' | 'config' | 'notificacoes'>('corridas');
   const [repassesInitialSubTab, setRepassesInitialSubTab] = useState<'saques' | 'motoristas' | 'corridas_split' | 'livro_razao'>('saques');
   const [activeSosAlertsCount, setActiveSosAlertsCount] = useState<number>(0);
   const [pendingDocsCount, setPendingDocsCount] = useState<number>(0);
@@ -1769,7 +1769,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
               { id: 'financeiro', label: 'Financeiro & Caixa', icon: DollarSign, badge: null },
               { id: 'repasses', label: 'Saques, Carteiras & Split', icon: Wallet, badge: null },
               { id: 'taxas', label: 'Taxas Financeiras', icon: Percent, badge: null },
-              { id: 'efibank', label: 'Efí Bank (API & Pix)', icon: Landmark, badge: null },
+              { id: 'gateways', label: 'Gateways (Efí & MP)', icon: Landmark, badge: null },
               { id: 'sos', label: 'Central SOS', icon: ShieldAlert, badge: activeSosAlertsCount > 0 ? String(activeSosAlertsCount) : null, isDanger: activeSosAlertsCount > 0 },
             ]
           },
@@ -2041,7 +2041,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
                 {activeTab === 'financeiro' && 'Financeiro & Caixa'}
                 {activeTab === 'repasses' && 'Saques, Carteiras & Split por Corrida'}
                 {activeTab === 'taxas' && 'Taxas Financeiras'}
-                {activeTab === 'efibank' && 'Efí Bank (Certificado, PIX & Split)'}
+                {(activeTab === 'gateways' || activeTab === 'efibank') && 'Gateways de Pagamento (Efí Bank & Mercado Pago)'}
                 {activeTab === 'auditoria' && 'Auditoria & Trilha do Banco'}
                 {activeTab === 'sos' && 'Central SOS'}
                 {activeTab === 'rotas' && 'Rotas GPS'}
@@ -4782,7 +4782,7 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
         {activeTab === 'taxas' && (
           <AdminFinancialFeesTab
             config={currentConfig}
-            onOpenEfiConfig={() => setActiveTab('efibank')}
+            onOpenEfiConfig={() => setActiveTab('gateways')}
             onConfigUpdated={(next) => {
               setCurrentConfig(next);
               onRefreshData();
@@ -4790,9 +4790,9 @@ export const AdminDashboardScreen: React.FC<AdminDashboardScreenProps> = ({
           />
         )}
 
-        {/* ================= ABA DEDICADA: CONFIGURAÇÃO EFÍ BANK (API, CERTIFICADO, SPLIT & PAYOUTS) ================= */}
-        {activeTab === 'efibank' && (
-          <AdminEfiBankTab />
+        {/* ================= ABA DEDICADA: GATEWAYS DE PAGAMENTO (EFÍ BANK & MERCADO PAGO) ================= */}
+        {(activeTab === 'gateways' || activeTab === 'efibank') && (
+          <AdminGatewaysTab />
         )}
 
         {activeTab === 'auditoria' && (

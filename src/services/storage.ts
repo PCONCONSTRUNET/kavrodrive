@@ -661,6 +661,9 @@ export const StorageService = {
     efiDriverPixSendEnabled: boolean;
     efiSandbox: boolean;
     mercadopagoEnabled: boolean;
+    mercadopagoPixActive?: boolean;
+    mercadopagoCardActive?: boolean;
+    mercadopagoSandbox?: boolean;
     mercadopagoPublicKey: string;
     autoPixPayoutEnabled: boolean;
   }> {
@@ -682,6 +685,9 @@ export const StorageService = {
           efiDriverPixSendEnabled: Boolean(d.efiDriverPixSendEnabled),
           efiSandbox: Boolean(d.efiSandbox),
           mercadopagoEnabled: Boolean(d.mercadopagoEnabled),
+          mercadopagoPixActive: Boolean(d.mercadopagoPixActive),
+          mercadopagoCardActive: Boolean(d.mercadopagoCardActive),
+          mercadopagoSandbox: Boolean(d.mercadopagoSandbox),
           mercadopagoPublicKey: String(d.mercadopagoPublicKey || '').trim(),
           autoPixPayoutEnabled: Boolean(d.autoPixPayoutEnabled)
         };
@@ -695,6 +701,9 @@ export const StorageService = {
       efiDriverPixSendEnabled: false,
       efiSandbox: false,
       mercadopagoEnabled: false,
+      mercadopagoPixActive: false,
+      mercadopagoCardActive: false,
+      mercadopagoSandbox: true,
       mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
       autoPixPayoutEnabled: false
     };
@@ -783,6 +792,63 @@ export const StorageService = {
       return await res.json();
     } catch {
       return { ok: false, error: 'Erro ao registrar webhook na Efí Bank.' };
+    }
+  },
+
+  async fetchAdminMercadoPagoConfig(): Promise<{
+    ok: boolean;
+    config?: import('../types').MercadoPagoAdminConfig;
+    computedWebhookUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/mercadopago', {
+        cache: 'no-store',
+        headers: { ...this.getAuthHeaders() }
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao carregar Mercado Pago.' };
+    }
+  },
+
+  async saveAdminMercadoPagoConfig(payload: import('../types').MercadoPagoConfigUpdatePayload): Promise<{
+    ok: boolean;
+    config?: import('../types').MercadoPagoAdminConfig;
+    computedWebhookUrl?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/mercadopago', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(payload)
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao salvar Mercado Pago.' };
+    }
+  },
+
+  async testAdminMercadoPagoConnection(overridePayload?: import('../types').MercadoPagoConfigUpdatePayload): Promise<{
+    ok: boolean;
+    environment?: string;
+    accountId?: number | string;
+    nickname?: string | null;
+    email?: string | null;
+    siteId?: string | null;
+    message?: string;
+    error?: string;
+  }> {
+    try {
+      const res = await fetch('/api/admin/gateways/mercadopago/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        body: JSON.stringify(overridePayload || {})
+      });
+      return await res.json();
+    } catch {
+      return { ok: false, error: 'Erro de conexão ao testar Mercado Pago.' };
     }
   },
 

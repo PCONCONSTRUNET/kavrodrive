@@ -4667,3 +4667,243 @@ test('Otimizacao de escala: updateDriverLocationOnly preserva perfil/veiculos se
   assert.ok(Array.isArray(overview.driverWallets));
   assert.ok(overview.driverWallets.some(w => w.driverId === drvId));
 });
+
+test('Gateway Mercado Pago: config persistida, ativar/desativar, máscara, PIX, cartão, /payments/config e webhook HMAC', async () => {
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '5').slice(-9).split('').map(Number);
+    if (new Set(base).size === 1) base[8] = (base[8] + 1) % 10;
+    const calc = (arr) => {
+      let s = 0;
+      for (let i = 0; i < arr.length; i++) s += arr[i] * (arr.length + 1 - i);
+      return ((s * 10) % 11) % 10;
+    };
+    const d1 = calc(base);
+    const d2 = calc([...base, d1]);
+    return [...base, d1, d2].join('');
+  };
+
+  const mpGateway = require('../server/mercadoPagoGateway.cjs');
+  const efiGateway = require('../server/efiBankGateway.cjs');
+  await efiGateway.saveEfiConfig({ enabled: false }).catch(() => {});
+  mpGateway.clearCaches();
+
+  const paidPaymentIds = new Set();
+  const capturedMpRequests = [];
+
+  mpGateway._setMercadoPagoFetchForTest(async (urlStr, options = {}) => {
+    const parsed = new URL(urlStr);
+    const method = String(options.method || 'GET').toUpperCase();
+    const bodyObj = options.body ? JSON.parse(options.body) : null;
+    const route = `${method} ${parsed.pathname}`;
+    capturedMpRequests.push({ route, urlStr, headers: options.headers || {}, bodyObj });
+
+    if (route === 'GET /users/me') {
+      const auth = String(options.headers?.Authorization || '');
+      if (auth.includes('INVALID')) {
+        return new Response(JSON.stringify({ message: 'unauthorized' }), { status: 401 });
+      }
+      return new Response(JSON.stringify({ id: 77889900, nickname: 'KAVRO_MP_TEST', email: 'mp@kavro.test', site_id: 'MLB' }), { status: 200 });
+    }
+
+    if (route === 'POST /v1/payments') {
+      if (bodyObj?.payment_method_id === 'pix') {
+        const payId = `9900${Date.now().toString().slice(-6)}`;
+        return new Response(
+          JSON.stringify({
+            id: Number(payId),
+            status: 'pending',
+            external_reference: bodyObj.external_reference,
+            date_of_expiration: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+            point_of_interaction: {
+              transaction_data: {
+                qr_code: `00020126580014BR.GOV.BCB.PIX0136mp-pix-${payId}`,
+                qr_code_base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+              }
+            }
+          }),
+          { status: 201 }
+        );
+      }
+      // Pré-autorização cartão
+      const cardPayId = `8800${Date.now().toString().slice(-6)}`;
+      return new Response(
+        JSON.stringify({
+          id: Number(cardPayId),
+          status: 'authorized',
+          authorization_code: 'MP_AUTH_OK_99'
+        }),
+        { status: 201 }
+      );
+    }
+
+    if (route.startsWith('PUT /v1/payments/')) {
+      const id = parsed.pathname.split('/').pop();
+      return new Response(JSON.stringify({ id: Number(id), status: 'approved' }), { status: 200 });
+    }
+
+    if (route.startsWith('GET /v1/payments/')) {
+      const id = parsed.pathname.split('/').pop();
+      const isPaid = paidPaymentIds.has(String(id));
+      return new Response(
+        JSON.stringify({
+          id: Number(id),
+          status: isPaid ? 'approved' : 'pending',
+          status_detail: isPaid ? 'accredited' : 'pending_waiting_payment',
+          transaction_amount: 34.5,
+          external_reference: globalThis.__mpLastExternalRef || ''
+        }),
+        { status: 200 }
+      );
+    }
+
+    return new Response(JSON.stringify({ message: `Unhandled MP route ${route}` }), { status: 404 });
+  });
+
+  try {
+    // 1) Endpoints Admin Mercado Pago exigem autenticação Master (401 fail-closed)
+    assert.equal((await apiJson('/api/admin/gateways/mercadopago')).status, 401);
+    assert.equal(
+      (await apiJson('/api/admin/gateways/mercadopago', { method: 'POST', body: { enabled: true } })).status,
+      401
+    );
+    assert.equal(
+      (await apiJson('/api/admin/gateways/mercadopago/test', { method: 'POST', body: {} })).status,
+      401
+    );
+
+    // 2) Exige Access Token para ativar
+    await assert.rejects(
+      () => mpGateway.saveMercadoPagoConfig({ enabled: true, clearAccessToken: true }),
+      /Access Token/
+    );
+
+    // 3) Salva e ativa Mercado Pago no banco + mascara segredos
+    const savedMp = await mpGateway.saveMercadoPagoConfig({
+      enabled: true,
+      sandbox: true,
+      publicKey: 'TEST-pk-kavro-public-001',
+      accessToken: 'TEST-token-super-secret-8899',
+      webhookSecret: 'mp_wh_secret_kavro_123',
+      useForCard: true,
+      useForPassengerPix: true,
+      statementDescriptor: 'KAVRO TEST'
+    });
+    assert.equal(savedMp.enabled, true);
+
+    const sanitized = mpGateway.sanitizeMercadoPagoConfigForAdmin(savedMp);
+    assert.equal(sanitized.hasAccessToken, true);
+    assert.equal(sanitized.hasWebhookSecret, true);
+    assert.equal(sanitized.publicKey, 'TEST-pk-kavro-public-001');
+    assert.equal(JSON.stringify(sanitized).includes('TEST-token-super-secret-8899'), false);
+    assert.equal(JSON.stringify(sanitized).includes('mp_wh_secret_kavro_123'), false);
+
+    // 4) /api/payments/config e /api/health expõem status ativo do Mercado Pago (sem segredos)
+    const payCfg = await apiJson('/api/payments/config');
+    assert.equal(payCfg.status, 200);
+    assert.equal(payCfg.json.gatewayProvider, 'mercadopago');
+    assert.equal(payCfg.json.mercadopagoEnabled, true);
+    assert.equal(payCfg.json.mercadopagoPixActive, true);
+    assert.equal(payCfg.json.mercadopagoCardActive, true);
+    assert.equal(payCfg.json.mercadopagoSandbox, true);
+    assert.equal(payCfg.json.mercadopagoPublicKey, 'TEST-pk-kavro-public-001');
+    assert.equal(payCfg.json.accessToken, undefined);
+
+    const healthRes = await apiJson('/api/health');
+    assert.equal(healthRes.status, 200);
+    assert.equal(healthRes.json.services.mercadopagoConfigured, true);
+
+    // 5) Test Connection válido e inválido
+    const okConn = await mpGateway.testConnection();
+    assert.equal(okConn.ok, true);
+    assert.equal(okConn.nickname, 'KAVRO_MP_TEST');
+
+    const badConn = await mpGateway.testConnection({ accessToken: 'INVALID-TOKEN' });
+    assert.equal(badConn.ok, false);
+
+    // 6) Cria corrida PIX (como Efí está desligada, Mercado Pago gera o QR PIX) + confirma via webhook HMAC-SHA256
+    const mpTestIp = '198.51.100.251';
+    const cliReg = await apiJson('/api/clients/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': mpTestIp },
+      body: {
+        name: 'Passageiro Mercado Pago',
+        phone: `(48) 99744-${String(Date.now()).slice(-4)}`,
+        document: makeTestCpf(Math.floor((Date.now() % 650000000) + 310000066)),
+        email: `mp.cli.${Date.now()}@kavro.test`,
+        password: '1234',
+        termsAcceptance: { accepted: true }
+      }
+    });
+    assert.equal(cliReg.status, 200);
+    const cliToken = cliReg.json.clientToken;
+
+    const rideRes = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': mpTestIp },
+      body: {
+        clientId: cliReg.json.client.id,
+        clientName: 'Passageiro Mercado Pago',
+        clientPhone: cliReg.json.client.phone,
+        origin: { address: 'Rua MP Origem, 10', lat: -28.391, lng: -49.393 },
+        destination: { address: 'Rua MP Destino, 99', lat: -28.401, lng: -49.403 },
+        distanceKm: 6,
+        durationMin: 12,
+        time: '18:30',
+        category: 'kavro_go',
+        paymentMethod: 'pix'
+      }
+    });
+    assert.equal(rideRes.status, 200);
+    const mpRide = rideRes.json.ride;
+    const mpRideTx = await finance.getPaymentTxByRide(mpRide.id);
+    assert.ok(/^\d+$/.test(String(mpRideTx.gatewayTxId)));
+    assert.ok(String(mpRide.pixCopyPaste || '').includes('mp-pix-'));
+    globalThis.__mpLastExternalRef = mpRide.id;
+
+    // Assinatura errada falha fechado (401)
+    const badWh = await apiJson('/api/webhooks/mercadopago', {
+      method: 'POST',
+      headers: { 'x-signature': 'ts=123,v1=deadbeef', 'x-request-id': 'req-1' },
+      body: { type: 'payment', data: { id: mpRideTx.gatewayTxId } }
+    });
+    assert.equal(badWh.status, 401);
+
+    // Marca pago no mock e envia assinatura válida usando webhookSecret salvo no banco
+    paidPaymentIds.add(String(mpRideTx.gatewayTxId));
+    const ts = String(Math.floor(Date.now() / 1000));
+    const reqId = 'req-mp-valid-1';
+    const manifest = `id:${mpRideTx.gatewayTxId};request-id:${reqId};ts:${ts};`;
+    const validSig = crypto.createHmac('sha256', 'mp_wh_secret_kavro_123').update(manifest).digest('hex');
+
+    const goodWh = await apiJson('/api/webhooks/mercadopago', {
+      method: 'POST',
+      headers: { 'x-signature': `ts=${ts},v1=${validSig}`, 'x-request-id': reqId },
+      body: { type: 'payment', data: { id: mpRideTx.gatewayTxId } }
+    });
+    assert.equal(goodWh.status, 200);
+    assert.equal(goodWh.json.ride.paymentStatus, 'confirmado');
+
+    // 7) Desativar Mercado Pago no Painel Master desliga imediatamente no /api/payments/config e /api/health
+    await mpGateway.saveMercadoPagoConfig({ enabled: false });
+    const afterOffCfg = await apiJson('/api/payments/config');
+    assert.equal(afterOffCfg.json.mercadopagoEnabled, false);
+    assert.equal(afterOffCfg.json.mercadopagoPixActive, false);
+    assert.equal(afterOffCfg.json.mercadopagoCardActive, false);
+    assert.equal(afterOffCfg.json.mercadopagoPublicKey, '');
+    assert.equal(afterOffCfg.json.gatewayProvider, 'sandbox');
+
+    const afterOffHealth = await apiJson('/api/health');
+    assert.equal(afterOffHealth.json.services.mercadopagoConfigured, false);
+    assert.ok(capturedMpRequests.length >= 2);
+  } finally {
+    delete globalThis.__mpLastExternalRef;
+    await mpGateway.saveMercadoPagoConfig({
+      enabled: false,
+      clearAccessToken: true,
+      clearPublicKey: true,
+      clearWebhookSecret: true
+    }).catch(() => {});
+    mpGateway._setMercadoPagoFetchForTest(null);
+    mpGateway.clearCaches();
+  }
+});

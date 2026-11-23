@@ -1052,3 +1052,38 @@ export interface EfiBankConfigUpdatePayload {
   regenerateWebhookSecret?: boolean;
   webhookUrl?: string;
 }
+
+export interface MercadoPagoAdminConfig {
+  enabled: boolean;
+  sandbox: boolean;
+  publicKey: string;
+  hasAccessToken: boolean;
+  accessTokenMasked: string;
+  hasWebhookSecret: boolean;
+  webhookSecretMasked: string;
+  useForCard: boolean;
+  useForPassengerPix: boolean;
+  statementDescriptor: string;
+  webhookUrl: string;
+  lastTestedAt?: string | null;
+  lastTestOk?: boolean | null;
+  lastTestMessage?: string;
+  updatedAt?: string | null;
+  credentialsReady: boolean;
+  source?: 'env' | 'database' | 'default';
+}
+
+export interface MercadoPagoConfigUpdatePayload {
+  enabled?: boolean;
+  sandbox?: boolean;
+  publicKey?: string;
+  clearPublicKey?: boolean;
+  accessToken?: string;
+  clearAccessToken?: boolean;
+  webhookSecret?: string;
+  clearWebhookSecret?: boolean;
+  useForCard?: boolean;
+  useForPassengerPix?: boolean;
+  statementDescriptor?: string;
+  webhookUrl?: string;
+}

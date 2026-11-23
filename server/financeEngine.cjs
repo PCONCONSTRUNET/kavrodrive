@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const db = require('./db.cjs');
 const env = require('./env.cjs');
 const efiBankGateway = require('./efiBankGateway.cjs');
+const mercadoPagoGateway = require('./mercadoPagoGateway.cjs');
 
 function round2(n) {
   return Math.round((Number(n) || 0) * 100) / 100;
@@ -2388,7 +2389,8 @@ function mapMpPaymentMethodId(brand, cardType) {
 }
 
 async function createMpCardTokenServer({ cardNumber, holderName, expMonth, expYear, cvv, holderDoc }) {
-  const publicKey = String(process.env.MERCADOPAGO_PUBLIC_KEY || process.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim();
+  const mpCreds = await mercadoPagoGateway.getActiveCredentials();
+  const publicKey = String(mpCreds.enabled && mpCreds.useForCard ? mpCreds.publicKey || '' : '').trim();
   if (!publicKey) return null;
   try {
     const cleanDoc = String(holderDoc || '').replace(/\D/g, '');
@@ -2407,7 +2409,7 @@ async function createMpCardTokenServer({ cardNumber, holderName, expMonth, expYe
         number: cleanDoc
       };
     }
-    const resp = await fetch(`https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(publicKey)}`, {
+    const resp = await mercadoPagoGateway.mpFetch(`https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(publicKey)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
@@ -2565,39 +2567,29 @@ async function createPixChargeForRide(ride) {
     pixQrCode = efiPix.pixQrCode || getQrCodeUrl(pixCopyPaste, 260);
     gatewayTxId = efiPix.txid;
     pixExpiresAt = efiPix.expiresAt || pixExpiresAt;
-  } else if (env.MERCADOPAGO_ACCESS_TOKEN) {
-    try {
-      const mpRes = await fetch('https://api.mercadopago.com/v1/payments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`,
-          'X-Idempotency-Key': `mp_pix_${ride.id}_${split.grossAmount}`
-        },
-        body: JSON.stringify({
-          transaction_amount: split.grossAmount,
-          description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
-          payment_method_id: 'pix',
-          external_reference: ride.id,
-          payer: {
-            email: 'passageiro@kavrodrive.com.br',
-            first_name: ride.clientName || 'Passageiro'
-          }
-        })
-      });
-      if (mpRes.ok) {
-        const mpData = await mpRes.json();
-        const qrData = mpData?.point_of_interaction?.transaction_data;
-        if (qrData?.qr_code) {
-          pixCopyPaste = qrData.qr_code;
-          pixQrCode = qrData.qr_code_base64
-            ? `data:image/png;base64,${qrData.qr_code_base64}`
-            : getQrCodeUrl(pixCopyPaste, 260);
-          gatewayTxId = String(mpData.id);
-        }
-      }
-    } catch (err) {
-      console.warn('[MP Pix Create fallback]:', err.message);
+  } else if (await mercadoPagoGateway.isMercadoPagoPixActive()) {
+    let payerCpf = '';
+    if (ride.clientId) {
+      try {
+        const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [ride.clientId]);
+        payerCpf = String(cliR.rows[0]?.document || '');
+      } catch {}
+    }
+    const mpPix = await mercadoPagoGateway.createPixPayment({
+      amountBrl: split.grossAmount,
+      externalReference: ride.id,
+      idempotencyKey: `mp_pix_${ride.id}_${split.grossAmount}`,
+      description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
+      payerName: ride.clientName || 'Passageiro',
+      payerEmail: ride.clientEmail || 'passageiro@kavrodrive.com.br',
+      payerCpf,
+      qrFallbackGenerator: getQrCodeUrl
+    });
+    if (mpPix) {
+      pixCopyPaste = mpPix.pixCopyPaste;
+      pixQrCode = mpPix.pixQrCode;
+      gatewayTxId = mpPix.paymentId;
+      pixExpiresAt = mpPix.expiresAt || pixExpiresAt;
     }
   }
 
@@ -2668,19 +2660,21 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
     ? rawTokenCandidate.slice('mp_tok_'.length)
     : (!rawTokenCandidate.startsWith('tok_') && rawTokenCandidate.length >= 16 ? rawTokenCandidate : '');
 
-  if (env.MERCADOPAGO_ACCESS_TOKEN && realMpToken) {
+  const mpCreds = await mercadoPagoGateway.getActiveCredentials();
+  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken && realMpToken) {
     try {
-      const mpResp = await fetch('https://api.mercadopago.com/v1/payments', {
+      const mpResp = await mercadoPagoGateway.mpFetch('https://api.mercadopago.com/v1/payments', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`,
+          'Authorization': `Bearer ${mpCreds.accessToken}`,
           'X-Idempotency-Key': `mp_card_auth_${ride.id}_${split.grossAmount}`
         },
         body: JSON.stringify({
           transaction_amount: split.grossAmount,
           token: realMpToken,
           description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
+          statement_descriptor: mpCreds.statementDescriptor || 'KAVRO DRIVE',
           installments: 1,
           capture: false,
           payment_method_id: mapMpPaymentMethodId(savedCard?.brand || brand, ride.paymentMethod),
@@ -2775,14 +2769,15 @@ async function captureCardForRide(ride, finalAmount) {
   const tx = await getPaymentTxByRide(ride.id);
   const amount = round2(finalAmount ?? ride.totalPrice);
   const gwId = String(tx?.gatewayTxId || '');
-  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));
+  const mpCreds = await mercadoPagoGateway.getActiveCredentials({ allowWhenDisabled: true });
+  const isRealMpId = Boolean(mpCreds.accessToken && gwId && /^\d+$/.test(gwId));
   if (isRealMpId) {
     try {
-      const capResp = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}`, {
+      const capResp = await mercadoPagoGateway.mpFetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`
+          'Authorization': `Bearer ${mpCreds.accessToken}`
         },
         body: JSON.stringify({
           capture: true,
@@ -2806,15 +2801,16 @@ async function captureCardForRide(ride, finalAmount) {
 
 async function refundGatewayPayment(tx, refundAmount = null) {
   const gwId = String(tx?.gatewayTxId || '');
-  const isRealMpId = Boolean(env.MERCADOPAGO_ACCESS_TOKEN && gwId && /^\d+$/.test(gwId));
+  const mpCreds = await mercadoPagoGateway.getActiveCredentials({ allowWhenDisabled: true });
+  const isRealMpId = Boolean(mpCreds.accessToken && gwId && /^\d+$/.test(gwId));
   if (!isRealMpId) return { ok: true, provider: 'sandbox' };
   try {
     const body = refundAmount ? { amount: round2(refundAmount) } : {};
-    const resp = await fetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}/refunds`, {
+    const resp = await mercadoPagoGateway.mpFetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${env.MERCADOPAGO_ACCESS_TOKEN}`,
+        'Authorization': `Bearer ${mpCreds.accessToken}`,
         'X-Idempotency-Key': `mp_refund_${tx.id}_${refundAmount || 'full'}`
       },
       body: JSON.stringify(body)
@@ -3077,6 +3073,50 @@ async function createDriverDebtSettlementPix(driverId, customAmount = null) {
       pixQrCode: finalQr,
       provider: 'efibank'
     };
+  }
+
+  if (await mercadoPagoGateway.isMercadoPagoPixActive()) {
+    const drv = await getDriverById(driverId).catch(() => null);
+    const mpDebtPix = await mercadoPagoGateway.createPixPayment({
+      amountBrl: amountToPay,
+      externalReference: `DEBT_${driverId}`,
+      idempotencyKey: `mp_debt_${driverId}_${txid}`,
+      description: `Quitação saldo devedor Kavro (${driverId})`,
+      payerName: drv?.name || 'Motorista Parceiro Kavro',
+      payerEmail: drv?.email || 'motorista@kavrodrive.com.br',
+      payerCpf: drv?.document || '',
+      qrFallbackGenerator: getQrCodeUrl
+    });
+    if (mpDebtPix) {
+      await savePaymentTransaction({
+        id: `tx_debt_${driverId}`,
+        rideId: `DEBT_${driverId}`,
+        rideCode: `QUIT-${String(driverId).slice(-6)}`,
+        driverId,
+        driverName: drv?.name || null,
+        method: 'pix',
+        status: 'aguardando',
+        estimatedAmount: amountToPay,
+        finalAmount: amountToPay,
+        paidAmount: 0,
+        commissionPercent: 0,
+        commissionAmount: 0,
+        driverNetAmount: 0,
+        pixQrCode: mpDebtPix.pixQrCode,
+        pixCopyPaste: mpDebtPix.pixCopyPaste,
+        pixExpiresAt: mpDebtPix.expiresAt,
+        gatewayTxId: mpDebtPix.paymentId
+      });
+      return {
+        driverId,
+        amount: amountToPay,
+        txid: mpDebtPix.paymentId,
+        gatewayTxId: mpDebtPix.paymentId,
+        pixCopyPaste: mpDebtPix.pixCopyPaste,
+        pixQrCode: mpDebtPix.pixQrCode,
+        provider: 'mercadopago'
+      };
+    }
   }
 
   const pixCopyPaste = generateDynamicPixPayload({
@@ -3934,6 +3974,29 @@ async function getClientWallet(clientId, options = {}) {
         }
       }
     }
+    if (await mercadoPagoGateway.isMercadoPagoPixActive()) {
+      const pendingMpEntries = entries.filter(
+        e =>
+          e.status === 'aguardando' &&
+          e.metadata?.provider === 'mercadopago' &&
+          /^\d+$/.test(String(e.gatewayTxId || ''))
+      );
+      for (const pe of pendingMpEntries.slice(0, 5)) {
+        try {
+          const mpCheck = await mercadoPagoGateway.getPaymentStatus(pe.gatewayTxId);
+          if (mpCheck.ok && mpCheck.paid) {
+            await confirmClientWalletTopup({
+              entryId: pe.id,
+              gatewayTxId: pe.gatewayTxId,
+              paidAmount: mpCheck.amountBrl || pe.amount
+            });
+            syncedAny = true;
+          }
+        } catch {
+          // ignore transient MP lookup failures
+        }
+      }
+    }
     if (syncedAny) {
       entries = await listClientWalletEntries(cid);
     }
@@ -4130,6 +4193,29 @@ async function createClientWalletTopup({
       gatewayTxId = efiPix.txid;
       pixExpiresAt = efiPix.expiresAt || pixExpiresAt;
       pixProvider = 'efibank';
+    } else if (await mercadoPagoGateway.isMercadoPagoPixActive()) {
+      let payerCpf = '';
+      try {
+        const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [cid]);
+        payerCpf = String(cliR.rows[0]?.document || '');
+      } catch {}
+      const mpPix = await mercadoPagoGateway.createPixPayment({
+        amountBrl: cleanAmount,
+        externalReference: entryId,
+        idempotencyKey: `mp_wlt_${entryId}`,
+        description: `Recarga Carteira Kavro (${cid})`,
+        payerName: clientName || 'Passageiro Kavro',
+        payerEmail: clientEmail || 'passageiro@kavrodrive.com.br',
+        payerCpf,
+        qrFallbackGenerator: getQrCodeUrl
+      });
+      if (mpPix) {
+        pixCopyPaste = mpPix.pixCopyPaste;
+        pixQrCode = mpPix.pixQrCode;
+        gatewayTxId = mpPix.paymentId;
+        pixExpiresAt = mpPix.expiresAt || pixExpiresAt;
+        pixProvider = 'mercadopago';
+      }
     }
 
     const { entry } = await insertClientWalletEntry({
