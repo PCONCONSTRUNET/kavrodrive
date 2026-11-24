@@ -8,6 +8,9 @@ interface UberPaymentMethodModalProps {
   embedded?: boolean;
   paymentMethod: PaymentMethod;
   totalPrice: number;
+  baseTotalPrice?: number;
+  cardFeePercent?: number;
+  cardFeeAmount?: number;
   walletBalance: number;
   isLoggedIn: boolean;
   allowCash: boolean;
@@ -28,6 +31,9 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
   embedded = false,
   paymentMethod,
   totalPrice,
+  baseTotalPrice,
+  cardFeePercent = 0,
+  cardFeeAmount = 0,
   walletBalance,
   isLoggedIn,
   allowCash,
@@ -52,7 +58,18 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
         : '';
 
   const isWalletSelected = paymentMethod === 'carteira';
-  const hasEnoughWalletBalance = isLoggedIn && walletBalance + 0.001 >= totalPrice;
+  const walletRequiredTotal = baseTotalPrice !== undefined ? baseTotalPrice : totalPrice;
+  const hasEnoughWalletBalance = isLoggedIn && walletBalance + 0.001 >= walletRequiredTotal;
+  const resolvedCardFeeAmt =
+    cardFeeAmount > 0
+      ? cardFeeAmount
+      : cardFeePercent > 0 && walletRequiredTotal > 0
+        ? Math.round(walletRequiredTotal * (cardFeePercent / 100) * 100) / 100
+        : 0;
+  const totalCardCharge = Math.round((walletRequiredTotal + resolvedCardFeeAmt) * 100) / 100;
+  const cardFeePctText = Number(cardFeePercent || 0).toFixed(2).replace('.', ',');
+  const cardFeeAmtText = resolvedCardFeeAmt.toFixed(2).replace('.', ',');
+  const totalCardChargeText = totalCardCharge.toFixed(2).replace('.', ',');
 
   const handleToggleWallet = () => {
     if (isWalletSelected) {
@@ -416,6 +433,11 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                       <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
                         {c.cardType === 'cartao_debito' ? 'Débito (à vista)' : 'Crédito à vista (1x)'} • Val {c.expMonth}/{c.expYear}
                       </div>
+                      {c.cardType !== 'cartao_debito' && resolvedCardFeeAmt > 0 && (
+                        <div style={{ fontSize: '0.7rem', color: '#1D4ED8', fontWeight: 700, marginTop: 2 }}>
+                          Taxa cartão +{cardFeePctText}% (+R$ {cardFeeAmtText} • Total R$ {totalCardChargeText})
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -468,6 +490,11 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                     <div style={{ fontSize: '0.73rem', color: '#64748B', fontWeight: 500 }}>
                       Cobrança à vista (1x) • Visa, Mastercard, Elo
                     </div>
+                    {resolvedCardFeeAmt > 0 && (
+                      <div style={{ fontSize: '0.7rem', color: '#1D4ED8', fontWeight: 700, marginTop: 2 }}>
+                        Taxa cartão +{cardFeePctText}% (+R$ {cardFeeAmtText} • Total R$ {totalCardChargeText})
+                      </div>
+                    )}
                   </div>
                 </div>
 

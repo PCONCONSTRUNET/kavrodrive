@@ -174,6 +174,51 @@ function getQrCodeUrl(payload, size = 260) {
 // ============================================================
 // Cálculos de Split & Comissão (Exclusivo no Backend)
 // ============================================================
+const DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT = 2.49;
+
+/**
+ * Identifica se o meio de pagamento corresponde a cartão elegível para repasse parcial da taxa.
+ */
+function isCreditCardPassThroughMethod(paymentMethod = '', includeDebitCard = false) {
+  const m = String(paymentMethod || '').toLowerCase().trim();
+  if (m === 'cartao_credito' || m === 'online' || m === 'apple_pay') return true;
+  return Boolean(includeDebitCard && m === 'cartao_debito');
+}
+
+/**
+ * Resolve o percentual vigente de repasse da taxa de cartão ao passageiro.
+ */
+function resolveCardFeePassThroughPercent(cfg = {}, paymentMethod = 'cartao_credito', { includeDebitCard = false } = {}) {
+  if (cfg?.cardFeePassThroughEnabled === false) return 0;
+  if (!isCreditCardPassThroughMethod(paymentMethod, includeDebitCard)) return 0;
+  const raw = cfg?.cardFeePassThroughPercent;
+  if (raw === undefined || raw === null || raw === '') {
+    return DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT;
+  }
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) return DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT;
+  return Math.min(100, Math.max(0, round2(parsed)));
+}
+
+/**
+ * Calcula valor base, taxa de cartão repassada e total cobrado sem alterar a base do depósito/motorista.
+ */
+function calculateCardPassThroughPricing(baseAmount, cfg = {}, paymentMethod = 'cartao_credito', options = {}) {
+  const cleanBase = Math.max(0, round2(baseAmount));
+  const cardFeePercent = resolveCardFeePassThroughPercent(cfg, paymentMethod, options);
+  const cardFeeAmount =
+    cleanBase > 0 && cardFeePercent > 0
+      ? round2(cleanBase * (cardFeePercent / 100))
+      : 0;
+  const totalWithFee = round2(cleanBase + cardFeeAmount);
+  return {
+    baseAmount: cleanBase,
+    cardFeePercent,
+    cardFeeAmount,
+    totalWithFee
+  };
+}
+
 function calculateSplit(grossAmount, commissionPercent = 20, commissionFixed = 0) {
   const gross = Math.max(0, round2(grossAmount));
   const pct = Math.min(100, Math.max(0, Number(commissionPercent ?? 20)));
@@ -187,6 +232,91 @@ function calculateSplit(grossAmount, commissionPercent = 20, commissionFixed = 0
     commissionFixed: fixed,
     commissionAmount,
     driverNetAmount
+  };
+}
+
+/**
+ * Calcula o split financeiro da corrida isolando a taxa extra do cartão 100% na plataforma
+ * e mantendo comissão percentual + líquido do motorista estritamente sobre a tarifa base.
+ */
+function calculateRideFinancialSplit({
+  ride = null,
+  baseAmount = null,
+  totalPrice = null,
+  cfg = {},
+  commissionPercent = 20,
+  commissionFixed = 0,
+  useConfigPassThrough = false,
+  includeDebitCard = false
+} = {}) {
+  const method = ride?.paymentMethod || ride?.payment_method || 'pix';
+  const rawSnap = ride?.appliedFareSnapshot ?? ride?.applied_fare_snapshot;
+  const snapshot = rawSnap && typeof rawSnap === 'object' ? rawSnap : null;
+  const eligible = isCreditCardPassThroughMethod(method, includeDebitCard);
+
+  let baseTotal = 0;
+  let cardFeePercent = 0;
+  let cardFeeAmount = 0;
+  let grossAmount = 0;
+
+  if (baseAmount !== null && baseAmount !== undefined) {
+    baseTotal = Math.max(0, round2(baseAmount));
+    if (useConfigPassThrough) {
+      const pass = calculateCardPassThroughPricing(baseTotal, cfg, method, { includeDebitCard });
+      cardFeePercent = pass.cardFeePercent;
+      cardFeeAmount = pass.cardFeeAmount;
+      grossAmount = pass.totalWithFee;
+    } else {
+      cardFeePercent = eligible
+        ? Math.min(100, Math.max(0, round2(Number(snapshot?.cardFeePercent ?? ride?.cardFeePercent ?? 0) || 0)))
+        : 0;
+      cardFeeAmount = (baseTotal > 0 && cardFeePercent > 0)
+        ? round2(baseTotal * (cardFeePercent / 100))
+        : 0;
+      grossAmount = round2(baseTotal + cardFeeAmount);
+    }
+  } else {
+    grossAmount = Math.max(0, round2(totalPrice ?? ride?.totalPrice ?? ride?.total_price ?? 0));
+    const snapRate = eligible
+      ? Math.min(100, Math.max(0, round2(Number(snapshot?.cardFeePercent ?? ride?.cardFeePercent ?? 0) || 0)))
+      : 0;
+    const snapBase = snapshot?.rideBaseTotal !== undefined && snapshot?.rideBaseTotal !== null
+      ? round2(snapshot.rideBaseTotal)
+      : null;
+    const snapFeeAmt = snapshot?.cardFeeAmount !== undefined && snapshot?.cardFeeAmount !== null
+      ? round2(snapshot.cardFeeAmount)
+      : (ride?.cardFeeAmount !== undefined && ride?.cardFeeAmount !== null ? round2(ride.cardFeeAmount) : null);
+
+    if (snapBase !== null && snapFeeAmt !== null && Math.abs((snapBase + snapFeeAmt) - grossAmount) <= 0.02) {
+      baseTotal = snapBase;
+      cardFeePercent = snapRate;
+      cardFeeAmount = round2(Math.max(0, grossAmount - baseTotal));
+    } else if (snapRate > 0 && grossAmount > 0) {
+      baseTotal = round2(grossAmount / (1 + (snapRate / 100)));
+      cardFeePercent = snapRate;
+      cardFeeAmount = round2(Math.max(0, grossAmount - baseTotal));
+    } else {
+      baseTotal = grossAmount;
+      cardFeePercent = 0;
+      cardFeeAmount = 0;
+    }
+  }
+
+  const baseSplit = calculateSplit(baseTotal, commissionPercent, commissionFixed);
+  const commissionAmount = baseTotal > 0
+    ? round2(baseSplit.commissionAmount + cardFeeAmount)
+    : 0;
+
+  return {
+    grossAmount,
+    baseTotal,
+    cardFeePercent,
+    cardFeeAmount,
+    commissionPercent: baseSplit.commissionPercent,
+    commissionFixed: baseSplit.commissionFixed,
+    baseCommissionAmount: baseSplit.commissionAmount,
+    commissionAmount,
+    driverNetAmount: baseSplit.driverNetAmount
   };
 }
 
@@ -2632,7 +2762,14 @@ async function createPixChargeForRide(ride) {
 async function authorizeCardForRide(ride, cardInfo = {}) {
   const cfg = await getSystemConfig();
   const effectiveCommPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod || 'cartao_credito');
-  const split = calculateSplit(ride.totalPrice, effectiveCommPct, resolveCommissionFixedForRide(cfg, ride));
+  const split = calculateRideFinancialSplit({
+    ride,
+    totalPrice: ride.totalPrice,
+    cfg,
+    commissionPercent: effectiveCommPct,
+    commissionFixed: resolveCommissionFixedForRide(cfg, ride),
+    useConfigPassThrough: false
+  });
   const last4 = String(cardInfo.cardLast4 || ride.cardLast4 || '4242');
   const brand = String(cardInfo.cardBrand || ride.cardBrand || 'Mastercard');
 
@@ -2853,11 +2990,14 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
   if (!ride || !ride.driverId) return null;
   const cfg = await getSystemConfig();
   const finalGross = finalAmountOverride !== null ? round2(finalAmountOverride) : round2(ride.totalPrice);
-  const split = calculateSplit(
-    finalGross,
-    ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod),
-    resolveCommissionFixedForRide(cfg, ride)
-  );
+  const split = calculateRideFinancialSplit({
+    ride,
+    totalPrice: finalGross,
+    cfg,
+    commissionPercent: ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod),
+    commissionFixed: resolveCommissionFixedForRide(cfg, ride),
+    useConfigPassThrough: false
+  });
 
   // Verifica se o motorista possuía dívida anterior para registrar nota de compensação automática
   const walletBefore = await getDriverWallet(ride.driverId);
@@ -2872,6 +3012,9 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
   const commFormulaLabel = split.commissionFixed > 0
     ? `${split.commissionPercent}% + R$ ${split.commissionFixed.toFixed(2)}`
     : `${split.commissionPercent}%`;
+  const cardPassNote = split.cardFeeAmount > 0
+    ? ` | Taxa cartão passageiro R$ ${split.cardFeeAmount.toFixed(2)} (${split.cardFeePercent}% 100% plataforma)`
+    : '';
 
   // 1. Crédito líquido do motorista
   const { entry: driverEntry, idempotent } = await recordLedgerEntry({
@@ -2891,10 +3034,13 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
     balanceDelta: +split.driverNetAmount,
     balanceBucket: settlementBucket,
     status: entryStatus,
-    description: `Ganho líquido corrida ${ride.rideCode || ride.id} (${ride.paymentMethod.toUpperCase()}) — Bruto R$ ${split.grossAmount.toFixed(2)} (-${commFormulaLabel} comissão)`,
+    description: `Ganho líquido corrida ${ride.rideCode || ride.id} (${ride.paymentMethod.toUpperCase()}) — Base R$ ${split.baseTotal.toFixed(2)} (-${commFormulaLabel} comissão)${cardPassNote}`,
     metadata: {
       autoSplit: true,
       commissionFixed: split.commissionFixed,
+      rideBaseTotal: split.baseTotal,
+      cardFeePercent: split.cardFeePercent,
+      cardFeeAmount: split.cardFeeAmount,
       debtOffsetApplied: walletBefore.debtBalance > 0 ? Math.min(walletBefore.debtBalance, split.driverNetAmount) : 0
     }
   });
@@ -2917,7 +3063,15 @@ async function settleDigitalRideToLedger(ride, finalAmountOverride = null) {
     balanceDelta: 0, // Já descontado no valor líquido creditado via split
     balanceBucket: 'platform',
     status: 'confirmado',
-    description: `Comissão Kavro Drive (${commFormulaLabel}) retida via split na corrida ${ride.rideCode || ride.id}`
+    description: split.cardFeeAmount > 0
+      ? `Comissão Kavro Drive (${commFormulaLabel} sobre R$ ${split.baseTotal.toFixed(2)} + R$ ${split.cardFeeAmount.toFixed(2)} repasse cartão) na corrida ${ride.rideCode || ride.id}`
+      : `Comissão Kavro Drive (${commFormulaLabel}) retida via split na corrida ${ride.rideCode || ride.id}`,
+    metadata: {
+      rideBaseTotal: split.baseTotal,
+      baseCommissionAmount: split.baseCommissionAmount,
+      cardFeePercent: split.cardFeePercent,
+      cardFeeAmount: split.cardFeeAmount
+    }
   });
 
   return { driverEntry, split, idempotent };
@@ -3418,7 +3572,14 @@ async function getPlatformFinancialOverview() {
       if (!r || !r.id || existingRideIds.has(r.id)) continue;
       const gross = round2(r.total_price ?? r.totalPrice ?? 0);
       if (gross <= 0) continue;
-      const split = calculateSplit(gross, r.commission_percent ?? commPctDefault, resolveCommissionFixedForRide(cfg, r));
+      const split = calculateRideFinancialSplit({
+        ride: r,
+        totalPrice: gross,
+        cfg,
+        commissionPercent: r.commission_percent ?? commPctDefault,
+        commissionFixed: resolveCommissionFixedForRide(cfg, r),
+        useConfigPassThrough: false
+      });
       const method = r.payment_method || r.paymentMethod || 'pix';
       const rawPayStatus = r.payment_status || r.paymentStatus || (r.status === 'finalizada' ? 'confirmado' : 'aguardando');
       const normalizedStatus = rawPayStatus === 'pago' ? 'confirmado' : rawPayStatus;
@@ -3524,6 +3685,8 @@ async function getPlatformFinancialOverview() {
       cartao_debito: Number(cfg.gatewayFeePercents?.cartao_debito ?? 0),
       apple_pay: Number(cfg.gatewayFeePercents?.apple_pay ?? 0)
     },
+    cardFeePassThroughEnabled: cfg.cardFeePassThroughEnabled !== false,
+    cardFeePassThroughPercent: resolveCardFeePassThroughPercent(cfg, 'cartao_credito'),
     withdrawalFeePercent: Number(cfg.withdrawalFeePercent ?? 0),
     withdrawalFeeFixed: Number(cfg.withdrawalFeeFixed ?? 0),
     cancellationFeeAmount: Number(cfg.cancellationFeeAmount ?? 0),
@@ -4264,14 +4427,85 @@ async function createClientWalletTopup({
     return { ok: true, pending: true, entry, wallet };
   }
 
-  // Depósito imediato via Cartão salvo
-  const cards = await listSavedCards(cid, clientPhone);
+  // Depósito imediato via Cartão salvo (com repasse configurável da taxa de cartão ao passageiro)
+  const cards = await listSavedCards(cid, clientPhone, { includeRawDoc: true });
   const chosenCard = cards.find(c => c.id === cardId) || null;
   if (!chosenCard) {
     throw new Error('Selecione ou cadastre um cartão válido para depositar na carteira.');
   }
+  if (String(chosenCard.last4 || '') === '0000') {
+    return {
+      ok: false,
+      error: 'Cartão recusado pelo banco emissor. Escolha outro cartão ou PIX.'
+    };
+  }
+
+  const cardPassThrough = calculateCardPassThroughPricing(cleanAmount, cfg, normalizedMethod, { includeDebitCard: true });
+  const cardFeePercent = cardPassThrough.cardFeePercent;
+  const cardFeeAmount = cardPassThrough.cardFeeAmount;
+  const chargedTotalAmount = cardPassThrough.totalWithFee;
 
   let gatewayTxId = `wallet_card_${Date.now()}`;
+  let chargeProvider = 'sandbox';
+
+  const rawTokenCandidate = String(chosenCard.gatewayToken || '').trim();
+  const realMpToken = rawTokenCandidate.startsWith('mp_tok_')
+    ? rawTokenCandidate.slice('mp_tok_'.length)
+    : (!rawTokenCandidate.startsWith('tok_') && rawTokenCandidate.length >= 16 ? rawTokenCandidate : '');
+  const mpCreds = await mercadoPagoGateway.getActiveCredentials();
+  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken && realMpToken) {
+    let payerDoc = String(chosenCard.holderDocument || '').replace(/\D/g, '');
+    if (!payerDoc && cid) {
+      try {
+        const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [cid]);
+        payerDoc = String(cliR.rows[0]?.document || '').replace(/\D/g, '');
+      } catch {}
+    }
+    try {
+      const mpResp = await mercadoPagoGateway.mpFetch('https://api.mercadopago.com/v1/payments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${mpCreds.accessToken}`,
+          'X-Idempotency-Key': `mp_wallet_card_${entryId}_${chargedTotalAmount}`
+        },
+        body: JSON.stringify({
+          transaction_amount: chargedTotalAmount,
+          token: realMpToken,
+          description: `Recarga Carteira Kavro Drive (${cid})`,
+          statement_descriptor: mpCreds.statementDescriptor || 'KAVRO DRIVE',
+          installments: 1,
+          capture: true,
+          payment_method_id: mapMpPaymentMethodId(chosenCard.brand, chosenCard.cardType || normalizedMethod),
+          external_reference: entryId,
+          payer: {
+            email: clientEmail || 'passageiro@kavrodrive.com.br',
+            first_name: String(clientName || 'Passageiro').split(' ')[0],
+            ...(payerDoc.length === 11 || payerDoc.length === 14
+              ? { identification: { type: payerDoc.length === 14 ? 'CNPJ' : 'CPF', number: payerDoc } }
+              : {})
+          }
+        })
+      });
+      const mpData = await mpResp.json().catch(() => ({}));
+      const mpStatus = String(mpData?.status || '').toLowerCase();
+      if (!mpResp.ok || mpStatus === 'rejected' || mpStatus === 'cancelled') {
+        const reason = mpData?.status_detail || mpData?.message || 'Transação recusada pelo emissor no Mercado Pago.';
+        return { ok: false, error: `Cartão recusado (${reason}). Tente outro cartão ou PIX.` };
+      }
+      if (mpData?.id) {
+        gatewayTxId = String(mpData.id);
+        chargeProvider = 'mercadopago';
+      }
+    } catch (err) {
+      console.warn('[MP Wallet Card Charge error]:', err.message);
+      return { ok: false, error: 'Erro de comunicação com o Mercado Pago ao processar o cartão. Tente novamente.' };
+    }
+  }
+
+  const chargeFeeLabel = cardFeeAmount > 0
+    ? ` (Cobrado R$ ${chargedTotalAmount.toFixed(2).replace('.', ',')} • Taxa ${cardFeePercent.toFixed(2).replace('.', ',')}% cartão)`
+    : '';
 
   const { entry } = await insertClientWalletEntry({
     id: entryId,
@@ -4285,10 +4519,32 @@ async function createClientWalletTopup({
     balanceDelta: cleanAmount,
     status: 'confirmado',
     gatewayTxId,
-    description: `Depósito na carteira via ${chosenCard.brand} •••• ${chosenCard.last4}`
+    metadata: {
+      provider: chargeProvider,
+      requestedDepositAmount: cleanAmount,
+      cardFeePercent,
+      cardFeeAmount,
+      chargedTotalAmount,
+      cardId: chosenCard.id,
+      cardBrand: chosenCard.brand,
+      cardLast4: chosenCard.last4
+    },
+    description: `Depósito na carteira via ${chosenCard.brand} •••• ${chosenCard.last4}${chargeFeeLabel}`
   });
   const wallet = await getClientWallet(cid, { skipGatewaySync: true });
-  return { ok: true, pending: false, entry, wallet };
+  return {
+    ok: true,
+    pending: false,
+    entry,
+    wallet,
+    chargeSummary: {
+      depositAmount: cleanAmount,
+      cardFeePercent,
+      cardFeeAmount,
+      totalCharged: chargedTotalAmount,
+      provider: chargeProvider
+    }
+  };
 }
 
 async function debitClientWalletForRide({
@@ -4454,7 +4710,12 @@ module.exports = {
   CARD_MAX_INSTALLMENTS,
   validateCardOnlySingleInstallment,
   round2,
+  DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT,
+  isCreditCardPassThroughMethod,
+  resolveCardFeePassThroughPercent,
+  calculateCardPassThroughPricing,
   calculateSplit,
+  calculateRideFinancialSplit,
   resolveCommissionPercentForRide,
   resolveCommissionFixedForRide,
   generateDynamicPixPayload,

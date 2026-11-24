@@ -94,7 +94,7 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
     ? estimateDurationMinutes(distanceKm)
     : 15;
 
-  const pricing = calculateRidePrice(distanceKm, durationMin, time, config, selectedCategory);
+  const pricing = calculateRidePrice(distanceKm, durationMin, time, config, selectedCategory, undefined, paymentMethod);
   const autoPrice = pricing.totalPrice;
   const finalPrice = useAutoPrice ? autoPrice : (parseCurrencyToFloat(manualPrice) || autoPrice);
 
@@ -125,7 +125,12 @@ export const ManualRideModal: React.FC<ManualRideModalProps> = ({
       distanceKm,
       durationMin,
       category: selectedCategory,
+      categoryName: pricing.categoryName,
+      appliedFareSnapshot: useAutoPrice ? pricing.appliedFareSnapshot : editingRide?.appliedFareSnapshot,
       baseFare: config.baseFare,
+      commissionPercent: pricing.commissionPercent,
+      cardFeePercent: useAutoPrice ? pricing.cardFeePercent : editingRide?.cardFeePercent,
+      cardFeeAmount: useAutoPrice ? pricing.cardFeeAmount : editingRide?.cardFeeAmount,
       totalPrice: finalPrice,
       paymentMethod,
       paymentStatus,

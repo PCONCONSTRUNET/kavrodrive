@@ -4932,3 +4932,372 @@ test('Gateway Mercado Pago: config persistida, ativar/desativar, máscara, PIX, 
     mpGateway.clearCaches();
   }
 });
+
+test('Repasse configurável de taxa de cartão ao passageiro (2,49% padrão em corridas e carteira, base do motorista preservada)', async () => {
+  const prevCfg = JSON.parse(JSON.stringify(db.localStore.system_config?.default?.config || {}));
+  const mpGateway = require('../server/mercadoPagoGateway.cjs');
+  const efiGateway = require('../server/efiBankGateway.cjs');
+  await efiGateway.saveEfiConfig({ enabled: false }).catch(() => {});
+  mpGateway.clearCaches();
+
+  const capturedMpCalls = [];
+  mpGateway._setMercadoPagoFetchForTest(async (urlStr, options = {}) => {
+    const parsed = new URL(urlStr);
+    const method = String(options.method || 'GET').toUpperCase();
+    const bodyObj = options.body ? JSON.parse(options.body) : null;
+    capturedMpCalls.push({ method, pathname: parsed.pathname, bodyObj });
+
+    if (method === 'POST' && parsed.pathname === '/v1/card_tokens') {
+      return new Response(JSON.stringify({ id: `tok_mp_pass_${Date.now()}` }), { status: 201 });
+    }
+    if (method === 'POST' && parsed.pathname === '/v1/payments') {
+      if (bodyObj?.payment_method_id === 'pix') {
+        const pixId = 970000 + capturedMpCalls.length;
+        return new Response(JSON.stringify({
+          id: pixId,
+          status: 'pending',
+          point_of_interaction: { transaction_data: { qr_code: `000201PIX${pixId}` } }
+        }), { status: 201 });
+      }
+      const payId = 980000 + capturedMpCalls.length;
+      return new Response(JSON.stringify({
+        id: payId,
+        status: bodyObj?.capture === false ? 'authorized' : 'approved',
+        authorization_code: 'MP_PASS_OK'
+      }), { status: 201 });
+    }
+    if (method === 'PUT' && parsed.pathname.startsWith('/v1/payments/')) {
+      const id = parsed.pathname.split('/').pop();
+      return new Response(JSON.stringify({ id: Number(id), status: 'approved' }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ message: 'unexpected' }), { status: 404 });
+  });
+
+  const ts = Date.now();
+  const makeCpf = (seed) => {
+    const base = String(seed).padStart(9, '0').slice(-9).split('').map(Number);
+    const calc = (len) => {
+      let s = 0;
+      for (let i = 0; i < len; i++) s += base[i] * (len + 1 - i);
+      const r = (s * 10) % 11;
+      return r >= 10 ? 0 : r;
+    };
+    base.push(calc(9));
+    base.push(calc(10));
+    return base.join('');
+  };
+
+  try {
+    // 1) Padrão inicial inclui cardFeePassThroughEnabled=true e cardFeePassThroughPercent=2.49
+    assert.equal(originalStoreSnapshot.system_config.default.config.cardFeePassThroughEnabled, true);
+    assert.equal(originalStoreSnapshot.system_config.default.config.cardFeePassThroughPercent, 2.49);
+
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({
+        ...prevCfg,
+        baseFare: 8,
+        pricePerKm: 3.2,
+        pricePerMinute: 0.5,
+        minimumFare: 15,
+        platformCommissionPercent: 20,
+        platformCommissionFixed: 0,
+        paymentMethodCommissionPercents: { pix: 20, cartao_credito: 20, carteira: 20, dinheiro: 20 },
+        gatewayFeePercents: { pix: 0.99, cartao_credito: 4.98 },
+        cardFeePassThroughEnabled: true,
+        cardFeePassThroughPercent: 2.49,
+        activePaymentMethods: ['pix', 'cartao_credito', 'carteira', 'dinheiro']
+      })]
+    );
+
+    await mpGateway.saveMercadoPagoConfig({
+      enabled: true,
+      sandbox: true,
+      publicKey: 'TEST-pk-pass-001',
+      accessToken: 'TEST-at-pass-001',
+      useForCard: true,
+      useForPassengerPix: true
+    });
+
+    const pubPayCfg = await apiJson('/api/payments/config');
+    assert.equal(pubPayCfg.status, 200);
+    assert.equal(pubPayCfg.json.cardFeePassThroughEnabled, true);
+    assert.equal(pubPayCfg.json.cardFeePassThroughPercent, 2.49);
+
+    // Registra passageiro e motorista com IP isolado para evitar rate limit cumulativo da suíte
+    const passTestIp = '198.51.100.252';
+    const cliReg = await apiJson('/api/clients/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': passTestIp },
+      body: {
+        name: 'Passageiro Juros Cartao',
+        phone: `(48) 99771-${String(ts).slice(-4)}`,
+        document: makeCpf(ts % 500000000 + 110000011),
+        email: `cardpass.cli.${ts}@kavro.test`,
+        password: 'PassCard123!',
+        termsAcceptance: { accepted: true, version: '2026.1' }
+      }
+    });
+    assert.equal(cliReg.status, 200);
+    const cliToken = cliReg.json.clientToken;
+    const cliId = cliReg.json.client.id;
+
+    const drvReg = await apiJson('/api/drivers/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': passTestIp },
+      body: {
+        name: 'Motorista Juros Base',
+        phone: `(48) 99772-${String(ts).slice(-4)}`,
+        email: `cardpass.drv.${ts}@kavro.test`,
+        document: makeCpf((ts % 500000000) + 220000022),
+        password: 'PassDrv123!',
+        vehicleBrand: 'Hyundai',
+        vehicleModel: 'HB20',
+        vehicleColor: 'Branco',
+        vehiclePlate: `CRD${String(ts).slice(-4)}`,
+        termsAcceptance: { accepted: true, version: '2026.1' }
+      }
+    });
+    assert.equal(drvReg.status, 200);
+    const drvToken = drvReg.json.driverToken;
+    const drvId = drvReg.json.driver.id;
+    const drvObj = await finance.getDriverById(drvId);
+    await finance.saveDriverRecord({ ...drvObj, approvalStatus: 'aprovado', isOnline: true, kyc: { status: 'aprovado' } });
+
+    // Salva cartão real tokenizado no mock do Mercado Pago
+    const saveCardRes = await apiJson('/api/payments/cards', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': passTestIp },
+      body: {
+        clientId: cliId,
+        cardNumber: '5200000000004242',
+        holderName: 'PASSAGEIRO JUROS',
+        holderDocument: cliReg.json.client.document,
+        expMonth: '12',
+        expYear: '2030',
+        cvv: '123',
+        cardType: 'cartao_credito',
+        mpCardToken: `mp_tok_live_${ts}`
+      }
+    });
+    assert.equal(saveCardRes.status, 200);
+    const savedCardId = saveCardRes.json.card.id;
+
+    // 2) Corrida no Cartão (base R$ 100,00 + 2,49% = R$ 102,49; motorista 80,00 sobre R$ 100,00)
+    const rideRes = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Juros Cartao',
+        originAddress: 'Origem Pass',
+        destinationAddress: 'Destino Pass',
+        distanceKm: 25,
+        durationMin: 24,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: savedCardId
+      }
+    });
+    assert.equal(rideRes.status, 200);
+    const createdRide = rideRes.json.ride;
+    assert.equal(createdRide.totalPrice, 102.49);
+    assert.equal(createdRide.cardFeePercent, 2.49);
+    assert.equal(createdRide.cardFeeAmount, 2.49);
+    assert.equal(createdRide.appliedFareSnapshot.rideBaseTotal, 100);
+    assert.equal(createdRide.commissionPercent, 20);
+    assert.equal(createdRide.driverNetAmount, 80);
+    assert.equal(createdRide.commissionAmount, 22.49);
+
+    const ridePreAuthCall = capturedMpCalls.find(
+      c => c.method === 'POST' && c.pathname === '/v1/payments' && c.bodyObj?.external_reference === createdRide.id
+    );
+    assert.ok(ridePreAuthCall);
+    assert.equal(ridePreAuthCall.bodyObj.transaction_amount, 102.49);
+    assert.equal(ridePreAuthCall.bodyObj.capture, false);
+
+    // Motorista aceita, inicia e finaliza -> captura R$ 102,49 e credita R$ 80,00 no ledger do motorista
+    const accRes = await apiJson(`/api/rides/${encodeURIComponent(createdRide.id)}/accept`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { driverId: drvId }
+    });
+    assert.equal(accRes.status, 200);
+    const startRes = await apiJson(`/api/rides/${encodeURIComponent(createdRide.id)}/status`, {
+      method: 'PATCH',
+      headers: { 'x-driver-token': drvToken },
+      body: { status: 'em_andamento', boardingPin: createdRide.boardingPin }
+    });
+    assert.equal(startRes.status, 200);
+    const completeRes = await apiJson(`/api/rides/${encodeURIComponent(createdRide.id)}/complete`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken },
+      body: { driverId: drvId }
+    });
+    assert.equal(completeRes.status, 200);
+    assert.equal(completeRes.json.ride.totalPrice, 102.49);
+    assert.equal(completeRes.json.ride.driverNetAmount, 80);
+    assert.equal(completeRes.json.ride.commissionAmount, 22.49);
+    assert.equal(completeRes.json.wallet.availableBalance, 80);
+
+    const captureCall = capturedMpCalls.find(c => c.method === 'PUT' && c.pathname.startsWith('/v1/payments/'));
+    assert.ok(captureCall);
+    assert.equal(captureCall.bodyObj.transaction_amount, 102.49);
+
+    // 3) Depósito na carteira via Cartão (credita R$ 100,00 no saldo, cobra R$ 102,49 no Mercado Pago)
+    const walletTopupRes = await apiJson('/api/client/wallet/topup', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { amount: 100, method: 'cartao_credito', cardId: savedCardId }
+    });
+    assert.equal(walletTopupRes.status, 200);
+    assert.equal(walletTopupRes.json.ok, true);
+    assert.equal(walletTopupRes.json.wallet.balance, 100);
+    assert.equal(walletTopupRes.json.entry.amount, 100);
+    assert.equal(walletTopupRes.json.entry.balanceDelta, 100);
+    assert.equal(walletTopupRes.json.chargeSummary.depositAmount, 100);
+    assert.equal(walletTopupRes.json.chargeSummary.cardFeePercent, 2.49);
+    assert.equal(walletTopupRes.json.chargeSummary.cardFeeAmount, 2.49);
+    assert.equal(walletTopupRes.json.chargeSummary.totalCharged, 102.49);
+
+    const walletMpCall = capturedMpCalls.find(
+      c => c.method === 'POST' && c.pathname === '/v1/payments' && String(c.bodyObj?.external_reference || '').startsWith('cw-topup-')
+    );
+    assert.ok(walletMpCall);
+    assert.equal(walletMpCall.bodyObj.transaction_amount, 102.49);
+    assert.equal(walletMpCall.bodyObj.capture, true);
+
+    // Depósito via PIX NÃO cobra taxa adicional de cartão
+    const walletPixRes = await apiJson('/api/client/wallet/topup', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { amount: 50, method: 'pix' }
+    });
+    assert.equal(walletPixRes.status, 200);
+    const walletPixMpCall = capturedMpCalls.find(
+      c => c.method === 'POST' && c.pathname === '/v1/payments' && c.bodyObj?.payment_method_id === 'pix'
+    );
+    assert.ok(walletPixMpCall);
+    assert.equal(walletPixMpCall.bodyObj.transaction_amount, 50);
+
+    // 4) Edição de percentual no Admin (1,50%) e desligamento completo (false -> 0%) + Auditoria
+    const cfg150 = {
+      ...db.localStore.system_config.default.config,
+      cardFeePassThroughEnabled: true,
+      cardFeePassThroughPercent: 1.5
+    };
+    const diffEdit = audit.buildConfigChangesDiff(db.localStore.system_config.default.config, cfg150);
+    assert.ok(diffEdit.some(d => d.field === 'cardFeePassThroughPercent' && d.after.includes('1,50%')));
+
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(cfg150)]
+    );
+
+    const ride150 = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': passTestIp },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Juros Cartao',
+        origin: { address: 'Origem 150', lat: -28.391, lng: -49.393 },
+        destination: { address: 'Destino 150', lat: -28.401, lng: -49.403 },
+        distanceKm: 25,
+        durationMin: 24,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: savedCardId
+      }
+    });
+    assert.equal(ride150.status, 200);
+    assert.equal(ride150.json.ride.totalPrice, 101.5);
+    assert.equal(ride150.json.ride.driverNetAmount, 80);
+
+    // Edição de rota preserva 1,50% travado na nova tarifa base e mantém líquido do motorista na base
+    const routeEditRes = await apiJson(`/api/rides/${encodeURIComponent(ride150.json.ride.id)}/route`, {
+      method: 'PATCH',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': passTestIp },
+      body: {
+        origin: { address: 'Origem 150', lat: -28.391, lng: -49.393 },
+        destination: { address: 'Destino 150 Longe', lat: -28.411, lng: -49.413 },
+        distanceKm: 30,
+        durationMin: 30
+      }
+    });
+    assert.equal(routeEditRes.status, 200);
+    assert.equal(routeEditRes.json.ride.appliedFareSnapshot.rideBaseTotal, 119);
+    assert.equal(routeEditRes.json.ride.cardFeePercent, 1.5);
+    assert.equal(routeEditRes.json.ride.cardFeeAmount, 1.79);
+    assert.equal(routeEditRes.json.ride.totalPrice, 120.79);
+    assert.equal(routeEditRes.json.ride.driverNetAmount, 95.2);
+
+    const topup150 = await apiJson('/api/client/wallet/topup', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { amount: 100, method: 'cartao_credito', cardId: savedCardId }
+    });
+    assert.equal(topup150.status, 200);
+    assert.equal(topup150.json.chargeSummary.totalCharged, 101.5);
+    assert.equal(topup150.json.wallet.balance, 200);
+
+    // Desliga repasse completamente
+    const cfgOff = { ...cfg150, cardFeePassThroughEnabled: false };
+    const diffOff = audit.buildConfigChangesDiff(cfg150, cfgOff);
+    assert.ok(diffOff.some(d => d.field === 'cardFeePassThroughEnabled'));
+
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(cfgOff)]
+    );
+
+    const rideOff = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: {
+        clientId: cliId,
+        clientName: 'Passageiro Juros Cartao',
+        originAddress: 'Origem Off',
+        destinationAddress: 'Destino Off',
+        distanceKm: 25,
+        durationMin: 24,
+        time: '14:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: savedCardId
+      }
+    });
+    assert.equal(rideOff.status, 200);
+    assert.equal(rideOff.json.ride.totalPrice, 100);
+    assert.equal(rideOff.json.ride.cardFeeAmount, 0);
+    assert.equal(rideOff.json.ride.driverNetAmount, 80);
+
+    const topupOff = await apiJson('/api/client/wallet/topup', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken },
+      body: { amount: 100, method: 'cartao_credito', cardId: savedCardId }
+    });
+    assert.equal(topupOff.status, 200);
+    assert.equal(topupOff.json.chargeSummary.cardFeeAmount, 0);
+    assert.equal(topupOff.json.chargeSummary.totalCharged, 100);
+    assert.equal(topupOff.json.wallet.balance, 300);
+  } finally {
+    await mpGateway.saveMercadoPagoConfig({
+      enabled: false,
+      clearAccessToken: true,
+      clearPublicKey: true,
+      clearWebhookSecret: true
+    }).catch(() => {});
+    mpGateway._setMercadoPagoFetchForTest(null);
+    mpGateway.clearCaches();
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(prevCfg)]
+    ).catch(() => {});
+  }
+});

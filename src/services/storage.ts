@@ -175,6 +175,8 @@ export const DEFAULT_CONFIG: SystemConfig = {
     pix: 1.19,
     cartao_credito: 3.49,
   },
+  cardFeePassThroughEnabled: true,
+  cardFeePassThroughPercent: 2.49,
   withdrawalFeePercent: 0,
   withdrawalFeeFixed: 0,
   cancellationFeeAmount: 0,
@@ -666,6 +668,8 @@ export const StorageService = {
     mercadopagoSandbox?: boolean;
     mercadopagoPublicKey: string;
     autoPixPayoutEnabled: boolean;
+    cardFeePassThroughEnabled?: boolean;
+    cardFeePassThroughPercent?: number;
   }> {
     try {
       const res = await fetch('/api/payments/config', { cache: 'no-store' });
@@ -689,7 +693,9 @@ export const StorageService = {
           mercadopagoCardActive: Boolean(d.mercadopagoCardActive),
           mercadopagoSandbox: Boolean(d.mercadopagoSandbox),
           mercadopagoPublicKey: String(d.mercadopagoPublicKey || '').trim(),
-          autoPixPayoutEnabled: Boolean(d.autoPixPayoutEnabled)
+          autoPixPayoutEnabled: Boolean(d.autoPixPayoutEnabled),
+          cardFeePassThroughEnabled: d.cardFeePassThroughEnabled !== undefined ? Boolean(d.cardFeePassThroughEnabled) : true,
+          cardFeePassThroughPercent: d.cardFeePassThroughPercent !== undefined ? Number(d.cardFeePassThroughPercent) : 2.49
         };
       }
     } catch {}
@@ -705,7 +711,9 @@ export const StorageService = {
       mercadopagoCardActive: false,
       mercadopagoSandbox: true,
       mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
-      autoPixPayoutEnabled: false
+      autoPixPayoutEnabled: false,
+      cardFeePassThroughEnabled: true,
+      cardFeePassThroughPercent: 2.49
     };
   },
 
@@ -953,6 +961,13 @@ export const StorageService = {
     pending?: boolean;
     entry?: ClientWalletEntry;
     wallet?: ClientWalletSummary;
+    chargeSummary?: {
+      depositAmount: number;
+      cardFeePercent: number;
+      cardFeeAmount: number;
+      totalCharged: number;
+      provider?: string;
+    };
     error?: string;
   }> {
     try {
@@ -3231,6 +3246,63 @@ export function resolveCommissionPercentForMethod(
   return Math.min(100, Math.max(0, Number.isNaN(basePct) ? 20 : Math.round(basePct * 100) / 100));
 }
 
+export const DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT = 2.49;
+
+/**
+ * Resolve o percentual de repasse da taxa de cartão ao passageiro conforme configuração vigente.
+ */
+export function resolveCardFeePassThroughPercent(
+  config: Partial<SystemConfig> | null | undefined,
+  paymentMethod?: PaymentMethod | string,
+  options: { includeDebitCard?: boolean } = {}
+): number {
+  if (config?.cardFeePassThroughEnabled === false) return 0;
+  const method = String(paymentMethod || '').toLowerCase().trim();
+  const eligible =
+    method === 'cartao_credito' ||
+    method === 'online' ||
+    method === 'apple_pay' ||
+    Boolean(options.includeDebitCard && method === 'cartao_debito');
+  if (!eligible) return 0;
+
+  const raw = config?.cardFeePassThroughPercent;
+  if (raw === undefined || raw === null) {
+    return DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT;
+  }
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) return DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT;
+  return Math.min(100, Math.max(0, Math.round(parsed * 100) / 100));
+}
+
+/**
+ * Calcula tarifa base, taxa de cartão repassada ao passageiro e total cobrado sem alterar a base do motorista.
+ */
+export function calculateCardPassThroughPricing(
+  baseAmount: number,
+  config: Partial<SystemConfig> | null | undefined,
+  paymentMethod?: PaymentMethod | string,
+  options: { includeDebitCard?: boolean } = {}
+): {
+  baseAmount: number;
+  cardFeePercent: number;
+  cardFeeAmount: number;
+  totalWithFee: number;
+} {
+  const cleanBase = Math.max(0, Math.round((Number(baseAmount) || 0) * 100) / 100);
+  const cardFeePercent = resolveCardFeePassThroughPercent(config, paymentMethod, options);
+  const cardFeeAmount =
+    cleanBase > 0 && cardFeePercent > 0
+      ? Math.round(cleanBase * (cardFeePercent / 100) * 100) / 100
+      : 0;
+  const totalWithFee = Math.round((cleanBase + cardFeeAmount) * 100) / 100;
+  return {
+    baseAmount: cleanBase,
+    cardFeePercent,
+    cardFeeAmount,
+    totalWithFee,
+  };
+}
+
 export function calculateRidePrice(
   distanceKm: number,
   durationMin: number,
@@ -3240,6 +3312,9 @@ export function calculateRidePrice(
   city?: string,
   paymentMethod?: PaymentMethod
 ): {
+  baseTotalPrice: number;
+  cardFeePercent: number;
+  cardFeeAmount: number;
   totalPrice: number;
   commissionPercent: number;
   commissionFixed: number;
@@ -3257,6 +3332,9 @@ export function calculateRidePrice(
     multiplier: number;
     commissionPercent: number;
     commissionFixed: number;
+    rideBaseTotal: number;
+    cardFeePercent: number;
+    cardFeeAmount: number;
     nightSurchargePercent?: number;
     city?: string;
   };
@@ -3273,14 +3351,21 @@ export function calculateRidePrice(
   const isNight = false;
   const nightSurcharge = 0;
 
-  const finalPrice = Math.max(pricing.minimumFare, Math.round(subtotal * 10) / 10);
+  const baseRidePrice = Math.max(pricing.minimumFare, Math.round(subtotal * 10) / 10);
   const commPct = resolveCommissionPercentForMethod(config, pricing.commissionPercent, paymentMethod);
   const commFixed = Math.max(0, Math.round((Number(config.platformCommissionFixed ?? 0) || 0) * 100) / 100);
-  const rawCommAmt = Math.round(((finalPrice * (commPct / 100)) + (finalPrice > 0 ? commFixed : 0)) * 100) / 100;
-  const commAmt = Math.min(finalPrice, rawCommAmt);
-  const netAmt = Math.round(Math.max(0, finalPrice - commAmt) * 100) / 100;
+  const rawBaseCommAmt = Math.round(((baseRidePrice * (commPct / 100)) + (baseRidePrice > 0 ? commFixed : 0)) * 100) / 100;
+  const baseCommAmt = Math.min(baseRidePrice, rawBaseCommAmt);
+  const netAmt = Math.round(Math.max(0, baseRidePrice - baseCommAmt) * 100) / 100;
+
+  const cardPassThrough = calculateCardPassThroughPricing(baseRidePrice, config, paymentMethod);
+  const finalPrice = cardPassThrough.totalWithFee;
+  const commAmt = Math.round((baseCommAmt + cardPassThrough.cardFeeAmount) * 100) / 100;
 
   return {
+    baseTotalPrice: baseRidePrice,
+    cardFeePercent: cardPassThrough.cardFeePercent,
+    cardFeeAmount: cardPassThrough.cardFeeAmount,
     totalPrice: finalPrice,
     commissionPercent: commPct,
     commissionFixed: commFixed,
@@ -3298,6 +3383,9 @@ export function calculateRidePrice(
       multiplier: pricing.multiplier,
       commissionPercent: commPct,
       commissionFixed: commFixed,
+      rideBaseTotal: baseRidePrice,
+      cardFeePercent: cardPassThrough.cardFeePercent,
+      cardFeeAmount: cardPassThrough.cardFeeAmount,
       nightSurchargePercent: 0,
       city
     },
@@ -3307,8 +3395,10 @@ export function calculateRidePrice(
       timeCost: timePart,
       nightSurcharge,
       isNight,
-      minimumFareApplied: finalPrice === pricing.minimumFare,
-      categoryMultiplier: pricing.multiplier
+      minimumFareApplied: baseRidePrice === pricing.minimumFare,
+      categoryMultiplier: pricing.multiplier,
+      cardFeePercent: cardPassThrough.cardFeePercent,
+      cardFeeAmount: cardPassThrough.cardFeeAmount
     }
   };
 }

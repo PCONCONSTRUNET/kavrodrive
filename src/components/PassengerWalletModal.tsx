@@ -24,7 +24,7 @@ import {
   SavedCard,
   SystemConfig
 } from '../types';
-import { StorageService } from '../services/storage';
+import { calculateCardPassThroughPricing, StorageService } from '../services/storage';
 import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
 import { AddCardModalSheet } from './AddCardModalSheet';
@@ -65,10 +65,14 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
     gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
     efiPixActive: boolean;
     mercadopagoPublicKey: string;
+    cardFeePassThroughEnabled?: boolean;
+    cardFeePassThroughPercent?: number;
   }>({
     gatewayProvider: 'sandbox',
     efiPixActive: false,
-    mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim()
+    mercadopagoPublicKey: String(import.meta.env.VITE_MERCADOPAGO_PUBLIC_KEY || '').trim(),
+    cardFeePassThroughEnabled: config.cardFeePassThroughEnabled,
+    cardFeePassThroughPercent: config.cardFeePassThroughPercent
   });
 
   const [showDepositPanel, setShowDepositPanel] = useState(false);
@@ -129,7 +133,9 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
         setPaymentsConfig({
           gatewayProvider: cfg.gatewayProvider,
           efiPixActive: cfg.efiPixActive,
-          mercadopagoPublicKey: cfg.mercadopagoPublicKey
+          mercadopagoPublicKey: cfg.mercadopagoPublicKey,
+          cardFeePassThroughEnabled: cfg.cardFeePassThroughEnabled,
+          cardFeePassThroughPercent: cfg.cardFeePassThroughPercent
         })
       )
       .catch(() => {});
@@ -157,6 +163,22 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   })();
 
   const isAmountValid = parsedAmount >= MIN_DEPOSIT_BRL;
+  const effectivePassThroughCfg = {
+    cardFeePassThroughEnabled:
+      paymentsConfig.cardFeePassThroughEnabled !== undefined
+        ? paymentsConfig.cardFeePassThroughEnabled
+        : config.cardFeePassThroughEnabled,
+    cardFeePassThroughPercent:
+      paymentsConfig.cardFeePassThroughPercent !== undefined
+        ? paymentsConfig.cardFeePassThroughPercent
+        : config.cardFeePassThroughPercent
+  };
+  const walletCardPricing = calculateCardPassThroughPricing(
+    isAmountValid ? parsedAmount : MIN_DEPOSIT_BRL,
+    effectivePassThroughCfg,
+    'cartao_credito',
+    { includeDebitCard: true }
+  );
 
   if (!isOpen) return null;
 
@@ -214,7 +236,13 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
       return;
     }
 
-    setDepositSuccessMsg(`Depósito de ${formatBRL(parsedAmount)} creditado na sua carteira!`);
+    if (res.chargeSummary && res.chargeSummary.cardFeeAmount > 0) {
+      setDepositSuccessMsg(
+        `Depósito de ${formatBRL(res.chargeSummary.depositAmount)} creditado na sua carteira! (Cobrado ${formatBRL(res.chargeSummary.totalCharged)} no cartão c/ taxa de ${res.chargeSummary.cardFeePercent.toFixed(2).replace('.', ',')}%)`
+      );
+    } else {
+      setDepositSuccessMsg(`Depósito de ${formatBRL(parsedAmount)} creditado na sua carteira!`);
+    }
     setShowDepositPanel(false);
   };
 
@@ -797,6 +825,47 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                               </button>
                             </div>
                           )}
+
+                          {walletCardPricing.cardFeeAmount > 0 && (
+                            <div
+                              style={{
+                                marginTop: 10,
+                                padding: '10px 12px',
+                                borderRadius: 12,
+                                backgroundColor: '#EFF6FF',
+                                border: '1px solid #BFDBFE',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: 4,
+                                fontSize: '0.75rem',
+                                color: '#1E3A8A'
+                              }}
+                            >
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span>Crédito líquido na carteira:</span>
+                                <strong>{formatBRL(walletCardPricing.baseAmount)}</strong>
+                              </div>
+                              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span>
+                                  Taxa do cartão ({walletCardPricing.cardFeePercent.toFixed(2).replace('.', ',')}%):
+                                </span>
+                                <strong>+ {formatBRL(walletCardPricing.cardFeeAmount)}</strong>
+                              </div>
+                              <div
+                                style={{
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  paddingTop: 4,
+                                  borderTop: '1px solid #BFDBFE',
+                                  fontSize: '0.8rem',
+                                  color: '#0F172A'
+                                }}
+                              >
+                                <span>Total cobrado no cartão:</span>
+                                <strong>{formatBRL(walletCardPricing.totalWithFee)}</strong>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -829,7 +898,9 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
                             <span>
                               {depositMethod === 'pix'
                                 ? `Gerar PIX de ${formatBRL(isAmountValid ? parsedAmount : MIN_DEPOSIT_BRL)}`
-                                : `Depositar ${formatBRL(isAmountValid ? parsedAmount : MIN_DEPOSIT_BRL)} no cartão`}
+                                : walletCardPricing.cardFeeAmount > 0
+                                  ? `Depositar ${formatBRL(walletCardPricing.baseAmount)} (Cobrar ${formatBRL(walletCardPricing.totalWithFee)})`
+                                  : `Depositar ${formatBRL(walletCardPricing.baseAmount)} no cartão`}
                             </span>
                           )}
                         </button>

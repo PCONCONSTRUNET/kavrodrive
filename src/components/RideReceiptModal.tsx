@@ -352,14 +352,40 @@ ${publicTrackingUrl}`;
                 </div>
               )}
 
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, fontSize: '0.9rem' }}>
-                <span style={{ color: '#334155', fontWeight: 500 }}>
-                  {hasCancellationFee ? 'Taxa de cancelamento' : 'Preço da viagem'}
-                </span>
-                <span style={{ color: '#0F172A', fontWeight: 700 }}>
-                  {formatCurrency(displayTotal)}
-                </span>
-              </div>
+              {(() => {
+                const feeAmt = Number(ride.cardFeeAmount ?? ride.appliedFareSnapshot?.cardFeeAmount ?? 0);
+                const feePct = Number(ride.cardFeePercent ?? ride.appliedFareSnapshot?.cardFeePercent ?? 0);
+                const baseFareTotal =
+                  !hasCancellationFee && feeAmt > 0
+                    ? ride.appliedFareSnapshot?.rideBaseTotal !== undefined
+                      ? Number(ride.appliedFareSnapshot.rideBaseTotal)
+                      : Math.max(0, Math.round((displayTotal - feeAmt) * 100) / 100)
+                    : displayTotal;
+
+                return (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, fontSize: '0.9rem' }}>
+                      <span style={{ color: '#334155', fontWeight: 500 }}>
+                        {hasCancellationFee ? 'Taxa de cancelamento' : 'Preço da viagem'}
+                      </span>
+                      <span style={{ color: '#0F172A', fontWeight: 700 }}>
+                        {formatCurrency(baseFareTotal)}
+                      </span>
+                    </div>
+
+                    {!hasCancellationFee && feeAmt > 0 && (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, fontSize: '0.86rem' }}>
+                        <span style={{ color: '#1D4ED8', fontWeight: 600 }}>
+                          Taxa cartão de crédito ({feePct.toFixed(2).replace('.', ',')}%)
+                        </span>
+                        <span style={{ color: '#1D4ED8', fontWeight: 700 }}>
+                          + {formatCurrency(feeAmt)}
+                        </span>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {recordedTipAmount > 0 && (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 8, fontSize: '0.86rem' }}>

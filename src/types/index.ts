@@ -288,7 +288,17 @@ export interface ClientWalletEntry {
   pixCopyPaste?: string;
   pixExpiresAt?: string;
   description: string;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    provider?: string;
+    requestedDepositAmount?: number;
+    cardFeePercent?: number;
+    cardFeeAmount?: number;
+    chargedTotalAmount?: number;
+    cardId?: string;
+    cardBrand?: string;
+    cardLast4?: string;
+    [key: string]: unknown;
+  };
   createdAt: string;
   updatedAt?: string;
 }
@@ -581,7 +591,16 @@ export interface FinancialLedgerEntry {
   balanceBucket: 'available' | 'pending' | 'debt' | 'platform';
   status: 'confirmado' | 'pendente_liberacao' | 'processando' | 'revertido';
   description: string;
-  metadata?: Record<string, unknown>;
+  metadata?: {
+    rideBaseTotal?: number;
+    baseCommissionAmount?: number;
+    cardFeePercent?: number;
+    cardFeeAmount?: number;
+    commissionFixed?: number;
+    debtOffsetApplied?: number;
+    autoSplit?: boolean;
+    [key: string]: unknown;
+  };
   createdAt: string;
 }
 
@@ -721,6 +740,9 @@ export interface Ride {
     multiplier: number;
     commissionPercent: number;
     commissionFixed?: number;
+    rideBaseTotal?: number;
+    cardFeePercent?: number;
+    cardFeeAmount?: number;
     nightSurchargePercent?: number;
     city?: string;
   };
@@ -732,6 +754,8 @@ export interface Ride {
   commissionFixed?: number;
   commissionAmount?: number;
   driverNetAmount?: number;
+  cardFeePercent?: number;
+  cardFeeAmount?: number;
   cancellationFeeApplied?: number;
   cancelledBy?: 'passenger' | 'driver' | 'admin';
   paymentMethod: PaymentMethod;
@@ -834,6 +858,8 @@ export interface SystemConfig {
     cartao_debito?: number;
     apple_pay?: number;
   };
+  cardFeePassThroughEnabled?: boolean;
+  cardFeePassThroughPercent?: number;
   withdrawalFeePercent?: number;        // Taxa % cobrada por saque PIX do motorista (ex: 0%)
   withdrawalFeeFixed?: number;          // Taxa fixa em R$ por saque PIX do motorista (ex: R$ 0,00)
   cancellationFeeAmount?: number;       // Taxa padrão de cancelamento em R$ quando aplicável (ex: R$ 0,00)

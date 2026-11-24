@@ -82,6 +82,8 @@ function getInitialStore() {
             cartao_debito: 0,
             apple_pay: 0
           },
+          cardFeePassThroughEnabled: true,
+          cardFeePassThroughPercent: 2.49,
           withdrawalFeePercent: 0,
           withdrawalFeeFixed: 0,
           cancellationFeeAmount: 0,

@@ -16,7 +16,7 @@ import {
   Wallet
 } from 'lucide-react';
 import { PaymentMethod, SystemConfig } from '../types';
-import { StorageService } from '../services/storage';
+import { DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT, StorageService } from '../services/storage';
 import { formatCurrencyValue, parseCurrencyInput, parseCurrencyToFloat } from '../utils/format';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
 import { WithdrawalScheduleControlCard } from './WithdrawalScheduleControlCard';
@@ -107,6 +107,12 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
   );
   const [creditGatewayStr, setCreditGatewayStr] = useState(
     String(config.gatewayFeePercents?.cartao_credito ?? EFI_OFFICIAL_RATES.creditCardCashPercent)
+  );
+  const [cardFeePassThroughEnabled, setCardFeePassThroughEnabled] = useState<boolean>(
+    config.cardFeePassThroughEnabled !== false
+  );
+  const [cardFeePassThroughPercentStr, setCardFeePassThroughPercentStr] = useState(
+    String(config.cardFeePassThroughPercent ?? DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT)
   );
   const [paymentsStatus, setPaymentsStatus] = useState<{
     gatewayProvider: 'efibank' | 'mercadopago' | 'sandbox';
@@ -210,6 +216,10 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
     setPixGatewayStr(String(config.gatewayFeePercents?.pix ?? EFI_OFFICIAL_RATES.pixReceivePercent));
     setCreditGatewayStr(String(config.gatewayFeePercents?.cartao_credito ?? EFI_OFFICIAL_RATES.creditCardCashPercent));
+    setCardFeePassThroughEnabled(config.cardFeePassThroughEnabled !== false);
+    setCardFeePassThroughPercentStr(
+      String(config.cardFeePassThroughPercent ?? DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT)
+    );
     setWithdrawalFeePercentStr(String(config.withdrawalFeePercent ?? 0));
     setWithdrawalFeeFixedStr(formatCurrencyValue(config.withdrawalFeeFixed ?? 0));
     setMinWithdrawalStr(formatCurrencyValue(config.minWithdrawalAmount ?? 20));
@@ -253,6 +263,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
 
     const parsedPixGw = clampPct(pixGatewayStr, 0);
     const parsedCreditGw = clampPct(creditGatewayStr, 0);
+    const parsedCardPassPct = clampPct(cardFeePassThroughPercentStr, DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT);
 
     const parsedWdPct = clampPct(withdrawalFeePercentStr, 0);
     const parsedWdFixed = clampMoney(withdrawalFeeFixedStr, 0, 0);
@@ -284,6 +295,8 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
         pix: parsedPixGw,
         cartao_credito: parsedCreditGw
       },
+      cardFeePassThroughEnabled,
+      cardFeePassThroughPercent: parsedCardPassPct,
       withdrawalFeePercent: parsedWdPct,
       withdrawalFeeFixed: parsedWdFixed,
       minWithdrawalAmount: parsedMinWd,
@@ -320,6 +333,7 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     setGlobalFixedStr(formatCurrencyValue(parsedGlobalFixed));
     setPixGatewayStr(String(parsedPixGw));
     setCreditGatewayStr(String(parsedCreditGw));
+    setCardFeePassThroughPercentStr(String(parsedCardPassPct));
     setWithdrawalFeePercentStr(String(parsedWdPct));
     setWithdrawalFeeFixedStr(formatCurrencyValue(parsedWdFixed));
     setMinWithdrawalStr(formatCurrencyValue(parsedMinWd));
@@ -449,11 +463,22 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
     dinheiro: 0
   };
 
+  const effectiveCardPassPct = cardFeePassThroughEnabled
+    ? clampPct(cardFeePassThroughPercentStr, DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT)
+    : 0;
+  const halfCreditGwPct = Math.round((creditGwPreview / 2) * 100) / 100;
+
   const simGross = clampMoney(simRideAmountStr, 50, 1);
   const simPlatformFee = calcPlatformFee(simGross, globalPctPreview, globalFixedPreview);
   const simDriverNet = Math.round(Math.max(0, simGross - simPlatformFee) * 100) / 100;
-  const simGwCost = Math.round(((simGross * gwPctMap[simMethod]) / 100) * 100) / 100;
-  const simPlatformNet = Math.round((simPlatformFee - simGwCost) * 100) / 100;
+  const simPassThrough =
+    simMethod === 'cartao_credito' && effectiveCardPassPct > 0
+      ? Math.round((simGross * (effectiveCardPassPct / 100)) * 100) / 100
+      : 0;
+  const simChargedTotal = Math.round((simGross + simPassThrough) * 100) / 100;
+  const simGwCost = Math.round(((simChargedTotal * gwPctMap[simMethod]) / 100) * 100) / 100;
+  const simPlatformGross = Math.round((simPlatformFee + simPassThrough) * 100) / 100;
+  const simPlatformNet = Math.round((simPlatformGross - simGwCost) * 100) / 100;
 
   const simWdGross = clampMoney(simWithdrawAmountStr, 100, 1);
   const wdPct = clampPct(withdrawalFeePercentStr, 0);
@@ -902,12 +927,19 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
           {/* Status ao vivo do Gateway de Pagamentos (Efí Bank / Mercado Pago / Sandbox) */}
           <div
             style={{
-              background: paymentsStatus.efiPixActive
-                ? 'linear-gradient(135deg, #0B1117 0%, #15222C 100%)'
-                : '#F8FAFC',
-              color: paymentsStatus.efiPixActive ? '#FFFFFF' : '#0F172A',
+              background:
+                paymentsStatus.efiPixActive || paymentsStatus.gatewayProvider === 'mercadopago'
+                  ? 'linear-gradient(135deg, #0B1117 0%, #15222C 100%)'
+                  : '#F8FAFC',
+              color:
+                paymentsStatus.efiPixActive || paymentsStatus.gatewayProvider === 'mercadopago'
+                  ? '#FFFFFF'
+                  : '#0F172A',
               borderRadius: 12,
-              border: paymentsStatus.efiPixActive ? '1px solid #1E293B' : '1px solid #E2E8F0',
+              border:
+                paymentsStatus.efiPixActive || paymentsStatus.gatewayProvider === 'mercadopago'
+                  ? '1px solid #1E293B'
+                  : '1px solid #E2E8F0',
               padding: '14px 18px',
               display: 'flex',
               alignItems: 'center',
@@ -922,13 +954,24 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                 {paymentsStatus.efiPixActive
                   ? `Efí Bank PIX (${paymentsStatus.efiSandbox ? 'Homologação' : 'Produção'})`
                   : paymentsStatus.gatewayProvider === 'mercadopago'
-                    ? 'Mercado Pago Conectado'
+                    ? 'Mercado Pago Ativo (Cartão à vista + PIX)'
                     : 'Modo Sandbox / Manual'}
               </div>
-              <div style={{ fontSize: '0.73rem', color: paymentsStatus.efiPixActive ? '#94A3B8' : '#64748B', marginTop: 2 }}>
+              <div
+                style={{
+                  fontSize: '0.73rem',
+                  color:
+                    paymentsStatus.efiPixActive || paymentsStatus.gatewayProvider === 'mercadopago'
+                      ? '#94A3B8'
+                      : '#64748B',
+                  marginTop: 2
+                }}
+              >
                 {paymentsStatus.efiPixActive
                   ? `PIX e Carteira pela Efí Bank${paymentsStatus.efiDriverPixSendEnabled ? ' • Envio de Saque PIX API ativo' : ''}${paymentsStatus.efiSplitEnabled ? ' • Split Efí ativo' : ''}.`
-                  : 'Configure a Efí Bank (Certificado .p12, PIX, Split e Repasses) na aba dedicada do Painel Master.'}
+                  : paymentsStatus.gatewayProvider === 'mercadopago'
+                    ? `Cartão (${creditGwPreview}% na gateway • repasse ${effectiveCardPassPct}% ao passageiro) e PIX (${pixGwPreview}%) roteados pelo Mercado Pago.`
+                    : 'Configure o Mercado Pago ou a Efí Bank na aba Gateways de Pagamento do Painel Master.'}
               </div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
@@ -938,12 +981,28 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   fontWeight: 800,
                   padding: '4px 10px',
                   borderRadius: 999,
-                  backgroundColor: paymentsStatus.efiPixActive ? 'rgba(118, 216, 0, 0.16)' : '#E2E8F0',
-                  border: paymentsStatus.efiPixActive ? '1px solid rgba(118, 216, 0, 0.4)' : '1px solid #CBD5E1',
-                  color: paymentsStatus.efiPixActive ? '#BEF264' : '#334155'
+                  backgroundColor: paymentsStatus.efiPixActive
+                    ? 'rgba(118, 216, 0, 0.16)'
+                    : paymentsStatus.gatewayProvider === 'mercadopago'
+                      ? 'rgba(0, 158, 227, 0.22)'
+                      : '#E2E8F0',
+                  border: paymentsStatus.efiPixActive
+                    ? '1px solid rgba(118, 216, 0, 0.4)'
+                    : paymentsStatus.gatewayProvider === 'mercadopago'
+                      ? '1px solid rgba(56, 189, 248, 0.45)'
+                      : '1px solid #CBD5E1',
+                  color: paymentsStatus.efiPixActive
+                    ? '#BEF264'
+                    : paymentsStatus.gatewayProvider === 'mercadopago'
+                      ? '#7DD3FC'
+                      : '#334155'
                 }}
               >
-                {paymentsStatus.efiPixActive ? 'Efí Bank Conectada' : paymentsStatus.gatewayProvider === 'mercadopago' ? 'Gateway Conectado' : 'Sandbox'}
+                {paymentsStatus.efiPixActive
+                  ? 'Efí Bank Conectada'
+                  : paymentsStatus.gatewayProvider === 'mercadopago'
+                    ? 'Mercado Pago Conectado'
+                    : 'Sandbox'}
               </span>
               {onOpenEfiConfig && (
                 <button
@@ -954,19 +1013,23 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                     fontWeight: 800,
                     padding: '5px 11px',
                     borderRadius: 999,
-                    backgroundColor: '#76D800',
-                    color: '#0F172A',
+                    backgroundColor: paymentsStatus.gatewayProvider === 'mercadopago' && !paymentsStatus.efiPixActive ? '#009EE3' : '#76D800',
+                    color: paymentsStatus.gatewayProvider === 'mercadopago' && !paymentsStatus.efiPixActive ? '#FFFFFF' : '#0F172A',
                     border: 'none',
                     cursor: 'pointer'
                   }}
                 >
-                  Configurar Efí Bank / Certificado
+                  {paymentsStatus.gatewayProvider === 'mercadopago' && !paymentsStatus.efiPixActive
+                    ? 'Configurar Mercado Pago / Gateways'
+                    : 'Configurar Gateways (MP / Efí)'}
                 </button>
               )}
             </div>
           </div>
 
-          {renderEfiTariffsSection(50, false)}
+          {paymentsStatus.gatewayProvider !== 'mercadopago' || paymentsStatus.efiPixActive || paymentsStatus.efiEnabled
+            ? renderEfiTariffsSection(50, false)
+            : null}
 
           {/* Tabela direta: Meios de Pagamento x Comissão x Taxa do Gateway */}
           <div
@@ -1102,9 +1165,28 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                         </td>
 
                         <td style={{ padding: '12px 16px', fontSize: '0.74rem', color: '#475569' }}>
-                          Kavro <strong style={{ color: row.accent }}>{formatBRL(exFee)}</strong> • Motorista{' '}
-                          <strong style={{ color: '#0F172A' }}>{formatBRL(exDriver)}</strong>
-                          {gwPct > 0 ? ` • GW ${gwPct}%` : ''}
+                          {row.id === 'cartao_credito' && effectiveCardPassPct > 0 ? (
+                            (() => {
+                              const exPass = Math.round((50 * (effectiveCardPassPct / 100)) * 100) / 100;
+                              const exTotalCharged = Math.round((50 + exPass) * 100) / 100;
+                              const exGwFee = Math.round((exTotalCharged * (gwPct / 100)) * 100) / 100;
+                              const exKavroNet = Math.round((exFee + exPass - exGwFee) * 100) / 100;
+                              return (
+                                <>
+                                  Pass. paga <strong style={{ color: '#0F172A' }}>{formatBRL(exTotalCharged)}</strong> (+{formatBRL(exPass)}) •{' '}
+                                  Motorista <strong style={{ color: '#0F172A' }}>{formatBRL(exDriver)}</strong> •{' '}
+                                  Líq. Kavro <strong style={{ color: row.accent }}>{formatBRL(exKavroNet)}</strong>
+                                  {gwPct > 0 ? ` (GW ${gwPct}%)` : ''}
+                                </>
+                              );
+                            })()
+                          ) : (
+                            <>
+                              Kavro <strong style={{ color: row.accent }}>{formatBRL(exFee)}</strong> • Motorista{' '}
+                              <strong style={{ color: '#0F172A' }}>{formatBRL(exDriver)}</strong>
+                              {gwPct > 0 ? ` • GW ${gwPct}%` : ''}
+                            </>
+                          )}
                         </td>
                       </tr>
                     );
@@ -1112,6 +1194,163 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                 </tbody>
               </table>
             </div>
+          </div>
+
+          {/* Controle configurável: Repasse de Taxa do Cartão ao Passageiro (Corridas & Carteira) */}
+          <div
+            style={{
+              backgroundColor: '#FFFFFF',
+              borderRadius: 10,
+              border: cardFeePassThroughEnabled ? '1.5px solid #93C5FD' : '1px solid #E2E8F0',
+              padding: 18,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 9,
+                    backgroundColor: cardFeePassThroughEnabled ? '#EFF6FF' : '#F1F5F9',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}
+                >
+                  <CreditCard size={18} color={cardFeePassThroughEnabled ? '#1D4ED8' : '#64748B'} />
+                </div>
+                <div>
+                  <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#0F172A' }}>
+                    Taxa de Cartão Repassada ao Passageiro (Corridas &amp; Carteira)
+                  </div>
+                  <div style={{ fontSize: '0.72rem', color: '#64748B' }}>
+                    O ganho do motorista continua 100% sobre a tarifa base; o acréscimo amortiza a taxa do gateway ({creditGwPreview}%).
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  markDirty();
+                  setCardFeePassThroughEnabled((prev) => !prev);
+                }}
+                style={{
+                  padding: '7px 14px',
+                  borderRadius: 999,
+                  border: 'none',
+                  backgroundColor: cardFeePassThroughEnabled ? '#DBEAFE' : '#E2E8F0',
+                  color: cardFeePassThroughEnabled ? '#1E40AF' : '#475569',
+                  fontSize: '0.75rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                {cardFeePassThroughEnabled ? <CheckCircle2 size={14} /> : <Percent size={14} />}
+                <span>{cardFeePassThroughEnabled ? `Repasse Ativo (${effectiveCardPassPct}%)` : 'Repasse Desativado (0%)'}</span>
+              </button>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, alignItems: 'end' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 700, color: '#334155', marginBottom: 4 }}>
+                  Juros / Taxa cobrada do passageiro no Cartão (%)
+                </label>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    disabled={!cardFeePassThroughEnabled}
+                    value={cardFeePassThroughPercentStr}
+                    onChange={(e) => {
+                      markDirty();
+                      setCardFeePassThroughPercentStr(e.target.value.replace(/[^\d.,]/g, ''));
+                    }}
+                    placeholder="2.49"
+                    style={{
+                      ...inputStyle,
+                      opacity: cardFeePassThroughEnabled ? 1 : 0.6,
+                      backgroundColor: cardFeePassThroughEnabled ? '#FFFFFF' : '#F8FAFC'
+                    }}
+                  />
+                  <span style={{ fontSize: '0.84rem', fontWeight: 800, color: '#475569' }}>%</span>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    markDirty();
+                    setCardFeePassThroughEnabled(true);
+                    setCardFeePassThroughPercentStr(String(halfCreditGwPct > 0 ? halfCreditGwPct : DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT));
+                  }}
+                  style={{
+                    height: 38,
+                    padding: '0 12px',
+                    borderRadius: 8,
+                    border: '1px solid #BFDBFE',
+                    backgroundColor: '#EFF6FF',
+                    color: '#1D4ED8',
+                    fontSize: '0.74rem',
+                    fontWeight: 800,
+                    cursor: 'pointer'
+                  }}
+                >
+                  Usar metade do gateway ({(halfCreditGwPct > 0 ? halfCreditGwPct : DEFAULT_CARD_FEE_PASS_THROUGH_PERCENT).toFixed(2).replace('.', ',')}%)
+                </button>
+              </div>
+            </div>
+
+            {(() => {
+              const exPass50 = Math.round((50 * (effectiveCardPassPct / 100)) * 100) / 100;
+              const exCharged50 = Math.round((50 + exPass50) * 100) / 100;
+              const exBaseComm50 = calcPlatformFee(50, globalPctPreview, globalFixedPreview);
+              const exDriver50 = Math.round(Math.max(0, 50 - exBaseComm50) * 100) / 100;
+              const exGw50 = Math.round((exCharged50 * (creditGwPreview / 100)) * 100) / 100;
+              const exKavroNet50 = Math.round((exBaseComm50 + exPass50 - exGw50) * 100) / 100;
+              return (
+                <div
+                  style={{
+                    padding: '11px 13px',
+                    borderRadius: 9,
+                    backgroundColor: '#F8FAFC',
+                    border: '1px solid #E2E8F0',
+                    fontSize: '0.74rem',
+                    color: '#334155',
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: '6px 16px',
+                    alignItems: 'center'
+                  }}
+                >
+                  <span>
+                    <strong>Simulação R$ 50,00 no Cartão:</strong>
+                  </span>
+                  <span>
+                    Passageiro paga: <strong style={{ color: '#0F172A' }}>{formatBRL(exCharged50)}</strong>
+                    {exPass50 > 0 ? ` (+${formatBRL(exPass50)})` : ' (sem acréscimo)'}
+                  </span>
+                  <span>
+                    Motorista recebe: <strong style={{ color: '#0F172A' }}>{formatBRL(exDriver50)}</strong> (sobre R$ 50,00 base)
+                  </span>
+                  <span>
+                    Gateway ({creditGwPreview}%): <strong style={{ color: '#B45309' }}>- {formatBRL(exGw50)}</strong>
+                  </span>
+                  <span>
+                    Líquido Kavro: <strong style={{ color: '#15803D' }}>{formatBRL(exKavroNet50)}</strong>
+                  </span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* 2 Cards diretos: Saques PIX vs Split & Dívida */}
@@ -1349,13 +1588,21 @@ export const AdminFinancialFeesTab: React.FC<AdminFinancialFeesTabProps> = ({
                   </div>
                 </div>
                 <div style={{ fontSize: '0.75rem', display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  {simPassThrough > 0 && (
+                    <>
+                      <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#1D4ED8' }}>Repasse Cartão Passageiro ({effectiveCardPassPct}%):</span>
+                        <strong style={{ color: '#1D4ED8' }}>+ {formatBRL(simPassThrough)} (Cobrado: {formatBRL(simChargedTotal)})</strong>
+                      </div>
+                    </>
+                  )}
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: '#475569' }}>Taxa Geral Kavro ({generalFeeLabel}):</span>
+                    <span style={{ color: '#475569' }}>Taxa Geral Kavro ({generalFeeLabel} sobre base):</span>
                     <strong style={{ color: '#15803D' }}>{formatBRL(simPlatformFee)}</strong>
                   </div>
                   {simGwCost > 0 && (
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ color: '#B45309' }}>Taxa Gateway ({gwPctMap[simMethod]}%):</span>
+                      <span style={{ color: '#B45309' }}>Taxa Gateway ({gwPctMap[simMethod]}% s/ {formatBRL(simChargedTotal)}):</span>
                       <strong style={{ color: '#B45309' }}>- {formatBRL(simGwCost)} (Líq. Kavro: {formatBRL(simPlatformNet)})</strong>
                     </div>
                   )}

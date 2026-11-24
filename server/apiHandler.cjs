@@ -495,7 +495,15 @@ async function confirmDigitalRidePaymentAndPublish({ rideId, paidAmountBrl, gate
   const whFixed = finance.resolveCommissionFixedForRide
     ? finance.resolveCommissionFixedForRide(null, before)
     : (before.commissionFixed ?? 0);
-  const split = finance.calculateSplit(finalVal, before.commissionPercent ?? 20, whFixed);
+  const cfgForConfirm = await getCachedSystemConfig().catch(() => ({}));
+  const split = finance.calculateRideFinancialSplit({
+    ride: before,
+    totalPrice: finalVal,
+    cfg: cfgForConfirm,
+    commissionPercent: before.commissionPercent ?? 20,
+    commissionFixed: whFixed,
+    useConfigPassThrough: false
+  });
   const nextRideStatus = before.status === 'aguardando_pagamento' ? 'aguardando_confirmacao' : before.status;
 
   const updatedRide = await upsertFullRide({
@@ -1108,6 +1116,8 @@ function formatRideFromDb(row) {
     commissionFixed: commFixed,
     commissionAmount: commAmt,
     driverNetAmount: netAmt,
+    cardFeePercent: snap?.cardFeePercent !== undefined ? Number(snap.cardFeePercent) : undefined,
+    cardFeeAmount: snap?.cardFeeAmount !== undefined ? Number(snap.cardFeeAmount) : undefined,
     paymentMethod: row.payment_method ?? row.paymentMethod ?? 'pix',
     paymentStatus: row.payment_status ?? row.paymentStatus ?? 'aguardando',
     paymentTxId: row.payment_tx_id ?? row.paymentTxId ?? undefined,
@@ -4272,20 +4282,72 @@ async function handleApiRequest(req, res) {
       const authoritativeTotal = officialFare
         ? officialFare.totalPrice
         : Number(ride.totalPrice || before?.totalPrice || 0);
-      const split = finance.calculateSplit(authoritativeTotal, effectiveCommPct, effectiveCommFixed);
+      const manualSnapBase =
+        !before && isAdmin && ride.isManualBooking && ride.appliedFareSnapshot?.rideBaseTotal !== undefined
+          ? Number(ride.appliedFareSnapshot.rideBaseTotal)
+          : null;
+      const split = !before && officialFare
+        ? finance.calculateRideFinancialSplit({
+            ride,
+            baseAmount: officialFare.totalPrice,
+            cfg,
+            commissionPercent: effectiveCommPct,
+            commissionFixed: effectiveCommFixed,
+            useConfigPassThrough: true
+          })
+        : manualSnapBase !== null && Number.isFinite(manualSnapBase)
+          ? finance.calculateRideFinancialSplit({
+              ride,
+              baseAmount: manualSnapBase,
+              cfg,
+              commissionPercent: effectiveCommPct,
+              commissionFixed: effectiveCommFixed,
+              useConfigPassThrough: ride.appliedFareSnapshot?.cardFeePercent === undefined
+            })
+          : finance.calculateRideFinancialSplit({
+              ride: before
+                ? { ...before, ...ride, appliedFareSnapshot: ride.appliedFareSnapshot || before.appliedFareSnapshot }
+                : ride,
+              totalPrice: authoritativeTotal,
+              cfg,
+              commissionPercent: effectiveCommPct,
+              commissionFixed: effectiveCommFixed,
+              useConfigPassThrough: false
+            });
       ride.estimatedPrice = before ? before.estimatedPrice : split.grossAmount;
       ride.totalPrice = split.grossAmount;
       ride.commissionPercent = split.commissionPercent;
       ride.commissionFixed = split.commissionFixed;
       ride.commissionAmount = split.commissionAmount;
       ride.driverNetAmount = split.driverNetAmount;
+      ride.cardFeePercent = split.cardFeePercent;
+      ride.cardFeeAmount = split.cardFeeAmount;
       if (ride.appliedFareSnapshot) {
         ride.appliedFareSnapshot = {
           ...ride.appliedFareSnapshot,
           categoryType: ride.serviceType,
           ...(normalizedDelivery ? { deliveryDetails: normalizedDelivery } : {}),
           commissionPercent: split.commissionPercent,
-          commissionFixed: split.commissionFixed
+          commissionFixed: split.commissionFixed,
+          rideBaseTotal: split.baseTotal,
+          cardFeePercent: split.cardFeePercent,
+          cardFeeAmount: split.cardFeeAmount
+        };
+      } else {
+        ride.appliedFareSnapshot = {
+          categoryId: ride.category || 'kavro_go',
+          categoryName: ride.categoryName || 'Padrão',
+          categoryType: ride.serviceType,
+          baseFare: Number(ride.baseFare ?? 8),
+          pricePerKm: Number(cfg.pricePerKm ?? 3.2),
+          pricePerMinute: Number(cfg.pricePerMinute ?? 0.5),
+          minimumFare: Number(cfg.minimumFare ?? 15),
+          multiplier: 1,
+          commissionPercent: split.commissionPercent,
+          commissionFixed: split.commissionFixed,
+          rideBaseTotal: split.baseTotal,
+          cardFeePercent: split.cardFeePercent,
+          cardFeeAmount: split.cardFeeAmount
         };
       }
 
@@ -4848,7 +4910,14 @@ async function handleApiRequest(req, res) {
       const effectiveCompleteFixed = finance.resolveCommissionFixedForRide
         ? finance.resolveCommissionFixedForRide(cfgForComplete, ride)
         : Math.max(0, finance.round2(ride.commissionFixed ?? cfgForComplete.platformCommissionFixed ?? 0));
-      const split = finance.calculateSplit(finalPrice, effectiveCompletePct, effectiveCompleteFixed);
+      const split = finance.calculateRideFinancialSplit({
+        ride,
+        totalPrice: finalPrice,
+        cfg: cfgForComplete,
+        commissionPercent: effectiveCompletePct,
+        commissionFixed: effectiveCompleteFixed,
+        useConfigPassThrough: false
+      });
 
       let newPaymentStatus = ride.paymentStatus;
       let paidAmount = finalPrice;
@@ -4974,7 +5043,7 @@ async function handleApiRequest(req, res) {
         category: 'financeiro_corridas',
         actionKey: 'ride_completed_settled',
         title: `Corrida ${enrichedCompletedRide.rideCode || enrichedCompletedRide.id} finalizada e liquidada`,
-        summary: `Pagamento (${String(ride.paymentMethod || 'pix').toUpperCase()}) de ${audit.formatMoneyPt(finalPrice)} • Comissão ${split.commissionPercent}% (${audit.formatMoneyPt(split.commissionAmount)}) • Motorista ${audit.formatMoneyPt(split.driverNetAmount)}.`,
+        summary: `Pagamento (${String(ride.paymentMethod || 'pix').toUpperCase()}) de ${audit.formatMoneyPt(finalPrice)}${split.cardFeeAmount > 0 ? ` (base ${audit.formatMoneyPt(split.baseTotal)} + ${split.cardFeePercent}% cartão ${audit.formatMoneyPt(split.cardFeeAmount)})` : ''} • Comissão ${split.commissionPercent}% (${audit.formatMoneyPt(split.commissionAmount)}) • Motorista ${audit.formatMoneyPt(split.driverNetAmount)}.`,
         severity: 'info',
         actorRole: isAdmin ? 'admin_master' : 'motorista',
         actorId: isAdmin ? getAdminActorContext(req).actorId : driverId,
@@ -5368,7 +5437,23 @@ async function handleApiRequest(req, res) {
       const rawNextTotal = officialFare
         ? officialFare.totalPrice
         : (body.totalPrice !== undefined && isAdmin ? finance.round2(body.totalPrice) : before.totalPrice);
-      const split = finance.calculateSplit(rawNextTotal, commPct, commFixed);
+      const split = officialFare
+        ? finance.calculateRideFinancialSplit({
+            ride: before,
+            baseAmount: officialFare.totalPrice,
+            cfg,
+            commissionPercent: commPct,
+            commissionFixed: commFixed,
+            useConfigPassThrough: false
+          })
+        : finance.calculateRideFinancialSplit({
+            ride: before,
+            totalPrice: rawNextTotal,
+            cfg,
+            commissionPercent: commPct,
+            commissionFixed: commFixed,
+            useConfigPassThrough: false
+          });
 
       const tx = await finance.getPaymentTxByRide(id);
       let nextPaymentTxId = before.paymentTxId;
@@ -5526,6 +5611,9 @@ async function handleApiRequest(req, res) {
       const nowIso = new Date().toISOString();
       const nextSnapshot = {
         ...(before.appliedFareSnapshot || {}),
+        rideBaseTotal: split.baseTotal,
+        cardFeePercent: split.cardFeePercent,
+        cardFeeAmount: split.cardFeeAmount,
         routeAdjusted: true,
         routeAdjustedAt: nowIso,
         previousOriginAddress: before.origin?.address || null,
@@ -6479,6 +6567,7 @@ async function handleApiRequest(req, res) {
       const efiPixActive = await efiBankGateway.isEfiPixActive();
       const efiSplitEnabled = await efiBankGateway.isEfiSplitActive();
       const efiDriverPixSendEnabled = await efiBankGateway.isEfiDriverPayoutActive();
+      const sysCfg = await getCachedSystemConfig().catch(() => ({}));
       const gatewayProvider = efiPixActive ? 'efibank' : (mpPixActive || mpOn ? 'mercadopago' : 'sandbox');
       return sendJson(res, 200, {
         ok: true,
@@ -6495,6 +6584,10 @@ async function handleApiRequest(req, res) {
         mercadopagoPublicKey: mpPublicKey,
         cardMaxInstallments: finance.CARD_MAX_INSTALLMENTS || 1,
         cardOnlyAtSight: true,
+        cardFeePassThroughEnabled: sysCfg?.cardFeePassThroughEnabled !== false,
+        cardFeePassThroughPercent: finance.resolveCardFeePassThroughPercent
+          ? finance.resolveCardFeePassThroughPercent(sysCfg, 'cartao_credito')
+          : 2.49,
         autoPixPayoutEnabled: Boolean(efiDriverPixSendEnabled || process.env.PIX_PAYOUT_WEBHOOK_URL || process.env.ASAAS_API_KEY)
       });
     }
@@ -6822,11 +6915,14 @@ async function handleApiRequest(req, res) {
           return sendJson(res, 402, result);
         }
         if (!result.pending && result.wallet) {
+          const feeNote = result.chargeSummary?.cardFeeAmount > 0
+            ? ` (cobrado ${audit.formatMoneyPt(result.chargeSummary.totalCharged)} no cartão c/ taxa de ${result.chargeSummary.cardFeePercent}%)`
+            : '';
           await audit.recordAuditEvent({
             category: 'financeiro_corridas',
             actionKey: 'client_wallet_topup_confirmed',
             title: 'Depósito confirmado na carteira do passageiro',
-            summary: `${cliRow.name || targetClientId} depositou ${audit.formatMoneyPt(amount)} via ${String(body.method || 'cartao').toUpperCase()}. Novo saldo: ${audit.formatMoneyPt(result.wallet.balance)}.`,
+            summary: `${cliRow.name || targetClientId} depositou ${audit.formatMoneyPt(amount)} via ${String(body.method || 'cartao').toUpperCase()}${feeNote}. Novo saldo: ${audit.formatMoneyPt(result.wallet.balance)}.`,
             severity: 'info',
             actorRole: isAdmin ? 'admin_master' : 'passageiro',
             actorId: targetClientId,
