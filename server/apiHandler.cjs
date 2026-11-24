@@ -12,6 +12,7 @@ const { isValidCpfDigits } = require('./termsSignatureUtils.cjs');
 const realtimeHub = require('./realtimeHub.cjs');
 const audit = require('./auditEngine.cjs');
 const security = require('./securityUtils.cjs');
+const systemDiagnostics = require('./systemDiagnostics.cjs');
 
 function getRequestClientIp(req) {
   return (
@@ -1991,6 +1992,45 @@ async function handleApiRequest(req, res) {
           otpWebhookConfigured: Boolean(process.env.OTP_WEBHOOK_URL)
         }
       });
+    }
+
+    // 0.0.0 PAINEL ISOLADO DE STATUS & DIAGNÓSTICO DO SISTEMA (PROTEGIDO POR PIN)
+    if (pathname === '/api/status/auth' && method === 'POST') {
+      const clientIp = getRequestClientIp(req);
+      const rateRes = await security.checkRateLimitAsync('status_pin', clientIp, 10, 5 * 60 * 1000);
+      if (!rateRes.allowed) {
+        return sendJson(res, 429, {
+          ok: false,
+          error: `Muitas tentativas de PIN. Aguarde ${rateRes.retryAfterSec}s e tente novamente.`
+        });
+      }
+      const body = await parseBody(req);
+      if (!systemDiagnostics.timingSafePinMatch(body?.pin)) {
+        return sendJson(res, 401, { ok: false, error: 'PIN de acesso incorreto.' });
+      }
+      const issued = systemDiagnostics.signStatusToken(getAdminSessionSecret());
+      return sendJson(res, 200, { ok: true, ...issued });
+    }
+
+    if (pathname === '/api/status/diagnostics' && method === 'GET') {
+      const authHeader = String(req.headers['authorization'] || '').replace(/^Bearer\s+/i, '').trim();
+      const rawStatusToken = String(req.headers['x-status-token'] || authHeader || '').trim();
+      const hasValidStatusToken = Boolean(
+        systemDiagnostics.verifyStatusToken(rawStatusToken, getAdminSessionSecret())
+      );
+      const hasAdminSession = hasValidStatusToken ? false : await isAuthorizedAdmin(req);
+      if (!hasValidStatusToken && !hasAdminSession) {
+        return sendJson(res, 401, {
+          ok: false,
+          error: 'Informe o PIN de monitoramento para visualizar as estatísticas do sistema.'
+        });
+      }
+      const probe = url.searchParams.get('probe') === '1';
+      const report = await systemDiagnostics.collectSystemDiagnostics({
+        probe,
+        getGoogleClientId
+      });
+      return sendJson(res, 200, { ok: true, ...report });
     }
 
     // 0.0.1 REAL-TIME STREAM (Server-Sent Events Autenticado & Escopado)

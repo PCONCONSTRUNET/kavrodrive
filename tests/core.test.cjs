@@ -5747,3 +5747,69 @@ test('Painel Admin Saques: pedido pendente inclui ficha completa do motorista (n
     ).catch(() => {});
   }
 });
+
+test('Painel Isolado /status: auth por PIN 20202020, isolamento do Admin, rate-limit e estatísticas do banco/sistema', async () => {
+  // 1) Sem token retorna 401 fail-closed
+  const unauthRes = await apiJson('/api/status/diagnostics');
+  assert.equal(unauthRes.status, 401);
+
+  // 2) PIN inválido falha com 401
+  const badPinRes = await apiJson('/api/status/auth', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.251' },
+    body: { pin: '99999999' }
+  });
+  assert.equal(badPinRes.status, 401);
+
+  // 3) PIN correto 20202020 retorna token isolado kavro_sts.*
+  const authRes = await apiJson('/api/status/auth', {
+    method: 'POST',
+    headers: { 'x-forwarded-for': '198.51.100.251' },
+    body: { pin: '20202020' }
+  });
+  assert.equal(authRes.status, 200);
+  assert.equal(authRes.json.ok, true);
+  assert.ok(String(authRes.json.token || '').startsWith('kavro_sts.'));
+
+  // 4) Token de status NÃO dá acesso às rotas administrativas (/api/admin/*)
+  const adminAttempt = await apiJson('/api/admin/finance/overview', {
+    headers: { Authorization: `Bearer ${authRes.json.token}` }
+  });
+  assert.equal(adminAttempt.status, 401);
+
+  // 5) Diagnóstico autenticado retorna status geral, banco, pool, contadores, tabelas e integrações
+  const diagRes = await apiJson('/api/status/diagnostics', {
+    headers: { Authorization: `Bearer ${authRes.json.token}` }
+  });
+  assert.equal(diagRes.status, 200);
+  assert.equal(diagRes.json.ok, true);
+  assert.ok(['operational', 'degraded', 'critical'].includes(diagRes.json.overall?.status));
+  assert.equal(typeof diagRes.json.overall?.score, 'number');
+  assert.equal(diagRes.json.database?.connected, true);
+  assert.equal(typeof diagRes.json.database?.latencyMs, 'number');
+  assert.equal(typeof diagRes.json.database?.pool?.max, 'number');
+  assert.equal(typeof diagRes.json.database?.operationalCounts?.totalDrivers, 'number');
+  assert.ok(Array.isArray(diagRes.json.database?.tableStats));
+  assert.ok(diagRes.json.database.tableStats.some(t => t.name === 'rides'));
+  assert.ok(diagRes.json.database.tableStats.some(t => t.name === 'drivers'));
+  assert.ok(Array.isArray(diagRes.json.checks));
+  assert.ok(diagRes.json.checks.some(c => c.id === 'database'));
+  assert.ok(diagRes.json.checks.some(c => c.id === 'mercadopago'));
+  assert.ok(diagRes.json.integrations?.realtime);
+  assert.equal(typeof diagRes.json.runtime?.uptimeSeconds, 'number');
+
+  // 6) Rate-limit após excesso de tentativas no PIN retorna 429
+  let got429 = false;
+  for (let i = 0; i < 12; i++) {
+    const attempt = await apiJson('/api/status/auth', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.252' },
+      body: { pin: '00000000' }
+    });
+    if (attempt.status === 429) {
+      got429 = true;
+      break;
+    }
+  }
+  assert.equal(got429, true);
+});

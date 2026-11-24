@@ -55,7 +55,7 @@ function buildCorsHeaders(req, extraHeaders = {}) {
   const headers = {
     Vary: 'Origin',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-driver-token, x-client-token, x-webhook-secret',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-admin-pin, x-driver-token, x-client-token, x-status-token, x-webhook-secret',
     ...extraHeaders
   };
   if (allowedOrigin) {

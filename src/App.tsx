@@ -40,6 +40,7 @@ const HelpCenterScreen = lazyNamed(() => import('./views/HelpCenterScreen'), 'He
 const FamilyInviteScreen = lazyNamed(() => import('./views/FamilyInviteScreen'), 'FamilyInviteScreen');
 const CitiesServedScreen = lazyNamed(() => import('./views/CitiesServedScreen'), 'CitiesServedScreen');
 const InstallPwaTutorialScreen = lazyNamed(() => import('./views/InstallPwaTutorialScreen'), 'InstallPwaTutorialScreen');
+const SystemStatusScreen = lazyNamed(() => import('./views/SystemStatusScreen'), 'SystemStatusScreen');
 
 const RouteLoadingFallback: React.FC = () => (
   <div
@@ -1253,6 +1254,16 @@ export const App: React.FC = () => {
       <Route
         path="/parceiro"
         element={<Navigate to="/kavro-drive" replace />}
+      />
+
+      {/* Rota isolada de Status & Saúde do Banco / Sistema (acesso via PIN em /status) */}
+      <Route
+        path="/status"
+        element={<SystemStatusScreen />}
+      />
+      <Route
+        path="/sistema"
+        element={<Navigate to="/status" replace />}
       />
 
       {/* Rota exclusiva do Painel Administrativo Master (/administracion) */}
