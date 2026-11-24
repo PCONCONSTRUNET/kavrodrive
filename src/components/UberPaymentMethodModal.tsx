@@ -67,9 +67,8 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
         ? Math.round(walletRequiredTotal * (cardFeePercent / 100) * 100) / 100
         : 0;
   const totalCardCharge = Math.round((walletRequiredTotal + resolvedCardFeeAmt) * 100) / 100;
-  const cardFeePctText = Number(cardFeePercent || 0).toFixed(2).replace('.', ',');
-  const cardFeeAmtText = resolvedCardFeeAmt.toFixed(2).replace('.', ',');
-  const totalCardChargeText = totalCardCharge.toFixed(2).replace('.', ',');
+  const basePriceLabel = walletRequiredTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+  const cardPriceLabel = totalCardCharge.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
   const handleToggleWallet = () => {
     if (isWalletSelected) {
@@ -315,9 +314,9 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   cursor: 'pointer',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
                   <PaymentMethodIcon method="dinheiro" size={26} />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
                       Dinheiro
                     </div>
@@ -327,21 +326,28 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    width: 24,
-                    height: 24,
-                    borderRadius: '50%',
-                    border: paymentMethod === 'dinheiro' ? '2px solid #0F172A' : '1.5px solid #CBD5E1',
-                    backgroundColor: paymentMethod === 'dinheiro' ? '#0F172A' : 'transparent',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                >
-                  {paymentMethod === 'dinheiro' && <Check size={14} strokeWidth={3} />}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                  {walletRequiredTotal > 0 && (
+                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569', whiteSpace: 'nowrap' }}>
+                      {basePriceLabel}
+                    </span>
+                  )}
+                  <div
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: '50%',
+                      border: paymentMethod === 'dinheiro' ? '2px solid #0F172A' : '1.5px solid #CBD5E1',
+                      backgroundColor: paymentMethod === 'dinheiro' ? '#0F172A' : 'transparent',
+                      color: '#FFFFFF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {paymentMethod === 'dinheiro' && <Check size={14} strokeWidth={3} />}
+                  </div>
                 </div>
               </button>
             )}
@@ -367,9 +373,9 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   cursor: 'pointer',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
                   <PaymentMethodIcon method="pix" size={26} />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
                       PIX
                     </div>
@@ -379,21 +385,28 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   </div>
                 </div>
 
-                <div
-                  style={{
-                    width: 24,
-                    height: 24,
-                    borderRadius: '50%',
-                    border: paymentMethod === 'pix' ? '2px solid #0F172A' : '1.5px solid #CBD5E1',
-                    backgroundColor: paymentMethod === 'pix' ? '#0F172A' : 'transparent',
-                    color: '#FFFFFF',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    flexShrink: 0,
-                  }}
-                >
-                  {paymentMethod === 'pix' && <Check size={14} strokeWidth={3} />}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                  {walletRequiredTotal > 0 && (
+                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569', whiteSpace: 'nowrap' }}>
+                      {basePriceLabel}
+                    </span>
+                  )}
+                  <div
+                    style={{
+                      width: 24,
+                      height: 24,
+                      borderRadius: '50%',
+                      border: paymentMethod === 'pix' ? '2px solid #0F172A' : '1.5px solid #CBD5E1',
+                      backgroundColor: paymentMethod === 'pix' ? '#0F172A' : 'transparent',
+                      color: '#FFFFFF',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {paymentMethod === 'pix' && <Check size={14} strokeWidth={3} />}
+                  </div>
                 </div>
               </button>
             )}
@@ -402,6 +415,7 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
               const isCardSelected =
                 (paymentMethod === 'cartao_credito' || paymentMethod === 'cartao_debito') &&
                 selectedCardId === c.id;
+              const rowCardPriceLabel = c.cardType === 'cartao_debito' ? basePriceLabel : cardPriceLabel;
               return (
                 <button
                   key={c.id}
@@ -424,38 +438,40 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                     cursor: 'pointer',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
                     <PaymentMethodIcon method="cartao_credito" size={26} />
-                    <div>
+                    <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#0F172A' }}>
                         {String(c.brand || 'Cartão').toUpperCase()} •••• {c.last4}
                       </div>
                       <div style={{ fontSize: '0.74rem', color: '#64748B' }}>
                         {c.cardType === 'cartao_debito' ? 'Débito (à vista)' : 'Crédito à vista (1x)'} • Val {c.expMonth}/{c.expYear}
                       </div>
-                      {c.cardType !== 'cartao_debito' && resolvedCardFeeAmt > 0 && (
-                        <div style={{ fontSize: '0.7rem', color: '#1D4ED8', fontWeight: 700, marginTop: 2 }}>
-                          Taxa cartão +{cardFeePctText}% (+R$ {cardFeeAmtText} • Total R$ {totalCardChargeText})
-                        </div>
-                      )}
                     </div>
                   </div>
 
-                  <div
-                    style={{
-                      width: 24,
-                      height: 24,
-                      borderRadius: '50%',
-                      border: isCardSelected ? '2px solid #0F172A' : '1.5px solid #CBD5E1',
-                      backgroundColor: isCardSelected ? '#0F172A' : 'transparent',
-                      color: '#FFFFFF',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                    }}
-                  >
-                    {isCardSelected && <Check size={14} strokeWidth={3} />}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                    {walletRequiredTotal > 0 && (
+                      <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569', whiteSpace: 'nowrap' }}>
+                        {rowCardPriceLabel}
+                      </span>
+                    )}
+                    <div
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: '50%',
+                        border: isCardSelected ? '2px solid #0F172A' : '1.5px solid #CBD5E1',
+                        backgroundColor: isCardSelected ? '#0F172A' : 'transparent',
+                        color: '#FFFFFF',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {isCardSelected && <Check size={14} strokeWidth={3} />}
+                    </div>
                   </div>
                 </button>
               );
@@ -481,40 +497,42 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
                   cursor: 'pointer',
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0, flex: 1 }}>
                   <PaymentMethodIcon method="cartao_credito" size={26} />
-                  <div>
+                  <div style={{ minWidth: 0 }}>
                     <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0F172A' }}>
                       {savedCards.length > 0 ? 'Adicionar novo cartão' : 'Cartão de Crédito ou Débito'}
                     </div>
                     <div style={{ fontSize: '0.73rem', color: '#64748B', fontWeight: 500 }}>
                       Cobrança à vista (1x) • Visa, Mastercard, Elo
                     </div>
-                    {resolvedCardFeeAmt > 0 && (
-                      <div style={{ fontSize: '0.7rem', color: '#1D4ED8', fontWeight: 700, marginTop: 2 }}>
-                        Taxa cartão +{cardFeePctText}% (+R$ {cardFeeAmtText} • Total R$ {totalCardChargeText})
-                      </div>
-                    )}
                   </div>
                 </div>
 
-                <span
-                  style={{
-                    padding: '5px 10px',
-                    borderRadius: 999,
-                    backgroundColor: '#0F172A',
-                    color: '#FFFFFF',
-                    fontSize: '0.72rem',
-                    fontWeight: 800,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    flexShrink: 0,
-                  }}
-                >
-                  <Plus size={12} />
-                  <span>Adicionar</span>
-                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+                  <span
+                    style={{
+                      padding: '5px 10px',
+                      borderRadius: 999,
+                      backgroundColor: '#0F172A',
+                      color: '#FFFFFF',
+                      fontSize: '0.72rem',
+                      fontWeight: 800,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      flexShrink: 0,
+                    }}
+                  >
+                    <Plus size={12} />
+                    <span>Adicionar</span>
+                  </span>
+                  {walletRequiredTotal > 0 && (
+                    <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#475569', whiteSpace: 'nowrap' }}>
+                      {cardPriceLabel}
+                    </span>
+                  )}
+                </div>
               </button>
             )}
           </div>

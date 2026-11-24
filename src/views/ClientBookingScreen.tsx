@@ -2360,16 +2360,9 @@ export const ClientBookingScreen: React.FC<ClientBookingScreenProps> = ({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
               <PaymentMethodIcon method={paymentMethod} size={22} />
-              <div style={{ minWidth: 0, textAlign: 'left' }}>
-                <div style={{ fontSize: '0.9rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {effectivePaymentLabel}
-                </div>
-                {pricing.cardFeeAmount > 0 && (
-                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: '#1D4ED8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    Corrida R$ {pricing.baseTotalPrice.toFixed(2).replace('.', ',')} + {pricing.cardFeePercent.toFixed(2).replace('.', ',')}% cartão (R$ {pricing.cardFeeAmount.toFixed(2).replace('.', ',')})
-                  </div>
-                )}
-              </div>
+              <span style={{ fontSize: '0.9rem', fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {effectivePaymentLabel}
+              </span>
             </div>
             <ChevronRight size={18} color="#475569" style={{ flexShrink: 0 }} />
           </button>
