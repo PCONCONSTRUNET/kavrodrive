@@ -13,6 +13,7 @@ const realtimeHub = require('./realtimeHub.cjs');
 const audit = require('./auditEngine.cjs');
 const security = require('./securityUtils.cjs');
 const systemDiagnostics = require('./systemDiagnostics.cjs');
+const geocodeService = require('./geocodeService.cjs');
 
 function getRequestClientIp(req) {
   return (
@@ -2788,112 +2789,34 @@ async function handleApiRequest(req, res) {
 
     // 2.3 PROXY DE GEOCODIFICAÇÃO (NOMINATIM + PHOTON COM USER-AGENT OFICIAL DO SERVIDOR)
     if (pathname === '/api/geocode' && method === 'GET') {
+      const rl = await security.checkRateLimitAsync('geocode_search', getRequestClientIp(req), 45, 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas buscas de endereço em sequência. Aguarde ${rl.retryAfterSec}s.`, results: [] }, { 'Retry-After': String(rl.retryAfterSec) });
+      }
       const rawQ = String(url.searchParams.get('q') || '').trim().slice(0, 220);
-      const latParam = Number(url.searchParams.get('lat'));
-      const lngParam = Number(url.searchParams.get('lng'));
-      const biasLat = Number.isFinite(latParam) ? latParam : -28.3878;
-      const biasLng = Number.isFinite(lngParam) ? lngParam : -49.3977;
-
       if (rawQ.length < 2) {
         return sendJson(res, 200, { ok: true, results: [] });
       }
+      const geoRes = await geocodeService.searchAddress({
+        q: rawQ,
+        lat: url.searchParams.get('lat'),
+        lng: url.searchParams.get('lng')
+      });
+      return sendJson(res, 200, geoRes);
+    }
 
-      const fetchWithTimeout = async (targetUrl, opts = {}, ms = 3200) => {
-        const controller = new AbortController();
-        const tid = setTimeout(() => controller.abort(), ms);
-        try {
-          return await fetch(targetUrl, { ...opts, signal: controller.signal });
-        } finally {
-          clearTimeout(tid);
-        }
-      };
-
-      const photonPromise = (async () => {
-        try {
-          const pUrl = `https://photon.komoot.io/api/?q=${encodeURIComponent(rawQ)}&limit=8&lat=${biasLat}&lon=${biasLng}&location_bias_scale=0.35`;
-          const r = await fetchWithTimeout(pUrl);
-          if (!r.ok) return [];
-          const data = await r.json();
-          if (!Array.isArray(data?.features)) return [];
-          return data.features
-            .filter((f) => {
-              const cc = String(f?.properties?.countrycode || '').toUpperCase();
-              return !cc || cc === 'BR';
-            })
-            .map((f) => {
-              const p = f.properties || {};
-              const parts = [];
-              if (p.name) parts.push(p.name);
-              if (p.street && p.street !== p.name) {
-                parts.push(p.housenumber ? `${p.street}, ${p.housenumber}` : p.street);
-              } else if (p.housenumber && parts.length > 0) {
-                parts[0] += `, ${p.housenumber}`;
-              }
-              if (p.district && p.district !== p.name) parts.push(p.district);
-              const city = p.city || p.town || p.municipality;
-              if (city && city !== p.name && city !== p.district) parts.push(city);
-              if (p.state) parts.push(p.state);
-              return {
-                display_name: parts.filter(Boolean).join(', '),
-                lat: Number(f.geometry?.coordinates?.[1]),
-                lng: Number(f.geometry?.coordinates?.[0])
-              };
-            })
-            .filter((it) => Boolean(it.display_name) && Number.isFinite(it.lat) && Number.isFinite(it.lng));
-        } catch {
-          return [];
-        }
-      })();
-
-      const nominatimPromise = (async () => {
-        try {
-          const nUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(rawQ)}&addressdetails=1&limit=6&countrycodes=br`;
-          const r = await fetchWithTimeout(nUrl, {
-            headers: {
-              'Accept-Language': 'pt-BR,pt;q=0.9',
-              'User-Agent': 'KavroDrive/1.0 (+https://kavrodrive.vercel.app)'
-            }
-          });
-          if (!r.ok) return [];
-          const data = await r.json();
-          if (!Array.isArray(data)) return [];
-          return data
-            .map((item) => {
-              const a = item.address || {};
-              const road = a.road || a.pedestrian || item.name || '';
-              const num = a.house_number ? `, ${a.house_number}` : '';
-              const hood = a.suburb || a.neighbourhood || '';
-              const city = a.city || a.town || a.village || a.municipality || '';
-              const state = a.state || '';
-              const formatted = [
-                road ? `${road}${num}` : '',
-                hood && hood !== road ? hood : '',
-                city && city !== hood ? city : '',
-                state
-              ].filter(Boolean).join(', ');
-              return {
-                display_name: formatted || String(item.display_name || '').split(',').slice(0, 4).join(',').trim(),
-                lat: parseFloat(item.lat),
-                lng: parseFloat(item.lon)
-              };
-            })
-            .filter((it) => Boolean(it.display_name) && Number.isFinite(it.lat) && Number.isFinite(it.lng));
-        } catch {
-          return [];
-        }
-      })();
-
-      const [pRes, nRes] = await Promise.all([photonPromise, nominatimPromise]);
-      const merged = [];
-      const seen = new Set();
-      for (const item of [...pRes, ...nRes]) {
-        const key = String(item.display_name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
-        if (key && !seen.has(key)) {
-          seen.add(key);
-          merged.push(item);
-        }
+    if (pathname === '/api/geocode/reverse' && method === 'GET') {
+      const rl = await security.checkRateLimitAsync('geocode_reverse', getRequestClientIp(req), 45, 60 * 1000);
+      if (!rl.allowed) {
+        return sendJson(res, 429, { ok: false, error: `Muitas consultas de mapa em sequência. Aguarde ${rl.retryAfterSec}s.` }, { 'Retry-After': String(rl.retryAfterSec) });
       }
-      return sendJson(res, 200, { ok: true, results: merged.slice(0, 8) });
+      const latParam = Number(url.searchParams.get('lat'));
+      const lngParam = Number(url.searchParams.get('lng'));
+      if (!Number.isFinite(latParam) || !Number.isFinite(lngParam) || Math.abs(latParam) > 90 || Math.abs(lngParam) > 180) {
+        return sendJson(res, 400, { ok: false, error: 'Coordenadas inválidas.' });
+      }
+      const revRes = await geocodeService.reverseGeocode({ lat: latParam, lng: lngParam });
+      return sendJson(res, 200, revRes);
     }
 
     // ============================================================

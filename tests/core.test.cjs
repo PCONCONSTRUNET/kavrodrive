@@ -5820,3 +5820,126 @@ test('Painel Isolado /status: auth por PIN 20202020, isolamento do Admin, rate-l
   }
   assert.equal(got429, true);
 });
+
+test('Busca de enderecos com cache, reverse proxy e provedor comercial/fallback em /api/geocode e /api/geocode/reverse', async () => {
+  const geocodeService = require('../server/geocodeService.cjs');
+  const prevGoogleKey = process.env.GOOGLE_MAPS_API_KEY;
+  const upstreamUrls = [];
+
+  try {
+    geocodeService.clearGeocodeCaches();
+    process.env.GOOGLE_MAPS_API_KEY = 'TEST_GMAPS_KEY_123';
+    geocodeService._setGeocodeFetchForTest(async (targetUrl, opts = {}) => {
+      upstreamUrls.push({ url: String(targetUrl), headers: opts.headers || {} });
+      if (String(targetUrl).includes('maps.googleapis.com/maps/api/place/textsearch')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [{
+              name: 'Hospital São Lucas',
+              formatted_address: 'Rua 15 de Novembro, 420 - Centro, Lauro Müller - SC',
+              geometry: { location: { lat: -28.3911, lng: -49.3965 } }
+            }]
+          })
+        };
+      }
+      if (String(targetUrl).includes('maps.googleapis.com/maps/api/geocode/json?latlng=')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            results: [{
+              formatted_address: 'Rua Henrique Lage, 100 - Centro, Lauro Müller - SC, Brasil'
+            }]
+          })
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    });
+
+    // 1) Primeira busca via Google + segunda busca idêntica servida do cache (sem nova chamada externa)
+    const firstFwd = await apiJson('/api/geocode?q=' + encodeURIComponent('Hospital São Lucas') + '&lat=-28.39&lng=-49.39');
+    assert.equal(firstFwd.status, 200);
+    assert.equal(firstFwd.json.ok, true);
+    assert.equal(firstFwd.json.provider, 'google_maps');
+    assert.equal(firstFwd.json.cached, false);
+    assert.equal(firstFwd.json.results.length, 1);
+    assert.equal(upstreamUrls.length, 1);
+
+    const secondFwd = await apiJson('/api/geocode?q=' + encodeURIComponent('Hospital Sao Lucas') + '&lat=-28.391&lng=-49.391');
+    assert.equal(secondFwd.status, 200);
+    assert.equal(secondFwd.json.cached, true);
+    assert.equal(upstreamUrls.length, 1);
+
+    // 2) Reverse geocode valida coordenadas inválidas e faz cache de coordenadas próximas
+    const invalidRev = await apiJson('/api/geocode/reverse?lat=999&lng=0');
+    assert.equal(invalidRev.status, 400);
+
+    const firstRev = await apiJson('/api/geocode/reverse?lat=-28.3911&lng=-49.3965');
+    assert.equal(firstRev.status, 200);
+    assert.equal(firstRev.json.provider, 'google_maps');
+    assert.equal(firstRev.json.cached, false);
+    assert.match(firstRev.json.address, /Henrique Lage/i);
+    assert.equal(upstreamUrls.length, 2);
+
+    const secondRev = await apiJson('/api/geocode/reverse?lat=-28.3911&lng=-49.3965');
+    assert.equal(secondRev.status, 200);
+    assert.equal(secondRev.json.cached, true);
+    assert.equal(upstreamUrls.length, 2);
+
+    // 3) Sem chave comercial: Photon + Nominatim cooldown (429) e fallback reverso BigDataCloud
+    delete process.env.GOOGLE_MAPS_API_KEY;
+    geocodeService.clearGeocodeCaches();
+    let nominatimCalled = 0;
+    geocodeService._setGeocodeFetchForTest(async (targetUrl) => {
+      const s = String(targetUrl);
+      if (s.includes('photon.komoot.io')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            features: [{
+              properties: { countrycode: 'BR', name: 'Praça da Matriz', street: 'Rua Barão', city: 'Lauro Müller', state: 'SC' },
+              geometry: { coordinates: [-49.397, -28.392] }
+            }]
+          })
+        };
+      }
+      if (s.includes('nominatim.openstreetmap.org')) {
+        nominatimCalled += 1;
+        return { ok: false, status: 429, json: async () => ({}) };
+      }
+      if (s.includes('bigdatacloud.net')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            locality: 'Centro',
+            city: 'Lauro Müller',
+            principalSubdivisionCode: 'BR-SC'
+          })
+        };
+      }
+      return { ok: false, status: 500, json: async () => ({}) };
+    });
+
+    const freeFwd = await apiJson('/api/geocode?q=' + encodeURIComponent('Praça da Matriz'));
+    assert.equal(freeFwd.status, 200);
+    assert.equal(freeFwd.json.results.length, 1);
+    assert.equal(nominatimCalled, 1);
+
+    // Próxima chamada reversa pula Nominatim em cooldown e usa fallback BigDataCloud
+    const freeRev = await apiJson('/api/geocode/reverse?lat=-28.4001&lng=-49.4001');
+    assert.equal(freeRev.status, 200);
+    assert.equal(freeRev.json.provider, 'bigdatacloud');
+    assert.match(freeRev.json.address, /Lauro Müller\/SC/);
+    assert.equal(nominatimCalled, 1);
+    assert.equal(geocodeService.getGeocodeStatus().nominatimCooldownActive, true);
+  } finally {
+    if (prevGoogleKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;
+    else process.env.GOOGLE_MAPS_API_KEY = prevGoogleKey;
+    geocodeService._setGeocodeFetchForTest(null);
+    geocodeService.clearGeocodeCaches();
+  }
+});

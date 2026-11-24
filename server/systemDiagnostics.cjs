@@ -10,6 +10,7 @@ const kycStorage = require('./kycStorage.cjs');
 const efiBankGateway = require('./efiBankGateway.cjs');
 const mercadoPagoGateway = require('./mercadoPagoGateway.cjs');
 const audit = require('./auditEngine.cjs');
+const geocodeService = require('./geocodeService.cjs');
 
 const DEFAULT_STATUS_PIN = '20202020';
 const STATUS_TOKEN_PREFIX = 'kavro_sts';
@@ -593,6 +594,7 @@ async function collectSystemDiagnostics({ probe = false, getGoogleClientId } = {
   }
 
   const r2Status = kycStorage.getCloudflareR2Status();
+  const geoStatus = geocodeService.getGeocodeStatus();
   const rtStats = realtimeHub.getStats();
   const googleClientId = typeof getGoogleClientId === 'function' ? getGoogleClientId() : '';
   const mem = process.memoryUsage();
@@ -714,6 +716,16 @@ async function collectSystemDiagnostics({ probe = false, getGoogleClientId } = {
       status: process.env.TURNSTILE_SECRET_KEY && process.env.RESEND_API_KEY ? 'ok' : 'warn',
       metric: `Turnstile: ${process.env.TURNSTILE_SECRET_KEY ? 'ON' : 'OFF'} • OTP E-mail: ${process.env.RESEND_API_KEY ? 'ON' : 'OFF'}`,
       detail: `Google OAuth: ${googleClientId ? 'ON' : 'OFF'} • Secret próprio: ${process.env.ADMIN_SESSION_SECRET ? 'Sim' : 'Derivado'}`
+    },
+    {
+      id: 'geocoding_search',
+      title: 'Busca de Endereços & Geocodificação',
+      category: 'infra',
+      status: geoStatus.nominatimCooldownActive
+        ? 'warn'
+        : 'ok',
+      metric: `${geoStatus.providerLabel}`,
+      detail: `Cache: ${geoStatus.cacheEntries} entradas (${geoStatus.cacheHits} hits / ${geoStatus.cacheMisses} misses) • Comercial: ${geoStatus.isCommercial ? 'Sim' : 'Fallback gratuito em cache'}`
     },
     {
       id: 'ops_alerts',
@@ -847,7 +859,8 @@ async function collectSystemDiagnostics({ probe = false, getGoogleClientId } = {
         otpEmailConfigured: Boolean(process.env.RESEND_API_KEY),
         otpWebhookConfigured: Boolean(process.env.OTP_WEBHOOK_URL),
         adminSessionSecretConfigured: Boolean((process.env.ADMIN_SESSION_SECRET || '').trim())
-      }
+      },
+      geocoding: geoStatus
     },
     checks,
     recentCriticalAudit

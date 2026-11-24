@@ -598,6 +598,11 @@ async function queryPhotonDirect(
   }
 }
 
+const CLIENT_GEO_SEARCH_CACHE = new Map<string, { results: Array<{ display_name: string; lat: number; lng: number }>; expiresAt: number }>();
+const CLIENT_GEO_REVERSE_CACHE = new Map<string, { address: string; expiresAt: number }>();
+const CLIENT_GEO_SEARCH_TTL_MS = 10 * 60 * 1000;
+const CLIENT_GEO_REVERSE_TTL_MS = 30 * 60 * 1000;
+
 async function queryServerGeocodeApi(
   queryStr: string,
   userLat: number,
@@ -606,7 +611,7 @@ async function queryServerGeocodeApi(
   if (typeof window === 'undefined') return [];
   try {
     const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 3800);
+    const tid = setTimeout(() => controller.abort(), 4000);
     const res = await fetch(
       `/api/geocode?q=${encodeURIComponent(queryStr)}&lat=${encodeURIComponent(String(userLat))}&lng=${encodeURIComponent(String(userLng))}`,
       { signal: controller.signal }
@@ -617,6 +622,28 @@ async function queryServerGeocodeApi(
     return Array.isArray(json?.results) ? json.results : [];
   } catch {
     return [];
+  }
+}
+
+async function queryServerReverseGeocodeApi(
+  lat: number,
+  lng: number
+): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 4000);
+    const res = await fetch(
+      `/api/geocode/reverse?lat=${encodeURIComponent(String(lat))}&lng=${encodeURIComponent(String(lng))}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(tid);
+    if (!res.ok) return null;
+    const json = await res.json();
+    const addr = String(json?.address || '').trim();
+    return addr && !addr.startsWith('GPS:') ? addr : null;
+  } catch {
+    return null;
   }
 }
 
@@ -690,6 +717,11 @@ export async function searchAddressGeocode(
   const parsed = buildBrazilianGeocodeCandidates(rawClean);
   const normQ = normalizeText(parsed.cleanedFull);
   const tokens = normQ.split(/[\s,]+/).filter((t) => t.length >= 2);
+  const clientCacheKey = `${normQ}:${Math.round(userLat * 10)},${Math.round(userLng * 10)}`;
+  const cachedHit = CLIENT_GEO_SEARCH_CACHE.get(clientCacheKey);
+  if (cachedHit && cachedHit.expiresAt > Date.now()) {
+    return cachedHit.results;
+  }
 
   // 1. Base local rápida (apenas quando bate na rua/bairro exato ou sem tokens numéricos desconhecidos)
   const localMatches = LOCAL_POINTS_DATABASE.filter((item) => {
@@ -705,10 +737,14 @@ export async function searchAddressGeocode(
   // 2. Se o endereço colado contém CEP embutido (ex: "... CEP 88835-000"), resolve ViaCEP em paralelo
   const viaCepPromise = parsed.embeddedCep ? lookupViaCep(parsed.embeddedCep) : Promise.resolve(null);
 
-  // 3. Tenta candidato principal no Photon
-  let externalMatches = await queryPhotonDirect(parsed.candidates[0] || rawClean, userLat, userLng);
+  // 3. Tenta candidato principal pelo proxy com cache (/api/geocode -> Google/Mapbox/LocationIQ/Photon/Nominatim)
+  const primaryQuery = parsed.candidates[0] || rawClean;
+  let externalMatches = await queryServerGeocodeApi(primaryQuery, userLat, userLng);
+  if (externalMatches.length === 0) {
+    externalMatches = await queryPhotonDirect(primaryQuery, userLat, userLng);
+  }
 
-  // 4. Se veio vazio ou com poucos resultados, roda relaxamento progressivo (sem "Nº", sem número, XV <-> 15) + /api/geocode (Nominatim)
+  // 4. Se veio vazio ou com poucos resultados, roda relaxamento progressivo (ViaCEP, sem "Nº", sem número, XV <-> 15)
   if (externalMatches.length < 2) {
     const relaxQueue = parsed.candidates.slice(1);
     const viaCepData = await viaCepPromise;
@@ -716,18 +752,12 @@ export async function searchAddressGeocode(
       relaxQueue.unshift(viaCepData.formattedAddress);
     }
 
-    const relaxedTasks: Array<Promise<Array<{ display_name: string; lat: number; lng: number }>>> = [];
-    for (let i = 0; i < relaxQueue.length && i < 3; i++) {
-      relaxedTasks.push(queryPhotonDirect(relaxQueue[i], userLat, userLng));
-    }
-    // Proxy /api/geocode usa Nominatim oficial com User-Agent + Photon no servidor
-    relaxedTasks.push(queryServerGeocodeApi(parsed.candidates[0] || rawClean, userLat, userLng));
-    if (parsed.candidates[1]) {
-      relaxedTasks.push(queryServerGeocodeApi(parsed.candidates[1], userLat, userLng));
-    }
-    if (parsed.candidates[3] && parsed.candidates[3] !== parsed.candidates[1]) {
-      relaxedTasks.push(queryServerGeocodeApi(parsed.candidates[3], userLat, userLng));
-    }
+    const uniqueRelax = Array.from(new Set(relaxQueue.filter(q => q && q !== primaryQuery))).slice(0, 3);
+    const relaxedTasks = uniqueRelax.map((candidate) =>
+      queryServerGeocodeApi(candidate, userLat, userLng).then((hits) =>
+        hits.length > 0 ? hits : queryPhotonDirect(candidate, userLat, userLng)
+      )
+    );
 
     const batch = await Promise.all(relaxedTasks);
     for (const chunk of batch) {
@@ -766,62 +796,41 @@ export async function searchAddressGeocode(
   };
   unique.sort((a, b) => scoreItem(b.display_name) - scoreItem(a.display_name));
 
-  return unique.slice(0, 8);
+  const finalResults = unique.slice(0, 8);
+  if (finalResults.length > 0) {
+    if (CLIENT_GEO_SEARCH_CACHE.size >= 150) {
+      const oldest = CLIENT_GEO_SEARCH_CACHE.keys().next().value;
+      if (oldest !== undefined) CLIENT_GEO_SEARCH_CACHE.delete(oldest);
+    }
+    CLIENT_GEO_SEARCH_CACHE.set(clientCacheKey, {
+      results: finalResults,
+      expiresAt: Date.now() + CLIENT_GEO_SEARCH_TTL_MS,
+    });
+  }
+  return finalResults;
 }
 
 /**
- * Geocodificação reversa (coordenadas para endereço textual real com fallback)
+ * Geocodificação reversa (coordenadas para endereço textual real via proxy em cache com fallback)
  */
 export async function reverseGeocode(lat: number, lng: number): Promise<string> {
-  const stateMap: Record<string, string> = {
-    'Santa Catarina': 'SC',
-    'Rio Grande do Sul': 'RS',
-    'Paraná': 'PR',
-    'São Paulo': 'SP',
-    'Rio de Janeiro': 'RJ',
-    'Minas Gerais': 'MG',
-  };
+  const revKey = `${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`;
+  const cachedRev = CLIENT_GEO_REVERSE_CACHE.get(revKey);
+  if (cachedRev && cachedRev.expiresAt > Date.now()) {
+    return cachedRev.address;
+  }
 
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
-    const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
-    const response = await fetch(url, {
-      headers: {
-        'Accept-Language': 'pt-BR,pt;q=0.9',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
-
-    if (response.ok) {
-      const data = await response.json();
-      const addr = data.address || {};
-      const road = addr.road || addr.pedestrian || addr.footway || addr.path || addr.residential || '';
-      const num = addr.house_number ? `, ${addr.house_number}` : '';
-      const suburbRaw = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || addr.hamlet || '';
-      const cityRaw = addr.city || addr.town || addr.village || addr.municipality || '';
-      const stateRaw = addr.state || '';
-      const uf = stateMap[stateRaw] || (addr['ISO3166-2-lvl4'] ? String(addr['ISO3166-2-lvl4']).replace('BR-', '') : '');
-
-      const suburbPart = suburbRaw && suburbRaw !== road && suburbRaw !== cityRaw ? ` - ${suburbRaw}` : '';
-      const cityPart = cityRaw ? `, ${cityRaw}${uf ? `/${uf}` : ''}` : '';
-
-      if (road) {
-        return `${road}${num}${suburbPart}${cityPart}`;
-      }
-      if (suburbRaw && cityRaw) {
-        return `${suburbRaw}, ${cityRaw}${uf ? `/${uf}` : ''}`;
-      }
-      if (cityRaw) {
-        return `${cityRaw}${uf ? `/${uf}` : ''}`;
-      }
-      if (data.display_name) {
-        return String(data.display_name).split(',').slice(0, 3).join(',').trim();
-      }
+  const serverAddress = await queryServerReverseGeocodeApi(lat, lng);
+  if (serverAddress) {
+    if (CLIENT_GEO_REVERSE_CACHE.size >= 150) {
+      const oldest = CLIENT_GEO_REVERSE_CACHE.keys().next().value;
+      if (oldest !== undefined) CLIENT_GEO_REVERSE_CACHE.delete(oldest);
     }
-  } catch {
-    // Continua para fallback secundário
+    CLIENT_GEO_REVERSE_CACHE.set(revKey, {
+      address: serverAddress,
+      expiresAt: Date.now() + CLIENT_GEO_REVERSE_TTL_MS,
+    });
+    return serverAddress;
   }
 
   try {
