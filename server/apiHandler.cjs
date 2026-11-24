@@ -4378,8 +4378,13 @@ async function handleApiRequest(req, res) {
             cardId: ride.cardId,
             cardLast4: ride.cardLast4,
             cardBrand: ride.cardBrand,
-            mpCardToken: ride.mpCardToken
+            mpCardToken: ride.mpCardToken,
+            cvv: ride.cvv,
+            deviceSessionId: ride.mpDeviceSessionId
           });
+          delete ride.cvv;
+          delete ride.mpCardToken;
+          delete ride.mpDeviceSessionId;
           if (!authResult.authorized) {
             return {
               status: 402,
@@ -4567,6 +4572,9 @@ async function handleApiRequest(req, res) {
       }
       if (method === 'POST') {
         const ride = await parseBody(req);
+        if (ride && typeof ride === 'object' && !ride.mpDeviceSessionId) {
+          ride.mpDeviceSessionId = String(req.headers['x-meli-session-id'] || '').trim();
+        }
         const isAdmin = await isAuthorizedAdmin(req);
         const driverSession = verifyDriverToken(req);
         const clientSession = verifyClientToken(req);
@@ -5463,8 +5471,8 @@ async function handleApiRequest(req, res) {
 
       if (before.paymentMethod === 'pix') {
         if (before.status === 'aguardando_pagamento') {
-          if (tx && String(tx.gatewayTxId || '').startsWith('pi_')) {
-            await finance.refundGatewayPayment(tx, null).catch(() => {});
+          if (tx && /^\d+$/.test(String(tx.gatewayTxId || '').trim())) {
+            await finance.refundGatewayPayment(tx, null, { isUncapturedAuth: true }).catch(() => {});
           }
           try {
             const { tx: newPixTx } = await finance.createPixChargeForRide({
@@ -5531,7 +5539,9 @@ async function handleApiRequest(req, res) {
             {
               cardId: before.cardId,
               cardLast4: before.cardLast4,
-              cardBrand: before.cardBrand
+              cardBrand: before.cardBrand,
+              cvv: body.cvv,
+              deviceSessionId: String(body.mpDeviceSessionId || req.headers['x-meli-session-id'] || '').trim()
             }
           );
           if (!reAuth.authorized) {
@@ -5540,7 +5550,7 @@ async function handleApiRequest(req, res) {
               error: reAuth.error || 'O novo destino excede a pré-autorização do cartão. Cancele e faça uma nova solicitação.'
             });
           }
-          await finance.refundGatewayPayment(tx, null).catch(() => {});
+          await finance.refundGatewayPayment(tx, null, { isUncapturedAuth: true }).catch(() => {});
           nextPaymentTxId = reAuth.tx.id;
         } else if (tx) {
           await finance.savePaymentTransaction({
@@ -6813,7 +6823,9 @@ async function handleApiRequest(req, res) {
           const card = await finance.tokenizeAndSaveCard({
             ...body,
             clientId: isAdmin ? body.clientId : clientSession.sub,
-            clientPhone: isAdmin ? body.clientPhone : (body.clientPhone || clientSession.phone)
+            clientPhone: isAdmin ? body.clientPhone : (body.clientPhone || clientSession.phone),
+            clientEmail: isAdmin ? body.clientEmail : (body.clientEmail || clientSession.email),
+            clientName: isAdmin ? body.clientName : (body.clientName || clientSession.name)
           });
           return sendJson(res, 200, { ok: true, card });
         } catch (err) {
@@ -6909,7 +6921,10 @@ async function handleApiRequest(req, res) {
           clientEmail: cliRow.email || clientSession?.email || '',
           amount,
           method: body.method || 'pix',
-          cardId: body.cardId || ''
+          cardId: body.cardId || '',
+          cvv: body.cvv || '',
+          mpCardToken: body.mpCardToken || '',
+          deviceSessionId: String(body.mpDeviceSessionId || req.headers['x-meli-session-id'] || '').trim()
         });
         if (!result.ok) {
           return sendJson(res, 402, result);

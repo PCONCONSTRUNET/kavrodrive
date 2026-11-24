@@ -34,6 +34,24 @@ import {
   resolveCategoryType
 } from '../utils/categoryEngine';
 
+/**
+ * Obtém o identificador de sessão antifraude gerado pelo Mercado Pago security.js no navegador.
+ */
+export function getMercadoPagoDeviceSessionId(): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    const raw = (window as unknown as { MP_DEVICE_SESSION_ID?: unknown }).MP_DEVICE_SESSION_ID;
+    return typeof raw === 'string' ? raw.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+function getMercadoPagoSessionHeaders(): Record<string, string> {
+  const sid = getMercadoPagoDeviceSessionId();
+  return sid ? { 'x-meli-session-id': sid } : {};
+}
+
 const STORAGE_KEYS = {
   RIDES: 'up_mobilidade_rides',
   CLIENTS: 'up_mobilidade_clients',
@@ -362,7 +380,11 @@ export const StorageService = {
     try {
       const res = await fetch('/api/rides', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+          ...getMercadoPagoSessionHeaders()
+        },
         body: JSON.stringify(ridePayload)
       });
       const data = await res.json();
@@ -588,7 +610,11 @@ export const StorageService = {
     try {
       const res = await fetch(`/api/rides/${encodeURIComponent(rideId)}/route`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+          ...getMercadoPagoSessionHeaders()
+        },
         body: JSON.stringify(payload)
       });
       const data = await res.json().catch(() => ({}));
@@ -896,7 +922,11 @@ export const StorageService = {
     try {
       const res = await fetch('/api/payments/cards', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+          ...getMercadoPagoSessionHeaders()
+        },
         body: JSON.stringify(payload)
       });
       return await res.json();
@@ -973,7 +1003,11 @@ export const StorageService = {
     try {
       const res = await fetch('/api/client/wallet/topup', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+          ...getMercadoPagoSessionHeaders()
+        },
         body: JSON.stringify(payload)
       });
       const data = await res.json();

@@ -57,6 +57,8 @@ export interface SavedCard {
   expYear: string;
   cardType: 'cartao_credito' | 'cartao_debito';
   gatewayToken: string;
+  mpCustomerId?: string;
+  mpCardId?: string;
   isDefault?: boolean;
   createdAt: string;
 }

@@ -556,6 +556,170 @@ async function createPixPayment({
   };
 }
 
+/**
+ * Busca cliente existente no Mercado Pago pelo e-mail.
+ */
+async function searchCustomerByEmail({ accessToken, email }) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!accessToken || !cleanEmail) return null;
+  const resp = await mpFetch(
+    `https://api.mercadopago.com/v1/customers/search?email=${encodeURIComponent(cleanEmail)}`,
+    {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/json'
+      }
+    }
+  );
+  if (!resp.ok) return null;
+  const data = await resp.json().catch(() => ({}));
+  const first = Array.isArray(data?.results) ? data.results[0] : null;
+  return first?.id ? String(first.id) : null;
+}
+
+/**
+ * Busca ou cria um Customer no Mercado Pago para permitir reutilização segura de cartões salvos.
+ */
+async function ensureCustomer({ accessToken, email, firstName = 'Passageiro', lastName = 'Kavro', cpf = '' }) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!accessToken || !cleanEmail) {
+    return { ok: false, error: 'Access Token ou e-mail do passageiro ausente para Customer Mercado Pago.' };
+  }
+  const existingId = await searchCustomerByEmail({ accessToken, email: cleanEmail }).catch(() => null);
+  if (existingId) {
+    return { ok: true, customerId: existingId };
+  }
+
+  const cleanDoc = String(cpf || '').replace(/\D/g, '');
+  const payload = {
+    email: cleanEmail,
+    first_name: String(firstName || 'Passageiro').trim().slice(0, 80) || 'Passageiro',
+    last_name: String(lastName || 'Kavro').trim().slice(0, 80) || 'Kavro',
+    ...(cleanDoc.length === 11 || cleanDoc.length === 14
+      ? { identification: { type: cleanDoc.length === 14 ? 'CNPJ' : 'CPF', number: cleanDoc } }
+      : {})
+  };
+
+  const resp = await mpFetch('https://api.mercadopago.com/v1/customers', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${accessToken}`
+    },
+    body: JSON.stringify(payload)
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (resp.ok && data?.id) {
+    return { ok: true, customerId: String(data.id) };
+  }
+
+  const retryId = await searchCustomerByEmail({ accessToken, email: cleanEmail }).catch(() => null);
+  if (retryId) {
+    return { ok: true, customerId: retryId };
+  }
+  return {
+    ok: false,
+    statusCode: resp.status,
+    error: data?.message || `Falha ao registrar Customer no Mercado Pago (HTTP ${resp.status})`
+  };
+}
+
+/**
+ * Vincula um card_token ao Customer no Mercado Pago para gerar card_id permanente reutilizável.
+ */
+async function saveCustomerCard({ accessToken, customerId, cardToken }) {
+  if (!accessToken || !customerId || !cardToken) {
+    return { ok: false, error: 'Dados insuficientes para vincular cartão ao cliente Mercado Pago.' };
+  }
+  const resp = await mpFetch(
+    `https://api.mercadopago.com/v1/customers/${encodeURIComponent(customerId)}/cards`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ token: String(cardToken) })
+    }
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data?.id) {
+    return {
+      ok: false,
+      statusCode: resp.status,
+      error: data?.message || `Falha ao salvar cartão no cliente Mercado Pago (HTTP ${resp.status})`
+    };
+  }
+  return {
+    ok: true,
+    cardId: String(data.id),
+    paymentMethodId: data.payment_method?.id ? String(data.payment_method.id) : '',
+    last4: data.last_four_digits ? String(data.last_four_digits) : ''
+  };
+}
+
+/**
+ * Gera um novo card_token de uso único a partir do card_id permanente salvo no Customer.
+ */
+async function createSavedCardToken({ publicKey, customerCardId, securityCode = '' }) {
+  const pk = String(publicKey || '').trim();
+  const cid = String(customerCardId || '').trim();
+  if (!pk || !cid) {
+    return { ok: false, error: 'Public Key ou card_id ausente para renovar token do cartão salvo.' };
+  }
+  const cleanCvv = String(securityCode || '').replace(/\D/g, '');
+  const resp = await mpFetch(
+    `https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(pk)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        card_id: cid,
+        ...(cleanCvv.length >= 3 ? { security_code: cleanCvv } : {})
+      })
+    }
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok || !data?.id) {
+    return {
+      ok: false,
+      statusCode: resp.status,
+      error: data?.message || `Não foi possível renovar token do cartão salvo (HTTP ${resp.status})`
+    };
+  }
+  return { ok: true, token: String(data.id) };
+}
+
+/**
+ * Cancela uma pré-autorização ou cobrança pendente no Mercado Pago (libera limite antes da captura).
+ */
+async function cancelAuthorizedPayment({ accessToken, paymentId }) {
+  if (!accessToken || !paymentId) {
+    return { ok: false, error: 'Access Token ou ID do pagamento ausente para cancelamento.' };
+  }
+  const resp = await mpFetch(
+    `https://api.mercadopago.com/v1/payments/${encodeURIComponent(paymentId)}`,
+    {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify({ status: 'cancelled' })
+    }
+  );
+  const data = await resp.json().catch(() => ({}));
+  if (resp.ok || String(data?.status || '').toLowerCase() === 'cancelled') {
+    return { ok: true, provider: 'mercadopago', status: 'cancelled', paymentId: String(paymentId) };
+  }
+  return {
+    ok: false,
+    statusCode: resp.status,
+    error: data?.message || `Falha ao cancelar pagamento no Mercado Pago (HTTP ${resp.status})`
+  };
+}
+
 module.exports = {
   ensureSchema,
   getMercadoPagoConfig,
@@ -573,5 +737,10 @@ module.exports = {
   verifyWebhookSignature,
   getPaymentStatus,
   createPixPayment,
+  searchCustomerByEmail,
+  ensureCustomer,
+  saveCustomerCard,
+  createSavedCardToken,
+  cancelAuthorizedPayment,
   _setMercadoPagoFetchForTest
 };

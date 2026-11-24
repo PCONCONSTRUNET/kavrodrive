@@ -69,6 +69,8 @@
     <div id="root"></div>
     <!-- OneSignal Web Push (usa o mesmo service worker do PWA: /sw.js) -->
     <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+    <!-- Mercado Pago Security / Antifraude (MP_DEVICE_SESSION_ID) -->
+    <script src="https://www.mercadopago.com/v2/security.js" view="checkout" async></script>
     <script>
       window.OneSignalDeferred = window.OneSignalDeferred || [];
       OneSignalDeferred.push(async function (OneSignal) {

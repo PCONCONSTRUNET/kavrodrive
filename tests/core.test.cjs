@@ -5301,3 +5301,330 @@ test('Repasse configurável de taxa de cartão ao passageiro (2,49% padrão em c
     ).catch(() => {});
   }
 });
+
+test('Mercado Pago Cartão Produção: Customers/Cards reutilizáveis, cancelamento real de pré-auth, X-meli-session-id e fail-closed', async () => {
+  const prevCfg = JSON.parse(JSON.stringify(db.localStore.system_config?.default?.config || {}));
+  const mpGateway = require('../server/mercadoPagoGateway.cjs');
+  const efiGateway = require('../server/efiBankGateway.cjs');
+  await efiGateway.saveEfiConfig({ enabled: false }).catch(() => {});
+  mpGateway.clearCaches();
+
+  const mpTrace = [];
+  let forcePaymentNetworkError = false;
+  let forceCaptureNetworkError = false;
+  let seqId = 100;
+
+  mpGateway._setMercadoPagoFetchForTest(async (urlStr, options = {}) => {
+    const parsed = new URL(urlStr);
+    const method = String(options.method || 'GET').toUpperCase();
+    const bodyObj = options.body ? JSON.parse(options.body) : null;
+    mpTrace.push({
+      method,
+      pathname: parsed.pathname,
+      search: parsed.search,
+      headers: options.headers || {},
+      bodyObj
+    });
+
+    if (method === 'GET' && parsed.pathname === '/v1/customers/search') {
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    }
+    if (method === 'POST' && parsed.pathname === '/v1/customers') {
+      return new Response(JSON.stringify({ id: 'cust-mp-9001', email: bodyObj.email }), { status: 201 });
+    }
+    if (method === 'POST' && parsed.pathname === '/v1/customers/cust-mp-9001/cards') {
+      return new Response(JSON.stringify({
+        id: '9911223344',
+        last_four_digits: '4242',
+        payment_method: { id: 'master' }
+      }), { status: 201 });
+    }
+    if (method === 'POST' && parsed.pathname === '/v1/card_tokens') {
+      seqId += 1;
+      return new Response(JSON.stringify({ id: `tok_fresh_${seqId}_${bodyObj?.card_id || 'new'}` }), { status: 201 });
+    }
+    if (method === 'POST' && parsed.pathname === '/v1/payments') {
+      if (forcePaymentNetworkError) {
+        throw new Error('ECONNRESET Mercado Pago');
+      }
+      seqId += 1;
+      const payId = 950000 + seqId;
+      return new Response(JSON.stringify({
+        id: payId,
+        status: bodyObj?.capture === false ? 'authorized' : 'approved',
+        authorization_code: `AUTHMP${seqId}`
+      }), { status: 201 });
+    }
+    if (method === 'PUT' && parsed.pathname.startsWith('/v1/payments/')) {
+      if (forceCaptureNetworkError && bodyObj?.capture === true) {
+        throw new Error('ETIMEDOUT Mercado Pago Capture');
+      }
+      const id = Number(parsed.pathname.split('/').pop());
+      return new Response(JSON.stringify({
+        id,
+        status: bodyObj?.status === 'cancelled' ? 'cancelled' : 'approved'
+      }), { status: 200 });
+    }
+    if (method === 'POST' && /^\/v1\/payments\/\d+\/refunds$/.test(parsed.pathname)) {
+      return new Response(JSON.stringify({ id: 777001, status: 'approved' }), { status: 201 });
+    }
+    return new Response(JSON.stringify({ message: `Unexpected ${method} ${parsed.pathname}` }), { status: 404 });
+  });
+
+  const ts = Date.now();
+  const prodIp = '198.51.100.253';
+  const makeCpf = (seed) => {
+    const base = String(seed).padStart(9, '0').slice(-9).split('').map(Number);
+    const calc = (len) => {
+      let s = 0;
+      for (let i = 0; i < len; i++) s += base[i] * (len + 1 - i);
+      const r = (s * 10) % 11;
+      return r >= 10 ? 0 : r;
+    };
+    base.push(calc(9));
+    base.push(calc(10));
+    return base.join('');
+  };
+
+  try {
+    await mpGateway.saveMercadoPagoConfig({
+      enabled: true,
+      sandbox: false,
+      publicKey: 'APP_USR-pk-prod-001',
+      accessToken: 'APP_USR-at-prod-001',
+      useForCard: true,
+      useForPassengerPix: true
+    });
+
+    const cliReg = await apiJson('/api/clients/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': prodIp },
+      body: {
+        name: 'Passageiro Prod MP',
+        phone: `(48) 99610-${String(ts).slice(-4)}`,
+        document: makeCpf((ts % 500000000) + 330000033),
+        email: `mp.prod.${ts}@kavro.test`,
+        password: 'ProdPass123!',
+        termsAcceptance: { accepted: true, version: '2026.1' }
+      }
+    });
+    assert.equal(cliReg.status, 200);
+    const cliToken = cliReg.json.clientToken;
+    const cliId = cliReg.json.client.id;
+
+    const drvReg = await apiJson('/api/drivers/register', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': prodIp },
+      body: {
+        name: 'Motorista Prod MP',
+        phone: `(48) 99611-${String(ts).slice(-4)}`,
+        email: `mp.drv.prod.${ts}@kavro.test`,
+        document: makeCpf((ts % 500000000) + 440000044),
+        password: 'ProdDrv123!',
+        vehicleBrand: 'Toyota',
+        vehicleModel: 'Corolla',
+        vehicleColor: 'Preto',
+        vehiclePlate: `MPR${String(ts).slice(-4)}`,
+        termsAcceptance: { accepted: true, version: '2026.1' }
+      }
+    });
+    assert.equal(drvReg.status, 200);
+    const drvToken = drvReg.json.driverToken;
+    const drvId = drvReg.json.driver.id;
+    const drvObj = await finance.getDriverById(drvId);
+    await finance.saveDriverRecord({ ...drvObj, approvalStatus: 'aprovado', isOnline: true, kyc: { status: 'aprovado' } });
+
+    // 1) Salvar cartão cria Customer + Customer Card permanente no Mercado Pago
+    const saveCard = await apiJson('/api/payments/cards', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp },
+      body: {
+        clientId: cliId,
+        cardNumber: '5200000000004242',
+        holderName: 'PASSAGEIRO PROD',
+        holderDocument: cliReg.json.client.document,
+        expMonth: '12',
+        expYear: '2030',
+        cvv: '321',
+        cardType: 'cartao_credito'
+      }
+    });
+    assert.equal(saveCard.status, 200);
+    assert.equal(saveCard.json.card.mpCustomerId, 'cust-mp-9001');
+    assert.equal(saveCard.json.card.mpCardId, '9911223344');
+    assert.equal(saveCard.json.card.gatewayToken, 'mp_card_9911223344');
+    const savedCardId = saveCard.json.card.id;
+
+    // 2) Corrida 1 + Corrida 2 + Depósito Carteira reutilizam o mesmo card_id gerando tokens frescos e enviando X-meli-session-id
+    const ride1 = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp, 'x-meli-session-id': 'dev-sess-ride-1' },
+      body: {
+        clientId: cliId,
+        originAddress: 'Origem 1',
+        destinationAddress: 'Destino 1',
+        distanceKm: 10,
+        durationMin: 15,
+        time: '12:00',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: savedCardId
+      }
+    });
+    assert.equal(ride1.status, 200);
+    const ride2 = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp, 'x-meli-session-id': 'dev-sess-ride-2' },
+      body: {
+        clientId: cliId,
+        originAddress: 'Origem 2',
+        destinationAddress: 'Destino 2',
+        distanceKm: 12,
+        durationMin: 18,
+        time: '12:15',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: savedCardId
+      }
+    });
+    assert.equal(ride2.status, 200);
+
+    const topupRes = await apiJson('/api/client/wallet/topup', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp, 'x-meli-session-id': 'dev-sess-wallet-1' },
+      body: { amount: 50, method: 'cartao_credito', cardId: savedCardId }
+    });
+    assert.equal(topupRes.status, 200);
+    assert.equal(topupRes.json.chargeSummary.provider, 'mercadopago');
+
+    const cardTokenRefreshCalls = mpTrace.filter(
+      c => c.method === 'POST' && c.pathname === '/v1/card_tokens' && c.bodyObj?.card_id === '9911223344'
+    );
+    assert.equal(cardTokenRefreshCalls.length, 3, 'Deve renovar token via card_id em cada cobrança reutilizada');
+
+    const mpPayments = mpTrace.filter(c => c.method === 'POST' && c.pathname === '/v1/payments');
+    assert.equal(mpPayments.length, 3);
+    for (const p of mpPayments) {
+      assert.equal(p.bodyObj.payer?.type, 'customer');
+      assert.equal(p.bodyObj.payer?.id, 'cust-mp-9001');
+      assert.ok(String(p.bodyObj.token).includes('9911223344'));
+    }
+    assert.equal(mpPayments[0].headers['X-meli-session-id'], 'dev-sess-ride-1');
+    assert.equal(mpPayments[1].headers['X-meli-session-id'], 'dev-sess-ride-2');
+    assert.equal(mpPayments[2].headers['X-meli-session-id'], 'dev-sess-wallet-1');
+
+    // 3) Cancelamento de pré-autorização não capturada (ride1) envia PUT /v1/payments/:id { status: 'cancelled' }
+    const cancelHoldRes = await apiJson(`/api/rides/${encodeURIComponent(ride1.json.ride.id)}/status`, {
+      method: 'PATCH',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp },
+      body: { status: 'cancelada', cancelledBy: 'passenger' }
+    });
+    assert.equal(cancelHoldRes.status, 200);
+    assert.equal(cancelHoldRes.json.ride.paymentStatus, 'reembolsado');
+    const ride1Tx = await finance.getPaymentTxByRide(ride1.json.ride.id);
+    const voidCall = mpTrace.find(
+      c => c.method === 'PUT' && c.pathname === `/v1/payments/${ride1Tx.gatewayTxId}` && c.bodyObj?.status === 'cancelled'
+    );
+    assert.ok(voidCall, 'Pré-autorização cancelada deve liberar limite no MP via PUT status=cancelled');
+
+    // 4) Fail-closed em produção: falha de rede na captura bloqueia finalização e não credita motorista
+    await apiJson(`/api/rides/${encodeURIComponent(ride2.json.ride.id)}/accept`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken, 'x-forwarded-for': prodIp },
+      body: { driverId: drvId }
+    });
+    await apiJson(`/api/rides/${encodeURIComponent(ride2.json.ride.id)}/status`, {
+      method: 'PATCH',
+      headers: { 'x-driver-token': drvToken, 'x-forwarded-for': prodIp },
+      body: { status: 'em_andamento', boardingPin: ride2.json.ride.boardingPin }
+    });
+
+    forceCaptureNetworkError = true;
+    const failedCapRes = await apiJson(`/api/rides/${encodeURIComponent(ride2.json.ride.id)}/complete`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken, 'x-forwarded-for': prodIp },
+      body: { driverId: drvId }
+    });
+    assert.equal(failedCapRes.status, 402);
+    const drvWalletAfterFail = await finance.getDriverWallet(drvId);
+    assert.equal(drvWalletAfterFail.availableBalance, 0, 'Não pode creditar motorista se captura falhar');
+    forceCaptureNetworkError = false;
+
+    // Captura funciona quando rede volta e cancelamento pós-captura dispara POST /refunds
+    const okCapRes = await apiJson(`/api/rides/${encodeURIComponent(ride2.json.ride.id)}/complete`, {
+      method: 'POST',
+      headers: { 'x-driver-token': drvToken, 'x-forwarded-for': prodIp },
+      body: { driverId: drvId }
+    });
+    assert.equal(okCapRes.status, 200);
+    const ride2Tx = await finance.getPaymentTxByRide(ride2.json.ride.id);
+    const refundPaidRes = await finance.refundGatewayPayment(ride2Tx, 10);
+    assert.equal(refundPaidRes.ok, true);
+    assert.ok(mpTrace.some(c => c.method === 'POST' && c.pathname === `/v1/payments/${ride2Tx.gatewayTxId}/refunds`));
+
+    // 5) Fail-closed em produção na pré-autorização quando rede cai ou cartão tem apenas token legado tok_
+    forcePaymentNetworkError = true;
+    const failedAuthRide = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp },
+      body: {
+        clientId: cliId,
+        originAddress: 'Origem Fail',
+        destinationAddress: 'Destino Fail',
+        distanceKm: 10,
+        durationMin: 15,
+        time: '12:30',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: savedCardId
+      }
+    });
+    assert.equal(failedAuthRide.status, 402);
+    forcePaymentNetworkError = false;
+
+    db.localStore.saved_cards.unshift({
+      id: `card-legacy-${ts}`,
+      client_id: cliId,
+      client_phone: cliReg.json.client.phone,
+      brand: 'Visa',
+      last4: '1111',
+      holder_name: 'LEGADO SANDBOX',
+      exp_month: '12',
+      exp_year: '2030',
+      card_type: 'cartao_credito',
+      gateway_token: `tok_visa_1111_${ts}`,
+      is_default: false,
+      created_at: new Date().toISOString()
+    });
+    const legacyCardBlocked = await apiJson('/api/rides', {
+      method: 'POST',
+      headers: { 'x-client-token': cliToken, 'x-forwarded-for': prodIp },
+      body: {
+        clientId: cliId,
+        originAddress: 'Origem Legado',
+        destinationAddress: 'Destino Legado',
+        distanceKm: 10,
+        durationMin: 15,
+        time: '12:35',
+        category: 'kavro_go',
+        paymentMethod: 'cartao_credito',
+        cardId: `card-legacy-${ts}`
+      }
+    });
+    assert.equal(legacyCardBlocked.status, 402);
+  } finally {
+    await mpGateway.saveMercadoPagoConfig({
+      enabled: false,
+      clearAccessToken: true,
+      clearPublicKey: true,
+      clearWebhookSecret: true
+    }).catch(() => {});
+    mpGateway._setMercadoPagoFetchForTest(null);
+    mpGateway.clearCaches();
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(prevCfg)]
+    ).catch(() => {});
+  }
+});

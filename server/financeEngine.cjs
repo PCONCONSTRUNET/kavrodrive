@@ -470,6 +470,8 @@ async function ensureExtendedSchema() {
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
       ALTER TABLE public.saved_cards ADD COLUMN IF NOT EXISTS holder_document VARCHAR(20);
+      ALTER TABLE public.saved_cards ADD COLUMN IF NOT EXISTS mp_customer_id VARCHAR(120);
+      ALTER TABLE public.saved_cards ADD COLUMN IF NOT EXISTS mp_card_id VARCHAR(120);
       CREATE TABLE IF NOT EXISTS public.withdrawal_requests (
         id VARCHAR(64) PRIMARY KEY,
         driver_id VARCHAR(64) NOT NULL,
@@ -2486,6 +2488,8 @@ function formatSavedCardRow(c, includeRawDoc = false) {
     expYear: c.exp_year ?? c.expYear ?? '',
     cardType: c.card_type ?? c.cardType ?? 'cartao_credito',
     gatewayToken: c.gateway_token ?? c.gatewayToken ?? '',
+    mpCustomerId: c.mp_customer_id ?? c.mpCustomerId ?? undefined,
+    mpCardId: c.mp_card_id ?? c.mpCardId ?? undefined,
     isDefault: Boolean(c.is_default ?? c.isDefault),
     createdAt: c.created_at ?? c.createdAt ?? ''
   };
@@ -2563,6 +2567,8 @@ async function createMpCardTokenServer({ cardNumber, holderName, expMonth, expYe
 async function tokenizeAndSaveCard({
   clientId,
   clientPhone,
+  clientEmail = '',
+  clientName = '',
   cardNumber,
   holderName,
   expMonth,
@@ -2591,6 +2597,9 @@ async function tokenizeAndSaveCard({
     throw new Error('CPF/CNPJ do titular inválido.');
   }
 
+  const mpCreds = await mercadoPagoGateway.getActiveCredentials();
+  const mpCardEnabled = Boolean(mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken);
+
   // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
   const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
     cardNumber: digits,
@@ -2601,10 +2610,60 @@ async function tokenizeAndSaveCard({
     holderDoc: cleanDoc
   });
 
+  if (mpCardEnabled && !mpCreds.sandbox && !realMpToken) {
+    throw new Error('Não foi possível tokenizar o cartão no Mercado Pago. Confira os dados e a Public Key de produção.');
+  }
+
+  let mpCustomerId = '';
+  let mpCardId = '';
+  if (mpCardEnabled && realMpToken) {
+    let resolvedEmail = String(clientEmail || '').trim().toLowerCase();
+    let resolvedName = String(clientName || holderName || 'Passageiro Kavro').trim();
+    if ((!resolvedEmail || !resolvedName) && clientId) {
+      try {
+        const cliR = await db.query('SELECT email, name FROM public.clients WHERE id = $1 LIMIT 1', [clientId]);
+        if (!resolvedEmail) resolvedEmail = String(cliR.rows[0]?.email || '').trim().toLowerCase();
+        if (!resolvedName) resolvedName = String(cliR.rows[0]?.name || '').trim();
+      } catch {}
+    }
+    if (!resolvedEmail) {
+      const idSlug = String(cleanDoc || clientPhone || clientId || Date.now()).replace(/[^a-zA-Z0-9]/g, '') || 'cliente';
+      resolvedEmail = `cliente.${idSlug}@kavrodrive.com.br`;
+    }
+    const nameParts = resolvedName.split(/\s+/).filter(Boolean);
+    const firstName = nameParts[0] || 'Passageiro';
+    const lastName = nameParts.slice(1).join(' ') || 'Kavro';
+
+    const custRes = await mercadoPagoGateway.ensureCustomer({
+      accessToken: mpCreds.accessToken,
+      email: resolvedEmail,
+      firstName,
+      lastName,
+      cpf: cleanDoc
+    });
+    if (custRes.ok && custRes.customerId) {
+      const attachRes = await mercadoPagoGateway.saveCustomerCard({
+        accessToken: mpCreds.accessToken,
+        customerId: custRes.customerId,
+        cardToken: realMpToken
+      });
+      if (attachRes.ok && attachRes.cardId) {
+        mpCustomerId = custRes.customerId;
+        mpCardId = attachRes.cardId;
+      } else if (!mpCreds.sandbox) {
+        throw new Error(attachRes.error || 'Não foi possível salvar o cartão no cliente Mercado Pago.');
+      }
+    } else if (!mpCreds.sandbox) {
+      throw new Error(custRes.error || 'Não foi possível registrar o cliente no Mercado Pago.');
+    }
+  }
+
   // Token opaco do gateway — nunca armazena número completo nem CVV
-  const gatewayToken = realMpToken
-    ? `mp_tok_${realMpToken}`
-    : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
+  const gatewayToken = mpCardId
+    ? `mp_card_${mpCardId}`
+    : realMpToken
+      ? `mp_tok_${realMpToken}`
+      : `tok_${brand.toLowerCase()}_${last4}_${crypto.randomBytes(8).toString('hex')}`;
 
   cardObj = {
     id: cardId,
@@ -2618,6 +2677,8 @@ async function tokenizeAndSaveCard({
     expYear: String(expYear || '2030').slice(-4),
     cardType: cardType === 'cartao_debito' ? 'cartao_debito' : 'cartao_credito',
     gatewayToken,
+    ...(mpCustomerId ? { mpCustomerId } : {}),
+    ...(mpCardId ? { mpCardId } : {}),
     isDefault: true,
     createdAt: now
   };
@@ -2635,6 +2696,8 @@ async function tokenizeAndSaveCard({
       exp_year: cardObj.expYear,
       card_type: cardObj.cardType,
       gateway_token: cardObj.gatewayToken,
+      mp_customer_id: mpCustomerId || null,
+      mp_card_id: mpCardId || null,
       is_default: true,
       created_at: now
     });
@@ -2644,11 +2707,12 @@ async function tokenizeAndSaveCard({
 
   await db.query(
     `INSERT INTO public.saved_cards (
-      id, client_id, client_phone, brand, last4, holder_name, holder_document, exp_month, exp_year, card_type, gateway_token, is_default, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,NOW())`,
+      id, client_id, client_phone, brand, last4, holder_name, holder_document, exp_month, exp_year, card_type, gateway_token, mp_customer_id, mp_card_id, is_default, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,TRUE,NOW())`,
     [
       cardObj.id, cardObj.clientId, cardObj.clientPhone, cardObj.brand, cardObj.last4,
-      cardObj.holderName, cleanDoc || null, cardObj.expMonth, cardObj.expYear, cardObj.cardType, cardObj.gatewayToken
+      cardObj.holderName, cleanDoc || null, cardObj.expMonth, cardObj.expYear, cardObj.cardType,
+      cardObj.gatewayToken, mpCustomerId || null, mpCardId || null
     ]
   );
   return cardObj;
@@ -2759,6 +2823,135 @@ async function createPixChargeForRide(ride) {
   return { tx, split };
 }
 
+/**
+ * Executa cobrança ou pré-autorização de cartão no Mercado Pago usando Customer Card salvo ou token único,
+ * aplicando header antifraude X-meli-session-id e falha fechada em erros de produção.
+ */
+async function executeMercadoPagoCardCharge({
+  mpCreds,
+  savedCard = null,
+  inlineMpToken = '',
+  cardBrand = 'Mastercard',
+  cardType = 'cartao_credito',
+  cvv = '',
+  amount,
+  description,
+  idempotencyKey,
+  externalReference,
+  capture = false,
+  clientId = null,
+  clientEmail = '',
+  clientName = 'Passageiro',
+  holderDocument = '',
+  deviceSessionId = ''
+}) {
+  const rawInline = String(inlineMpToken || '').trim();
+  const cleanInline = rawInline.startsWith('mp_tok_') ? rawInline.slice('mp_tok_'.length) : rawInline;
+  const rawSavedTok = String(savedCard?.gatewayToken || '').trim();
+  const savedOneTimeTok = rawSavedTok.startsWith('mp_tok_')
+    ? rawSavedTok.slice('mp_tok_'.length)
+    : (!rawSavedTok.startsWith('mp_card_') && !rawSavedTok.startsWith('tok_') && rawSavedTok.length >= 16 ? rawSavedTok : '');
+  const mpCustomerId = String(savedCard?.mpCustomerId || '').trim();
+  const mpCardId = String(
+    savedCard?.mpCardId ||
+    (rawSavedTok.startsWith('mp_card_') ? rawSavedTok.slice('mp_card_'.length) : '')
+  ).trim();
+
+  let paymentToken = '';
+  let usingCustomerCard = false;
+
+  if (cleanInline) {
+    paymentToken = cleanInline;
+  } else if (mpCardId && mpCustomerId) {
+    const tokRes = await mercadoPagoGateway.createSavedCardToken({
+      publicKey: mpCreds.publicKey,
+      customerCardId: mpCardId,
+      securityCode: cvv
+    });
+    if (!tokRes.ok || !tokRes.token) {
+      return {
+        executed: true,
+        ok: false,
+        requiresCvv: Boolean(tokRes.statusCode === 400),
+        error: tokRes.error || 'Não foi possível renovar o token do cartão salvo no Mercado Pago.'
+      };
+    }
+    paymentToken = tokRes.token;
+    usingCustomerCard = true;
+  } else if (savedOneTimeTok) {
+    paymentToken = savedOneTimeTok;
+  } else {
+    return { executed: false, ok: false };
+  }
+
+  let payerDoc = String(holderDocument || savedCard?.holderDocument || '').replace(/\D/g, '');
+  if (!usingCustomerCard && !payerDoc && clientId) {
+    try {
+      const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [clientId]);
+      payerDoc = String(cliR.rows[0]?.document || '').replace(/\D/g, '');
+    } catch {}
+  }
+
+  const headers = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${mpCreds.accessToken}`,
+    'X-Idempotency-Key': String(idempotencyKey)
+  };
+  const cleanSession = String(deviceSessionId || '').trim();
+  if (cleanSession) {
+    headers['X-meli-session-id'] = cleanSession;
+  }
+
+  const payer = usingCustomerCard
+    ? { type: 'customer', id: mpCustomerId }
+    : {
+        email: String(clientEmail || 'passageiro@kavrodrive.com.br').trim() || 'passageiro@kavrodrive.com.br',
+        first_name: String(clientName || 'Passageiro').split(' ')[0] || 'Passageiro',
+        ...(payerDoc.length === 11 || payerDoc.length === 14
+          ? { identification: { type: payerDoc.length === 14 ? 'CNPJ' : 'CPF', number: payerDoc } }
+          : {})
+      };
+
+  try {
+    const mpResp = await mercadoPagoGateway.mpFetch('https://api.mercadopago.com/v1/payments', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        transaction_amount: round2(amount),
+        token: paymentToken,
+        description,
+        statement_descriptor: mpCreds.statementDescriptor || 'KAVRO DRIVE',
+        installments: 1,
+        capture: Boolean(capture),
+        payment_method_id: mapMpPaymentMethodId(savedCard?.brand || cardBrand, savedCard?.cardType || cardType),
+        external_reference: String(externalReference || ''),
+        payer
+      })
+    });
+    const mpData = await mpResp.json().catch(() => ({}));
+    const mpStatus = String(mpData?.status || '').toLowerCase();
+    if (!mpResp.ok || mpStatus === 'rejected' || mpStatus === 'cancelled') {
+      const reason = mpData?.status_detail || mpData?.message || 'Transação recusada pelo emissor no Mercado Pago.';
+      return { executed: true, ok: false, mpData, error: String(reason) };
+    }
+    return {
+      executed: true,
+      ok: true,
+      mpData,
+      gatewayTxId: String(mpData.id),
+      authCode: String(mpData?.authorization_code || `MP-${mpData.id || Date.now()}`)
+    };
+  } catch (err) {
+    console.warn('[MP Card Charge error]:', err.message);
+    return {
+      executed: true,
+      ok: false,
+      networkError: true,
+      error: 'Erro de comunicação com o Mercado Pago ao processar o cartão. Tente novamente.'
+    };
+  }
+}
+
 async function authorizeCardForRide(ride, cardInfo = {}) {
   const cfg = await getSystemConfig();
   const effectiveCommPct = ride.commissionPercent ?? resolveCommissionPercentForRide(cfg, null, ride.paymentMethod || 'cartao_credito');
@@ -2797,58 +2990,36 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
     return { authorized: false, tx: failedTx, split, error: 'Cartão recusado pelo banco emissor. Escolha outro cartão ou PIX.' };
   }
 
-  // Busca token real salvo ou enviado no checkout para pré-autorização
+  // Busca cartão salvo no banco (com Customer/Card IDs e documento)
   let savedCard = null;
   if (cardInfo.cardId || ride.cardId) {
     const cards = await listSavedCards(ride.clientId, ride.clientPhone, { includeRawDoc: true });
     savedCard = cards.find(c => c.id === (cardInfo.cardId || ride.cardId)) || null;
   }
 
-  let payerDoc = String(cardInfo.holderDocument || savedCard?.holderDocument || '').replace(/\D/g, '');
-  if (!payerDoc && ride.clientId) {
-    try {
-      const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [ride.clientId]);
-      payerDoc = String(cliR.rows[0]?.document || '').replace(/\D/g, '');
-    } catch {}
-  }
-
-  const rawTokenCandidate = String(cardInfo.mpCardToken || savedCard?.gatewayToken || '').trim();
-  const realMpToken = rawTokenCandidate.startsWith('mp_tok_')
-    ? rawTokenCandidate.slice('mp_tok_'.length)
-    : (!rawTokenCandidate.startsWith('tok_') && rawTokenCandidate.length >= 16 ? rawTokenCandidate : '');
-
   const mpCreds = await mercadoPagoGateway.getActiveCredentials();
-  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken && realMpToken) {
-    try {
-      const mpResp = await mercadoPagoGateway.mpFetch('https://api.mercadopago.com/v1/payments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${mpCreds.accessToken}`,
-          'X-Idempotency-Key': `mp_card_auth_${ride.id}_${split.grossAmount}`
-        },
-        body: JSON.stringify({
-          transaction_amount: split.grossAmount,
-          token: realMpToken,
-          description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
-          statement_descriptor: mpCreds.statementDescriptor || 'KAVRO DRIVE',
-          installments: 1,
-          capture: false,
-          payment_method_id: mapMpPaymentMethodId(savedCard?.brand || brand, ride.paymentMethod),
-          external_reference: ride.id,
-          payer: {
-            email: ride.clientEmail || 'passageiro@kavrodrive.com.br',
-            first_name: String(ride.clientName || 'Passageiro').split(' ')[0],
-            ...(payerDoc.length === 11 || payerDoc.length === 14
-              ? { identification: { type: payerDoc.length === 14 ? 'CNPJ' : 'CPF', number: payerDoc } }
-              : {})
-          }
-        })
-      });
-      const mpData = await mpResp.json().catch(() => ({}));
-      const mpStatus = String(mpData?.status || '').toLowerCase();
-      if (!mpResp.ok || mpStatus === 'rejected' || mpStatus === 'cancelled') {
-        const reason = mpData?.status_detail || mpData?.message || 'Transação recusada pelo emissor no Mercado Pago.';
+  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken) {
+    const chargeRes = await executeMercadoPagoCardCharge({
+      mpCreds,
+      savedCard,
+      inlineMpToken: cardInfo.mpCardToken,
+      cardBrand: brand,
+      cardType: ride.paymentMethod || 'cartao_credito',
+      cvv: cardInfo.cvv,
+      amount: split.grossAmount,
+      description: `Corrida Kavro Drive ${ride.rideCode || ride.id}`,
+      idempotencyKey: `mp_card_auth_${ride.id}_${split.grossAmount}`,
+      externalReference: ride.id,
+      capture: false,
+      clientId: ride.clientId,
+      clientEmail: ride.clientEmail,
+      clientName: ride.clientName,
+      holderDocument: cardInfo.holderDocument,
+      deviceSessionId: cardInfo.deviceSessionId
+    });
+
+    if (chargeRes.executed) {
+      if (!chargeRes.ok) {
         const failedTx = await savePaymentTransaction({
           rideId: ride.id,
           rideCode: ride.rideCode,
@@ -2865,13 +3036,17 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
           cardId: cardInfo.cardId || ride.cardId || '',
           cardLast4: savedCard?.last4 || last4,
           cardBrand: savedCard?.brand || brand,
-          failureReason: String(reason),
-          gatewayTxId: mpData?.id ? String(mpData.id) : `card_mp_fail_${ride.id}_${Date.now()}`
+          failureReason: String(chargeRes.error || 'Falha na pré-autorização do cartão.'),
+          gatewayTxId: chargeRes.mpData?.id ? String(chargeRes.mpData.id) : `card_mp_fail_${ride.id}_${Date.now()}`
         });
-        return { authorized: false, tx: failedTx, split, error: `Cartão recusado (${reason}). Tente outro cartão ou PIX.` };
+        return {
+          authorized: false,
+          tx: failedTx,
+          split,
+          error: `Cartão recusado (${chargeRes.error}). Tente outro cartão ou PIX.`
+        };
       }
 
-      const authCode = String(mpData?.authorization_code || `MP-${mpData.id || Date.now()}`);
       const tx = await savePaymentTransaction({
         rideId: ride.id,
         rideCode: ride.rideCode,
@@ -2890,12 +3065,19 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
         cardId: cardInfo.cardId || ride.cardId || '',
         cardLast4: savedCard?.last4 || last4,
         cardBrand: savedCard?.brand || brand,
-        gatewayAuthCode: authCode,
-        gatewayTxId: String(mpData.id)
+        gatewayAuthCode: chargeRes.authCode,
+        gatewayTxId: chargeRes.gatewayTxId
       });
       return { authorized: true, tx, split, provider: 'mercadopago' };
-    } catch (err) {
-      console.warn('[MP Card PreAuth error]:', err.message);
+    }
+
+    // Em produção real, não permitir aprovar corrida no cartão como "sandbox" sem token válido MP
+    if (!mpCreds.sandbox) {
+      return {
+        authorized: false,
+        split,
+        error: 'Este cartão precisa ser recadastrado para pagamento em produção no Mercado Pago.'
+      };
     }
   }
 
@@ -2953,20 +3135,48 @@ async function captureCardForRide(ride, finalAmount) {
       }
       return { captured: true, gatewayTxId: String(capData.id || tx.gatewayTxId), provider: 'mercadopago' };
     } catch (err) {
-      console.warn('[MP Card Capture fallback/error]:', err.message);
+      console.warn('[MP Card Capture error]:', err.message);
+      return {
+        captured: false,
+        error: 'Erro de comunicação ao capturar a cobrança no Mercado Pago. Tente finalizar novamente.'
+      };
     }
+  }
+  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken && !mpCreds.sandbox) {
+    return {
+      captured: false,
+      error: 'Pré-autorização do cartão ausente no Mercado Pago para concluir a captura em produção.'
+    };
   }
   return { captured: true, gatewayTxId: tx?.gatewayTxId || `card_cap_${ride.id}_${Date.now()}`, provider: 'sandbox' };
 }
 
-async function refundGatewayPayment(tx, refundAmount = null) {
-  const gwId = String(tx?.gatewayTxId || '');
+async function refundGatewayPayment(tx, refundAmount = null, options = {}) {
+  const gwId = String(tx?.gatewayTxId || '').trim();
   const mpCreds = await mercadoPagoGateway.getActiveCredentials({ allowWhenDisabled: true });
   const isRealMpId = Boolean(mpCreds.accessToken && gwId && /^\d+$/.test(gwId));
   if (!isRealMpId) return { ok: true, provider: 'sandbox' };
+
+  const isUncapturedAuth = options.isUncapturedAuth !== undefined
+    ? Boolean(options.isUncapturedAuth)
+    : (tx?.status === 'autorizado' || (Boolean(tx?.gatewayAuthCode) && Number(tx?.paidAmount || 0) === 0));
+
   try {
+    if ((refundAmount === null || refundAmount === undefined) && isUncapturedAuth) {
+      const cancelRes = await mercadoPagoGateway.cancelAuthorizedPayment({
+        accessToken: mpCreds.accessToken,
+        paymentId: gwId
+      });
+      if (cancelRes.ok) {
+        return cancelRes;
+      }
+      if (cancelRes.statusCode && cancelRes.statusCode !== 400 && cancelRes.statusCode !== 404) {
+        return cancelRes;
+      }
+    }
+
     const body = refundAmount ? { amount: round2(refundAmount) } : {};
-    const resp = await mercadoPagoGateway.mpFetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(tx.gatewayTxId)}/refunds`, {
+    const resp = await mercadoPagoGateway.mpFetch(`https://api.mercadopago.com/v1/payments/${encodeURIComponent(gwId)}/refunds`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -3408,8 +3618,11 @@ async function processRideCancellationFinance(before, { cancelledBy = 'passenger
       tx?.status === 'pendente');
 
   if (isPendingGatewayTx && appliedCancellationFee === 0) {
-    if (tx && String(tx.gatewayTxId || '').startsWith('pi_')) {
-      await refundGatewayPayment(tx, null).catch(() => {});
+    if (tx && /^\d+$/.test(String(tx.gatewayTxId || '').trim())) {
+      const gwVoid = await refundGatewayPayment(tx, null, { isUncapturedAuth }).catch((e) => ({ ok: false, error: e?.message }));
+      if (gwVoid && !gwVoid.ok) {
+        console.warn('[MP Cancel Hold error]:', gwVoid.error);
+      }
     }
     nextPaymentStatus = isUncapturedAuth ? 'reembolsado' : 'cancelado';
     if (tx) {
@@ -4328,6 +4541,9 @@ async function createClientWalletTopup({
   amount,
   method = 'pix',
   cardId = '',
+  cvv = '',
+  mpCardToken = '',
+  deviceSessionId = '',
   idempotencyKey = ''
 }) {
   await ensureExtendedSchema();
@@ -4448,58 +4664,37 @@ async function createClientWalletTopup({
   let gatewayTxId = `wallet_card_${Date.now()}`;
   let chargeProvider = 'sandbox';
 
-  const rawTokenCandidate = String(chosenCard.gatewayToken || '').trim();
-  const realMpToken = rawTokenCandidate.startsWith('mp_tok_')
-    ? rawTokenCandidate.slice('mp_tok_'.length)
-    : (!rawTokenCandidate.startsWith('tok_') && rawTokenCandidate.length >= 16 ? rawTokenCandidate : '');
   const mpCreds = await mercadoPagoGateway.getActiveCredentials();
-  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken && realMpToken) {
-    let payerDoc = String(chosenCard.holderDocument || '').replace(/\D/g, '');
-    if (!payerDoc && cid) {
-      try {
-        const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [cid]);
-        payerDoc = String(cliR.rows[0]?.document || '').replace(/\D/g, '');
-      } catch {}
-    }
-    try {
-      const mpResp = await mercadoPagoGateway.mpFetch('https://api.mercadopago.com/v1/payments', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${mpCreds.accessToken}`,
-          'X-Idempotency-Key': `mp_wallet_card_${entryId}_${chargedTotalAmount}`
-        },
-        body: JSON.stringify({
-          transaction_amount: chargedTotalAmount,
-          token: realMpToken,
-          description: `Recarga Carteira Kavro Drive (${cid})`,
-          statement_descriptor: mpCreds.statementDescriptor || 'KAVRO DRIVE',
-          installments: 1,
-          capture: true,
-          payment_method_id: mapMpPaymentMethodId(chosenCard.brand, chosenCard.cardType || normalizedMethod),
-          external_reference: entryId,
-          payer: {
-            email: clientEmail || 'passageiro@kavrodrive.com.br',
-            first_name: String(clientName || 'Passageiro').split(' ')[0],
-            ...(payerDoc.length === 11 || payerDoc.length === 14
-              ? { identification: { type: payerDoc.length === 14 ? 'CNPJ' : 'CPF', number: payerDoc } }
-              : {})
-          }
-        })
-      });
-      const mpData = await mpResp.json().catch(() => ({}));
-      const mpStatus = String(mpData?.status || '').toLowerCase();
-      if (!mpResp.ok || mpStatus === 'rejected' || mpStatus === 'cancelled') {
-        const reason = mpData?.status_detail || mpData?.message || 'Transação recusada pelo emissor no Mercado Pago.';
-        return { ok: false, error: `Cartão recusado (${reason}). Tente outro cartão ou PIX.` };
+  if (mpCreds.enabled && mpCreds.useForCard && mpCreds.accessToken) {
+    const chargeRes = await executeMercadoPagoCardCharge({
+      mpCreds,
+      savedCard: chosenCard,
+      inlineMpToken: mpCardToken,
+      cardBrand: chosenCard.brand,
+      cardType: chosenCard.cardType || normalizedMethod,
+      cvv,
+      amount: chargedTotalAmount,
+      description: `Recarga Carteira Kavro Drive (${cid})`,
+      idempotencyKey: `mp_wallet_card_${entryId}_${chargedTotalAmount}`,
+      externalReference: entryId,
+      capture: true,
+      clientId: cid,
+      clientEmail,
+      clientName,
+      holderDocument: chosenCard.holderDocument,
+      deviceSessionId
+    });
+    if (chargeRes.executed) {
+      if (!chargeRes.ok) {
+        return { ok: false, error: `Cartão recusado (${chargeRes.error}). Tente outro cartão ou PIX.` };
       }
-      if (mpData?.id) {
-        gatewayTxId = String(mpData.id);
-        chargeProvider = 'mercadopago';
-      }
-    } catch (err) {
-      console.warn('[MP Wallet Card Charge error]:', err.message);
-      return { ok: false, error: 'Erro de comunicação com o Mercado Pago ao processar o cartão. Tente novamente.' };
+      gatewayTxId = chargeRes.gatewayTxId;
+      chargeProvider = 'mercadopago';
+    } else if (!mpCreds.sandbox) {
+      return {
+        ok: false,
+        error: 'Este cartão precisa ser recadastrado para recarga em produção no Mercado Pago.'
+      };
     }
   }
 
