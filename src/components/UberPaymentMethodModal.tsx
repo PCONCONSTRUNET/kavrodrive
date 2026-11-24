@@ -79,6 +79,10 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
           ? {
               flex: 1,
               minHeight: 0,
+              minWidth: 0,
+              width: '100%',
+              overflowX: 'hidden',
+              boxSizing: 'border-box',
               display: 'flex',
               flexDirection: 'column',
               backgroundColor: '#FFFFFF',
@@ -88,8 +92,11 @@ export const UberPaymentMethodModal: React.FC<UberPaymentMethodModalProps> = ({
           : {
               position: 'fixed',
               inset: 0,
+              width: '100%',
               maxWidth: 480,
               margin: '0 auto',
+              overflowX: 'hidden',
+              boxSizing: 'border-box',
               backgroundColor: '#FFFFFF',
               zIndex: 10050,
               display: 'flex',

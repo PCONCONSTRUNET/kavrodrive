@@ -1568,7 +1568,23 @@ test('Gateway de Pagamentos completo (sem Stripe): tokenizacao de cartao, pre-au
     kyc: { status: 'aprovado' }
   });
 
-  // 3) Tokenizacao direta de cartao de credito
+  // 3) Tokenizacao direta de cartao de credito (valida CPF do titular quando informado)
+  const invalidCpfCardRes = await apiJson('/api/payments/cards', {
+    method: 'POST',
+    headers: { 'x-client-token': cliToken },
+    body: {
+      clientId: cliId,
+      holderName: 'PASSAGEIRO PAGAMENTOS',
+      cardNumber: '4111111111114242',
+      expMonth: '12',
+      expYear: '2030',
+      cvv: '123',
+      cardType: 'cartao_credito',
+      holderDocument: '123'
+    }
+  });
+  assert.equal(invalidCpfCardRes.status, 400);
+
   const cardSaveRes = await apiJson('/api/payments/cards', {
     method: 'POST',
     headers: { 'x-client-token': cliToken },
@@ -1579,12 +1595,14 @@ test('Gateway de Pagamentos completo (sem Stripe): tokenizacao de cartao, pre-au
       expMonth: '12',
       expYear: '2030',
       cvv: '123',
-      cardType: 'cartao_credito'
+      cardType: 'cartao_credito',
+      holderDocument: '11144477735'
     }
   });
   assert.equal(cardSaveRes.status, 200);
   assert.equal(cardSaveRes.json.card.brand, 'Visa');
   assert.equal(cardSaveRes.json.card.last4, '4242');
+  assert.equal(cardSaveRes.json.card.holderDocLast4, '7735');
 
   // 4) Corrida no Cartao: pre-autoriza -> motorista aceita, inicia e finaliza -> captura
   const blockedInstallmentRide = await apiJson('/api/rides', {

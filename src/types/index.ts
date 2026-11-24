@@ -52,6 +52,7 @@ export interface SavedCard {
   brand: string;
   last4: string;
   holderName: string;
+  holderDocLast4?: string;
   expMonth: string;
   expYear: string;
   cardType: 'cartao_credito' | 'cartao_debito';

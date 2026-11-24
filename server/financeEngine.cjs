@@ -331,6 +331,7 @@ async function ensureExtendedSchema() {
         brand VARCHAR(30) NOT NULL,
         last4 VARCHAR(4) NOT NULL,
         holder_name TEXT NOT NULL,
+        holder_document VARCHAR(20),
         exp_month VARCHAR(2) NOT NULL,
         exp_year VARCHAR(4) NOT NULL,
         card_type VARCHAR(30) DEFAULT 'cartao_credito',
@@ -338,6 +339,7 @@ async function ensureExtendedSchema() {
         is_default BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT NOW()
       );
+      ALTER TABLE public.saved_cards ADD COLUMN IF NOT EXISTS holder_document VARCHAR(20);
       CREATE TABLE IF NOT EXISTS public.withdrawal_requests (
         id VARCHAR(64) PRIMARY KEY,
         driver_id VARCHAR(64) NOT NULL,
@@ -2339,7 +2341,8 @@ function detectCardBrand(numStr) {
   return 'Mastercard';
 }
 
-function formatSavedCardRow(c) {
+function formatSavedCardRow(c, includeRawDoc = false) {
+  const docDigits = String(c.holder_document ?? c.holderDocument ?? '').replace(/\D/g, '');
   return {
     id: c.id,
     clientId: c.client_id ?? c.clientId ?? '',
@@ -2347,6 +2350,8 @@ function formatSavedCardRow(c) {
     brand: c.brand || 'Cartão',
     last4: c.last4 || '',
     holderName: c.holder_name ?? c.holderName ?? '',
+    holderDocLast4: docDigits.length >= 4 ? docDigits.slice(-4) : '',
+    ...(includeRawDoc && docDigits ? { holderDocument: docDigits } : {}),
     expMonth: c.exp_month ?? c.expMonth ?? '',
     expYear: c.exp_year ?? c.expYear ?? '',
     cardType: c.card_type ?? c.cardType ?? 'cartao_credito',
@@ -2356,9 +2361,10 @@ function formatSavedCardRow(c) {
   };
 }
 
-async function listSavedCards(clientId, clientPhone) {
+async function listSavedCards(clientId, clientPhone, options = {}) {
   await ensureExtendedSchema();
   const cleanPhone = String(clientPhone || '').replace(/\D/g, '');
+  const includeRawDoc = Boolean(options?.includeRawDoc);
   if (!db.pool) {
     return (db.localStore.saved_cards || [])
       .filter(c => {
@@ -2366,7 +2372,7 @@ async function listSavedCards(clientId, clientPhone) {
         return (clientId && (c.client_id === clientId || c.clientId === clientId)) ||
           (cleanPhone.length >= 8 && cPhone === cleanPhone);
       })
-      .map(formatSavedCardRow);
+      .map(c => formatSavedCardRow(c, includeRawDoc));
   }
   const r = await db.query(
     `SELECT * FROM public.saved_cards
@@ -2375,7 +2381,7 @@ async function listSavedCards(clientId, clientPhone) {
      ORDER BY created_at DESC`,
     [String(clientId || ''), cleanPhone]
   );
-  return r.rows.map(formatSavedCardRow);
+  return r.rows.map(c => formatSavedCardRow(c, includeRawDoc));
 }
 
 function mapMpPaymentMethodId(brand, cardType) {
@@ -2450,6 +2456,10 @@ async function tokenizeAndSaveCard({
   }
   const last4 = digits.slice(-4);
   const brand = detectCardBrand(digits);
+  const cleanDoc = String(holderDocument || '').replace(/\D/g, '');
+  if (holderDocument !== undefined && holderDocument !== null && String(holderDocument).trim() !== '' && cleanDoc.length !== 11 && cleanDoc.length !== 14) {
+    throw new Error('CPF/CNPJ do titular inválido.');
+  }
 
   // Quando MERCADOPAGO_PUBLIC_KEY estiver configurada (ou token do SDK enviado pelo browser), registra token real no MP
   const realMpToken = String(mpCardToken || '').trim() || await createMpCardTokenServer({
@@ -2458,7 +2468,7 @@ async function tokenizeAndSaveCard({
     expMonth,
     expYear,
     cvv,
-    holderDoc: holderDocument
+    holderDoc: cleanDoc
   });
 
   // Token opaco do gateway — nunca armazena número completo nem CVV
@@ -2473,6 +2483,7 @@ async function tokenizeAndSaveCard({
     brand,
     last4,
     holderName: String(holderName || 'TITULAR DO CARTAO').toUpperCase().trim(),
+    holderDocLast4: cleanDoc.length >= 4 ? cleanDoc.slice(-4) : '',
     expMonth: String(expMonth || '12').padStart(2, '0'),
     expYear: String(expYear || '2030').slice(-4),
     cardType: cardType === 'cartao_debito' ? 'cartao_debito' : 'cartao_credito',
@@ -2489,6 +2500,7 @@ async function tokenizeAndSaveCard({
       brand: cardObj.brand,
       last4: cardObj.last4,
       holder_name: cardObj.holderName,
+      holder_document: cleanDoc || null,
       exp_month: cardObj.expMonth,
       exp_year: cardObj.expYear,
       card_type: cardObj.cardType,
@@ -2502,11 +2514,11 @@ async function tokenizeAndSaveCard({
 
   await db.query(
     `INSERT INTO public.saved_cards (
-      id, client_id, client_phone, brand, last4, holder_name, exp_month, exp_year, card_type, gateway_token, is_default, created_at
-    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,NOW())`,
+      id, client_id, client_phone, brand, last4, holder_name, holder_document, exp_month, exp_year, card_type, gateway_token, is_default, created_at
+    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,TRUE,NOW())`,
     [
       cardObj.id, cardObj.clientId, cardObj.clientPhone, cardObj.brand, cardObj.last4,
-      cardObj.holderName, cardObj.expMonth, cardObj.expYear, cardObj.cardType, cardObj.gatewayToken
+      cardObj.holderName, cleanDoc || null, cardObj.expMonth, cardObj.expYear, cardObj.cardType, cardObj.gatewayToken
     ]
   );
   return cardObj;
@@ -2651,8 +2663,16 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
   // Busca token real salvo ou enviado no checkout para pré-autorização
   let savedCard = null;
   if (cardInfo.cardId || ride.cardId) {
-    const cards = await listSavedCards(ride.clientId, ride.clientPhone);
+    const cards = await listSavedCards(ride.clientId, ride.clientPhone, { includeRawDoc: true });
     savedCard = cards.find(c => c.id === (cardInfo.cardId || ride.cardId)) || null;
+  }
+
+  let payerDoc = String(cardInfo.holderDocument || savedCard?.holderDocument || '').replace(/\D/g, '');
+  if (!payerDoc && ride.clientId) {
+    try {
+      const cliR = await db.query('SELECT document FROM public.clients WHERE id = $1 LIMIT 1', [ride.clientId]);
+      payerDoc = String(cliR.rows[0]?.document || '').replace(/\D/g, '');
+    } catch {}
   }
 
   const rawTokenCandidate = String(cardInfo.mpCardToken || savedCard?.gatewayToken || '').trim();
@@ -2681,7 +2701,10 @@ async function authorizeCardForRide(ride, cardInfo = {}) {
           external_reference: ride.id,
           payer: {
             email: ride.clientEmail || 'passageiro@kavrodrive.com.br',
-            first_name: String(ride.clientName || 'Passageiro').split(' ')[0]
+            first_name: String(ride.clientName || 'Passageiro').split(' ')[0],
+            ...(payerDoc.length === 11 || payerDoc.length === 14
+              ? { identification: { type: payerDoc.length === 14 ? 'CNPJ' : 'CPF', number: payerDoc } }
+              : {})
           }
         })
       });

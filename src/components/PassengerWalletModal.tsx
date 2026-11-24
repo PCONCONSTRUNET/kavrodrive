@@ -15,8 +15,7 @@ import {
   Trash2,
   ShieldCheck,
   Loader2,
-  X,
-  Lock
+  X
 } from 'lucide-react';
 import {
   ClientProfile,
@@ -28,6 +27,7 @@ import {
 import { StorageService } from '../services/storage';
 import { showToast, useInlineConfirm } from '../utils/uiFeedback';
 import { PaymentMethodIcon } from './PaymentMethodIcon';
+import { AddCardModalSheet } from './AddCardModalSheet';
 
 interface PassengerWalletModalProps {
   isOpen: boolean;
@@ -74,13 +74,6 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
   const [showDepositPanel, setShowDepositPanel] = useState(false);
   const [showStatement, setShowStatement] = useState(false);
   const [showAddCardSheet, setShowAddCardSheet] = useState(false);
-  const [cardNumber, setCardNumber] = useState('');
-  const [cardHolder, setCardHolder] = useState(currentUser?.name || '');
-  const [cardExpMonth, setCardExpMonth] = useState('12');
-  const [cardExpYear, setCardExpYear] = useState('2029');
-  const [cardCvv, setCardCvv] = useState('');
-  const [cardError, setCardError] = useState('');
-  const [isSavingCard, setIsSavingCard] = useState(false);
 
   const [depositAmountStr, setDepositAmountStr] = useState('20');
   const [depositMethod, setDepositMethod] = useState<'pix' | 'cartao_credito'>('pix');
@@ -1117,208 +1110,24 @@ export const PassengerWalletModal: React.FC<PassengerWalletModalProps> = ({
 
         {/* ── MODAL DE CADASTRO DE CARTÃO DENTRO DA CARTEIRA ──────────── */}
         {showAddCardSheet && currentUser && (
-          <div
-            style={{
-              position: 'fixed',
-              inset: 0,
-              zIndex: 10090,
-              backgroundColor: '#FFFFFF',
-              display: 'flex',
-              justifyContent: 'center'
+          <AddCardModalSheet
+            isOpen
+            mode="fullscreen"
+            title="Adicionar cartão à Carteira"
+            subtitle="Pagamento criptografado à vista (1x, sem parcelamento) para depósitos e corridas Kavro"
+            submitLabel="Salvar Cartão na Carteira"
+            initialHolderName={currentUser.name || ''}
+            initialHolderCpf={currentUser.document || ''}
+            clientId={currentUser.id}
+            clientPhone={currentUser.phone}
+            mercadopagoPublicKey={paymentsConfig.mercadopagoPublicKey}
+            onClose={() => setShowAddCardSheet(false)}
+            onCardSaved={(savedCard) => {
+              setSavedCards((prev) => [savedCard, ...prev]);
+              setSelectedCardId(savedCard.id);
+              setShowAddCardSheet(false);
             }}
-          >
-            <div style={{
-              width: '100%',
-              maxWidth: 480,
-              height: '100dvh',
-              display: 'flex',
-              flexDirection: 'column',
-              overflowY: 'auto'
-            }}>
-              <div style={{
-                background: 'linear-gradient(155deg, #0B1117 0%, #15222C 100%)',
-                padding: 'calc(16px + env(safe-area-inset-top, 0px)) 20px 18px 20px',
-                borderBottomLeftRadius: 24,
-                borderBottomRightRadius: 24
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    <img src="/logo-horizontal-white.png" alt="KAVRO DRIVE" style={{ height: 22 }} />
-                    <span style={{
-                      fontSize: '0.66rem',
-                      fontWeight: 800,
-                      color: '#BEF264',
-                      backgroundColor: 'rgba(118, 216, 0, 0.14)',
-                      border: '1px solid rgba(118, 216, 0, 0.35)',
-                      padding: '3px 9px',
-                      borderRadius: 999,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4
-                    }}>
-                      <Lock size={10} /> Cartão Seguro
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAddCardSheet(false)}
-                    aria-label="Fechar"
-                    style={{
-                      width: 34,
-                      height: 34,
-                      borderRadius: '50%',
-                      border: 'none',
-                      backgroundColor: 'rgba(255,255,255,0.14)',
-                      color: '#FFFFFF',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    ✕
-                  </button>
-                </div>
-                <div style={{ fontSize: '0.98rem', fontWeight: 900, color: '#FFFFFF' }}>
-                  Adicionar cartão à Carteira
-                </div>
-                <div style={{ fontSize: '0.73rem', color: '#94A3B8', marginTop: 2 }}>
-                  Pagamento criptografado à vista (1x, sem parcelamento) para depósitos e corridas Kavro
-                </div>
-              </div>
-
-              <div style={{ padding: 20, flex: 1 }}>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    setCardError('');
-                    setIsSavingCard(true);
-                    let mpCardToken: string | undefined;
-                    try {
-                      if (paymentsConfig.mercadopagoPublicKey) {
-                        const cleanDoc = String(currentUser?.document || '').replace(/\D/g, '');
-                        const tokenBody: Record<string, unknown> = {
-                          card_number: cardNumber.replace(/\D/g, ''),
-                          expiration_month: parseInt(cardExpMonth, 10),
-                          expiration_year: parseInt(cardExpYear.length === 2 ? `20${cardExpYear}` : cardExpYear, 10),
-                          security_code: cardCvv.replace(/\D/g, ''),
-                          cardholder: {
-                            name: cardHolder.toUpperCase().trim(),
-                            ...(cleanDoc.length === 11 || cleanDoc.length === 14
-                              ? { identification: { type: cleanDoc.length === 14 ? 'CNPJ' : 'CPF', number: cleanDoc } }
-                              : {})
-                          }
-                        };
-                        const mpResp = await fetch(
-                          `https://api.mercadopago.com/v1/card_tokens?public_key=${encodeURIComponent(paymentsConfig.mercadopagoPublicKey)}`,
-                          {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(tokenBody)
-                          }
-                        );
-                        const mpData = await mpResp.json().catch(() => ({}));
-                        if (mpResp.ok && mpData?.id) {
-                          mpCardToken = String(mpData.id);
-                        }
-                      }
-                    } catch {
-                      // Fallback para tokenização no backend
-                    }
-                    const res = await StorageService.saveTokenizedCard({
-                      clientId: currentUser.id,
-                      clientPhone: currentUser.phone,
-                      cardNumber,
-                      holderName: cardHolder,
-                      expMonth: cardExpMonth,
-                      expYear: cardExpYear,
-                      cvv: cardCvv,
-                      cardType: 'cartao_credito',
-                      mpCardToken,
-                      holderDocument: currentUser.document
-                    });
-                    setIsSavingCard(false);
-                    if (!res.ok || !res.card) {
-                      setCardError(res.error || 'Verifique os dados do cartão.');
-                      return;
-                    }
-                    const nextCards = [res.card, ...savedCards];
-                    setSavedCards(nextCards);
-                    setSelectedCardId(res.card.id);
-                    setShowAddCardSheet(false);
-                    setCardNumber('');
-                    setCardCvv('');
-                  }}
-                  style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
-                >
-                  <input
-                    type="text"
-                    placeholder="Número do Cartão (16 dígitos)"
-                    value={cardNumber}
-                    onChange={(e) => setCardNumber(e.target.value)}
-                    required
-                    style={{ padding: '11px 12px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.86rem', fontWeight: 700 }}
-                  />
-                  <input
-                    type="text"
-                    placeholder="Nome impresso no cartão"
-                    value={cardHolder}
-                    onChange={(e) => setCardHolder(e.target.value)}
-                    required
-                    style={{ padding: '11px 12px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.85rem', fontWeight: 600 }}
-                  />
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                    <input
-                      type="text"
-                      placeholder="Mês (MM)"
-                      maxLength={2}
-                      value={cardExpMonth}
-                      onChange={(e) => setCardExpMonth(e.target.value)}
-                      required
-                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
-                    />
-                    <input
-                      type="text"
-                      placeholder="Ano (AAAA)"
-                      maxLength={4}
-                      value={cardExpYear}
-                      onChange={(e) => setCardExpYear(e.target.value)}
-                      required
-                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
-                    />
-                    <input
-                      type="password"
-                      placeholder="CVV"
-                      maxLength={4}
-                      value={cardCvv}
-                      onChange={(e) => setCardCvv(e.target.value)}
-                      required
-                      style={{ padding: '10px', borderRadius: 11, border: '1.5px solid #CBD5E1', fontSize: '0.84rem', textAlign: 'center' }}
-                    />
-                  </div>
-                  {cardError && (
-                    <div style={{ color: '#DC2626', fontSize: '0.75rem', fontWeight: 700, textAlign: 'center' }}>
-                      {cardError}
-                    </div>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={isSavingCard}
-                    style={{
-                      marginTop: 6,
-                      padding: '12px 24px',
-                      borderRadius: 999,
-                      border: 'none',
-                      backgroundColor: '#0F172A',
-                      color: '#FFFFFF',
-                      fontSize: '0.84rem',
-                      fontWeight: 800,
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {isSavingCard ? 'Tokenizando...' : 'Salvar Cartão na Carteira'}
-                  </button>
-                </form>
-              </div>
-            </div>
-          </div>
+          />
         )}
       </div>
     </div>,
