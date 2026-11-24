@@ -5777,7 +5777,7 @@ test('Painel Isolado /status: auth por PIN 20202020, isolamento do Admin, rate-l
   });
   assert.equal(adminAttempt.status, 401);
 
-  // 5) Diagnóstico autenticado retorna status geral, banco, pool, contadores, tabelas e integrações
+  // 5) Diagnóstico autenticado retorna status geral, semáforo, banco, pool, contadores, séries 7d e integrações
   const diagRes = await apiJson('/api/status/diagnostics', {
     headers: { Authorization: `Bearer ${authRes.json.token}` }
   });
@@ -5785,10 +5785,17 @@ test('Painel Isolado /status: auth por PIN 20202020, isolamento do Admin, rate-l
   assert.equal(diagRes.json.ok, true);
   assert.ok(['operational', 'degraded', 'critical'].includes(diagRes.json.overall?.status));
   assert.equal(typeof diagRes.json.overall?.score, 'number');
+  assert.equal(typeof diagRes.json.overall?.statusCounts?.ok, 'number');
+  assert.equal(typeof diagRes.json.overall?.statusCounts?.warn, 'number');
+  assert.equal(typeof diagRes.json.overall?.statusCounts?.error, 'number');
   assert.equal(diagRes.json.database?.connected, true);
   assert.equal(typeof diagRes.json.database?.latencyMs, 'number');
   assert.equal(typeof diagRes.json.database?.pool?.max, 'number');
   assert.equal(typeof diagRes.json.database?.operationalCounts?.totalDrivers, 'number');
+  assert.ok(Array.isArray(diagRes.json.database?.dailyRides7d));
+  assert.equal(diagRes.json.database.dailyRides7d.length, 7);
+  assert.equal(typeof diagRes.json.database?.paymentSummary?.confirmed, 'number');
+  assert.equal(typeof diagRes.json.database?.paymentSummary?.byMethod?.pix, 'number');
   assert.ok(Array.isArray(diagRes.json.database?.tableStats));
   assert.ok(diagRes.json.database.tableStats.some(t => t.name === 'rides'));
   assert.ok(diagRes.json.database.tableStats.some(t => t.name === 'drivers'));

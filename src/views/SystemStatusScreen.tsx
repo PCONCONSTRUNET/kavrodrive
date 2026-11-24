@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
   Activity,
   AlertTriangle,
+  BarChart3,
   CheckCircle2,
   Cpu,
   Database,
@@ -13,13 +14,28 @@ import {
   Radio,
   RefreshCw,
   Server,
-  ShieldAlert,
   ShieldCheck,
   Wifi,
   XCircle
 } from 'lucide-react';
+import {
+  HealthGaugeCard,
+  LatencyHistoryChart,
+  PaymentHealthDonutChart,
+  Rides7DaysBarChart,
+  StorageAndPoolChartCard
+} from '../components/SystemStatusCharts';
+import {
+  DailyRideMetric,
+  LatencySample,
+  PaymentSummaryMetric,
+  TableStatMetric,
+  TRAFFIC_COLORS,
+  getLatencyColor
+} from '../utils/statusTheme';
 
 type CheckHealthStatus = 'ok' | 'warn' | 'error' | 'inactive';
+type StatusViewTab = 'overview' | 'charts' | 'services' | 'database' | 'audit';
 
 interface SystemDiagnosticCheck {
   id: string;
@@ -28,15 +44,6 @@ interface SystemDiagnosticCheck {
   status: CheckHealthStatus;
   metric: string;
   detail: string;
-}
-
-interface TableStatItem {
-  name: string;
-  label: string;
-  count: number;
-  sizeBytes: number | null;
-  sizeFormatted: string;
-  status: 'ok' | 'missing' | 'error';
 }
 
 interface CriticalAuditItem {
@@ -56,6 +63,12 @@ interface SystemDiagnosticsReport {
     label: string;
     summary: string;
     score: number;
+    statusCounts?: {
+      ok: number;
+      warn: number;
+      error: number;
+      inactive: number;
+    };
   };
   runtime: {
     environment: string;
@@ -104,7 +117,9 @@ interface SystemDiagnosticsReport {
       auditLogsCount: number;
       notificationsCount: number;
     };
-    tableStats: TableStatItem[];
+    dailyRides7d?: DailyRideMetric[];
+    paymentSummary?: PaymentSummaryMetric;
+    tableStats: TableStatMetric[];
   };
   integrations: {
     realtime: {
@@ -169,6 +184,12 @@ interface SystemDiagnosticsReport {
 
 const STATUS_TOKEN_STORAGE_KEY = 'kavro_isolated_status_session_v1';
 
+const CHECK_CATEGORY_GROUPS: { id: string; title: string; categories: string[] }[] = [
+  { id: 'infra', title: 'Infraestrutura, Banco & Tempo Real', categories: ['infra', 'armazenamento'] },
+  { id: 'payments', title: 'Pagamentos & Gateways', categories: ['pagamentos'] },
+  { id: 'security', title: 'Segurança, Mensageria & Operação', categories: ['seguranca', 'mensageria', 'operacao'] }
+];
+
 function loadStoredStatusToken(): string {
   try {
     const raw = localStorage.getItem(STATUS_TOKEN_STORAGE_KEY);
@@ -214,36 +235,10 @@ function formatUptimeDuration(seconds: number): string {
 }
 
 function getStatusBadgeTheme(status: CheckHealthStatus) {
-  if (status === 'ok') {
-    return {
-      bg: 'rgba(22, 163, 74, 0.14)',
-      border: 'rgba(34, 197, 94, 0.35)',
-      color: '#4ADE80',
-      label: 'OK'
-    };
-  }
-  if (status === 'warn') {
-    return {
-      bg: 'rgba(245, 158, 11, 0.14)',
-      border: 'rgba(245, 158, 11, 0.35)',
-      color: '#FBBF24',
-      label: 'ATENÇÃO'
-    };
-  }
-  if (status === 'error') {
-    return {
-      bg: 'rgba(239, 68, 68, 0.14)',
-      border: 'rgba(239, 68, 68, 0.38)',
-      color: '#F87171',
-      label: 'ERRO'
-    };
-  }
-  return {
-    bg: 'rgba(148, 163, 184, 0.12)',
-    border: 'rgba(148, 163, 184, 0.25)',
-    color: '#94A3B8',
-    label: 'DESATIVADO'
-  };
+  if (status === 'ok') return { ...TRAFFIC_COLORS.green, label: 'OK' };
+  if (status === 'warn') return { ...TRAFFIC_COLORS.orange, label: 'ATENÇÃO' };
+  if (status === 'error') return { ...TRAFFIC_COLORS.red, label: 'CRÍTICO' };
+  return { ...TRAFFIC_COLORS.gray, label: 'DESATIVADO' };
 }
 
 export const SystemStatusScreen: React.FC = () => {
@@ -253,7 +248,9 @@ export const SystemStatusScreen: React.FC = () => {
   const [authError, setAuthError] = useState<string | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
 
+  const [activeView, setActiveView] = useState<StatusViewTab>('overview');
   const [report, setReport] = useState<SystemDiagnosticsReport | null>(null);
+  const [latencySamples, setLatencySamples] = useState<LatencySample[]>([]);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [isFetching, setIsFetching] = useState(false);
   const [isProbingLive, setIsProbingLive] = useState(false);
@@ -280,6 +277,7 @@ export const SystemStatusScreen: React.FC = () => {
         clearStoredStatusToken();
         setToken('');
         setReport(null);
+        setLatencySamples([]);
         setAuthError(data?.error || 'Sessão expirada. Informe o PIN novamente.');
         return;
       }
@@ -287,7 +285,22 @@ export const SystemStatusScreen: React.FC = () => {
         setFetchError(data?.error || `Falha ao consultar diagnóstico (HTTP ${res.status}).`);
         return;
       }
-      setReport(data as SystemDiagnosticsReport);
+      const typed = data as SystemDiagnosticsReport;
+      setReport(typed);
+      const timeLabel = new Date(typed.generatedAt || Date.now()).toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      setLatencySamples(prev => {
+        const next: LatencySample = {
+          time: timeLabel,
+          latencyMs: Number(typed.database?.latencyMs ?? 0),
+          heapMb: Number(typed.runtime?.memory?.heapUsedMb ?? 0),
+          sseCount: Number(typed.integrations?.realtime?.activeConnections ?? 0)
+        };
+        return [...prev, next].slice(-24);
+      });
     } catch {
       setFetchError('Erro de conexão com o servidor de API.');
     } finally {
@@ -347,6 +360,7 @@ export const SystemStatusScreen: React.FC = () => {
     clearStoredStatusToken();
     setToken('');
     setReport(null);
+    setLatencySamples([]);
     setFetchError(null);
     setAuthError(null);
   };
@@ -377,9 +391,9 @@ export const SystemStatusScreen: React.FC = () => {
             <span style={{
               padding: '3px 9px',
               borderRadius: 999,
-              backgroundColor: 'rgba(163, 230, 53, 0.14)',
-              border: '1px solid rgba(163, 230, 53, 0.35)',
-              color: '#A3E635',
+              backgroundColor: TRAFFIC_COLORS.green.bg,
+              border: `1px solid ${TRAFFIC_COLORS.green.border}`,
+              color: TRAFFIC_COLORS.green.text,
               fontSize: '0.68rem',
               fontWeight: 800
             }}>
@@ -397,7 +411,7 @@ export const SystemStatusScreen: React.FC = () => {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#A3E635'
+              color: '#22C55E'
             }}>
               <Lock size={18} />
             </div>
@@ -406,13 +420,13 @@ export const SystemStatusScreen: React.FC = () => {
                 Diagnóstico &amp; Status do Sistema
               </h1>
               <p style={{ margin: '2px 0 0 0', fontSize: '0.76rem', color: '#94A3B8' }}>
-                Área técnica isolada fora do Admin
+                Painel técnico isolado com gráficos e telemetria
               </p>
             </div>
           </div>
 
           <p style={{ fontSize: '0.78rem', color: '#CBD5E1', lineHeight: 1.5, margin: '14px 0 18px 0' }}>
-            Informe o PIN técnico para acompanhar saúde do banco PostgreSQL, pool de conexões, latência, tempo real e APIs integradas.
+            Informe o PIN técnico para acompanhar saúde do banco PostgreSQL, latência ao vivo, gráficos operacionais e status das APIs.
           </p>
 
           <form onSubmit={handleUnlock} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -462,9 +476,9 @@ export const SystemStatusScreen: React.FC = () => {
               <div style={{
                 padding: '9px 12px',
                 borderRadius: 8,
-                backgroundColor: 'rgba(239, 68, 68, 0.14)',
-                border: '1px solid rgba(239, 68, 68, 0.35)',
-                color: '#FCA5A5',
+                backgroundColor: TRAFFIC_COLORS.red.bg,
+                border: `1px solid ${TRAFFIC_COLORS.red.border}`,
+                color: TRAFFIC_COLORS.red.text,
                 fontSize: '0.76rem',
                 fontWeight: 600
               }}>
@@ -479,7 +493,7 @@ export const SystemStatusScreen: React.FC = () => {
                 height: 44,
                 borderRadius: 10,
                 border: 'none',
-                backgroundColor: '#A3E635',
+                backgroundColor: '#22C55E',
                 color: '#0B1117',
                 fontSize: '0.88rem',
                 fontWeight: 800,
@@ -495,18 +509,65 @@ export const SystemStatusScreen: React.FC = () => {
     );
   }
 
-  const overallColors = !report
-    ? { bg: '#111827', border: '#334155', accent: '#94A3B8' }
-    : report.overall.status === 'operational'
-    ? { bg: 'rgba(22, 163, 74, 0.12)', border: 'rgba(34, 197, 94, 0.38)', accent: '#4ADE80' }
-    : report.overall.status === 'degraded'
-    ? { bg: 'rgba(245, 158, 11, 0.12)', border: 'rgba(245, 158, 11, 0.38)', accent: '#FBBF24' }
-    : { bg: 'rgba(239, 68, 68, 0.14)', border: 'rgba(239, 68, 68, 0.42)', accent: '#F87171' };
-
+  const computedCounts = report?.overall.statusCounts || {
+    ok: (report?.checks || []).filter(c => c.status === 'ok').length,
+    warn: (report?.checks || []).filter(c => c.status === 'warn').length,
+    error: (report?.checks || []).filter(c => c.status === 'error').length,
+    inactive: (report?.checks || []).filter(c => c.status === 'inactive').length
+  };
   const ops = report?.database.operationalCounts;
-  const poolPct = report?.database.pool.max
-    ? Math.min(100, Math.round((report.database.pool.totalCount / report.database.pool.max) * 100))
-    : 0;
+  const fallbackPaymentSummary: PaymentSummaryMetric = report?.database.paymentSummary || {
+    confirmed: Math.max(0, (ops?.totalTransactions || 0) - (ops?.failedTransactions || 0) - (ops?.refundedTransactions || 0)),
+    pending: 0,
+    failed: ops?.failedTransactions || 0,
+    refunded: ops?.refundedTransactions || 0,
+    byMethod: { pix: 0, cartao_credito: 0, cartao_debito: 0, dinheiro: 0, carteira: 0 }
+  };
+
+  const renderCheckCard = (item: SystemDiagnosticCheck) => {
+    const badge = getStatusBadgeTheme(item.status);
+    return (
+      <div
+        key={item.id}
+        style={{
+          padding: '13px 15px',
+          borderRadius: 12,
+          backgroundColor: '#111827',
+          border: `1px solid ${item.status === 'error' ? TRAFFIC_COLORS.red.border : item.status === 'warn' ? TRAFFIC_COLORS.orange.border : '#1E293B'}`,
+          borderLeft: `4px solid ${badge.solid}`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6
+        }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#FFFFFF' }}>{item.title}</span>
+          <span style={{
+            padding: '2px 8px',
+            borderRadius: 6,
+            fontSize: '0.64rem',
+            fontWeight: 800,
+            backgroundColor: badge.bg,
+            border: `1px solid ${badge.border}`,
+            color: badge.text
+          }}>
+            {badge.label}
+          </span>
+        </div>
+        <div style={{ fontSize: '0.94rem', fontWeight: 800, color: badge.text }}>
+          {item.metric}
+        </div>
+        <div style={{ fontSize: '0.73rem', color: '#94A3B8', lineHeight: 1.4 }}>
+          {item.detail}
+        </div>
+      </div>
+    );
+  };
+
+  const showCharts = activeView === 'overview' || activeView === 'charts';
+  const showServices = activeView === 'overview' || activeView === 'services';
+  const showDatabase = activeView === 'overview' || activeView === 'database';
+  const showAudit = activeView === 'overview' || activeView === 'audit';
 
   return (
     <div style={{
@@ -514,9 +575,9 @@ export const SystemStatusScreen: React.FC = () => {
       backgroundColor: '#0B1117',
       color: '#F8FAFC',
       fontFamily: "'Inter', 'Plus Jakarta Sans', sans-serif",
-      padding: '18px 16px 40px 16px'
+      padding: '18px 16px 44px 16px'
     }}>
-      <div style={{ maxWidth: 1180, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
+      <div style={{ maxWidth: 1240, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
         {/* Barra Superior */}
         <div style={{
           display: 'flex',
@@ -531,11 +592,11 @@ export const SystemStatusScreen: React.FC = () => {
             <img src="/logo-horizontal-white.png" alt="KAVRO DRIVE" style={{ height: 24, objectFit: 'contain' }} />
             <div style={{ height: 20, width: 1, backgroundColor: '#334155' }} />
             <div>
-              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#FFFFFF' }}>
-                Monitoramento &amp; Banco de Dados
+              <div style={{ fontSize: '0.96rem', fontWeight: 800, color: '#FFFFFF' }}>
+                Centro de Operações, Gráficos &amp; Banco de Dados
               </div>
               <div style={{ fontSize: '0.72rem', color: '#94A3B8' }}>
-                Aba técnica isolada (/status) • Sem acesso financeiro/administrativo
+                Monitoramento isolado (/status) • Sem acesso administrativo ou financeiro
               </div>
             </div>
           </div>
@@ -557,7 +618,7 @@ export const SystemStatusScreen: React.FC = () => {
                 type="checkbox"
                 checked={autoRefresh}
                 onChange={(e) => setAutoRefresh(e.target.checked)}
-                style={{ accentColor: '#A3E635' }}
+                style={{ accentColor: '#22C55E' }}
               />
               <span>Auto 15s</span>
             </label>
@@ -593,9 +654,9 @@ export const SystemStatusScreen: React.FC = () => {
                 height: 34,
                 padding: '0 12px',
                 borderRadius: 8,
-                border: '1px solid rgba(163, 230, 53, 0.4)',
-                backgroundColor: 'rgba(163, 230, 53, 0.14)',
-                color: '#A3E635',
+                border: `1px solid ${TRAFFIC_COLORS.green.border}`,
+                backgroundColor: TRAFFIC_COLORS.green.bg,
+                color: TRAFFIC_COLORS.green.text,
                 fontSize: '0.75rem',
                 fontWeight: 800,
                 cursor: isProbingLive ? 'wait' : 'pointer',
@@ -615,9 +676,9 @@ export const SystemStatusScreen: React.FC = () => {
                 height: 34,
                 padding: '0 12px',
                 borderRadius: 8,
-                border: '1px solid rgba(239, 68, 68, 0.35)',
-                backgroundColor: 'rgba(239, 68, 68, 0.1)',
-                color: '#FCA5A5',
+                border: `1px solid ${TRAFFIC_COLORS.red.border}`,
+                backgroundColor: TRAFFIC_COLORS.red.bg,
+                color: TRAFFIC_COLORS.red.text,
                 fontSize: '0.75rem',
                 fontWeight: 700,
                 cursor: 'pointer',
@@ -632,13 +693,51 @@ export const SystemStatusScreen: React.FC = () => {
           </div>
         </div>
 
+        {/* Navegação Organizada por Abas */}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {[
+            { id: 'overview', label: 'Visão Geral', icon: ShieldCheck },
+            { id: 'charts', label: 'Gráficos & Latência', icon: BarChart3 },
+            { id: 'services', label: 'Serviços & Gateways', icon: Server },
+            { id: 'database', label: 'Banco & Tabelas SQL', icon: Database },
+            { id: 'audit', label: `Alertas & Auditoria (${report?.recentCriticalAudit.length ?? 0})`, icon: AlertTriangle }
+          ].map(tab => {
+            const Icon = tab.icon;
+            const active = activeView === tab.id;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveView(tab.id as StatusViewTab)}
+                style={{
+                  height: 35,
+                  padding: '0 13px',
+                  borderRadius: 9,
+                  border: active ? `1px solid ${TRAFFIC_COLORS.green.border}` : '1px solid #1E293B',
+                  backgroundColor: active ? TRAFFIC_COLORS.green.bg : '#111827',
+                  color: active ? TRAFFIC_COLORS.green.text : '#CBD5E1',
+                  fontSize: '0.76rem',
+                  fontWeight: active ? 800 : 600,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6
+                }}
+              >
+                <Icon size={14} />
+                <span>{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {fetchError && (
           <div style={{
             padding: '12px 14px',
             borderRadius: 10,
-            backgroundColor: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid rgba(239, 68, 68, 0.4)',
-            color: '#FCA5A5',
+            backgroundColor: TRAFFIC_COLORS.red.bg,
+            border: `1px solid ${TRAFFIC_COLORS.red.border}`,
+            color: TRAFFIC_COLORS.red.text,
             fontSize: '0.82rem',
             fontWeight: 600
           }}>
@@ -656,450 +755,336 @@ export const SystemStatusScreen: React.FC = () => {
             color: '#94A3B8',
             fontSize: '0.86rem'
           }}>
-            Coletando telemetria e estatísticas do banco de dados...
+            Coletando telemetria, gráficos e estatísticas do banco de dados...
           </div>
         )}
 
         {report && (
           <>
-            {/* Banner Principal de Saúde Geral */}
-            <div style={{
-              padding: '18px 20px',
-              borderRadius: 14,
-              border: `1px solid ${overallColors.border}`,
-              backgroundColor: overallColors.bg,
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 16
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                <div style={{
-                  width: 48,
-                  height: 48,
-                  borderRadius: 12,
-                  backgroundColor: 'rgba(15, 23, 42, 0.65)',
-                  border: `1px solid ${overallColors.border}`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  color: overallColors.accent
-                }}>
-                  {report.overall.status === 'operational' ? (
-                    <ShieldCheck size={24} />
-                  ) : report.overall.status === 'degraded' ? (
-                    <AlertTriangle size={24} />
-                  ) : (
-                    <ShieldAlert size={24} />
-                  )}
-                </div>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                    <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 900, color: '#FFFFFF' }}>
-                      {report.overall.label}
-                    </h2>
-                    <span style={{
-                      padding: '2px 9px',
-                      borderRadius: 999,
-                      fontSize: '0.72rem',
-                      fontWeight: 800,
-                      backgroundColor: 'rgba(15, 23, 42, 0.75)',
-                      color: overallColors.accent,
-                      border: `1px solid ${overallColors.border}`
-                    }}>
-                      Saúde: {report.overall.score}/100
-                    </span>
-                  </div>
-                  <p style={{ margin: '4px 0 0 0', fontSize: '0.82rem', color: '#E2E8F0' }}>
-                    {report.overall.summary}
-                  </p>
-                  <div style={{ fontSize: '0.72rem', color: '#94A3B8', marginTop: 4 }}>
-                    Última verificação: {new Date(report.generatedAt).toLocaleString('pt-BR')} • {report.runtime.instanceNote}
-                  </div>
-                </div>
-              </div>
+            {/* Gauge Radial + Semáforo Geral */}
+            <HealthGaugeCard
+              score={report.overall.score}
+              overallStatus={report.overall.status}
+              label={report.overall.label}
+              summary={report.overall.summary}
+              statusCounts={computedCounts}
+              generatedAt={report.generatedAt}
+              instanceNote={report.runtime.instanceNote}
+            />
 
-              <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: '0.76rem' }}>
-                <div style={{ padding: '8px 12px', borderRadius: 10, backgroundColor: 'rgba(15, 23, 42, 0.72)', border: '1px solid #334155' }}>
-                  <div style={{ color: '#94A3B8', fontSize: '0.67rem', textTransform: 'uppercase' }}>Uptime Instância</div>
-                  <div style={{ fontWeight: 800, color: '#FFFFFF', fontSize: '0.92rem' }}>
-                    {formatUptimeDuration(report.runtime.uptimeSeconds)}
+            {/* Faixa de Indicadores Rápidos (Verde / Laranja / Vermelho) */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(175px, 1fr))', gap: 10 }}>
+              {[
+                {
+                  label: 'Latência DB',
+                  value: report.database.latencyMs !== null ? `${report.database.latencyMs} ms` : 'OFF',
+                  sub: report.database.serverVersion,
+                  theme: getLatencyColor(report.database.latencyMs)
+                },
+                {
+                  label: 'Uptime Instância',
+                  value: formatUptimeDuration(report.runtime.uptimeSeconds),
+                  sub: `${report.runtime.environment}${report.runtime.vercelRegion ? ` (${report.runtime.vercelRegion})` : ''}`,
+                  theme: TRAFFIC_COLORS.green
+                },
+                {
+                  label: 'Tamanho do Banco',
+                  value: report.database.databaseSizeFormatted,
+                  sub: `${report.database.tableStats.length} tabelas mapeadas`,
+                  theme: TRAFFIC_COLORS.green
+                },
+                {
+                  label: 'Motoristas Online',
+                  value: `${ops?.onlineDrivers ?? 0} / ${ops?.approvedDrivers ?? 0}`,
+                  sub: `KYC pend.: ${ops?.pendingDrivers ?? 0}`,
+                  theme: (ops?.pendingDrivers || 0) > 0 ? TRAFFIC_COLORS.orange : TRAFFIC_COLORS.green
+                },
+                {
+                  label: 'Saques Pendentes',
+                  value: String(ops?.pendingWithdrawals ?? 0),
+                  sub: `Pagos: ${ops?.paidWithdrawals ?? 0}`,
+                  theme: (ops?.pendingWithdrawals || 0) > 0 ? TRAFFIC_COLORS.orange : TRAFFIC_COLORS.green
+                },
+                {
+                  label: 'Alertas SOS Ativos',
+                  value: String(ops?.activeSosAlerts ?? 0),
+                  sub: (ops?.activeSosAlerts || 0) > 0 ? 'Requer atenção imediata' : 'Nenhum alerta ativo',
+                  theme: (ops?.activeSosAlerts || 0) > 0 ? TRAFFIC_COLORS.red : TRAFFIC_COLORS.green
+                }
+              ].map(card => (
+                <div
+                  key={card.label}
+                  style={{
+                    padding: '11px 13px',
+                    borderRadius: 11,
+                    backgroundColor: '#111827',
+                    border: `1px solid ${card.theme.border}`,
+                    borderTop: `3px solid ${card.theme.solid}`
+                  }}
+                >
+                  <div style={{ fontSize: '0.68rem', color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase' }}>
+                    {card.label}
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 900, color: card.theme.text, marginTop: 2 }}>
+                    {card.value}
+                  </div>
+                  <div style={{ fontSize: '0.68rem', color: '#CBD5E1', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {card.sub}
                   </div>
                 </div>
-                <div style={{ padding: '8px 12px', borderRadius: 10, backgroundColor: 'rgba(15, 23, 42, 0.72)', border: '1px solid #334155' }}>
-                  <div style={{ color: '#94A3B8', fontSize: '0.67rem', textTransform: 'uppercase' }}>Memória Processo</div>
-                  <div style={{ fontWeight: 800, color: '#FFFFFF', fontSize: '0.92rem' }}>
-                    {report.runtime.memory.heapUsedMb} MB / {report.runtime.memory.rssMb} MB RSS
-                  </div>
-                </div>
-                <div style={{ padding: '8px 12px', borderRadius: 10, backgroundColor: 'rgba(15, 23, 42, 0.72)', border: '1px solid #334155' }}>
-                  <div style={{ color: '#94A3B8', fontSize: '0.67rem', textTransform: 'uppercase' }}>Ambiente</div>
-                  <div style={{ fontWeight: 800, color: '#FFFFFF', fontSize: '0.92rem' }}>
-                    {report.runtime.environment}
-                    {report.runtime.vercelRegion ? ` (${report.runtime.vercelRegion})` : ''}
-                  </div>
-                </div>
-              </div>
+              ))}
             </div>
 
-            {/* Checklist de Todos os Componentes do Sistema */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
-              gap: 12
-            }}>
-              {report.checks.map(item => {
-                const badge = getStatusBadgeTheme(item.status);
-                return (
-                  <div
-                    key={item.id}
-                    style={{
-                      padding: 14,
-                      borderRadius: 12,
-                      backgroundColor: '#111827',
-                      border: `1px solid ${item.status === 'error' ? 'rgba(239, 68, 68, 0.45)' : item.status === 'warn' ? 'rgba(245, 158, 11, 0.35)' : '#1E293B'}`,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      gap: 7
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                      <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#FFFFFF' }}>{item.title}</span>
-                      <span style={{
-                        padding: '2px 7px',
-                        borderRadius: 6,
-                        fontSize: '0.65rem',
-                        fontWeight: 800,
-                        backgroundColor: badge.bg,
-                        border: `1px solid ${badge.border}`,
-                        color: badge.color
-                      }}>
-                        {badge.label}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: '0.94rem', fontWeight: 800, color: badge.color }}>
-                      {item.metric}
-                    </div>
-                    <div style={{ fontSize: '0.73rem', color: '#94A3B8', lineHeight: 1.4 }}>
-                      {item.detail}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            {/* BLOCO DE GRÁFICOS VISUAIS */}
+            {showCharts && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: 16 }}>
+                <LatencyHistoryChart
+                  samples={latencySamples}
+                  currentLatencyMs={report.database.latencyMs}
+                />
+                <Rides7DaysBarChart
+                  days={report.database.dailyRides7d || []}
+                />
+                <PaymentHealthDonutChart
+                  summary={fallbackPaymentSummary}
+                />
+                <StorageAndPoolChartCard
+                  pool={report.database.pool}
+                  memory={report.runtime.memory}
+                  databaseSizeBytes={report.database.databaseSizeBytes}
+                  databaseSizeFormatted={report.database.databaseSizeFormatted}
+                  tableStats={report.database.tableStats}
+                />
+              </div>
+            )}
 
-            {/* Bloco Banco de Dados + Pool + Contadores Operacionais */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
-              gap: 16
-            }}>
-              {/* Saúde & Pool do Banco */}
+            {/* BLOCO DE SERVIÇOS ORGANIZADO POR CATEGORIA */}
+            {showServices && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {CHECK_CATEGORY_GROUPS.map(group => {
+                  const groupChecks = report.checks.filter(c => group.categories.includes(c.category));
+                  if (groupChecks.length === 0) return null;
+                  return (
+                    <div key={group.id} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      <div style={{ fontSize: '0.78rem', fontWeight: 800, color: '#CBD5E1', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                        {group.title}
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12 }}>
+                        {groupChecks.map(renderCheckCard)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* BLOCO DE TABELAS SQL & CONTADORES */}
+            {showDatabase && (
               <div style={{
-                padding: 18,
                 borderRadius: 14,
                 backgroundColor: '#111827',
                 border: '1px solid #1E293B',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 14
+                overflow: 'hidden'
               }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
-                    <Database size={17} color="#A3E635" />
-                    <span>Estatísticas do Banco de Dados</span>
+                <div style={{
+                  padding: '14px 18px',
+                  borderBottom: '1px solid #1E293B',
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.88rem', fontWeight: 800, color: '#FFFFFF' }}>
+                    <HardDrive size={17} color="#22C55E" />
+                    <span>Inventário Completo do Banco ({report.database.tableStats.length} tabelas)</span>
                   </div>
-                  <span style={{
-                    padding: '2px 8px',
-                    borderRadius: 6,
-                    fontSize: '0.68rem',
-                    fontWeight: 700,
-                    backgroundColor: report.database.connected ? 'rgba(22, 163, 74, 0.16)' : 'rgba(239, 68, 68, 0.2)',
-                    color: report.database.connected ? '#4ADE80' : '#F87171'
-                  }}>
-                    {report.database.connected ? 'CONECTADO' : 'OFFLINE'}
+                  <span style={{ fontSize: '0.72rem', color: '#94A3B8' }}>
+                    {report.database.serverVersion} • Node {report.runtime.nodeVersion} • {report.runtime.platform}
                   </span>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, fontSize: '0.78rem' }}>
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.68rem' }}>Latência de Query</div>
-                    <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#FFFFFF', marginTop: 2 }}>
-                      {report.database.latencyMs !== null ? `${report.database.latencyMs} ms` : '—'}
-                    </div>
-                  </div>
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.68rem' }}>Tamanho do Banco</div>
-                    <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#FFFFFF', marginTop: 2 }}>
-                      {report.database.databaseSizeFormatted}
-                    </div>
-                  </div>
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.68rem' }}>Engine / Versão</div>
-                    <div style={{ fontWeight: 700, color: '#E2E8F0', marginTop: 2 }}>
-                      {report.database.serverVersion}
-                    </div>
-                  </div>
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.68rem' }}>Modo de Persistência</div>
-                    <div style={{ fontWeight: 700, color: '#E2E8F0', marginTop: 2 }}>
-                      {report.database.mode === 'postgresql' ? 'PostgreSQL (Supabase)' : 'JSON Local (Dev)'}
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{ padding: 12, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.73rem', color: '#CBD5E1', marginBottom: 6 }}>
-                    <span>Pool de Conexões ({report.database.pool.totalCount} / {report.database.pool.max || 1})</span>
-                    <span>Ociosas: {report.database.pool.idleCount} • Fila: {report.database.pool.waitingCount}</span>
-                  </div>
-                  <div style={{ height: 8, borderRadius: 999, backgroundColor: '#1E293B', overflow: 'hidden' }}>
-                    <div style={{
-                      width: `${poolPct}%`,
-                      height: '100%',
-                      backgroundColor: report.database.pool.waitingCount > 0 ? '#FBBF24' : '#4ADE80'
-                    }} />
-                  </div>
-                </div>
-              </div>
-
-              {/* Resumo Operacional do Sistema */}
-              <div style={{
-                padding: 18,
-                borderRadius: 14,
-                backgroundColor: '#111827',
-                border: '1px solid #1E293B',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 14
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
-                  <Activity size={17} color="#A3E635" />
-                  <span>Contadores Operacionais em Tempo Real</span>
-                </div>
-
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 10, fontSize: '0.76rem' }}>
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.67rem' }}>Corridas</div>
-                    <div style={{ fontWeight: 900, fontSize: '1.1rem', color: '#FFFFFF', marginTop: 2 }}>{ops?.totalRides ?? 0}</div>
-                    <div style={{ fontSize: '0.68rem', color: '#4ADE80' }}>Ativas: {ops?.activeRides ?? 0} • Concl.: {ops?.completedRides ?? 0}</div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.67rem' }}>Motoristas</div>
-                    <div style={{ fontWeight: 900, fontSize: '1.1rem', color: '#FFFFFF', marginTop: 2 }}>{ops?.totalDrivers ?? 0}</div>
-                    <div style={{ fontSize: '0.68rem', color: '#A3E635' }}>Online: {ops?.onlineDrivers ?? 0} • KYC Pend.: {ops?.pendingDrivers ?? 0}</div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.67rem' }}>Passageiros</div>
-                    <div style={{ fontWeight: 900, fontSize: '1.1rem', color: '#FFFFFF', marginTop: 2 }}>{ops?.totalClients ?? 0}</div>
-                    <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>Cadastros totais</div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.67rem' }}>Pagamentos</div>
-                    <div style={{ fontWeight: 900, fontSize: '1.1rem', color: '#FFFFFF', marginTop: 2 }}>{ops?.totalTransactions ?? 0}</div>
-                    <div style={{ fontSize: '0.68rem', color: (ops?.failedTransactions || 0) > 0 ? '#F87171' : '#94A3B8' }}>
-                      Falhas: {ops?.failedTransactions ?? 0} • Estornos: {ops?.refundedTransactions ?? 0}
-                    </div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.67rem' }}>Saques PIX</div>
-                    <div style={{ fontWeight: 900, fontSize: '1.1rem', color: (ops?.pendingWithdrawals || 0) > 0 ? '#FBBF24' : '#FFFFFF', marginTop: 2 }}>
-                      {ops?.pendingWithdrawals ?? 0} pendente(s)
-                    </div>
-                    <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>Pagos: {ops?.paidWithdrawals ?? 0}</div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 10, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ color: '#94A3B8', fontSize: '0.67rem' }}>SOS &amp; Segurança</div>
-                    <div style={{ fontWeight: 900, fontSize: '1.1rem', color: (ops?.activeSosAlerts || 0) > 0 ? '#F87171' : '#4ADE80', marginTop: 2 }}>
-                      {ops?.activeSosAlerts ?? 0} ativo(s)
-                    </div>
-                    <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>Bloqueados fin.: {ops?.blockedDrivers ?? 0}</div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Inventário das Tabelas do Banco */}
-            <div style={{
-              borderRadius: 14,
-              backgroundColor: '#111827',
-              border: '1px solid #1E293B',
-              overflow: 'hidden'
-            }}>
-              <div style={{
-                padding: '14px 18px',
-                borderBottom: '1px solid #1E293B',
-                display: 'flex',
-                flexWrap: 'wrap',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
-                  <HardDrive size={17} color="#A3E635" />
-                  <span>Tabelas do Banco de Dados ({report.database.tableStats.length})</span>
-                </div>
-                <span style={{ fontSize: '0.72rem', color: '#94A3B8' }}>
-                  Node {report.runtime.nodeVersion} • {report.runtime.platform}
-                </span>
-              </div>
-
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.78rem' }}>
-                  <thead>
-                    <tr style={{ backgroundColor: '#0F172A', borderBottom: '1px solid #1E293B', color: '#94A3B8', fontSize: '0.69rem', textTransform: 'uppercase' }}>
-                      <th style={{ padding: '10px 16px' }}>Coleção / Entidade</th>
-                      <th style={{ padding: '10px 14px' }}>Tabela SQL</th>
-                      <th style={{ padding: '10px 14px', textAlign: 'right' }}>Registros</th>
-                      <th style={{ padding: '10px 14px', textAlign: 'right' }}>Espaço</th>
-                      <th style={{ padding: '10px 16px', textAlign: 'right' }}>Estado</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.database.tableStats.map(tbl => (
-                      <tr key={tbl.name} style={{ borderBottom: '1px solid #1E293B' }}>
-                        <td style={{ padding: '9px 16px', fontWeight: 600, color: '#F8FAFC' }}>{tbl.label}</td>
-                        <td style={{ padding: '9px 14px', fontFamily: 'monospace', color: '#94A3B8' }}>public.{tbl.name}</td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: '#FFFFFF', fontVariantNumeric: 'tabular-nums' }}>
-                          {tbl.count.toLocaleString('pt-BR')}
-                        </td>
-                        <td style={{ padding: '9px 14px', textAlign: 'right', color: '#CBD5E1', fontFamily: 'monospace' }}>
-                          {tbl.sizeFormatted}
-                        </td>
-                        <td style={{ padding: '9px 16px', textAlign: 'right' }}>
-                          <span style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                            padding: '2px 8px',
-                            borderRadius: 6,
-                            fontSize: '0.67rem',
-                            fontWeight: 700,
-                            backgroundColor: tbl.status === 'ok' ? 'rgba(22, 163, 74, 0.14)' : 'rgba(245, 158, 11, 0.16)',
-                            color: tbl.status === 'ok' ? '#4ADE80' : '#FBBF24'
-                          }}>
-                            {tbl.status === 'ok' ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
-                            {tbl.status === 'ok' ? 'OK' : tbl.status.toUpperCase()}
-                          </span>
-                        </td>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.78rem' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#0F172A', borderBottom: '1px solid #1E293B', color: '#94A3B8', fontSize: '0.69rem', textTransform: 'uppercase' }}>
+                        <th style={{ padding: '10px 16px' }}>Coleção / Entidade</th>
+                        <th style={{ padding: '10px 14px' }}>Tabela SQL</th>
+                        <th style={{ padding: '10px 14px', textAlign: 'right' }}>Registros</th>
+                        <th style={{ padding: '10px 14px', textAlign: 'right' }}>Espaço</th>
+                        <th style={{ padding: '10px 16px', textAlign: 'right' }}>Status</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Integrações + Eventos Críticos Recentes */}
-            <div style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))',
-              gap: 16
-            }}>
-              <div style={{
-                padding: 18,
-                borderRadius: 14,
-                backgroundColor: '#111827',
-                border: '1px solid #1E293B',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
-                  <Server size={17} color="#A3E635" />
-                  <span>Gateways, Mensageria &amp; Storage</span>
-                </div>
-
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.76rem' }}>
-                  <div style={{ padding: 10, borderRadius: 9, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ fontWeight: 700, color: '#FFFFFF', marginBottom: 3 }}>Mercado Pago</div>
-                    <div style={{ color: '#94A3B8' }}>
-                      Ativo: <strong style={{ color: '#E2E8F0' }}>{report.integrations.mercadopago.enabled ? 'Sim' : 'Não'}</strong> •{' '}
-                      Ambiente: <strong style={{ color: '#E2E8F0' }}>{report.integrations.mercadopago.sandbox ? 'Sandbox' : 'Produção'}</strong> •{' '}
-                      Token: <strong style={{ color: '#E2E8F0' }}>{report.integrations.mercadopago.hasAccessToken ? 'OK' : 'Ausente'}</strong> •{' '}
-                      Public Key: <strong style={{ color: '#E2E8F0' }}>{report.integrations.mercadopago.hasPublicKey ? 'OK' : 'Ausente'}</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 9, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ fontWeight: 700, color: '#FFFFFF', marginBottom: 3 }}>Efí Bank</div>
-                    <div style={{ color: '#94A3B8' }}>
-                      Ativo: <strong style={{ color: '#E2E8F0' }}>{report.integrations.efibank.enabled ? 'Sim' : 'Desativado'}</strong> •{' '}
-                      Credenciais: <strong style={{ color: '#E2E8F0' }}>{report.integrations.efibank.hasCredentials ? 'Presentes' : 'Ausentes'}</strong>
-                    </div>
-                  </div>
-
-                  <div style={{ padding: 10, borderRadius: 9, backgroundColor: '#0F172A', border: '1px solid #1E293B' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, color: '#FFFFFF', marginBottom: 3 }}>
-                      <Radio size={13} color="#4ADE80" /> Realtime &amp; Cloud
-                    </div>
-                    <div style={{ color: '#94A3B8' }}>
-                      SSE ativos: <strong style={{ color: '#E2E8F0' }}>{report.integrations.realtime.activeConnections}</strong> •{' '}
-                      Buffer: <strong style={{ color: '#E2E8F0' }}>{report.integrations.realtime.bufferedEvents}</strong> •{' '}
-                      R2 Privado/Público: <strong style={{ color: '#E2E8F0' }}>{report.integrations.storageR2.configured ? 'Sim' : 'Não'} / {report.integrations.storageR2.publicConfigured ? 'Sim' : 'Não'}</strong>
-                    </div>
-                  </div>
+                    </thead>
+                    <tbody>
+                      {report.database.tableStats.map(tbl => {
+                        const tColor = tbl.status === 'ok'
+                          ? TRAFFIC_COLORS.green
+                          : tbl.status === 'missing'
+                          ? TRAFFIC_COLORS.orange
+                          : TRAFFIC_COLORS.red;
+                        return (
+                          <tr key={tbl.name} style={{ borderBottom: '1px solid #1E293B' }}>
+                            <td style={{ padding: '9px 16px', fontWeight: 600, color: '#F8FAFC' }}>{tbl.label}</td>
+                            <td style={{ padding: '9px 14px', fontFamily: 'monospace', color: '#94A3B8' }}>public.{tbl.name}</td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', fontWeight: 700, color: '#FFFFFF', fontVariantNumeric: 'tabular-nums' }}>
+                              {tbl.count.toLocaleString('pt-BR')}
+                            </td>
+                            <td style={{ padding: '9px 14px', textAlign: 'right', color: '#CBD5E1', fontFamily: 'monospace' }}>
+                              {tbl.sizeFormatted}
+                            </td>
+                            <td style={{ padding: '9px 16px', textAlign: 'right' }}>
+                              <span style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                                padding: '2px 8px',
+                                borderRadius: 6,
+                                fontSize: '0.67rem',
+                                fontWeight: 700,
+                                backgroundColor: tColor.bg,
+                                border: `1px solid ${tColor.border}`,
+                                color: tColor.text
+                              }}>
+                                {tbl.status === 'ok' ? <CheckCircle2 size={11} /> : <XCircle size={11} />}
+                                {tbl.status === 'ok' ? 'OK' : tbl.status.toUpperCase()}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
+            )}
 
-              <div style={{
-                padding: 18,
-                borderRadius: 14,
-                backgroundColor: '#111827',
-                border: '1px solid #1E293B',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 10
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
-                  <Cpu size={17} color="#A3E635" />
-                  <span>Últimos Alertas de Auditoria ({report.recentCriticalAudit.length})</span>
-                </div>
-
-                {report.recentCriticalAudit.length === 0 ? (
-                  <div style={{
-                    padding: 16,
-                    borderRadius: 10,
-                    backgroundColor: '#0F172A',
-                    border: '1px solid #1E293B',
-                    color: '#94A3B8',
-                    fontSize: '0.77rem'
-                  }}>
-                    Nenhum evento crítico ou de atenção registrado recentemente na auditoria.
+            {/* BLOCO DE INTEGRAÇÕES & AUDITORIA CRÍTICA */}
+            {showAudit && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: 16 }}>
+                <div style={{
+                  padding: 18,
+                  borderRadius: 14,
+                  backgroundColor: '#111827',
+                  border: '1px solid #1E293B',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
+                    <Radio size={17} color="#22C55E" />
+                    <span>Variáveis &amp; Integrações Críticas</span>
                   </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {report.recentCriticalAudit.map(ev => (
-                      <div
-                        key={ev.id}
-                        style={{
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontSize: '0.75rem' }}>
+                    {[
+                      {
+                        name: 'Mercado Pago',
+                        ok: report.integrations.mercadopago.enabled && report.integrations.mercadopago.hasAccessToken,
+                        detail: `${report.integrations.mercadopago.sandbox ? 'Sandbox' : 'Produção'} • Token: ${report.integrations.mercadopago.hasAccessToken ? 'OK' : 'Falta'} • Webhook: ${report.integrations.mercadopago.hasWebhookSecret ? 'OK' : 'Falta'}`
+                      },
+                      {
+                        name: 'Cloudflare R2',
+                        ok: report.integrations.storageR2.configured && report.integrations.storageR2.publicConfigured,
+                        detail: `Privado: ${report.integrations.storageR2.configured ? 'OK' : 'OFF'} • Público: ${report.integrations.storageR2.publicConfigured ? 'OK' : 'OFF'}`
+                      },
+                      {
+                        name: 'Upstash Redis (SSE Serverless)',
+                        ok: report.integrations.realtime.upstashConfigured && report.integrations.realtime.upstashOk,
+                        detail: report.integrations.realtime.upstashConfigured
+                          ? `PING: ${report.integrations.realtime.upstashOk ? `${report.integrations.realtime.upstashLatencyMs} ms` : 'Falhou'}`
+                          : 'Não configurado (SSE local na instância)'
+                      },
+                      {
+                        name: 'OneSignal Push & Resend OTP',
+                        ok: report.integrations.push.configured && report.integrations.authAndSecurity.otpEmailConfigured,
+                        detail: `Push: ${report.integrations.push.configured ? 'ON' : 'OFF'} • OTP E-mail: ${report.integrations.authAndSecurity.otpEmailConfigured ? 'ON' : 'OFF'} • Turnstile: ${report.integrations.authAndSecurity.turnstileConfigured ? 'ON' : 'OFF'}`
+                      }
+                    ].map(row => {
+                      const theme = row.ok ? TRAFFIC_COLORS.green : TRAFFIC_COLORS.orange;
+                      return (
+                        <div key={row.name} style={{
                           padding: '9px 11px',
                           borderRadius: 9,
                           backgroundColor: '#0F172A',
-                          border: `1px solid ${ev.severity === 'critico' ? 'rgba(239, 68, 68, 0.35)' : 'rgba(245, 158, 11, 0.3)'}`,
-                          fontSize: '0.74rem'
-                        }}
-                      >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
-                          <span style={{ fontWeight: 800, color: ev.severity === 'critico' ? '#F87171' : '#FBBF24', fontFamily: 'monospace' }}>
-                            {ev.auditCode} • {ev.severity.toUpperCase()}
-                          </span>
-                          <span style={{ color: '#64748B', fontSize: '0.68rem' }}>
-                            {new Date(ev.createdAt).toLocaleString('pt-BR')}
-                          </span>
+                          border: `1px solid ${theme.border}`,
+                          borderLeft: `3px solid ${theme.solid}`
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <strong style={{ color: '#FFFFFF' }}>{row.name}</strong>
+                            <span style={{ color: theme.text, fontWeight: 800, fontSize: '0.68rem' }}>
+                              {row.ok ? 'VERDE • PRONTO' : 'LARANJA • REVISAR'}
+                            </span>
+                          </div>
+                          <div style={{ color: '#94A3B8' }}>{row.detail}</div>
                         </div>
-                        <div style={{ color: '#E2E8F0', fontWeight: 600 }}>{ev.title}</div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
-                )}
+                </div>
+
+                <div style={{
+                  padding: 18,
+                  borderRadius: 14,
+                  backgroundColor: '#111827',
+                  border: '1px solid #1E293B',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.86rem', fontWeight: 800, color: '#FFFFFF' }}>
+                    <Cpu size={17} color="#F97316" />
+                    <span>Últimos Alertas Críticos / Atenção ({report.recentCriticalAudit.length})</span>
+                  </div>
+
+                  {report.recentCriticalAudit.length === 0 ? (
+                    <div style={{
+                      padding: 16,
+                      borderRadius: 10,
+                      backgroundColor: TRAFFIC_COLORS.green.bg,
+                      border: `1px solid ${TRAFFIC_COLORS.green.border}`,
+                      color: TRAFFIC_COLORS.green.text,
+                      fontSize: '0.78rem',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8
+                    }}>
+                      <Activity size={16} />
+                      <span>Nenhum evento crítico ou de atenção recente na auditoria.</span>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {report.recentCriticalAudit.map(ev => {
+                        const evTheme = ev.severity === 'critico' ? TRAFFIC_COLORS.red : TRAFFIC_COLORS.orange;
+                        return (
+                          <div
+                            key={ev.id}
+                            style={{
+                              padding: '9px 11px',
+                              borderRadius: 9,
+                              backgroundColor: '#0F172A',
+                              border: `1px solid ${evTheme.border}`,
+                              borderLeft: `4px solid ${evTheme.solid}`,
+                              fontSize: '0.74rem'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 2 }}>
+                              <span style={{ fontWeight: 800, color: evTheme.text, fontFamily: 'monospace' }}>
+                                {ev.auditCode} • {ev.severity.toUpperCase()}
+                              </span>
+                              <span style={{ color: '#64748B', fontSize: '0.68rem' }}>
+                                {new Date(ev.createdAt).toLocaleString('pt-BR')}
+                              </span>
+                            </div>
+                            <div style={{ color: '#E2E8F0', fontWeight: 600 }}>{ev.title}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </>
         )}
       </div>
