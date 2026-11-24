@@ -3824,12 +3824,51 @@ async function getPlatformFinancialOverview() {
     // continua normalmente
   }
 
-  const [ledgerAll, withdrawals] = await Promise.all([
+  const [ledgerAll, rawWithdrawals] = await Promise.all([
     !db.pool
       ? Promise.resolve((db.localStore.financial_ledger || []).map(formatLedgerRow))
       : db.query('SELECT * FROM public.financial_ledger ORDER BY created_at DESC LIMIT 10000').then(r => r.rows.map(formatLedgerRow)),
     listWithdrawals()
   ]);
+
+  const driversById = new Map();
+  const driversByName = new Map();
+  for (const d of drivers) {
+    if (d?.id) driversById.set(d.id, d);
+    if (d?.name) driversByName.set(String(d.name).trim().toLowerCase(), d);
+  }
+  const withdrawals = rawWithdrawals.map(w => {
+    const matchedDriver =
+      (w.driverId && driversById.get(w.driverId)) ||
+      (w.driverName && driversByName.get(String(w.driverName).trim().toLowerCase())) ||
+      null;
+    if (!matchedDriver) return w;
+    return {
+      ...w,
+      driverProfileSnapshot: {
+        id: matchedDriver.id,
+        name: matchedDriver.name || '',
+        document: matchedDriver.document || '',
+        phone: matchedDriver.phone || '',
+        email: matchedDriver.email || '',
+        cnh: matchedDriver.cnh || '',
+        city: matchedDriver.city || '',
+        vehicleBrand: matchedDriver.vehicleBrand || '',
+        vehicleModel: matchedDriver.vehicleModel || '',
+        vehiclePlate: matchedDriver.vehiclePlate || '',
+        approvalStatus: matchedDriver.approvalStatus || '',
+        financialBlocked: Boolean(matchedDriver.financialBlocked),
+        bankName: matchedDriver.bankName || '',
+        bankAgency: matchedDriver.bankAgency || '',
+        bankAccount: matchedDriver.bankAccount || '',
+        pixKey: matchedDriver.pixKey || '',
+        pixType: matchedDriver.pixType || 'cpf',
+        pixKeys: Array.isArray(matchedDriver.pixKeys) ? matchedDriver.pixKeys : [],
+        efiAccountId: matchedDriver.efiAccountId || '',
+        createdAt: matchedDriver.createdAt || ''
+      }
+    };
+  });
 
   const ledgerByDriver = new Map();
   for (const entry of ledgerAll) {

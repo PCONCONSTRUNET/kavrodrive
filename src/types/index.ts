@@ -641,6 +641,29 @@ export interface DriverPixKey {
   createdAt: string;
 }
 
+export interface WithdrawalDriverSnapshot {
+  id?: string;
+  name?: string;
+  document?: string;
+  phone?: string;
+  email?: string;
+  cnh?: string;
+  city?: string;
+  vehicleBrand?: string;
+  vehicleModel?: string;
+  vehiclePlate?: string;
+  approvalStatus?: DriverApprovalStatus | string;
+  financialBlocked?: boolean;
+  bankName?: string;
+  bankAgency?: string;
+  bankAccount?: string;
+  pixKey?: string;
+  pixType?: string;
+  pixKeys?: DriverPixKey[];
+  efiAccountId?: string;
+  createdAt?: string;
+}
+
 export interface WithdrawalRequest {
   id: string;
   driverId: string;
@@ -656,6 +679,7 @@ export interface WithdrawalRequest {
   payoutProviderTxId?: string | null;
   payoutStatus?: string | null;
   payoutProvider?: string | null;
+  driverProfileSnapshot?: WithdrawalDriverSnapshot;
   createdAt: string;
   processedAt?: string;
 }

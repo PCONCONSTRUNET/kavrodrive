@@ -5628,3 +5628,122 @@ test('Mercado Pago Cartão Produção: Customers/Cards reutilizáveis, cancelame
     ).catch(() => {});
   }
 });
+
+test('Painel Admin Saques: pedido pendente inclui ficha completa do motorista (nome completo, CPF e chave PIX)', async () => {
+  const prevCfg = db.localStore.system_config?.default?.config || {};
+  const ts = Date.now();
+  const makeTestCpf = (seedNum) => {
+    const base = String(seedNum).replace(/\D/g, '').padStart(9, '0').slice(-9);
+    const digits = base.split('').map(Number);
+    if (digits.every((d) => d === digits[0])) digits[8] = (digits[8] + 1) % 10;
+    const calc = (sliceLen) => {
+      let sum = 0;
+      for (let i = 0; i < sliceLen; i++) sum += digits[i] * (sliceLen + 1 - i);
+      const rem = (sum * 10) % 11;
+      return rem >= 10 ? 0 : rem;
+    };
+    digits.push(calc(9));
+    digits.push(calc(10));
+    return digits.join('');
+  };
+
+  const drvId = `drv-wd-sheet-${ts}`;
+  const drvCpf = makeTestCpf(Math.floor((ts % 550000000) + 210000044));
+  const drvEmail = `ficha.saque.${ts}@kavro.test`;
+  const todayBr = finance.getBrazilWeekdayIndex(new Date());
+
+  try {
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify({
+        ...prevCfg,
+        minWithdrawalAmount: 20,
+        driverWithdrawalEnabled: true,
+        driverWithdrawalWeekdays: [todayBr, 5]
+      })]
+    );
+
+    db.localStore.drivers.push({
+      id: drvId,
+      name: 'Carlos Eduardo Ferreira da Silva',
+      phone: `(48) 99555-${String(ts).slice(-4)}`,
+      email: drvEmail,
+      document: drvCpf,
+      cnh: '88776655441',
+      city: 'Criciúma - SC',
+      password_hash: scryptHash('1234'),
+      pix_key: drvCpf,
+      pix_type: 'cpf',
+      bank_name: 'Banco Inter',
+      pixKeys: [{
+        id: `pk-sheet-${ts}`,
+        pixType: 'cpf',
+        pixKey: drvCpf,
+        bankName: 'Banco Inter',
+        holderName: 'Carlos Eduardo Ferreira da Silva',
+        holderDocument: drvCpf,
+        sameOwnershipConfirmed: true,
+        isDefault: true,
+        createdAt: new Date().toISOString()
+      }],
+      approval_status: 'aprovado',
+      financial_blocked: false,
+      is_online: true,
+      created_at: new Date().toISOString()
+    });
+
+    await finance.recordLedgerEntry({
+      idempotencyKey: `wd_sheet_credit_${ts}`,
+      driverId: drvId,
+      driverName: 'Carlos Eduardo Ferreira da Silva',
+      entryType: 'ride_earning_credit',
+      paymentMethod: 'pix',
+      grossAmount: 150,
+      commissionPercent: 20,
+      commissionAmount: 30,
+      driverNetAmount: 120,
+      balanceDelta: 120,
+      balanceBucket: 'available',
+      status: 'confirmado',
+      description: 'Saldo para conferência da ficha do motorista no saque'
+    });
+
+    const loginDrv = await apiJson('/api/drivers/login', {
+      method: 'POST',
+      headers: { 'x-forwarded-for': '198.51.100.249' },
+      body: { identifier: drvEmail, password: '1234' }
+    });
+    assert.equal(loginDrv.status, 200);
+
+    const wdRes = await apiJson(`/api/drivers/${encodeURIComponent(drvId)}/withdrawals`, {
+      method: 'POST',
+      headers: { 'x-driver-token': loginDrv.json.driverToken },
+      body: { amount: 65, pixKey: drvCpf, pixType: 'cpf' }
+    });
+    assert.equal(wdRes.status, 200);
+    assert.equal(wdRes.json.ok, true);
+    assert.equal(wdRes.json.withdrawal.status, 'solicitado');
+
+    const overview = await finance.getPlatformFinancialOverview();
+    const pendingItem = overview.withdrawals.find(w => w.id === wdRes.json.withdrawal.id);
+    assert.ok(pendingItem, 'Pedido pendente deve aparecer na lista administrativa');
+    assert.equal(pendingItem.status, 'solicitado');
+    assert.ok(pendingItem.driverProfileSnapshot, 'Snapshot da ficha do motorista deve acompanhar o pedido');
+    assert.equal(pendingItem.driverProfileSnapshot.name, 'Carlos Eduardo Ferreira da Silva');
+    assert.equal(pendingItem.driverProfileSnapshot.document, drvCpf);
+    assert.equal(pendingItem.driverProfileSnapshot.email, drvEmail);
+    assert.equal(pendingItem.driverProfileSnapshot.cnh, '88776655441');
+    assert.equal(pendingItem.driverProfileSnapshot.bankName, 'Banco Inter');
+    assert.equal(pendingItem.driverProfileSnapshot.pixKey, drvCpf);
+    assert.equal(pendingItem.driverProfileSnapshot.pixType, 'cpf');
+    assert.equal(pendingItem.driverProfileSnapshot.pixKeys?.[0]?.holderDocument, drvCpf);
+    assert.equal(pendingItem.driverProfileSnapshot.pixKeys?.[0]?.holderName, 'Carlos Eduardo Ferreira da Silva');
+  } finally {
+    await db.query(
+      `INSERT INTO public.system_config (id, config, updated_at) VALUES ('default', $1, NOW())
+       ON CONFLICT (id) DO UPDATE SET config = EXCLUDED.config, updated_at = NOW();`,
+      [JSON.stringify(prevCfg)]
+    ).catch(() => {});
+  }
+});

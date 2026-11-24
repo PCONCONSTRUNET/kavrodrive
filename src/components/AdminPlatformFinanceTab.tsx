@@ -18,6 +18,7 @@ import {
 import { StorageService } from '../services/storage';
 import { AdminKycReviewModal } from './AdminKycReviewModal';
 import { AdminCrlvReviewModal } from './AdminCrlvReviewModal';
+import { AdminWithdrawalReviewModal } from './AdminWithdrawalReviewModal';
 import { AdminFinanceTreasurySection, TreasuryMetrics } from './AdminFinanceTreasurySection';
 import { AdminFinancialFeesTab } from './AdminFinancialFeesTab';
 import { WithdrawalScheduleControlCard } from './WithdrawalScheduleControlCard';
@@ -44,6 +45,14 @@ interface AdminPlatformFinanceTabProps {
 
 const formatBRL = (val: number) =>
   `R$ ${Number(val || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+const formatWithdrawalStatusLabel = (status?: string) => {
+  if (status === 'solicitado') return 'PENDENTE';
+  if (status === 'processando') return 'PROCESSANDO';
+  if (status === 'pago') return 'PAGO';
+  if (status === 'rejeitado') return 'RECUSADO';
+  return String(status || '').toUpperCase();
+};
 
 const getBiometricSummary = (drv?: DriverProfile | null) => {
   const bio = drv?.kyc?.biometricResult;
@@ -92,6 +101,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
 
   // Estado do Modal de Histórico Completo (Avaliação, Corridas, Saques, Extrato, Cadastro e Auditoria)
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
+  const [selectedWithdrawalReview, setSelectedWithdrawalReview] = useState<WithdrawalRequest | null>(null);
   const [driverModalTab, setDriverModalTab] = useState<'resumo' | 'corridas' | 'saques' | 'extrato' | 'auditoria'>('resumo');
   const [driverAuditLogs, setDriverAuditLogs] = useState<AuditLogRecord[]>([]);
   const [driverAuditLoading, setDriverAuditLoading] = useState(false);
@@ -223,6 +233,17 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     );
   };
 
+  const resolveDriverForWithdrawal = (w: WithdrawalRequest): DriverProfile | null => {
+    const cleanId = String(w.driverId || '').trim();
+    const cleanName = String(w.driverName || '').trim().toLowerCase();
+    return (
+      (cleanId && cleanId !== 'drv-default' ? drivers.find(d => d.id === cleanId) : undefined) ||
+      (cleanName ? drivers.find(d => d.name.trim().toLowerCase() === cleanName) : undefined) ||
+      (cleanId === 'drv-default' ? drivers[0] : undefined) ||
+      null
+    );
+  };
+
   const openDriverDossier = (
     driverId?: string | null,
     driverName?: string | null,
@@ -348,7 +369,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     await loadAll();
   };
 
-  const handleProcessWithdrawal = async (id: string, action: 'approve' | 'reject', notesOverride?: string) => {
+  const handleProcessWithdrawal = async (
+    id: string,
+    action: 'approve' | 'reject',
+    notesOverride?: string
+  ): Promise<{ ok: boolean; error?: string }> => {
     if (action === 'reject' && notesOverride === undefined) {
       setInlinePrompt({
         kind: 'withdrawal',
@@ -357,14 +382,26 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
         placeholder: 'Motivo da rejeição (opcional)...',
         value: ''
       });
-      return;
+      return { ok: true };
     }
     const notes = action === 'reject'
       ? (notesOverride?.trim() || 'Saque recusado pela Central Financeira')
       : 'Repasse PIX efetuado pela Central Financeira';
     setInlinePrompt(null);
-    await StorageService.adminProcessWithdrawal(id, action, notes);
+    const res = await StorageService.adminProcessWithdrawal(id, action, notes);
+    if (!res?.ok) {
+      const errMsg = res?.error || 'Não foi possível processar a solicitação de saque.';
+      showToast(errMsg, 'error');
+      return { ok: false, error: errMsg };
+    }
+    showToast(
+      action === 'approve'
+        ? 'Pagamento PIX do saque confirmado com sucesso!'
+        : 'Saque recusado e saldo estornado ao motorista.',
+      'success'
+    );
     await loadAll();
+    return { ok: true };
   };
 
   const handlePaymentAction = async (txId: string, action: 'refund' | 'dispute', reasonOverride?: string) => {
@@ -487,19 +524,32 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
     );
   });
 
-  const filteredWithdrawals = (overview?.withdrawals || []).filter(w => {
-    if (withdrawalStatusFilter !== 'todos' && w.status !== withdrawalStatusFilter) return false;
-    if (withdrawalSearch.trim()) {
-      const q = withdrawalSearch.toLowerCase();
-      const matchId = (w.id || '').toLowerCase().includes(q);
-      const matchPayoutTx = (w.payoutProviderTxId || '').toLowerCase().includes(q);
-      const matchLedger = (w.ledgerEntryId || '').toLowerCase().includes(q);
-      const matchDrv = (w.driverName || '').toLowerCase().includes(q) || (w.driverId || '').toLowerCase().includes(q);
-      const matchPix = (w.pixKey || '').toLowerCase().includes(q);
-      if (!matchId && !matchPayoutTx && !matchLedger && !matchDrv && !matchPix) return false;
-    }
-    return true;
-  });
+  const filteredWithdrawals = (overview?.withdrawals || [])
+    .filter(w => {
+      if (withdrawalStatusFilter !== 'todos' && w.status !== withdrawalStatusFilter) return false;
+      if (withdrawalSearch.trim()) {
+        const q = withdrawalSearch.toLowerCase();
+        const qDigits = q.replace(/\D/g, '');
+        const drv = resolveDriverForWithdrawal(w);
+        const drvDoc = String(drv?.document || w.driverProfileSnapshot?.document || '');
+        const drvDocDigits = drvDoc.replace(/\D/g, '');
+        const matchId = (w.id || '').toLowerCase().includes(q);
+        const matchPayoutTx = (w.payoutProviderTxId || '').toLowerCase().includes(q);
+        const matchLedger = (w.ledgerEntryId || '').toLowerCase().includes(q);
+        const matchDrv = (w.driverName || '').toLowerCase().includes(q) || (w.driverId || '').toLowerCase().includes(q);
+        const matchPix = (w.pixKey || '').toLowerCase().includes(q);
+        const matchDoc = drvDoc.toLowerCase().includes(q) || (qDigits.length >= 3 && drvDocDigits.includes(qDigits));
+        if (!matchId && !matchPayoutTx && !matchLedger && !matchDrv && !matchPix && !matchDoc) return false;
+      }
+      return true;
+    })
+    .slice()
+    .sort((a, b) => {
+      const aPending = a.status === 'solicitado' || a.status === 'processando' ? 0 : 1;
+      const bPending = b.status === 'solicitado' || b.status === 'processando' ? 0 : 1;
+      if (aPending !== bPending) return aPending - bPending;
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
 
   const periodMetrics: TreasuryMetrics = React.useMemo(() => {
     const valid = periodTransactions.filter(t => t.status !== 'reembolsado' && t.status !== 'falhou');
@@ -797,6 +847,26 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
           setReviewingKycDriver(null);
           await loadAll();
         }}
+      />
+    );
+  };
+
+  const renderWithdrawalReviewModal = () => {
+    if (!selectedWithdrawalReview) return null;
+    const matchedDriver = resolveDriverForWithdrawal(selectedWithdrawalReview);
+    const matchedWallet = overview?.driverWallets?.find(
+      walletItem => walletItem.driverId === (matchedDriver?.id || selectedWithdrawalReview.driverId)
+    ) || null;
+    return (
+      <AdminWithdrawalReviewModal
+        key={selectedWithdrawalReview.id}
+        isOpen={Boolean(selectedWithdrawalReview)}
+        withdrawal={selectedWithdrawalReview}
+        driver={matchedDriver}
+        wallet={matchedWallet}
+        onClose={() => setSelectedWithdrawalReview(null)}
+        onProcess={handleProcessWithdrawal}
+        onOpenFullDossier={(driverId, driverName) => openDriverDossier(driverId, driverName, 'resumo')}
       />
     );
   };
@@ -1765,7 +1835,16 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         </thead>
                         <tbody>
                           {driverWithdrawals.map(w => (
-                            <tr key={w.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                            <tr
+                              key={w.id}
+                              onClick={() => setSelectedWithdrawalReview(w)}
+                              title="Clique para abrir a ficha do motorista e conferir os dados do saque PIX"
+                              style={{
+                                borderBottom: '1px solid #F1F5F9',
+                                cursor: 'pointer',
+                                backgroundColor: w.status === 'solicitado' ? '#FFFBEB' : '#FFFFFF'
+                              }}
+                            >
                               <td style={{ padding: '10px 14px', color: '#334155', whiteSpace: 'nowrap' }}>
                                 <div style={{ marginBottom: 4 }}>{new Date(w.createdAt).toLocaleString('pt-BR')}</div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -1789,11 +1868,11 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                   padding: '2px 8px',
                                   borderRadius: 6,
                                   fontSize: '0.68rem',
-                                  fontWeight: 600,
+                                  fontWeight: 700,
                                   backgroundColor: w.status === 'pago' ? '#F0FDF4' : w.status === 'rejeitado' ? '#FEF2F2' : '#FFFBEB',
                                   color: w.status === 'pago' ? '#15803D' : w.status === 'rejeitado' ? '#B91C1C' : '#B45309'
                                 }}>
-                                  {w.status.toUpperCase()}
+                                  {formatWithdrawalStatusLabel(w.status)}
                                 </span>
                                 {w.payoutProviderTxId && (
                                   <div style={{ marginTop: 4 }}>
@@ -1805,42 +1884,69 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                                 {w.notes || '—'}
                               </td>
                               <td style={{ padding: '10px 14px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                                {w.status === 'solicitado' && (
-                                  <div style={{ display: 'inline-flex', gap: 6 }}>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleProcessWithdrawal(w.id, 'approve')}
-                                      style={{
-                                        padding: '4px 10px',
-                                        borderRadius: 6,
-                                        border: 'none',
-                                        backgroundColor: '#16A34A',
-                                        color: '#FFFFFF',
-                                        fontWeight: 600,
-                                        fontSize: '0.7rem',
-                                        cursor: 'pointer'
-                                      }}
-                                    >
-                                      Confirmar PIX
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleProcessWithdrawal(w.id, 'reject')}
-                                      style={{
-                                        padding: '4px 10px',
-                                        borderRadius: 6,
-                                        border: '1px solid #FECACA',
-                                        backgroundColor: '#FFFFFF',
-                                        color: '#DC2626',
-                                        fontWeight: 600,
-                                        fontSize: '0.7rem',
-                                        cursor: 'pointer'
-                                      }}
-                                    >
-                                      Recusar
-                                    </button>
-                                  </div>
-                                )}
+                                <div style={{ display: 'inline-flex', gap: 6 }}>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedWithdrawalReview(w);
+                                    }}
+                                    style={{
+                                      padding: '4px 9px',
+                                      borderRadius: 6,
+                                      border: '1px solid #0F172A',
+                                      backgroundColor: '#0F172A',
+                                      color: '#FFFFFF',
+                                      fontWeight: 600,
+                                      fontSize: '0.7rem',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    Ver Ficha
+                                  </button>
+                                  {w.status === 'solicitado' && (
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void handleProcessWithdrawal(w.id, 'approve');
+                                        }}
+                                        style={{
+                                          padding: '4px 10px',
+                                          borderRadius: 6,
+                                          border: 'none',
+                                          backgroundColor: '#16A34A',
+                                          color: '#FFFFFF',
+                                          fontWeight: 600,
+                                          fontSize: '0.7rem',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        Confirmar PIX
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          void handleProcessWithdrawal(w.id, 'reject');
+                                        }}
+                                        style={{
+                                          padding: '4px 10px',
+                                          borderRadius: 6,
+                                          border: '1px solid #FECACA',
+                                          backgroundColor: '#FFFFFF',
+                                          color: '#DC2626',
+                                          fontWeight: 600,
+                                          fontSize: '0.7rem',
+                                          cursor: 'pointer'
+                                        }}
+                                      >
+                                        Recusar
+                                      </button>
+                                    </>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           ))}
@@ -2167,6 +2273,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {renderWithdrawalReviewModal()}
         {renderDriverFullDossierModal()}
         {renderAdminKycReviewModal()}
         {renderDriverTermsModal()}
@@ -3022,6 +3129,7 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
   // ═══ VISÃO PRINCIPAL: CONSOLE FINANCEIRO, TAXAS & LIVRO-RAZÃO ═══
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {renderWithdrawalReviewModal()}
       {renderDriverFullDossierModal()}
       {renderAdminKycReviewModal()}
       {renderDriverTermsModal()}
@@ -3286,7 +3394,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
             <button
               key={tab.id}
               type="button"
-              onClick={() => setSubTab(tab.id as any)}
+              onClick={() => {
+                setSubTab(tab.id as any);
+                if (tab.id === 'saques') {
+                  void loadAll();
+                }
+              }}
               style={{
                 padding: '10px 4px',
                 background: 'none',
@@ -3771,15 +3884,15 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
             }}>
               <div>
                 <div style={{ fontSize: '0.88rem', fontWeight: 700, color: '#0F172A' }}>Solicitações de Saque e Repasses PIX</div>
-                <div style={{ fontSize: '0.73rem', color: '#64748B' }}>ID do saque, TXID Efí/PSP, perfil e auditoria direta do motorista recebedor</div>
+                <div style={{ fontSize: '0.73rem', color: '#64748B' }}>Pedidos chegam como <strong>PENDENTE</strong> — clique em cima de qualquer solicitação para abrir a ficha do motorista (Nome Completo, CPF e Chave PIX)</div>
               </div>
 
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-                <div style={{ position: 'relative', minWidth: 230 }}>
+                <div style={{ position: 'relative', minWidth: 240 }}>
                   <Search size={14} color="#94A3B8" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)' }} />
                   <input
                     type="text"
-                    placeholder="Buscar ID saque, Efí TXID, motorista ou PIX..."
+                    placeholder="Buscar motorista, CPF, chave PIX ou ID..."
                     value={withdrawalSearch}
                     onChange={(e) => setWithdrawalSearch(e.target.value)}
                     style={{
@@ -3799,10 +3912,34 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                   style={{ height: 34, padding: '0 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: '0.75rem', color: '#334155', backgroundColor: '#FFFFFF' }}
                 >
                   <option value="todos">Todos os Status</option>
-                  <option value="solicitado">Aguardando PIX</option>
+                  <option value="solicitado">Pendentes (Aguardando PIX)</option>
                   <option value="pago">Pagos</option>
                   <option value="rejeitado">Recusados</option>
                 </select>
+
+                <button
+                  type="button"
+                  onClick={() => void loadAll()}
+                  disabled={isLoading}
+                  title="Atualizar solicitações de saque"
+                  style={{
+                    height: 34,
+                    padding: '0 10px',
+                    borderRadius: 6,
+                    border: '1px solid #CBD5E1',
+                    backgroundColor: '#FFFFFF',
+                    color: '#0F172A',
+                    fontSize: '0.74rem',
+                    fontWeight: 600,
+                    cursor: isLoading ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5
+                  }}
+                >
+                  <RefreshCw size={13} />
+                  <span>Atualizar</span>
+                </button>
               </div>
             </div>
 
@@ -3816,16 +3953,29 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                 <thead>
                   <tr style={{ backgroundColor: '#F8FAFC', borderBottom: '1px solid #E2E8F0', color: '#64748B', fontSize: '0.7rem', textTransform: 'uppercase' }}>
                     <th style={{ padding: '10px 16px', fontWeight: 600 }}>ID Saque &amp; Data</th>
-                    <th style={{ padding: '10px 14px', fontWeight: 600 }}>Motorista</th>
+                    <th style={{ padding: '10px 14px', fontWeight: 600 }}>Motorista &amp; CPF</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Chave PIX</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Valor / Líquido</th>
                     <th style={{ padding: '10px 14px', fontWeight: 600 }}>Status &amp; ID Repasse Efí</th>
-                    <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Ações / Perfil / Auditoria</th>
+                    <th style={{ padding: '10px 16px', fontWeight: 600, textAlign: 'right' }}>Ficha / Ações</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredWithdrawals.map(w => (
-                    <tr key={w.id} style={{ borderBottom: '1px solid #F1F5F9' }}>
+                  {filteredWithdrawals.map(w => {
+                    const drv = resolveDriverForWithdrawal(w);
+                    const drvDoc = drv?.document || w.driverProfileSnapshot?.document || '';
+                    const isPendingRow = w.status === 'solicitado' || w.status === 'processando';
+                    return (
+                    <tr
+                      key={w.id}
+                      onClick={() => setSelectedWithdrawalReview(w)}
+                      title="Clique para abrir a ficha completa do motorista (Nome, CPF e Chave PIX)"
+                      style={{
+                        borderBottom: '1px solid #F1F5F9',
+                        cursor: 'pointer',
+                        backgroundColor: isPendingRow ? '#FFFDF5' : '#FFFFFF'
+                      }}
+                    >
                       <td style={{ padding: '12px 16px', color: '#64748B', fontSize: '0.72rem', whiteSpace: 'nowrap' }}>
                         <div style={{ marginBottom: 4 }}>{new Date(w.createdAt).toLocaleString('pt-BR')}</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -3834,26 +3984,16 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         </div>
                       </td>
                       <td style={{ padding: '12px 14px' }}>
-                        <button
-                          type="button"
-                          onClick={() => openDriverDossier(w.driverId, w.driverName, 'resumo')}
-                          style={{
-                            background: 'none',
-                            border: 'none',
-                            padding: 0,
-                            fontWeight: 700,
-                            color: '#0F172A',
-                            cursor: 'pointer',
-                            textDecoration: 'underline',
-                            textAlign: 'left'
-                          }}
-                        >
-                          {w.driverName}
-                        </button>
-                        <div style={{ fontSize: '0.67rem', color: '#64748B', fontFamily: 'monospace' }}>{w.driverId}</div>
+                        <div style={{ fontWeight: 700, color: '#0F172A' }}>
+                          {drv?.name || w.driverProfileSnapshot?.name || w.driverName}
+                        </div>
+                        <div style={{ fontSize: '0.7rem', color: '#475569', fontFamily: 'monospace', marginTop: 2 }}>
+                          CPF: {formatDocument(drvDoc) || 'Não informado'}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: '#94A3B8', fontFamily: 'monospace' }}>{w.driverId}</div>
                       </td>
                       <td style={{ padding: '12px 14px', color: '#334155', fontFamily: 'monospace', fontSize: '0.74rem' }}>
-                        {w.pixType?.toUpperCase()}: {w.pixKey}
+                        <span style={{ fontWeight: 700, color: '#0F172A' }}>{w.pixType?.toUpperCase()}:</span> {w.pixKey}
                       </td>
                       <td style={{ padding: '12px 14px', fontWeight: 700, color: '#0F172A', whiteSpace: 'nowrap' }}>
                         <div>{formatBRL(w.amount)}</div>
@@ -3868,12 +4008,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                           padding: '3px 8px',
                           borderRadius: 6,
                           fontSize: '0.68rem',
-                          fontWeight: 600,
+                          fontWeight: 700,
                           backgroundColor: w.status === 'pago' ? '#F0FDF4' : w.status === 'rejeitado' ? '#FEF2F2' : '#FFFBEB',
                           border: `1px solid ${w.status === 'pago' ? '#BBF7D0' : w.status === 'rejeitado' ? '#FECACA' : '#FDE68A'}`,
                           color: w.status === 'pago' ? '#15803D' : w.status === 'rejeitado' ? '#B91C1C' : '#B45309'
                         }}>
-                          {w.status.toUpperCase()}
+                          {formatWithdrawalStatusLabel(w.status)}
                         </span>
                         {w.payoutProviderTxId && (
                           <div style={{ marginTop: 4 }}>
@@ -3885,9 +4025,12 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         <div style={{ display: 'inline-flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
                           <button
                             type="button"
-                            onClick={() => openDriverDossier(w.driverId, w.driverName, 'resumo')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedWithdrawalReview(w);
+                            }}
                             style={{
-                              padding: '5px 8px',
+                              padding: '5px 9px',
                               borderRadius: 6,
                               border: '1px solid #0F172A',
                               backgroundColor: '#0F172A',
@@ -3897,14 +4040,17 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                               cursor: 'pointer',
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: 3
+                              gap: 4
                             }}
                           >
-                            <Eye size={11} /> Perfil
+                            <Eye size={11} /> Ver Ficha
                           </button>
                           <button
                             type="button"
-                            onClick={() => openDriverDossier(w.driverId, w.driverName, 'auditoria')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openDriverDossier(w.driverId, w.driverName, 'auditoria');
+                            }}
                             style={{
                               padding: '5px 8px',
                               borderRadius: 6,
@@ -3925,7 +4071,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                             <>
                               <button
                                 type="button"
-                                onClick={() => handleProcessWithdrawal(w.id, 'approve')}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleProcessWithdrawal(w.id, 'approve');
+                                }}
                                 style={{
                                   padding: '5px 10px',
                                   borderRadius: 6,
@@ -3944,7 +4093,10 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleProcessWithdrawal(w.id, 'reject')}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void handleProcessWithdrawal(w.id, 'reject');
+                                }}
                                 style={{
                                   padding: '5px 10px',
                                   borderRadius: 6,
@@ -3966,7 +4118,8 @@ export const AdminPlatformFinanceTab: React.FC<AdminPlatformFinanceTabProps> = (
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
               {renderInlinePromptBar('withdrawal')}
